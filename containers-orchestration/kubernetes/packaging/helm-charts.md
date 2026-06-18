@@ -9,67 +9,60 @@ id: article-containers-orchestration-kubernetes-packaging-helm-charts
 
 ## Table of Contents
 
-1. [From Manifests to a Chart](#from-manifests-to-a-chart)
-2. [The Smallest Useful Chart Directory](#the-smallest-useful-chart-directory)
-3. [Chart.yaml and Application Metadata](#chartyaml-and-application-metadata)
-4. [Templates Produce Kubernetes Objects](#templates-produce-kubernetes-objects)
-5. [Named Helpers Keep Labels Consistent](#named-helpers-keep-labels-consistent)
-6. [Rendering and Linting a Chart](#rendering-and-linting-a-chart)
-7. [Failure Mode: A Template Renders Broken YAML](#failure-mode-a-template-renders-broken-yaml)
-8. [What Belongs in a Chart](#what-belongs-in-a-chart)
-9. [Chart Dependencies and Boundaries](#chart-dependencies-and-boundaries)
+1. [What A Helm Chart Does](#what-a-helm-chart-does)
+2. [The Smallest Chart Directory](#the-smallest-chart-directory)
+3. [Chart.yaml, Values, And Release Inputs](#chartyaml-values-and-release-inputs)
+4. [Deployment And Service Templates](#deployment-and-service-templates)
+5. [Helpers For Names And Labels](#helpers-for-names-and-labels)
+6. [ConfigMaps And Optional Routing](#configmaps-and-optional-routing)
+7. [Linting And Rendering Checks](#linting-and-rendering-checks)
+8. [Debugging Broken Templates](#debugging-broken-templates)
+9. [Dependencies And Release Boundaries](#dependencies-and-release-boundaries)
 10. [A Chart Review Walkthrough](#a-chart-review-walkthrough)
+11. [What's Next](#whats-next)
 
-## From Manifests to a Chart
+## What A Helm Chart Does
+<!-- section-summary: A Helm chart packages Kubernetes templates, default values, and metadata so a team can render predictable application manifests. -->
 
-A Helm chart is a directory that contains Kubernetes manifest templates, default values, and chart metadata. Helm renders the templates into normal Kubernetes YAML, then can install or upgrade those objects as a named release.
+A **Helm chart** is a directory that contains Kubernetes templates, default values, metadata, and optional packaged dependencies. Helm reads those files, fills the templates with values, and renders normal Kubernetes YAML. Helm can also install or upgrade the rendered objects as a named release, which gives operators release history and rollback commands.
 
-The reason charts exist is repetition. If every service in a platform needs a Deployment, Service, resource requests, probes, labels, and optional ingress, copying full YAML into every repository creates drift. A chart lets the platform team define the repeatable shape once while each service supplies values.
+In the previous article, the orders team learned the most important packaging habit: render before apply. Now they want to package `devpolaris-orders-api` as a chart because several services in the company share the same basic shape. Each API needs a Deployment, a Service, labels, readiness probes, resource requests, a ConfigMap, and sometimes an Ingress or Gateway route.
 
-For `devpolaris-orders-api`, the first chart will package a Deployment and a Service. Later, values will control the image tag, replica count, port, and resource requests. The goal is to make the common shape consistent while preserving a clear rendered manifest.
+The chart should help the team repeat that shape without copying a full manifest for every environment. Staging can pass one replica and a staging hostname. Production can pass three replicas and the public hostname. Both environments should still render a clear Deployment and Service that a reviewer can inspect without reading every template trick in Helm.
 
-## The Smallest Useful Chart Directory
+The chart acts like a small product for the teammates who review and operate the service. The output needs to stay boring in the best way: predictable names, stable labels, obvious image tags, and values files that explain the environment choices. If a chart saves typing but makes the rendered YAML hard to understand, the team has traded one maintenance problem for another.
 
-A chart directory is a filesystem layout Helm understands. It contains chart metadata, default values, and templates that generate Kubernetes objects.
+## The Smallest Chart Directory
+<!-- section-summary: A beginner-friendly chart uses metadata, defaults, helpers, and a few templates that match the application release. -->
 
-![Helm chart directory map showing Chart.yaml, values.yaml, templates, helpers, README, and rendered YAML](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/chart-directory-map.png)
+Helm recognizes a chart through its directory layout. The useful beginner version has `Chart.yaml`, `values.yaml`, and a `templates/` directory. Template files under `templates/` render Kubernetes objects, while helper files such as `_helpers.tpl` define snippets that other templates can include.
 
-*A chart is a small package that turns templates and values into Kubernetes objects.*
+For `devpolaris-orders-api`, the first useful chart can look like this. The directory mirrors the application pieces the team already reviews in raw YAML.
 
-
-Example: the first orders API chart can have `Chart.yaml`, `values.yaml`, a Deployment template, and a Service template. Helm recognizes some names, and the `templates/` directory is where Kubernetes objects are generated.
-
-```text
+```
 charts/orders-api/
   Chart.yaml
   values.yaml
   templates/
     _helpers.tpl
+    configmap.yaml
     deployment.yaml
     service.yaml
+    ingress.yaml
 ```
 
-`Chart.yaml` describes the chart. `values.yaml` provides defaults. Files under `templates/` are processed by Helm's template engine. Files beginning with an underscore, such as `_helpers.tpl`, define reusable snippets rather than standalone Kubernetes objects.
+`Chart.yaml` describes the package itself. `values.yaml` provides default input values that make the chart render without extra files. The `templates/` directory holds the Kubernetes objects the chart produces. A file name beginning with `_`, such as `_helpers.tpl`, gives Helm reusable template definitions rather than a standalone manifest.
 
-That structure is small enough for a junior engineer to inspect. If a first chart already has twenty helper files and five layers of indirection, review becomes harder than copied YAML. Start with the objects the app actually needs.
+This small layout gives a junior engineer a fair chance at review. They can open `values.yaml` to see the knobs, open `deployment.yaml` to see where those knobs land, and render the chart to inspect the final object. A larger chart may need more files later, but the first version should earn trust before it grows.
 
-You may also see a `charts/` directory inside a chart. That directory holds packaged chart dependencies. A beginner-owned application chart often does not need it at first. Leave it out until there is a real dependency to manage.
+Some generated charts include many optional templates, notes, tests, and helper patterns. Those can teach useful Helm features, yet they can also distract from the application the team actually runs. For the orders API, the first review should care about the Deployment, Service, ConfigMap, and route. Everything else can wait until a production need appears.
 
-```text
-Not needed in the first orders-api chart
+## Chart.yaml, Values, And Release Inputs
+<!-- section-summary: Chart metadata identifies the package, while values files carry the release choices that change between environments. -->
 
-charts/
-  postgresql-12.1.4.tgz
-  redis-18.3.0.tgz
-```
+`Chart.yaml` is the chart metadata file. It names the chart, describes the package, declares the chart type, and carries the chart version. It can also include `appVersion`, which gives humans and tooling a convenient application version label.
 
-Those archives would make the API release responsible for database or cache lifecycle. That may be appropriate in a disposable local environment, but it is usually the wrong boundary for production.
-
-## Chart.yaml and Application Metadata
-
-`Chart.yaml` is the chart metadata file. It gives Helm enough information to identify the package, but it is not the same thing as the container image version.
-
-Example: chart version `0.1.0` can describe the package structure, while app version `2026.05.07` describes the application release the chart commonly deploys. The actual Deployment image still comes from templates and values.
+Here is a small metadata file for the orders API chart. The file identifies the package before Helm reads any templates.
 
 ```yaml
 apiVersion: v2
@@ -80,20 +73,53 @@ version: 0.1.0
 appVersion: "2026.05.07"
 ```
 
-The `apiVersion: v2` field means this is the current chart format used by Helm 3. The `type: application` field tells readers that this chart deploys an application, not a reusable library chart. The `version` field should change when the chart package changes. The `appVersion` field is information for humans and tooling, but the image tag still comes from templates and values.
+The chart `version` should change when the chart package changes. A template fix, a values schema change, or a new chart dependency deserves a chart version bump. The `appVersion` field can record the application release, and the container image changes only when the template reads that field or another image value.
 
-One common mistake is to bump `appVersion` and assume the Deployment image changed. It does not unless the template uses that value. Prefer an explicit image value so the rendered manifest tells the truth.
+The image tag should usually appear as an explicit value. That choice keeps the rendered Deployment honest, because reviewers can trace the image from the values file into the final manifest.
 
-## Templates Produce Kubernetes Objects
+```yaml
+# values.yaml
+replicaCount: 2
 
-A Helm template is Kubernetes YAML plus placeholders that Helm fills from release data and values. Helm uses Go templates, so placeholders appear inside `{{ ... }}`.
+image:
+  repository: ghcr.io/devpolaris/orders-api
+  tag: "2026.05.07"
+  pullPolicy: IfNotPresent
 
-![Helm render path showing chart, values, template engine, rendered YAML, and Kubernetes API](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/helm-render-path.png)
+service:
+  port: 80
+  targetPort: 8080
 
-*Helm templates are only useful if the rendered YAML is clear enough to review.*
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+```
 
+Environment values then override the defaults. Production can set a different replica count, hostname, or image tag while the template structure stays the same.
 
-Example: `.Values.replicaCount` can render into `spec.replicas: 3` for production and `spec.replicas: 1` for staging. The rendered output should be valid YAML after those placeholders are replaced.
+```yaml
+# environments/prod.values.yaml
+replicaCount: 3
+
+image:
+  tag: "2026.05.07"
+
+ingress:
+  enabled: true
+  host: orders.devpolaris.example
+```
+
+Helm accepts values from files with `-f` or `--values`, and later files take priority over earlier ones. That matters in real CI because a command such as `helm template orders ./charts/orders-api -f values.yaml -f environments/prod.values.yaml` gives production values the final say for keys that appear in both files.
+
+## Deployment And Service Templates
+<!-- section-summary: Templates combine Kubernetes YAML with Helm expressions, so reviewers should inspect both the source template and the rendered object. -->
+
+A **template** is Kubernetes YAML with Helm expressions inside `{{ ... }}`. Helm uses Go templates, and the current template context appears as a dot, written as `.`. A value such as `.Values.replicaCount` reads the `replicaCount` key from the merged values.
+
+Here is a compact Deployment template for the orders API. It uses values for the image, port, replicas, and resources, while helpers provide names and labels.
 
 ```yaml
 apiVersion: apps/v1
@@ -106,63 +132,55 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "orders-api.name" . }}
+      {{- include "orders-api.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "orders-api.name" . }}
+        {{- include "orders-api.selectorLabels" . | nindent 8 }}
     spec:
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - containerPort: {{ .Values.service.port }}
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
 ```
 
-The dot, written as `.`, is the current template context. `.Values.replicaCount` reads the `replicaCount` key from `values.yaml` or from a values file passed at install time. `include` calls a named helper.
-
-Here is the matching default values file:
+The matching Service template should use the same selector helper. This keeps traffic routing tied to the Pod labels that the Deployment creates.
 
 ```yaml
-replicaCount: 2
-
-image:
-  repository: ghcr.io/devpolaris/orders-api
-  tag: "2026.05.07"
-
-service:
-  port: 8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "orders-api.fullname" . }}
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "orders-api.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
 ```
 
-The important review habit is to read both the template and the rendered Deployment. Template source explains how the package works. Rendered YAML proves what Kubernetes will receive.
+The template source tells reviewers how the chart works. The rendered manifest tells reviewers what Kubernetes receives. A healthy review uses both views because a neat template can still render surprising YAML when values change.
 
-When you are learning a chart, render one object at a time mentally. Start with the `metadata.name`, then labels, then selectors, then the Pod template. If those pieces make sense, the rest of the workload is easier to inspect.
+Selectors deserve extra attention. A Deployment selector links the Deployment to its Pods, and Kubernetes treats selector changes carefully after creation. A Service selector controls which Pods receive traffic. Chart helpers should keep those labels stable unless the team plans a deliberate migration.
 
-```text
-Deployment fields to verify first
+## Helpers For Names And Labels
+<!-- section-summary: Helper templates keep repeated names and labels consistent across objects, especially where selectors and metadata must line up. -->
 
-metadata.name:
-  The object name that operators query.
+**Named helpers** are reusable template snippets. Helm charts usually place them in `_helpers.tpl`, and templates call them with `include`. Helpers work especially well for object names and labels because those values appear in several manifests and need consistent spelling.
 
-spec.selector.matchLabels:
-  The labels the Deployment uses to own Pods.
-
-template.metadata.labels:
-  The labels placed on each Pod.
-
-containers[0].image:
-  The image Kubernetes pulls for the API container.
-```
-
-Selectors deserve special attention because they are hard to change safely after a Deployment exists. A chart helper that keeps selector labels stable is doing useful work.
-
-## Named Helpers Keep Labels Consistent
-
-Named helpers are reusable template snippets, often used for names and labels that must stay identical across objects. They reduce copy mistakes in places where a small mismatch breaks behavior.
-
-Example: a Service selector must match Pod labels exactly. If one template spells the app label differently from another template, traffic can disappear even when Pods are healthy.
-
-Helm helpers reduce that risk by putting repeated names and labels in one place.
+For the orders API, the helper file can define a short app name, a release-scoped full name, common labels, and selector labels. Those helpers keep the Deployment, Service, ConfigMap, and route speaking the same naming language.
 
 ```yaml
 {{- define "orders-api.name" -}}
@@ -174,30 +192,89 @@ devpolaris-orders-api
 {{- end -}}
 
 {{- define "orders-api.labels" -}}
+helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 app.kubernetes.io/name: {{ include "orders-api.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/part-of: devpolaris
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+{{- end -}}
+
+{{- define "orders-api.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "orders-api.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 ```
 
-The helper file can look strange at first because it is template code, not Kubernetes YAML. Its job is to make the actual YAML boring and consistent. Use helpers for names and labels that must match across objects. Avoid helpers that hide important workload behavior such as probes, resources, or environment variables.
+The Kubernetes recommended labels use the `app.kubernetes.io` prefix so tools can query and group application resources in a common way. Helm commonly fills `app.kubernetes.io/managed-by` with the release service and `app.kubernetes.io/instance` with the release name. Those labels help operators find every object connected to one release.
 
-## Rendering and Linting a Chart
+Helpers should stay focused. Names, labels, and small repeated metadata snippets make good helper content. Probes, environment variables, resources, and routing behavior usually deserve visible template sections because reviewers need to see how the workload runs.
 
-Rendering prints the Kubernetes YAML that Helm will send to the cluster. Linting checks the chart source for common chart and template mistakes. Run both before installing so indentation errors, missing values, and malformed objects are caught while the change is still easy to fix.
+The `nindent` function in the examples matters because YAML cares about spaces. It inserts a newline and indents the included helper output so the rendered labels land under the correct parent key. A missing `nindent` often creates the first confusing Helm error a beginner sees.
 
-```bash
-$ helm template orders ./charts/orders-api --namespace devpolaris-staging
----
-# Source: orders-api/templates/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: orders-devpolaris-orders-api
+## ConfigMaps And Optional Routing
+<!-- section-summary: Charts should expose environment configuration and optional routes through values while keeping rendered objects straightforward. -->
+
+The orders API also needs plain environment configuration. A **ConfigMap** stores non-secret key-value data that Pods can read through environment variables or mounted files. The chart can render a ConfigMap from values, then the Deployment can load it with `envFrom`.
+
+```yaml
+# values.yaml
+config:
+  LOG_LEVEL: info
+  CHECKOUT_TIMEOUT_MS: "1500"
 ```
 
-`helm lint` checks chart structure and common template issues. It gives pull requests a useful mechanical check before Kubernetes admission testing.
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "orders-api.fullname" . }}
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+```
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: {{ include "orders-api.fullname" . }}
+```
+
+Secrets need a different path. Plain Helm values files often live in Git, so they should not hold database passwords, API tokens, or private keys. Real teams usually pair charts with a secret management flow such as External Secrets, Sealed Secrets, SOPS, a cloud secret manager, or a platform-owned secret injection process. The chart can reference a Secret name while the secret value lives in the approved secret system.
+
+Routing also belongs behind an explicit value. Many internal environments do not need an Ingress, while staging and production often do. The chart can render the Ingress only when `ingress.enabled` has a true value.
+
+```yaml
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "orders-api.fullname" . }}
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+spec:
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "orders-api.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
+```
+
+Optional templates need realistic CI coverage. A chart that renders cleanly with `ingress.enabled: false` can still fail when production turns ingress on. The CI matrix should render the chart with staging and production values so every enabled path has a real example.
+
+## Linting And Rendering Checks
+<!-- section-summary: Helm lint catches chart issues, while helm template proves the Kubernetes YAML for each environment. -->
+
+`helm lint` examines a chart for possible issues. The official command reference says the linter runs tests to verify that the chart has a well-formed structure and reports errors or warnings. It gives every pull request a fast mechanical check before the team looks at rendered output.
 
 ```bash
 $ helm lint ./charts/orders-api
@@ -207,74 +284,75 @@ $ helm lint ./charts/orders-api
 1 chart(s) linted, 0 chart(s) failed
 ```
 
-After rendering, pipe the output into `kubectl diff` when you have cluster access.
+Rendering comes next. `helm template` renders chart templates locally and displays the generated YAML. Cluster-aware checks still matter because local rendering cannot confirm every API kind against the target production cluster.
 
 ```bash
-$ helm template orders ./charts/orders-api -f values-staging.yaml | kubectl diff -n devpolaris-staging -f -
+$ helm template orders ./charts/orders-api \
+  --namespace devpolaris-prod \
+  -f environments/prod.values.yaml \
+  > rendered/prod.yaml
 ```
 
-That command compares rendered output with live objects. It helps separate chart rendering problems from cluster apply problems.
-
-For shared charts, add rendering to CI with at least one realistic values file. A chart that renders only with empty defaults may still fail when production values enable ingress, resources, or extra environment variables.
-
-```text
-Chart CI matrix
-
-lint:
-  helm lint ./charts/orders-api
-
-render-staging:
-  helm template orders ./charts/orders-api -f environments/staging.values.yaml
-
-render-prod:
-  helm template orders ./charts/orders-api -f environments/prod.values.yaml
-```
-
-This is a cheap check. It does not prove the app works, but it catches broken templates before a release command reaches the cluster.
-
-## Failure Mode: A Template Renders Broken YAML
-
-YAML uses indentation to decide which fields belong together, and Helm templates can change that indentation while they render. Suppose a helper is inserted without the right spacing. The chart source looks reasonable, but rendering produces invalid YAML.
+The team can inspect the rendered file directly. In a pull request, a short grep or summary helps reviewers focus on the high-risk fields before opening the full manifest.
 
 ```bash
-$ helm template orders ./charts/orders-api
+$ grep -n "kind:\\|name:\\|replicas:\\|image:\\|readinessProbe:\\|host:" rendered/prod.yaml
+2:kind: ConfigMap
+4:  name: orders-devpolaris-orders-api
+20:kind: Service
+22:  name: orders-devpolaris-orders-api
+38:kind: Deployment
+40:  name: orders-devpolaris-orders-api
+47:  replicas: 3
+70:          image: "ghcr.io/devpolaris/orders-api:2026.05.07"
+78:          readinessProbe:
+111:  - host: "orders.devpolaris.example"
+```
+
+When CI can reach a Kubernetes API server, `kubectl apply --dry-run=server -f rendered/prod.yaml` asks the server to validate the request without persisting the resources. `kubectl diff -f rendered/prod.yaml` then compares the proposed configuration with live objects. Those two commands catch different problems: admission and schema issues in one case, unexpected live changes in the other.
+
+## Debugging Broken Templates
+<!-- section-summary: Template failures usually make more sense after the team renders with debug output and reads the generated YAML around the error. -->
+
+The first painful Helm error often involves YAML indentation. Helm can produce a YAML file that Kubernetes cannot parse when a helper, range, or conditional lands at the wrong indentation level. The source template may look close, while the generated file places labels or fields under the wrong parent key.
+
+Here is a realistic failure from the orders chart. The command fails before anything reaches the cluster, which is exactly where the team wants to catch template errors.
+
+```bash
+$ helm template orders ./charts/orders-api -f environments/prod.values.yaml
 Error: YAML parse error on orders-api/templates/deployment.yaml:
 error converting YAML to JSON: yaml: line 9: did not find expected key
 ```
 
-Now render with debug output so Helm prints the generated content around the failure.
+Debug output helps because Helm prints more context around the generated manifest. The extra output usually points at the rendered YAML shape, not just the template line number.
 
 ```bash
-$ helm template orders ./charts/orders-api --debug
-install.go:214: [debug] Original chart version: ""
+$ helm template orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  --debug
+
 Error: YAML parse error on orders-api/templates/deployment.yaml:
   labels:
 app.kubernetes.io/name: devpolaris-orders-api
     app.kubernetes.io/instance: orders
 ```
 
-The label block lost its indentation. The fix is usually to use `nindent`, which adds a newline and indents the included text.
+The labels escaped the `metadata.labels` indentation. The helper call needs `nindent 4` under `metadata.labels`, or `nindent 8` under `template.metadata.labels`, depending on the parent key.
 
 ```yaml
-labels:
-  {{- include "orders-api.labels" . | nindent 4 }}
+metadata:
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
 ```
 
-After the fix, render again and inspect the actual YAML. Do not stop at "the command passed." Check the fields that connect objects, especially labels and selectors.
+After the template renders again, the team should inspect the rendered YAML instead of stopping at a green command. A passing render can still show an unexpected name, missing ConfigMap key, or selector mismatch. The best debugging loop goes from template source, to rendered YAML, to Kubernetes validation, then to live rollout checks.
 
-## What Belongs in a Chart
+## Dependencies And Release Boundaries
+<!-- section-summary: Chart dependencies work well for shared chart building blocks, but production data stores and independent systems usually need their own release lifecycle. -->
 
-A chart boundary is the line between reusable application shape and one environment's deployment choice. For `devpolaris-orders-api`, the chart might include the Deployment, Service, ConfigMap shape, default probes, default resources, and optional ingress. It should not include environment-specific secrets or one-off production edits hidden deep in templates.
+Helm charts can declare dependencies in `Chart.yaml`. A dependency can bring in another chart from a repository, and Helm can place packaged dependencies under the chart's `charts/` directory after dependency commands run. This feature helps when the application chart needs a shared helper chart, a standard sidecar chart, or a local development dependency.
 
-There is a real tradeoff here. A shared chart gives consistency across services, but a chart that accepts every possible knob becomes a second programming language. A service-owned chart gives app teams control, but repeated patterns can drift across repositories.
-
-Use this rule when deciding what to put in the chart: if the setting is part of how this class of service should run, it belongs in the chart. If the setting is a deployment choice for one environment, it probably belongs in values. If the setting is secret, it belongs outside both chart source and plain values files unless your secret management flow encrypts it safely.
-
-## Chart Dependencies and Boundaries
-
-Helm charts can depend on other charts. That is useful when an application package needs a standard sidecar, a common exporter, or a dependency that is managed as a chart. Use this carefully. A dependency should make the release easier to operate, not quietly install a database that nobody expected.
-
-For `devpolaris-orders-api`, the API chart should not install the production PostgreSQL database as a child chart. The database has a different lifecycle, backup policy, access model, and failure impact. If rolling back the API should not roll back the database, the database does not belong inside the API release.
+Here is a small dependency example for a shared internal helper chart. The dependency belongs in `Chart.yaml`, and the chart dependency commands can place the packaged dependency under `charts/` before rendering.
 
 ```yaml
 dependencies:
@@ -283,59 +361,89 @@ dependencies:
     repository: https://charts.devpolaris.example/platform
 ```
 
-That dependency shape can be reasonable if `common-http-api` is a library chart or a shared helper chart that standardizes labels and template fragments. It is more risky if the dependency creates real infrastructure that should be owned separately.
+This dependency makes sense if `common-http-api` provides shared labels, common HTTP defaults, or library-chart helpers that do not own a separate production lifecycle. It gives platform engineers one place to improve repeated chart patterns while service teams keep their application values small.
 
-A useful boundary test is to ask what should happen during rollback. If `helm rollback orders 4` should change only the API workload, keep the chart focused on the API workload. If a component needs its own rollback decision, give it its own release or manage it through another system.
+A PostgreSQL database dependency for production needs a different discussion. The orders API uses a database, but the production database has backups, restore testing, network policy, access control, storage upgrades, and its own incident response path. Rolling back the API release should not roll back the database release. That lifecycle difference usually means the database deserves its own chart release or another infrastructure management path.
+
+Local development can make a different choice. A disposable preview environment might install an ephemeral PostgreSQL child chart because the whole environment can disappear after a branch closes. Production needs a stricter boundary because the data outlives one API release.
+
+The rollback question gives reviewers a useful test. If `helm rollback orders 41` should only change the orders API workload, the chart should focus on that workload. If another component needs a separate approval, backup story, or rollback decision, that component should live outside the orders API chart.
 
 ## A Chart Review Walkthrough
+<!-- section-summary: A chart review follows metadata, values, templates, rendered output, validation, and rollback evidence. -->
 
-A chart review should follow the path from source to rendered object. Start with `Chart.yaml` to see whether the chart package changed. Then read `values.yaml` and the environment values file to understand inputs. Then read the relevant templates. Finally, inspect the rendered YAML.
+A chart review should follow the same path Helm follows. The reviewer reads metadata, reads values, checks the templates that changed, renders the chart, and inspects the final Kubernetes objects. This order keeps the conversation grounded in both source intent and cluster output.
 
-```text
-Review order for orders-api chart
+For `devpolaris-orders-api`, a production review can use this checklist. It gives the reviewer a path from package metadata to the exact Kubernetes objects.
 
-1. Chart.yaml
-   Check chart version and chart type.
+| Review step | What the reviewer checks |
+|---|---|
+| `Chart.yaml` | Chart version, chart type, and new dependencies |
+| `values.yaml` | Defaults, value names, and safe behavior without environment overrides |
+| `environments/prod.values.yaml` | Production replica count, image tag, hostname, resources, and enabled options |
+| `templates/deployment.yaml` | Where values land in the Pod, probes, resources, env, and selectors |
+| `templates/service.yaml` | Service port and selector labels |
+| `templates/configmap.yaml` | Plain config keys and quoting |
+| `rendered/prod.yaml` | Final Kubernetes objects that production will receive |
 
-2. values.yaml
-   Check defaults and whether new values are documented by shape.
-
-3. environments/prod.values.yaml
-   Check release decisions for production.
-
-4. templates/deployment.yaml
-   Check where values land in the workload.
-
-5. rendered/prod.yaml
-   Check the final Deployment, Service, ConfigMap, and Ingress.
-```
-
-Here is the kind of rendered evidence a reviewer should look for before approving:
+The rendered evidence should make the release easy to explain. A reviewer should see a concise summary and have access to the full rendered file.
 
 ```bash
-$ helm template orders ./charts/orders-api -f environments/prod.values.yaml \
-  | grep -n "kind:\\|name:\\|replicas:\\|image:\\|readinessProbe:"
-2:kind: Service
+$ helm template orders ./charts/orders-api \
+  --namespace devpolaris-prod \
+  -f environments/prod.values.yaml \
+  | grep -n "kind:\\|name:\\|replicas:\\|image:\\|readinessProbe:\\|host:"
+2:kind: ConfigMap
 4:  name: orders-devpolaris-orders-api
-18:kind: Deployment
-20:  name: orders-devpolaris-orders-api
-27:  replicas: 3
-51:          image: "ghcr.io/devpolaris/orders-api:2026.05.07"
-57:          readinessProbe:
+20:kind: Service
+22:  name: orders-devpolaris-orders-api
+38:kind: Deployment
+40:  name: orders-devpolaris-orders-api
+47:  replicas: 3
+70:          image: "ghcr.io/devpolaris/orders-api:2026.05.07"
+78:          readinessProbe:
+111:  - host: "orders.devpolaris.example"
 ```
 
-If the source says the release is only an image update but the rendered output changes selectors, probes, ports, or namespaces, pause the review. Either the chart changed more than the author realized, or the pull request description is incomplete.
+A strong pull request description then connects source changes to output changes. This keeps the discussion about the rendered release, not only the files that changed.
 
+```
+Chart review: devpolaris-orders-api
 
-![Helm chart summary covering Chart.yaml, values, templates, helpers, lint, and render](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/helm-chart-summary.png)
+Package source:
+- Chart version changes from 0.1.0 to 0.1.1
+- Deployment template adds explicit resources from values
+- Production values keep replicas at 3 and image tag at 2026.05.07
 
-*Use this checklist when building a chart that teammates can safely review.*
+Rendered production output:
+- Deployment image stays ghcr.io/devpolaris/orders-api:2026.05.07
+- Resource requests appear on the API container
+- Service selector stays app.kubernetes.io/name=devpolaris-orders-api
+- Ingress host stays orders.devpolaris.example
+
+Validation:
+- helm lint passed
+- helm template passed for staging and production
+- kubectl diff shows only Deployment container resources
+- server-side dry run passed against the production API server
+```
+
+This review style catches chart surprises before the release. If a template change meant to add resources also changes selectors, names, namespaces, or route hosts, the rendered output will show it. The team can split the pull request, adjust the template, or add a migration plan before production traffic depends on the change.
+
+## What's Next
+
+Helm gives the orders API team a structured package with templates, values, helpers, checks, dependencies, and review evidence. The module continues by comparing this approach with Kustomize overlays, then later returns to a larger design question: how teams keep templates useful without letting them spread into a confusing second application.
 
 ---
 
 **References**
 
-- [Helm Charts](https://helm.sh/docs/topics/charts/) - Official chart structure reference, including `Chart.yaml`, templates, and chart types.
-- [Helm Chart Template Guide](https://helm.sh/docs/chart_template_guide/) - Official guide to Helm's template language and rendering behavior.
-- [Helm Lint](https://helm.sh/docs/helm/helm_lint/) - Official command reference for checking chart structure and template issues.
-- [Recommended Kubernetes Labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/) - Official Kubernetes guidance for labels that make app objects easier to query and manage.
+- [Helm Charts](https://helm.sh/docs/topics/charts/) - Official Helm chart documentation for chart structure, `Chart.yaml`, templates, values, chart types, and dependencies.
+- [Helm Chart Template Guide](https://helm.sh/docs/chart_template_guide/) - Official guide to Helm's template language, values, functions, pipelines, named templates, and debugging.
+- [helm template](https://helm.sh/docs/helm/helm_template/) - Official command reference for rendering chart templates locally and displaying the generated manifests.
+- [helm lint](https://helm.sh/docs/helm/helm_lint/) - Official command reference for checking chart structure and template issues.
+- [helm upgrade](https://helm.sh/docs/helm/helm_upgrade/) - Official command reference for release upgrades, values precedence, dry-run output, and generated manifests.
+- [Helm Dependency Commands](https://helm.sh/docs/helm/helm_dependency/) - Official command family for managing chart dependencies.
+- [Recommended Kubernetes Labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/) - Official Kubernetes guidance for shared `app.kubernetes.io/*` labels across application resources.
+- [kubectl apply](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_apply/) - Official command reference documenting file-based apply and `--dry-run=server`.
+- [kubectl diff](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/) - Official command reference for comparing live resources with would-be applied manifests.

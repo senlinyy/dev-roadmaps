@@ -9,137 +9,120 @@ id: article-containers-orchestration-kubernetes-configuration-storage-backup-and
 
 ## Table of Contents
 
-1. [Backups Start with Knowing Where State Lives](#backups-start-with-knowing-where-state-lives)
+1. [Start with the State Inventory](#start-with-the-state-inventory)
 2. [Kubernetes API Objects and etcd](#kubernetes-api-objects-and-etcd)
-3. [Application Data Is Often Outside etcd](#application-data-is-often-outside-etcd)
-4. [A Recovery Inventory for devpolaris-orders-api](#a-recovery-inventory-for-devpolaris-orders-api)
-5. [Backing Up Manifests and Cluster State](#backing-up-manifests-and-cluster-state)
-6. [Volume Snapshots and PVC Recovery](#volume-snapshots-and-pvc-recovery)
-7. [Restore Drills and Verification](#restore-drills-and-verification)
-8. [Failure Mode: The Backup Exists but Cannot Restore the Service](#failure-mode-the-backup-exists-but-cannot-restore-the-service)
-9. [A Beginner Recovery Checklist](#a-beginner-recovery-checklist)
+3. [Manifests and GitOps Recovery](#manifests-and-gitops-recovery)
+4. [Secrets and Encryption Concerns](#secrets-and-encryption-concerns)
+5. [PVC Snapshots and Restore](#pvc-snapshots-and-restore)
+6. [External Databases and Object Stores](#external-databases-and-object-stores)
+7. [Velero in Real Kubernetes Backups](#velero-in-real-kubernetes-backups)
+8. [Restore Drill Runbook](#restore-drill-runbook)
+9. [RPO and RTO for devpolaris-orders-api](#rpo-and-rto-for-devpolaris-orders-api)
+10. [Verification Checklist](#verification-checklist)
+11. [Failure Patterns to Catch Early](#failure-patterns-to-catch-early)
 
-## Backups Start with Knowing Where State Lives
+## Start with the State Inventory
+<!-- section-summary: A useful backup plan begins by naming every place the service stores state and every system needed to restore it. -->
 
-A backup plan fails when it protects the wrong thing. In Kubernetes, state is split across several places. The API server stores objects such as Deployments, ConfigMaps, Secrets, Services, PVCs, and RBAC rules. Persistent volumes store mounted application files. Databases and object stores often live outside the cluster. Container images live in a registry.
+Backups get confusing in Kubernetes because the application is spread across several kinds of state. Some state lives in the Kubernetes API, some state lives on persistent volumes, and some state lives completely outside the cluster. A restore that protects only one layer may create objects that look right while the service still fails real user workflows.
 
-![Kubernetes state inventory showing API objects, etcd, PVC data, database, object store, and manifests](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/state-location-inventory.png)
+The same `devpolaris-orders-api` from the previous articles gives us a concrete recovery target. The service runs in Kubernetes, writes invoice work files to the `orders-api-workdir` PVC, stores final invoice PDFs in object storage, and keeps order records in a PostgreSQL database. The Kubernetes objects matter, but they are only one part of the recovery picture.
 
-*A useful backup plan starts by listing where each kind of state actually lives.*
+A first inventory can be very plain. The table should fit in a runbook and stay specific enough for a teammate to use during a drill, because vague backup notes rarely help when the service is already down:
 
+| State | Example for `devpolaris-orders-api` | Where it lives | Recovery owner |
+|---|---|---|---|
+| Workload objects | Deployment, Service, ServiceAccount, RBAC | Kubernetes API | Platform and app team |
+| Configuration | `orders-api-config` ConfigMap | Kubernetes API and Git | App team |
+| Secrets | Database credentials, API tokens | Kubernetes API and secret manager | Platform and security team |
+| Work files | `/var/lib/devpolaris/orders-work` | PVC backing storage | Platform and app team |
+| Business records | Orders, payment state, invoice metadata | PostgreSQL | Database team |
+| Final documents | Uploaded invoice PDFs | Object storage | App team and platform |
+| Images | `ghcr.io/devpolaris/orders-api:1.18.0` | Container registry | CI/CD owner |
 
-Backup and restore basics are about mapping those locations before choosing a tool. If `devpolaris-orders-api` loses a ConfigMap, the fix is different from losing a PostgreSQL table or a PVC full of invoice work files. One restore command cannot cover every kind of state unless it knows all the systems involved.
-
-```mermaid
-flowchart TD
-    A["Kubernetes API objects<br/>Deployments, ConfigMaps, Secrets"] --> B["etcd<br/>cluster state store"]
-    C["PVC data<br/>work directory files"] --> D["Storage backend<br/>disk or file share"]
-    E["Business data<br/>orders and payments"] --> F["Database"]
-    G["Images"] --> H["Container registry"]
-```
-
-The first operational skill is inventory. List what the service needs to run, where each piece lives, who owns it, and how it is restored.
+This table changes the conversation from "we have Kubernetes backups" to "we know which system restores each kind of state." That is the conversation a team needs before an outage, because each row has different tooling, permissions, retention, and verification.
 
 ## Kubernetes API Objects and etcd
+<!-- section-summary: Kubernetes stores API objects through etcd, so control plane recovery protects the desired cluster objects but not every piece of application data. -->
 
-etcd is the database the Kubernetes control plane uses to store API objects. It is a distributed key-value store, which means it stores named records and replicates them across members for consistency.
+**etcd** is the strongly consistent key-value store used by the Kubernetes control plane. When you create a Deployment, ConfigMap, Secret, Service, PVC, RoleBinding, or CustomResource, the Kubernetes API stores that object through etcd. The API server, scheduler, controller manager, and kubelets all work from that API state.
 
-Example: when you create a ConfigMap, Secret, Deployment, or PVC, that object becomes API state stored through etcd. If etcd is lost without a backup, the cluster can lose the record of what should exist.
+For managed Kubernetes, the cloud provider usually operates the control plane and its etcd backups. The application team still needs to know the provider's restore boundary, restore timing, and support process. A managed control plane restore may bring back API objects, while the database, object store, and deleted backing disks follow their own recovery processes.
 
-Many managed Kubernetes platforms handle control plane backups for you, but you still need to understand the boundary. A managed control plane backup may restore API objects. It does not automatically restore data inside an external database. It may not restore a deleted cloud disk if the disk was removed by a reclaim policy.
-
-For self-managed clusters, etcd snapshot commands are part of the administrator runbook. A simplified snapshot command looks like this:
-
-```bash
-$ ETCDCTL_API=3 etcdctl snapshot save /var/backups/etcd/snapshot-2026-05-07.db   --endpoints=https://127.0.0.1:2379   --cacert=/etc/kubernetes/pki/etcd/ca.crt   --cert=/etc/kubernetes/pki/etcd/server.crt   --key=/etc/kubernetes/pki/etcd/server.key
-Snapshot saved at /var/backups/etcd/snapshot-2026-05-07.db
-```
-
-Do not copy this blindly into a managed cluster. The file paths and operational responsibility vary by installation. The point is the concept: API state has its own backup path, and that path is separate from application data backups.
-
-## Application Data Is Often Outside etcd
-
-A common beginner mistake is assuming that backing up Kubernetes backs up the application. A Deployment manifest can be restored perfectly while the database is still empty. A PVC object can be restored while the underlying disk data is gone. A Secret can be restored while the external credential it points to has already been revoked.
-
-`devpolaris-orders-api` has at least four state surfaces:
-
-| State | Example | Backup Owner |
-|-------|---------|--------------|
-| Kubernetes config | ConfigMaps, Secrets, Deployment YAML | Platform or GitOps system |
-| Work files | PVC mounted at `/var/lib/devpolaris/orders-work` | Storage platform |
-| Business records | PostgreSQL orders tables | Database team or managed database |
-| Images | `ghcr.io/devpolaris/orders-api:1.18.0` | CI and registry retention |
-
-This table prevents false confidence. If someone says "we have Kubernetes backups," ask which row they mean. A real recovery plan covers every row needed to serve traffic again.
-
-## A Recovery Inventory for devpolaris-orders-api
-
-A small recovery inventory can live beside the service runbook. It should be specific enough that a teammate can use it during a restore drill.
-
-```text
-Service: devpolaris-orders-api
-Namespace: devpolaris-prod
-Deployment: orders-api
-ConfigMap: orders-api-config
-Secret: orders-api-secrets
-PVC: orders-api-workdir
-Database: postgres cluster orders-prod, database orders
-Registry image: ghcr.io/devpolaris/orders-api
-Critical endpoints: /healthz, /readyz, /internal/config
-```
-
-Add recovery expectations alongside object names.
-
-```text
-Recovery expectations
-- Config and workload manifests can be reapplied from Git.
-- Secret material comes from the production secret manager.
-- PVC workdir can be restored from the latest storage snapshot if invoice handoff files are missing.
-- Orders database recovery follows the database team's point-in-time restore process.
-- Service is considered restored only after /readyz passes and a test order can be read.
-```
-
-That last line matters. Restore is not complete when YAML applies successfully. Restore is complete when the application performs the business behavior users need.
-
-## Backing Up Manifests and Cluster State
-
-A manifest backup is the recoverable record of the Kubernetes objects you intended to run. Git is a strong place for that record when you practice declarative delivery. If your Deployments, ConfigMaps, Services, RBAC, and PVC manifests live in Git, you can recreate much of the desired API state.
-
-Cluster recovery still needs separate backups for runtime state and data. Example: Git can recreate the `orders-api-workdir` PVC object, but a storage snapshot or application backup must recover the files that lived on the volume.
-
-A simple export command can help during learning, but it is not a clean primary record because live objects contain generated fields.
+For self-managed clusters, etcd snapshots are a platform administrator responsibility. A simplified snapshot command looks like this, and the real runbook should use the paths and endpoints from your cluster:
 
 ```bash
-$ kubectl get deploy,svc,configmap,secret,pvc -n devpolaris-prod -o yaml > devpolaris-prod-api-objects.yaml
+ETCDCTL_API=3 etcdctl snapshot save /var/backups/etcd/snapshot-2026-06-16.db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
 ```
 
-That file may contain resource versions, managed fields, timestamps, and data you should not commit. Use exports for emergency inspection, not as your normal backup strategy.
+The exact endpoints and certificate paths depend on the cluster installation. The important idea is that API state has its own backup path. That path should be tested by platform engineers, and application teams should understand whether they restore objects from Git, from a cluster backup tool, or from a managed control plane recovery process.
 
-A better steady-state pattern is:
+Snapshot evidence should be checked before the team trusts it. The status command gives the platform team a quick sanity check before the snapshot is stored as recovery evidence:
 
-| Object Type | Primary Recovery Record |
-|-------------|-----------------|
-| Deployment and Service | Git manifests or Helm chart |
-| ConfigMap | Git manifest when values are non-secret |
-| Secret | External secret store or encrypted manifest process |
-| PVC | Git manifest for the claim, storage snapshot for the data |
-| RBAC | Git manifests reviewed by platform team |
+```bash
+ETCDCTL_API=3 etcdctl snapshot status /var/backups/etcd/snapshot-2026-06-16.db --write-out=table
+```
 
-The API object and the data behind it are different layers. Back up both when both matter.
+etcd snapshots can contain sensitive API data, including Secrets as stored by the API server. Snapshot files should receive the same protection as production secrets: encrypted storage locations, restricted access, and incident response coverage.
 
-## Volume Snapshots and PVC Recovery
+## Manifests and GitOps Recovery
+<!-- section-summary: GitOps gives the team a clean record of intended Kubernetes objects, while runtime backups handle state outside Git. -->
 
-A volume snapshot is a point-in-time recovery copy for a PVC's backing storage. It is useful when a team needs to recover files from a work directory, clone data into a restore namespace, or inspect a previous version without changing the original volume.
+A strong Kubernetes recovery plan usually starts with version-controlled manifests. If the Deployment, Service, ConfigMap, RBAC, NetworkPolicy, and PVC manifest live in Git, the team can recreate the intended API objects in a clean namespace or cluster. Helm, Kustomize, and GitOps controllers all fit this pattern when the repository is treated as the recovery record.
 
-Many CSI storage drivers support VolumeSnapshot resources. The exact guarantees depend on the driver and storage system, especially when applications are writing during the snapshot.
+For the orders API, the Git repository should answer basic questions quickly. Which image tag should run? Which Service exposes it? Which ServiceAccount does it use? Which PVC name does the Deployment mount? Which ConfigMap keys does the app expect?
 
-A snapshot object usually points at a PVC.
+You can export live objects during an incident investigation. This gives you a point-in-time file for comparison, review, or emergency handoff:
+
+```bash
+kubectl get deploy,svc,configmap,secret,pvc,serviceaccount,rolebinding \
+  -n devpolaris-prod \
+  -o yaml > devpolaris-prod-api-export.yaml
+```
+
+That export is useful evidence, but it contains generated fields, timestamps, resource versions, and possibly sensitive data. The normal recovery record should be a reviewed Git manifest or chart. The emergency export helps compare live state against the intended state.
+
+Git recovery and cluster backup tools complement each other. Git recreates the intended shape of the service. Cluster backup tools can capture runtime Kubernetes objects and selected volume data. Database backups, object storage versioning, and registry retention still need their own coverage.
+
+## Secrets and Encryption Concerns
+<!-- section-summary: Secrets need their own recovery and protection plan because API backups and etcd snapshots can carry sensitive values. -->
+
+A Kubernetes **Secret** is an API object used to hold sensitive values such as tokens, passwords, and TLS keys. The `data` field uses base64 encoding for the API shape, and real confidentiality comes from RBAC, encryption at rest, secret-management workflows, and careful access to backups.
+
+For `devpolaris-orders-api`, the Secret might contain a database connection password and a token used to sign invoice download links. Restoring the Deployment and ConfigMap only works when the Secret is recoverable and the external database credential still matches. The Secret row in the inventory needs an owner and a recovery source.
+
+Many teams use an external secret manager as the source of truth, then sync values into Kubernetes. Other teams use encrypted manifests with tools such as SOPS or Sealed Secrets. The exact tool can vary, but the restore question stays the same: can the team recreate the Secret values in the target cluster without copying plaintext through chat, shell history, or unencrypted files?
+
+Kubernetes also supports encrypting API data at rest, including Secrets, through an encryption configuration and optional KMS integration. This protects stored API data and makes etcd snapshots safer to handle, as long as the encryption keys and KMS access are also recoverable. Losing the keys can turn a backup into unreadable data.
+
+During a restore drill, test Secret recovery directly. The check should prove both object existence and application authentication:
+
+```bash
+kubectl get secret orders-api-secrets -n devpolaris-restore-drill
+
+kubectl rollout status deploy/orders-api -n devpolaris-restore-drill
+
+kubectl logs deploy/orders-api -n devpolaris-restore-drill | grep -i 'database connection'
+```
+
+The goal is to prove the application can authenticate to its dependencies after restore. A Secret object that exists but contains stale credentials still leaves the service broken.
+
+## PVC Snapshots and Restore
+<!-- section-summary: VolumeSnapshots can capture PVC data, and a safe restore usually creates a new PVC first so the team can inspect it. -->
+
+A **VolumeSnapshot** is a Kubernetes API object that asks a CSI snapshot driver to capture a point-in-time copy of a PVC's backing volume. It is useful for recovering the invoice work directory, cloning data into a test environment, or inspecting files from an earlier point without changing the live claim.
+
+The snapshot object points at the production workdir claim whose backing data the team wants to capture:
 
 ```yaml
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: orders-api-workdir-2026-05-07
+  name: orders-api-workdir-2026-06-16-0900
   namespace: devpolaris-prod
 spec:
   volumeSnapshotClassName: standard-snapshot
@@ -147,15 +130,22 @@ spec:
     persistentVolumeClaimName: orders-api-workdir
 ```
 
-After creation, inspect readiness.
+After applying the snapshot, check readiness. A snapshot should be ready before you write a restore step around it:
 
 ```bash
-$ kubectl get volumesnapshot -n devpolaris-prod
-NAME                            READYTOUSE   SOURCEPVC            RESTORESIZE   AGE
-orders-api-workdir-2026-05-07   true         orders-api-workdir    20Gi          3m
+kubectl get volumesnapshot orders-api-workdir-2026-06-16-0900 -n devpolaris-prod
+
+kubectl describe volumesnapshot orders-api-workdir-2026-06-16-0900 -n devpolaris-prod
 ```
 
-A restore often creates a new PVC from a snapshot, then mounts that claim into a recovery Pod or replacement workload. Do not overwrite the original path in production until you have verified the restored data.
+The output should show `READYTOUSE` as true. That field tells the team the snapshot is ready for restore input:
+
+```bash
+NAME                                  READYTOUSE   SOURCEPVC            RESTORESIZE   AGE
+orders-api-workdir-2026-06-16-0900    true         orders-api-workdir    20Gi          3m
+```
+
+A careful restore creates a new PVC from the snapshot first. This gives the team a safe copy to inspect before changing the live workload:
 
 ```yaml
 apiVersion: v1
@@ -166,7 +156,7 @@ metadata:
 spec:
   storageClassName: standard-retain
   dataSource:
-    name: orders-api-workdir-2026-05-07
+    name: orders-api-workdir-2026-06-16-0900
     kind: VolumeSnapshot
     apiGroup: snapshot.storage.k8s.io
   accessModes:
@@ -176,147 +166,170 @@ spec:
       storage: 20Gi
 ```
 
-Snapshots can capture storage in the middle of an application operation. If the app writes several files as one logical operation, a storage snapshot might capture the middle of that operation. Databases need database-aware backup procedures alongside disk snapshots.
+The restored claim should be mounted into a recovery Pod or a temporary copy of the application before production traffic points at it. That inspection avoids overwriting the live path while the team is still learning what the snapshot contains.
 
-## Restore Drills and Verification
+Snapshots have consistency limits. A filesystem snapshot can catch the application in the middle of writing several files. For databases, use database-aware backup and restore procedures instead of treating a disk snapshot as the whole recovery plan.
 
-A restore drill is a planned practice restore. It proves that your backup can become a working service. Without drills, teams often discover missing permissions, missing encryption keys, expired registry tags, or incomplete runbooks during a real outage.
+## External Databases and Object Stores
+<!-- section-summary: Kubernetes restores the cluster side of the service, while databases and object stores need their own backup policies and drills. -->
 
-![Kubernetes restore drill path showing backup, restore target, app start, data verification, and evidence record](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/restore-drill-path.png)
+Most production applications keep the most valuable state outside Kubernetes. The orders API keeps order records and payment state in PostgreSQL, while final invoice PDFs live in object storage. Those systems need their own backup schedules, retention rules, restore permissions, and verification steps.
 
-*A backup is only useful after a restore drill proves the service can run from it.*
+For PostgreSQL, the database team may use managed backups, write-ahead log archiving, point-in-time restore, or a database-specific backup tool. The application runbook should link to that process and name the restored database endpoint the Kubernetes Secret should use during a drill. A restored Deployment that points at the wrong database can pass `Running` checks while serving the wrong data.
 
+For object storage, the recovery plan may use versioning, lifecycle policies, replication, retention locks, or provider-native restore features. The invoice PDFs should have their own retention and integrity checks because the PVC work directory only holds files temporarily. The workdir snapshot helps with in-flight files, while object storage protects the completed archive.
 
-For `devpolaris-orders-api`, a safe drill can use a temporary namespace.
+Container images also need retention. If `ghcr.io/devpolaris/orders-api:1.18.0` disappears from the registry, Kubernetes can have perfect manifests and still fail to pull the application. Release images should be immutable, retained, and documented in the same recovery inventory.
 
-```bash
-$ kubectl create namespace devpolaris-restore-drill
-namespace/devpolaris-restore-drill created
+## Velero in Real Kubernetes Backups
+<!-- section-summary: Velero is a common Kubernetes backup tool, but teams still need to understand which resources and volumes it captures. -->
 
-$ kubectl apply -n devpolaris-restore-drill -f k8s/prod/orders-api-configmap.yaml
-configmap/orders-api-config created
+Velero is a widely used open-source tool for Kubernetes backup, restore, and migration. It runs a controller in the cluster and gives operators a CLI and custom resources for creating backups and restores. It can back up Kubernetes API resources and, depending on configuration, persistent volume data through snapshots or file-system backup.
 
-$ kubectl get pods -n devpolaris-restore-drill
-NAME                          READY   STATUS    RESTARTS   AGE
-orders-api-6c78464b7b-ppt5n   1/1     Running   0          74s
-```
+Velero is helpful because it wraps a lot of Kubernetes backup work into one operational workflow. A platform team can schedule namespace backups, store backup metadata in object storage, include or exclude resources, and restore into another namespace or cluster. The team still needs to choose storage plugins, permissions, backup locations, and volume backup strategy carefully.
 
-The useful verification goes beyond `Running`.
+A simple backup for the orders namespace might look like this. In a real platform setup, this command would follow the team's approved storage location and retention settings:
 
 ```bash
-$ kubectl logs deploy/orders-api -n devpolaris-restore-drill | grep 'configuration loaded' | tail -1
-2026-05-07T15:03:22.721Z INFO configuration loaded service=devpolaris-orders-api databaseUrl=present workdir=/var/lib/devpolaris/orders-work
-
-$ kubectl exec deploy/orders-api -n devpolaris-restore-drill -- wget -qO- http://127.0.0.1:8080/readyz
-ok
+velero backup create orders-api-prod-2026-06-16 \
+  --include-namespaces devpolaris-prod \
+  --wait
 ```
 
-A useful restore proves the service can do its job: Pods connect to their databases, restored volumes contain the right files, and file ownership lets the application use them.
-
-## Failure Mode: The Backup Exists but Cannot Restore the Service
-
-The painful failure is having a backup that cannot restore the service. This happens when the backup covers only one layer.
-
-A realistic incident might look like this:
-
-```text
-Incident: orders-api restore drill failed
-Observed: Deployment restored, Pods CrashLoopBackOff
-Pod log: database migration table missing
-Kubernetes objects: restored from Git
-PVC: restored from snapshot
-Database: no restore performed in drill namespace
-Result: service cannot pass /readyz
-```
-
-The diagnostic path follows the state inventory. Check API objects, then mounted storage, then external dependencies.
+A restore into a drill namespace might look like this. Namespace mapping lets the team practice without overwriting the production namespace:
 
 ```bash
-$ kubectl get deploy,configmap,secret,pvc -n devpolaris-restore-drill
-$ kubectl logs deploy/orders-api -n devpolaris-restore-drill --previous
-$ kubectl exec deploy/orders-api -n devpolaris-restore-drill -- ls -l /var/lib/devpolaris/orders-work
-$ kubectl describe secret orders-api-secrets -n devpolaris-restore-drill
+velero restore create orders-api-drill-2026-06-16 \
+  --from-backup orders-api-prod-2026-06-16 \
+  --namespace-mappings devpolaris-prod:devpolaris-restore-drill \
+  --wait
 ```
 
-If the database was not restored or reachable, no amount of Kubernetes object recovery will make the service healthy. The fix is to update the runbook so database restore is part of the drill, with a test database target and clear ownership.
+Those commands are only the first layer of the policy. The platform team needs to decide whether cluster-scoped resources are included, how Secrets are handled, how PV data is captured, where backups are stored, which credentials Velero uses, and how restore logs are reviewed. Kubernetes concepts still matter because Velero restores Kubernetes objects and volumes through Kubernetes APIs and storage integrations.
 
-## A Beginner Recovery Checklist
+## Restore Drill Runbook
+<!-- section-summary: A restore drill proves the backup by rebuilding the service in a controlled target and checking real application behavior. -->
 
-A backup checklist should be short enough to use and specific enough to prevent false confidence. Start with the service, then map state to restore evidence.
+A restore drill is a planned practice recovery. It should use a safe target, such as a temporary namespace or non-production cluster, and it should produce evidence that the service works. The drill should also record what failed, which permissions were missing, and how long the recovery took.
 
-| Layer | Backup Question | Restore Evidence |
-|-------|-----------------|------------------|
-| Manifests | Can we recreate intended objects? | `kubectl apply` succeeds in a test namespace |
-| Secrets | Can the service receive valid credentials? | App logs redacted `present` checks and auth succeeds |
-| PVC data | Can files be restored to a claim? | Recovery Pod lists expected files |
-| Database | Can business records be recovered? | Application reads a known test order |
-| Registry | Can Kubernetes pull the required image? | Pod starts with the expected image digest |
-| DNS and ingress | Can users reach the service? | Health check passes through the real route |
+The `devpolaris-orders-api` drill can stay beginner-friendly and still produce useful evidence. Each step should leave a record that the team can inspect after the practice run:
 
-Run the checklist before you need it. A restore drill turns backup from a hopeful file into an operational capability. The useful recovery skill is knowing which state you lost, which system owns that state, and which evidence proves the service is useful again.
+1. Drill namespace creation.
 
-### Restore Order Matters
-
-A restore order is the dependency sequence that brings a service back without creating avoidable noise. Restoring a Deployment before its Secret, PVC, or database is ready may create CrashLoopBackOff Pods. That noise can hide the real missing dependency while the team is trying to recover.
-
-For `devpolaris-orders-api`, a clean restore order is usually infrastructure first, data second, workload last.
-
-```text
-Suggested restore order
-1. Namespace, RBAC, and service accounts.
-2. ConfigMaps and Secret delivery mechanism.
-3. PVCs or restored claims.
-4. Database or external dependency restore.
-5. Deployment, Service, and ingress route.
-6. Readiness checks and one business transaction check.
+```bash
+kubectl create namespace devpolaris-restore-drill
 ```
 
-This order prevents the application from starting into an empty environment. It also gives you clearer checkpoints. If PVC restore fails at step 3, you know the Deployment is not the problem yet.
+2. Kubernetes manifest restore or apply.
 
-Automation is useful when it respects dependency order and reports which layer failed.
-
-### What Not to Call a Backup
-
-Several useful things are not backups by themselves. A replica is not a backup because it can faithfully copy deletion or corruption. A retained PV is not a backup because it may live in the same failure domain. A Git manifest is not a data backup because it cannot recreate rows in a database.
-
-This distinction helps when people use the word backup loosely during planning.
-
-| Artifact | Useful For | Missing Piece |
-|----------|------------|---------------|
-| Git manifests | Recreating intended Kubernetes objects | Runtime data and secret material |
-| Replica count of 3 | Surviving one Pod failure | Deleted or corrupted data |
-| Retained PV | Preventing automatic disk deletion | Point-in-time recovery |
-| Container image tag | Recreating software version | Config, data, and credentials |
-| Database read replica | Read scaling or failover | Protection from logical deletion unless configured |
-
-A real backup gives you a separate recovery point and a tested restore path. The word tested matters. Until you have restored from it, the backup is only a candidate.
-
-A restore drill should leave a small evidence bundle. Keep it boring and specific so the next drill can compare results.
-
-```text
-Restore drill evidence
-Namespace: devpolaris-restore-drill
-Image: ghcr.io/devpolaris/orders-api@sha256:7b1f4c
-Config loaded: yes
-Secret delivery: redacted presence checks passed
-PVC files restored: 128 files
-Readiness: /readyz returned ok
-Business check: test order ord_restore_001 read successfully
+```bash
+kubectl apply -n devpolaris-restore-drill -f k8s/base/orders-api/
 ```
 
-That evidence is more useful than saying "restore succeeded." It names the layers that were tested and gives the next engineer a baseline.
+3. Secret restore from the approved secret workflow.
 
+```bash
+kubectl get secret orders-api-secrets -n devpolaris-restore-drill
+```
 
-![Kubernetes backup and restore summary covering inventory, manifests, etcd, PVC snapshots, external data, and restore drills](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/backup-restore-summary.png)
+4. PVC copy restore from a snapshot or backup tool.
 
-*Use this checklist to avoid backing up only the easy part of the system.*
+```bash
+kubectl get pvc -n devpolaris-restore-drill
+```
+
+5. Drill service connection to a restored database clone or approved read-only test database.
+
+```bash
+kubectl rollout restart deploy/orders-api -n devpolaris-restore-drill
+```
+
+6. Application startup and readiness evidence.
+
+```bash
+kubectl rollout status deploy/orders-api -n devpolaris-restore-drill
+
+kubectl get pods -n devpolaris-restore-drill
+```
+
+7. Business behavior verification.
+
+```bash
+kubectl exec deploy/orders-api -n devpolaris-restore-drill -- \
+  wget -qO- http://127.0.0.1:8080/readyz
+
+kubectl exec deploy/orders-api -n devpolaris-restore-drill -- \
+  ls -lah /var/lib/devpolaris/orders-work
+```
+
+The drill ends with notes, not just a green command output. The record should include the backup name, snapshot name, database restore point, image tag, commands used, duration, errors, and the person who approved cleanup. That evidence makes backup work a repeatable operating process.
+
+## RPO and RTO for devpolaris-orders-api
+<!-- section-summary: RPO describes acceptable data loss, while RTO describes acceptable recovery time for each state surface. -->
+
+**Recovery Point Objective**, or **RPO**, answers this question: how much recent data can the business afford to lose? If the invoice workdir has a 15-minute RPO, the backup strategy should capture recoverable work files at least that often or the application should safely recreate them.
+
+**Recovery Time Objective**, or **RTO**, answers a different question: how quickly does the service need to return? If the orders API has a 30-minute RTO for invoice generation, the restore process, permissions, people, and tooling must fit inside that time during a real incident.
+
+RPO and RTO belong to each state surface. Different state has different business value and different restore mechanics:
+
+| State | Example RPO | Example RTO | Recovery path |
+|---|---:|---:|---|
+| Kubernetes manifests | Last merged Git commit | 15 minutes | Reapply manifests or sync GitOps controller. |
+| Secrets | Last approved rotation | 30 minutes | Recreate from secret manager or encrypted manifest workflow. |
+| PVC workdir | 15 minutes | 30 minutes | Restore from VolumeSnapshot or Velero volume backup. |
+| PostgreSQL orders database | 5 minutes | 60 minutes | Database point-in-time restore. |
+| Object storage invoices | Near-zero for completed files | 45 minutes | Object versioning, replication, or provider restore. |
+| Container image | Released image retained | 15 minutes | Pull immutable release tag from registry. |
+
+The numbers above are examples, not universal targets. A startup, a bank, and an internal reporting app can choose different objectives. The key is writing the targets down and testing the restore path against them.
+
+## Verification Checklist
+<!-- section-summary: A restore is complete when the service behavior, data, credentials, and observability all work in the restored target. -->
+
+Verification should prove that the application works, not just that Kubernetes objects exist. A Pod in `Running` state can still have stale config, wrong credentials, missing PVC data, or no connection to the restored database. Service checks should cover both inside-the-cluster behavior and the business workflow.
+
+A drill checklist like this verifies the service behavior, the data, and the operating signals together:
+
+| Area | Check | Command or evidence |
+|---|---|---|
+| Workload | Deployment rolled out | `kubectl rollout status deploy/orders-api -n devpolaris-restore-drill` |
+| Pods | Pods are ready with expected image | `kubectl get pods -o wide -n devpolaris-restore-drill` |
+| Config | ConfigMap keys match expected release | `kubectl describe configmap orders-api-config -n devpolaris-restore-drill` |
+| Secrets | Secret exists and app can authenticate | App logs show database connection success. |
+| PVC | Restored claim is bound and mounted | `kubectl get pvc -n devpolaris-restore-drill` |
+| Files | Invoice work files are present and writable | `ls -lah /var/lib/devpolaris/orders-work` from inside the Pod. |
+| Database | Restored database contains expected order records | Application read test or database team evidence. |
+| Object storage | Completed invoice PDF can be read | Signed test URL or storage inventory evidence. |
+| Networking | Service endpoints exist | `kubectl get endpointslice -n devpolaris-restore-drill` |
+| Observability | Logs and metrics arrive | Dashboard screenshot or query result in the drill record. |
+
+After verification, cleanup should be deliberate. Drill namespaces and temporary PVCs should be removed according to the reclaim policy and data handling rules. Retained volumes and restored databases can contain customer data, so cleanup needs the same care as creation.
+
+## Failure Patterns to Catch Early
+<!-- section-summary: Many backup plans fail because one layer restores while another required layer is missing, stale, or inaccessible. -->
+
+The easiest failure to catch is missing inventory. A team restores Kubernetes objects and then discovers the database restore requires a different team, a different region, or a ticket that takes hours. The inventory should name owners and links before the incident.
+
+Another common failure is stale Secret material. The Secret object restores, but the database password rotated last week and the restored value no longer works. A drill catches this quickly because the app starts, tries to connect, and logs the authentication failure.
+
+PVC restores can fail through class mismatch and topology mismatch. The restored claim may ask for a StorageClass missing from the target cluster, or it may create a volume in a zone outside the restored Pod's scheduling options. StorageClass names, CSI drivers, and topology expectations belong in the restore runbook.
+
+Velero and snapshot backups can also miss external systems. A namespace backup can include the Deployment and PVC metadata while the PostgreSQL database and object storage archive follow separate processes. The restore checklist should force those external checks instead of stopping at `kubectl get pods`.
+
+The final failure pattern is skipped practice. A backup should have restore evidence, a named owner, and a recent drill result. Every application change that moves state to a new database, bucket, volume, or Secret should update the runbook and the next drill checklist.
 
 ---
 
 **References**
 
-- [Operating etcd clusters for Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/) - Official administration guide that includes snapshot commands and restore concepts for cluster state.
-- [Volume Snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) - Official concept page for snapshot resources and CSI snapshot behavior.
-- [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) - Official concept page for PersistentVolume and PersistentVolumeClaim lifecycle, binding, access modes, and reclaim policy.
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official concept page for Secret types, storage cautions, and Pod usage patterns.
-- [Troubleshooting Applications](https://kubernetes.io/docs/tasks/debug/debug-application/) - Official debugging entry point for inspecting Pods, events, logs, and application failures.
+- [Kubernetes Volume Snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) - Defines VolumeSnapshot resources and the Kubernetes snapshot model for PVC data.
+- [Kubernetes Volume Snapshot Classes](https://kubernetes.io/docs/concepts/storage/volume-snapshot-classes/) - Explains VolumeSnapshotClass configuration and snapshot driver selection.
+- [Kubernetes Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) - Provides the foundation for PVC binding, reclaim policy, and restored volume behavior.
+- [Operating etcd clusters for Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/) - Covers etcd operation and snapshot commands for Kubernetes administrators.
+- [Encrypting Confidential Data at Rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) - Documents Kubernetes API data encryption at rest and KMS provider options.
+- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Explains Secret objects, usage patterns, and security considerations.
+- [Declarative Management of Kubernetes Objects Using Configuration Files](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/) - Describes managing Kubernetes objects from declarative files.
+- [Velero documentation overview](https://velero.io/docs/v1.16/) - Describes Velero backup, restore, migration, and persistent volume support.
+- [Velero Backup Reference](https://velero.io/docs/v1.16/backup-reference/) - Documents backup commands, schedules, resource filtering, and backup behavior.
+- [Velero Restore Reference](https://velero.io/docs/v1.16/restore-reference/) - Documents restore commands, restore workflow, and resource ordering.

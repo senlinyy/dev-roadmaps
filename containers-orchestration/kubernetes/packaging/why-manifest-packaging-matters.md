@@ -9,175 +9,238 @@ id: article-containers-orchestration-kubernetes-packaging-why-manifest-packaging
 
 ## Table of Contents
 
-1. [The Copy Problem Behind Kubernetes YAML](#the-copy-problem-behind-kubernetes-yaml)
+1. [Why Copying YAML Starts To Hurt](#why-copying-yaml-starts-to-hurt)
 2. [What Manifest Packaging Means](#what-manifest-packaging-means)
-3. [The Running Example](#the-running-example)
+3. [The Orders API Example](#the-orders-api-example)
 4. [Rendering Before Applying](#rendering-before-applying)
-5. [What Packaging Should Not Hide](#what-packaging-should-not-hide)
-6. [Failure Mode: A Small Difference Reaches Production](#failure-mode-a-small-difference-reaches-production)
-7. [Choosing the Smallest Useful Package](#choosing-the-smallest-useful-package)
-8. [A Review Habit for Packaged Manifests](#a-review-habit-for-packaged-manifests)
-9. [What CI Should Prove](#what-ci-should-prove)
+5. [How Environment Differences Stay Reviewable](#how-environment-differences-stay-reviewable)
+6. [The Selector Drift Failure](#the-selector-drift-failure)
+7. [Choosing A Small First Package](#choosing-a-small-first-package)
+8. [CI Checks For Packaged Manifests](#ci-checks-for-packaged-manifests)
+9. [Production Review Before Release](#production-review-before-release)
 10. [A Practical Migration Path](#a-practical-migration-path)
+11. [What's Next](#whats-next)
 
-## The Copy Problem Behind Kubernetes YAML
+## Why Copying YAML Starts To Hurt
+<!-- section-summary: Kubernetes YAML stays easy while one app has one environment, then copied manifests make small differences hard to see. -->
 
-Kubernetes work starts with plain YAML. A Deployment says which Pods should exist, a Service gives those Pods a stable network name, a ConfigMap carries plain settings, and an Ingress or Gateway decides how outside traffic reaches the app. That directness is good for learning because every field is visible.
+Kubernetes asks you to describe the desired state of your application with API objects. A **Deployment** describes the Pods the platform should keep running, a **Service** gives those Pods a stable network address inside the cluster, a **ConfigMap** stores plain configuration values, and an **Ingress** or **Gateway** can route traffic from outside the cluster to the Service. Those objects use YAML because humans can read it, review it, and keep it in Git.
 
-![Kubernetes manifest copy problem showing base manifest copied into dev, staging, prod, and drifting](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/yaml-copy-problem.png)
+That directness helps a lot at the start. A team building `devpolaris-orders-api` can place four files in a `k8s/` directory, apply them to a staging namespace, and understand the whole release by reading the files. The Deployment names the container image, the Service maps port `80` to the API's `8080` port, the ConfigMap provides values such as `LOG_LEVEL`, and the Ingress owns a hostname such as `orders.staging.devpolaris.example`.
 
-*Copied YAML makes small environment differences hard to review.*
+Now the team adds production. Production needs three replicas instead of one, a different hostname, stricter resource requests, and a different image tag during a controlled release. A quick copy from `staging/` into `prod/` solves the first deploy, and the repository still looks friendly. The trouble grows quietly as every future fix needs a human to remember which copies should match and which copies should differ.
 
+Here is the kind of drift that shows up after several releases. Staging has moved to the recommended Kubernetes application label, while production still has the older label on one object.
 
-The trouble starts when the same application runs in more than one place. `devpolaris-orders-api` needs a staging namespace, a production namespace, different replica counts, different image tags, and different hostnames. If the team copies four YAML files into two environment folders, the first release is easy. The tenth release is where small differences begin to hide.
-
-Manifest packaging is the answer to that repetition. It lets you keep one shared shape for an application and apply deliberate differences for each environment. The important promise is not shorter YAML. The promise is that reviewers can understand what will run without comparing twenty copied files by hand.
-
-You can see the risk in a normal repository diff. A teammate changes the Deployment label in staging because the team adopted the recommended Kubernetes app labels. Production still has the old label because nobody remembered the second copy. Both files look valid. Both apply cleanly. Only one of them still matches the Service selector.
-
-```text
-Copied manifest risk
-
-staging/deployment.yaml
-  app.kubernetes.io/name: devpolaris-orders-api
-
-prod/deployment.yaml
-  app: orders-api
-
-prod/service.yaml
-  selector:
-    app: orders-api
+```
+k8s/
+  staging/
+    deployment.yaml  # app.kubernetes.io/name: devpolaris-orders-api
+    service.yaml     # selector uses app.kubernetes.io/name
+  prod/
+    deployment.yaml  # app.kubernetes.io/name: devpolaris-orders-api
+    service.yaml     # selector still uses app: orders-api
 ```
 
-This is the kind of problem packaging is meant to reduce. The shared label pattern should live in one place, and each environment should only declare the differences that truly belong to that environment.
+Both production files can pass a quick visual scan because the names look familiar. Kubernetes also accepts the files because a Service selector can target any label key. The release fails later, when the Service cannot find the Pods that the Deployment created.
+
+That is the packaging problem in plain English. The team wants one shared application shape, plus deliberate environment choices, plus a review step that shows the final Kubernetes YAML before anything reaches the cluster.
 
 ## What Manifest Packaging Means
+<!-- section-summary: Manifest packaging creates ordinary Kubernetes objects from a reusable source form, so teams can review output instead of maintaining copied files. -->
 
-Manifest packaging is a pre-apply build step for Kubernetes YAML. You keep a reusable source form, ask a tool to render it, and then review or apply the ordinary Kubernetes objects that come out. The source might be a Helm chart, a Kustomize base with overlays, or another tool in the same family.
+**Manifest packaging** means the team keeps Kubernetes configuration in a reusable source form and renders it into normal Kubernetes YAML before apply time. The source form might use a Helm chart, a Kustomize base with overlays, or another tool that fits the same pattern. The important habit stays the same: the package source creates Kubernetes objects, and the rendered objects still deserve review.
 
-Example: the orders API package can keep one shared Deployment shape while staging supplies `replicaCount: 1` and production supplies `replicaCount: 3`. Kubernetes still receives normal API objects at the end.
+For `devpolaris-orders-api`, the reusable shape includes the Deployment, Service, ConfigMap, and optional Ingress or Gateway. Staging can supply `replicaCount: 1` and a staging host. Production can supply `replicaCount: 3`, a production host, and a stricter resource request. The package keeps repeated labels, selectors, ports, and probes in one shared place.
 
-That last point matters. Helm and Kustomize do not replace Deployments, Services, ConfigMaps, or Secrets. They help generate or assemble them. The cluster does not run a chart or an overlay. The cluster runs the rendered objects.
+Helm and Kustomize take different routes. **Helm** packages templates, default values, metadata, release commands, chart dependencies, and versioned application packages. **Kustomize** starts from valid Kubernetes YAML and layers patches, generated ConfigMaps, generated Secrets, names, labels, and other customizations through a `kustomization.yaml` file. Kubernetes receives rendered API objects at the end of both flows.
 
 ```mermaid
 flowchart TD
-    A["Package source<br/>chart or overlay"] --> B["Render step<br/>helm template or kubectl kustomize"]
-    B --> C["Plain Kubernetes YAML"]
-    C --> D["Review and diff"]
-    D --> E["kubectl apply<br/>or release tool"]
-    E --> F["Cluster objects"]
+    Source["Package source<br/>chart or kustomization"] --> Render["Render command<br/>helm template or kubectl kustomize"]
+    Render --> Output["Rendered Kubernetes YAML<br/>Deployment, Service, ConfigMap, Ingress"]
+    Output --> Review["Human review and CI checks"]
+    Review --> Apply["kubectl apply, Helm upgrade, or GitOps sync"]
+    Apply --> Cluster["Live cluster objects"]
 ```
 
-Think of this like building a small Node project. You edit TypeScript, but the runtime executes JavaScript. You still need to understand the JavaScript enough to debug production. With Kubernetes packaging, you edit chart templates or overlays, but the cluster accepts rendered YAML.
+This flow gives the team a clean debugging path. A release problem can live in the package source, the rendered YAML, the apply step, the live cluster state, or the application itself. The render step separates those layers, so the team can ask a concrete question during review: which Kubernetes objects will this package create or change?
 
-That mental model protects you from a common beginner mistake. If a packaged release breaks, do not stop at "Helm did it" or "Kustomize did it." Ask which rendered object changed, whether Kubernetes accepted that object, and whether the application became healthy after the object changed.
+## The Orders API Example
+<!-- section-summary: The module uses one API service so every packaging decision has a concrete Deployment, Service, ConfigMap, and route to inspect. -->
 
-```text
-Diagnostic layers
+The running example for this module follows a team that packages `devpolaris-orders-api`. The API listens on container port `8080`, reads a few plain settings from a ConfigMap, and serves HTTP traffic through an internal Service. The team also wants a public route for staging and production, using either an Ingress resource today or a Gateway API route later.
 
-Package source:
-  values file, chart template, base, overlay, patch
+The raw starting point looks familiar to any Kubernetes beginner. One Deployment runs the container, one Service targets the Pods, one ConfigMap carries environment settings, and one Ingress maps a hostname to the Service.
 
-Rendered manifest:
-  Deployment, Service, ConfigMap, Ingress
-
-Cluster state:
-  live object, rollout status, events, Pod logs
-
-Application behavior:
-  health endpoint, metrics, user-visible requests
 ```
-
-The layers give you a path through confusion. Packaging is one layer in the release, not the whole release.
-
-## The Running Example
-
-A running example gives the packaging idea a concrete shape. In this article, `devpolaris-orders-api` starts with four objects. The Deployment runs the API container. The Service points traffic to the Pods. The ConfigMap provides plain settings. The Ingress exposes the API through `orders.devpolaris.example`.
-
-```text
-k8s/
+k8s/raw/
   deployment.yaml
   service.yaml
   configmap.yaml
   ingress.yaml
 ```
 
-The first environment difference looks harmless. Staging uses one replica and a staging hostname. Production uses three replicas and a production hostname. Both use the same container port, labels, probes, and Service shape.
+The Deployment contains the fields operators care about during most releases. The image tag tells the cluster which version to pull, the replica count tells the Deployment controller how many Pods to maintain, and the readiness probe tells Kubernetes when a Pod can receive traffic.
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: devpolaris-orders-api
+  labels:
+    app.kubernetes.io/name: devpolaris-orders-api
+    app.kubernetes.io/part-of: devpolaris
 spec:
   replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpolaris-orders-api
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpolaris-orders-api
     spec:
       containers:
         - name: api
           image: ghcr.io/devpolaris/orders-api:2026.05.07
           ports:
             - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
 ```
 
-If this file is copied into every environment, a reviewer has to ask an awkward question on every pull request: is this change intentional everywhere, or did one copy drift? Packaging gives the team a place to express "same app shape" and "environment differences" separately.
+The Service needs the same label value because it sends traffic to Pods through its selector. This is one of the first places where packaging pays for itself. A copied Service can drift from a copied Deployment, while a package can produce both fields from one shared source.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpolaris-orders-api
+spec:
+  selector:
+    app.kubernetes.io/name: devpolaris-orders-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+```
+
+The team now has a real release question. They want staging and production to differ on image tag, replicas, hostname, and maybe resource sizing. They want labels, selectors, ports, probes, and object names to stay consistent unless a reviewer explicitly approves a change.
 
 ## Rendering Before Applying
+<!-- section-summary: Rendering prints the final Kubernetes YAML, which lets teams inspect real objects before a package changes the cluster. -->
 
-Rendering means asking the packaging tool to print the final Kubernetes YAML before it reaches the API server. It exists so reviewers can inspect the exact Deployment, Service, ConfigMap, or Ingress the cluster will receive.
+**Rendering** means asking the packaging tool to print the Kubernetes YAML it will produce. This step gives reviewers the final Deployment, Service, ConfigMap, and route manifest before the apply or upgrade step touches the API server. It also helps beginners because it connects template inputs to plain Kubernetes objects they already know.
 
-![Kubernetes manifest packaging render path showing package input, renderer, rendered YAML, review, and kubectl apply](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/render-before-apply.png)
-
-*The rendered YAML is the object Kubernetes will actually receive.*
-
-
-Example: before applying the production orders API package, render it and check the image, replicas, Service selector, and readiness probe. For Helm, that command is usually `helm template`. For Kustomize, it is `kubectl kustomize` or `kustomize build`.
+For a Helm chart, the team can render staging like this. The release name `orders` and the values file both influence the output, so the command in CI should match the command used for review.
 
 ```bash
-$ helm template orders-api ./charts/orders-api \
+$ helm template orders ./charts/orders-api \
   --namespace devpolaris-staging \
   -f environments/staging.values.yaml \
   > rendered/staging.yaml
 ```
 
-The file should look like ordinary Kubernetes YAML. A reviewer should be able to search for the image, replica count, namespace, labels, probes, and resource requests.
+For a Kustomize layout, the same habit uses `kubectl kustomize`. The Kubernetes docs describe this command as the way to view resources from a directory that contains a kustomization file, and the output can go to a file for review.
 
 ```bash
-$ grep -n "image:\\|replicas:\\|readinessProbe:" rendered/staging.yaml
-8:  replicas: 1
-36:          image: ghcr.io/devpolaris/orders-api:2026.05.07
-42:          readinessProbe:
+$ kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
 ```
 
-Kustomize has the same inspection habit:
+The team then searches the rendered output for fields that commonly break a release. The exact tool can vary, but the review should confirm the image, replicas, namespace, labels, selector, probes, resources, and route host.
 
 ```bash
-$ kubectl kustomize overlays/prod > rendered/prod.yaml
-$ kubectl diff -f rendered/prod.yaml
-diff -u -N /tmp/LIVE-189234/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api /tmp/MERGED-773581/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api
+$ grep -n "kind:\\|name:\\|replicas:\\|image:\\|readinessProbe:\\|host:" rendered/prod.yaml
+2:kind: ConfigMap
+4:  name: devpolaris-orders-api
+18:kind: Service
+20:  name: devpolaris-orders-api
+36:kind: Deployment
+38:  name: devpolaris-orders-api
+45:  replicas: 3
+68:          image: ghcr.io/devpolaris/orders-api:2026.05.07
+76:          readinessProbe:
+104:  - host: orders.devpolaris.example
 ```
 
-The exact command can vary by delivery system, but the review question stays the same: what Kubernetes objects will this package produce?
+When a cluster connection exists, `kubectl diff` adds a stronger review because it compares the proposed rendered YAML with the live version. The command reference describes this as a diff between the current online configuration and the configuration as it would look after apply.
 
-## What Packaging Should Not Hide
+```bash
+$ kubectl diff -n devpolaris-prod -f rendered/prod.yaml
+diff -u -N /tmp/LIVE/apps.v1.Deployment.devpolaris-orders-api /tmp/MERGED/apps.v1.Deployment.devpolaris-orders-api
+--- /tmp/LIVE/apps.v1.Deployment.devpolaris-orders-api
++++ /tmp/MERGED/apps.v1.Deployment.devpolaris-orders-api
+@@ -42,7 +42,7 @@
+       containers:
+       - name: api
+-        image: ghcr.io/devpolaris/orders-api:2026.05.06
++        image: ghcr.io/devpolaris/orders-api:2026.05.07
+```
 
-Packaging becomes risky when it makes simple operational questions harder. For an API package, a reviewer should still be able to find the image, traffic port, ConfigMap keys, namespace, and Service-to-Pod labels in the rendered output without chasing through unrelated helper files.
+This habit changes the tone of a packaging review. The author no longer asks reviewers to trust a chart, an overlay, or a values file. The author shows the Kubernetes objects that the cluster will receive.
 
-Here is a useful review checklist for `devpolaris-orders-api`:
+## How Environment Differences Stay Reviewable
+<!-- section-summary: A package works well when shared application shape and environment choices stay separate and easy to trace. -->
 
-| Question | What to inspect |
-|----------|-----------------|
-| Which image runs? | Deployment container image |
-| How many Pods should exist? | Deployment `spec.replicas` |
-| How does traffic find Pods? | Service selector and Pod labels |
-| Which config values are injected? | ConfigMap and Deployment `envFrom` or `env` |
-| How will rollout safety work? | Readiness probe and rollout strategy |
+Every environment difference should have a clear home. Shared application shape belongs in the package source, while environment decisions belong in values files, overlays, or patches. The point of the split is review clarity, because reviewers can see whether a change affects the reusable shape or only one environment.
 
-If a package makes these answers difficult, the package is too clever. A good chart or overlay removes duplication while keeping the final objects understandable.
+For Helm, the shared Deployment template might read values for the image, replica count, and ConfigMap data. Staging and production then provide small values files that express the environment choices.
 
-## Failure Mode: A Small Difference Reaches Production
+```yaml
+# environments/staging.values.yaml
+replicaCount: 1
+image:
+  repository: ghcr.io/devpolaris/orders-api
+  tag: "2026.05.07-rc.2"
+ingress:
+  host: orders.staging.devpolaris.example
+config:
+  LOG_LEVEL: debug
+  CHECKOUT_TIMEOUT_MS: "2500"
+```
 
-Suppose staging and production both use copied manifests. A teammate fixes the Service selector in staging after a label cleanup, but production keeps the old selector. The next production deploy creates healthy Pods, yet the Service has no endpoints.
+```yaml
+# environments/prod.values.yaml
+replicaCount: 3
+image:
+  repository: ghcr.io/devpolaris/orders-api
+  tag: "2026.05.07"
+ingress:
+  host: orders.devpolaris.example
+config:
+  LOG_LEVEL: info
+  CHECKOUT_TIMEOUT_MS: "1500"
+```
+
+For Kustomize, the base can hold the shared Deployment and Service, while overlays patch the namespace, replica count, image tag, and hostname. The official Kubernetes Kustomize guide describes this style as composing and customizing collections of resources, which matches the staging and production split well.
+
+```
+k8s/
+  base/
+    deployment.yaml
+    service.yaml
+    configmap.yaml
+    kustomization.yaml
+  overlays/
+    staging/
+      kustomization.yaml
+      ingress-patch.yaml
+    prod/
+      kustomization.yaml
+      ingress-patch.yaml
+```
+
+The review rule stays the same across both tools. The package input explains intent, and the rendered manifest proves the outcome. A reviewer can approve a production replica change with confidence when the rendered diff shows only `replicas: 2` moving to `replicas: 3` and the Service selector staying unchanged.
+
+## The Selector Drift Failure
+<!-- section-summary: Packaging should protect the fields that connect Kubernetes objects, especially Service selectors and Pod labels. -->
+
+Service selector drift makes manifest packaging feel practical very quickly. Imagine the orders API team cleans up labels in staging first. The Deployment now uses `app.kubernetes.io/name: devpolaris-orders-api`, and the Service selector follows it. Production receives only half of that cleanup because the copied Service file missed the pull request.
+
+Production deploys without a YAML error. The Deployment creates Pods, the Pods pass readiness checks, and the API container logs look normal. The customer-facing route still fails because the Service has no endpoints.
 
 ```bash
 $ kubectl get pods -n devpolaris-prod -l app.kubernetes.io/name=devpolaris-orders-api
@@ -190,145 +253,187 @@ NAME                    ENDPOINTS   AGE
 devpolaris-orders-api   <none>      12m
 ```
 
-The diagnostic path is direct. First check Pods. Then check the Service selector. Then compare it with Pod labels.
+The next check compares the Service selector with the Pod labels. This gives the team a direct explanation instead of a vague "Kubernetes networking" problem.
 
 ```bash
-$ kubectl get service devpolaris-orders-api -n devpolaris-prod -o jsonpath='{.spec.selector}{"\n"}'
+$ kubectl get service devpolaris-orders-api \
+  -n devpolaris-prod \
+  -o jsonpath='{.spec.selector}{"\n"}'
 {"app":"orders-api"}
 
-$ kubectl get pod devpolaris-orders-api-6cc9db6f78-n72p9 -n devpolaris-prod --show-labels
+$ kubectl get pod devpolaris-orders-api-6cc9db6f78-n72p9 \
+  -n devpolaris-prod \
+  --show-labels
 NAME                                      READY   STATUS    LABELS
 devpolaris-orders-api-6cc9db6f78-n72p9    1/1     Running   app.kubernetes.io/name=devpolaris-orders-api
 ```
 
-Packaging helps when the selector and Pod labels come from one shared source. Render production and verify that the Service selector matches the labels before apply.
+A package reduces this risk when labels and selectors share one source. Helm can use a helper that renders the same label block in the Deployment and Service. Kustomize can keep the selector shape in a base and apply environment differences around it. Either way, rendered output should show a matching selector before the production release proceeds.
 
-## Choosing the Smallest Useful Package
+## Choosing A Small First Package
+<!-- section-summary: The first package should remove real repetition while keeping the rendered Kubernetes objects easy to understand. -->
 
-Helm and Kustomize solve overlapping but different problems. Helm is good when you want reusable application packages with named releases, values files, versioned charts, and lifecycle commands such as upgrade and rollback. Kustomize is good when you already have valid Kubernetes YAML and need environment overlays without a template language.
+The first package for `devpolaris-orders-api` should stay small enough for the whole team to review. A useful starting package includes the Deployment, Service, ConfigMap, and optional route because those objects travel together during an API release. Autoscaling, service mesh annotations, extra sidecars, preview environments, and multi-region routing can wait until the team proves the basic render and review loop.
 
-For `devpolaris-orders-api`, a team might start with Kustomize if the app is internal and the manifests are easy to read. The base holds the shared Deployment, Service, and ConfigMap. The overlays patch replica count, hostname, namespace, and image tag.
+This is a practical boundary for a first pass. It keeps the team focused on the objects that move together during a normal API release.
 
-The same team might choose Helm if platform engineers publish a reusable chart for many services. Each service then supplies values for image, ports, resources, probes, and ingress. That chart can standardize labels and rollout defaults across the organization.
+| Include now | Reason |
+|---|---|
+| Deployment | Carries image, replicas, probes, resources, and Pod labels |
+| Service | Connects traffic to Pods through selectors |
+| ConfigMap | Carries plain environment settings that often differ by environment |
+| Ingress or Gateway route | Carries environment hostnames and traffic entry points |
 
-The tradeoff is control versus abstraction. A package should remove boring repetition, not remove the need to understand Kubernetes.
+Some settings need more care because they can turn a tidy package into a hidden programming system. A package can expose image tag, replica count, resource requests, and hostnames as values because teams change those during releases. A package should avoid dozens of optional knobs that nobody tests, because reviewers then have to reason through many possible object shapes.
 
-Start smaller than your future design. A first package for `devpolaris-orders-api` does not need to solve every service in the company. It needs to prove that one app can render staging and production manifests that match the team's expectations. Once that works, you can decide whether the pattern should become shared.
+The team can decide between Helm and Kustomize by looking at the work in front of them. Helm fits when the organization wants a reusable application chart, named releases, chart versions, dependencies, and release commands such as upgrade and rollback. Kustomize fits when the team already has clear Kubernetes YAML and mainly needs environment overlays without a template language.
 
-```text
-Small first target
+For this module, the next article goes deeper into Helm because many Kubernetes teams meet packaging through charts. The same render-first habit still applies when a team chooses Kustomize for a smaller internal service.
 
-Must package:
-- Deployment
-- Service
-- ConfigMap
+## CI Checks For Packaged Manifests
+<!-- section-summary: CI should render every important environment, validate the result, and publish enough evidence for human review. -->
 
-Can wait:
-- optional autoscaling
-- optional service mesh annotations
-- optional extra sidecars
-- optional preview environment generator
+CI gives the render habit a repeatable place to live. A pull request should render staging and production with realistic inputs, run chart or overlay checks, and preserve the output as an artifact or review summary. Packaging pull requests can skip production deploys while still proving that the package produces readable Kubernetes YAML.
+
+A Helm-based pull request can use this shape, where the chart is linted once and then rendered with staging and production inputs. The workflow gives reviewers both the source diff and the generated manifests.
+
+```yaml
+name: package-checks
+
+on:
+  pull_request:
+    paths:
+      - "charts/orders-api/**"
+      - "environments/*.values.yaml"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint chart
+        run: helm lint ./charts/orders-api
+      - name: Render staging
+        run: |
+          mkdir -p rendered
+          helm template orders ./charts/orders-api \
+            --namespace devpolaris-staging \
+            -f environments/staging.values.yaml \
+            > rendered/staging.yaml
+      - name: Render production
+        run: |
+          helm template orders ./charts/orders-api \
+            --namespace devpolaris-prod \
+            -f environments/prod.values.yaml \
+            > rendered/prod.yaml
+      - name: Server-side dry run
+        run: kubectl apply --dry-run=server -f rendered/prod.yaml
 ```
 
-This keeps the first review focused. The team learns the render and diff habit before adding more knobs.
+The `kubectl apply --dry-run=server` step needs a real cluster connection because the API server checks the request without storing the object. When CI cannot reach a cluster, the team can still render, lint, and run client-side schema or policy checks. The article's key habit remains visible: every environment gets rendered from the same source form that release automation will use.
 
-## A Review Habit for Packaged Manifests
+A good CI summary should name the fields reviewers care about. Long rendered YAML files can overwhelm a pull request, while a short summary helps a reviewer find the important changes fast.
 
-A healthy review asks for source and output. The source shows the intended packaging change. The output proves the Kubernetes result. For a small team, that can be a rendered YAML file attached to the pull request. For a larger team, CI can run the render command and publish a diff.
-
-```text
-Packaging review for devpolaris-orders-api
-
-Source changed:
-- charts/orders-api/templates/deployment.yaml
-- environments/prod.values.yaml
-
-Rendered output changed:
-- Deployment image: 2026.05.06 to 2026.05.07
-- Deployment replicas: unchanged at 3
-- Service selector: unchanged
-- Ingress host: unchanged
 ```
-
-That review record gives you a practical safety rail. If production fails, you can compare the rendered object with the live object and decide whether the package produced the wrong YAML, the delivery tool applied the wrong version, or the application failed after Kubernetes accepted the change.
-
-## What CI Should Prove
-
-CI for manifest packaging is a repeatable render-and-check path. The pipeline does not need to deploy production from every pull request. It only needs to render the package, validate the output, and make the important changes visible to humans.
-
-For `devpolaris-orders-api`, a pull request that changes packaging could run three checks. First, render the staging and production manifests. Second, scan the rendered YAML for the fields that often break releases. Third, run a dry-run validation against a cluster API when that is available.
-
-```text
-Pull request checks
-
-render-staging:
-  command: helm template orders ./charts/orders-api -f environments/staging.values.yaml
-  artifact: rendered/staging.yaml
-
-render-prod:
-  command: helm template orders ./charts/orders-api -f environments/prod.values.yaml
-  artifact: rendered/prod.yaml
-
-validate-prod:
-  command: kubectl apply --dry-run=server -f rendered/prod.yaml
-  result: accepted by API server
-```
-
-The rendered artifact matters because it gives reviewers a stable file to inspect. A review comment can point at `rendered/prod.yaml` and ask why `replicas` changed from three to one. Without that output, the reviewer has to mentally execute the chart or overlay.
-
-A useful CI summary is short and specific:
-
-```text
-Rendered production changes
+Rendered production summary
 
 Deployment/devpolaris-orders-api
   image: ghcr.io/devpolaris/orders-api:2026.05.06 -> ghcr.io/devpolaris/orders-api:2026.05.07
   replicas: 3 -> 3
   readiness path: /health/ready -> /health/ready
+  selector: app.kubernetes.io/name=devpolaris-orders-api
 
 Service/devpolaris-orders-api
-  selector: unchanged
-  port: unchanged
+  selector: app.kubernetes.io/name=devpolaris-orders-api
+  port: 80 -> 80
 
 Ingress/devpolaris-orders-api
-  host: unchanged
+  host: orders.devpolaris.example -> orders.devpolaris.example
 ```
 
-This is the same habit you use when reading a Terraform plan or a database migration. The source change tells you what the author edited. The rendered summary tells you what the system will receive.
+This summary supports a human review instead of replacing it. The reviewer still opens the rendered manifest when a selector, route, probe, or ConfigMap value changes. CI simply makes those changes hard to miss.
+
+## Production Review Before Release
+<!-- section-summary: A production packaging review follows source, rendered output, live diff, and rollback evidence in that order. -->
+
+A production review for packaged manifests should read like a calm release conversation. The author explains which source files changed, attaches rendered production output, shows the diff against the live cluster when possible, and states the rollback path. The reviewer then has enough evidence to approve the change or ask for a safer split.
+
+For `devpolaris-orders-api`, the pull request might include a short review note like this. The note gives reviewers a compact story before they open the rendered YAML.
+
+```
+Packaging review: devpolaris-orders-api 2026.05.07
+
+Source changed:
+- charts/orders-api/templates/deployment.yaml
+- environments/prod.values.yaml
+
+Rendered production output:
+- Deployment image updates to ghcr.io/devpolaris/orders-api:2026.05.07
+- Deployment replicas stay at 3
+- Service selector stays app.kubernetes.io/name=devpolaris-orders-api
+- Ingress host stays orders.devpolaris.example
+
+Validation:
+- helm lint passed
+- helm template passed for staging and production
+- kubectl diff shows only the image change
+- kubectl apply --dry-run=server passed against the production API server
+
+Rollback:
+- previous image tag: ghcr.io/devpolaris/orders-api:2026.05.06
+- Helm release rollback target: revision 41
+```
+
+This review separates package source from Kubernetes output. A values file change might look small, but it can alter many rendered objects. A template change might look technical, but it can leave production untouched if the rendered output stays the same for current values.
+
+This style also helps during incidents. If the release breaks, the team can compare the rendered manifest from the pull request with the live object in the cluster. That comparison tells them whether the package produced unexpected YAML, the deployment tool applied a different artifact, or the application version failed after Kubernetes accepted the manifest.
 
 ## A Practical Migration Path
+<!-- section-summary: Migration should prove equivalent output first, then add environment differences and CI checks in small reviewable steps. -->
 
-Do not convert every manifest at once if the team is still learning. Start with one app and one environment. Render the packaged output and compare it with the current raw manifests. The first goal is identical output, not clever packaging.
+A team with copied YAML should avoid a dramatic rewrite as the first move. The safer path packages one application, renders one environment, and compares the output with the current raw manifest. The first useful milestone is boring output: same objects, same labels, same selectors, same image, same ports, same route.
+
+For a Kustomize migration, the team can render the production overlay and compare it with the current production file. The first diff will often show object order or generated labels, so the reviewer should focus on runtime behavior rather than formatting.
 
 ```bash
-$ kubectl kustomize k8s/overlays/prod > /tmp/packaged.yaml
-$ diff -u k8s/raw-prod.yaml /tmp/packaged.yaml
+$ kubectl kustomize k8s/overlays/prod > /tmp/orders-packaged.yaml
+$ diff -u k8s/raw/prod.yaml /tmp/orders-packaged.yaml
 ```
 
-The first diff will often show ordering changes, labels added by the tool, or generated names. Work through those differences one at a time. If a difference affects runtime behavior, explain it in the pull request. If it is only formatting or object order, keep the note short.
+For a Helm migration, the team can render the chart with production values and compare that output with the existing production manifest. The chart should earn trust by matching the current release before it adds new flexibility.
 
-For `devpolaris-orders-api`, migrate in this order:
+```bash
+$ helm template orders ./charts/orders-api \
+  --namespace devpolaris-prod \
+  -f environments/prod.values.yaml \
+  > /tmp/orders-packaged.yaml
 
-| Step | Change | Reason |
-|------|--------|--------|
-| 1 | Package Deployment and Service | They carry the main app shape |
-| 2 | Add ConfigMap handling | Config changes often drive rollouts |
-| 3 | Add Ingress or Gateway | Hostname differences are environment-specific |
-| 4 | Add CI rendering | Review needs output before production |
-| 5 | Remove old copied manifests | Two active manifest paths create confusion |
+$ diff -u k8s/raw/prod.yaml /tmp/orders-packaged.yaml
+```
 
-Keep the old raw manifests until the packaged output has deployed successfully in a lower environment. Then remove the old files in a separate cleanup change. That keeps rollback simple while the team gains confidence in the new source form.
+The migration can move in small steps, and each step should leave the rendered output easy to compare with the previous production manifest. That pacing helps the team learn the package while keeping rollback and review evidence clear.
 
+| Step | Change | Review focus |
+|---|---|---|
+| 1 | Package Deployment and Service | Pod labels match Service selector |
+| 2 | Add ConfigMap handling | Environment keys and rollout behavior stay clear |
+| 3 | Add Ingress or Gateway route | Hostname and backend Service stay correct |
+| 4 | Add CI rendering | Staging and production outputs appear in every pull request |
+| 5 | Remove copied manifests | One source path remains for future releases |
 
-![Kubernetes manifest packaging summary covering source shape, inputs, render, diff, apply, and evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/manifest-packaging-summary.png)
+The old raw manifests can stay in the repository until the packaged output succeeds in a lower environment. After that, a separate cleanup pull request can remove the copied files. That pacing keeps rollback understandable while the team learns the new review habit.
 
-*Use this checklist to keep packaging from hiding what will run in the cluster.*
+## What's Next
+
+The next article zooms into Helm charts, because Helm is the packaging tool many teams meet first. We will keep following `devpolaris-orders-api`, but now the source form will have `Chart.yaml`, `values.yaml`, templates, helpers, render checks, dependencies, and a chart review flow.
 
 ---
 
 **References**
 
-- [Helm Charts](https://helm.sh/docs/topics/charts/) - Official Helm documentation for chart structure and how charts are rendered into Kubernetes manifests.
-- [Helm Template Guide](https://helm.sh/docs/chart_template_guide/) - Official guide to Helm templates, values, and generated manifests.
-- [Declarative Management of Kubernetes Objects Using Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) - Official Kubernetes task guide for Kustomize bases, overlays, and `kubectl apply -k`.
-- [kubectl diff](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/) - Official command reference for comparing proposed manifests with live cluster objects.
+- [Helm Charts](https://helm.sh/docs/topics/charts/) - Official Helm chart documentation covering chart files, templates, chart types, versions, and dependencies.
+- [helm template](https://helm.sh/docs/helm/helm_template/) - Official command reference for rendering chart templates locally and writing the generated manifests to output.
+- [Declarative Management of Kubernetes Objects Using Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) - Official Kubernetes guide for Kustomize, including `kubectl kustomize` and `kubectl apply -k`.
+- [kubectl diff](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/) - Official command reference for comparing live resources with the would-be applied configuration.
+- [kubectl apply](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_apply/) - Official command reference documenting `--dry-run=server` and file-based apply behavior.
+- [Recommended Kubernetes Labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/) - Official guidance for shared `app.kubernetes.io/*` labels across application resources.

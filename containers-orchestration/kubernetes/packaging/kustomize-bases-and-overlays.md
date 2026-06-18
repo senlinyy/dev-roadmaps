@@ -9,50 +9,55 @@ id: article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-ov
 
 ## Table of Contents
 
-1. [Changing YAML Without Templates](#changing-yaml-without-templates)
-2. [The Base Directory](#the-base-directory)
-3. [The First Overlay](#the-first-overlay)
-4. [Patching Specific Fields](#patching-specific-fields)
-5. [ConfigMap Generators and Name Updates](#configmap-generators-and-name-updates)
-6. [Rendering and Applying an Overlay](#rendering-and-applying-an-overlay)
-7. [Failure Mode: A Patch Targets the Wrong Object](#failure-mode-a-patch-targets-the-wrong-object)
-8. [When Overlays Start to Hurt](#when-overlays-start-to-hurt)
-9. [Reviewing an Overlay Pull Request](#reviewing-an-overlay-pull-request)
-10. [Organizing Overlays as Environments Grow](#organizing-overlays-as-environments-grow)
+1. [Why Kustomize Exists](#why-kustomize-exists)
+2. [The Package Shape](#the-package-shape)
+3. [The Base Directory](#the-base-directory)
+4. [Staging and Production Overlays](#staging-and-production-overlays)
+5. [Patches for Real Differences](#patches-for-real-differences)
+6. [ConfigMap Generators and Rollouts](#configmap-generators-and-rollouts)
+7. [Rendering, Diffing, and Applying](#rendering-diffing-and-applying)
+8. [Common Patch Mistakes](#common-patch-mistakes)
+9. [Overlay Pull Request Review](#overlay-pull-request-review)
+10. [What's Next](#whats-next)
 
-## Changing YAML Without Templates
+## Why Kustomize Exists
+<!-- section-summary: Kustomize lets a team keep normal Kubernetes YAML and layer environment changes over it. -->
 
-Kustomize is a Kubernetes configuration tool that builds final manifests from directories containing a `kustomization.yaml` file. Its main idea is simple: start with valid Kubernetes YAML, then apply named customizations such as patches, image changes, labels, namespaces, and generated ConfigMaps.
+Kustomize is a configuration tool for Kubernetes manifests. It reads a directory with a `kustomization.yaml` file, collects the resources listed there, and builds a final set of Kubernetes YAML that the API server can receive.
 
-![Kustomize base and overlay path showing base, patch, overlay, rendered YAML, and apply](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/kustomize-base-overlay-map.png)
+The important idea is that the source files stay close to plain Kubernetes. A Deployment file still reads like a Deployment, a Service file still reads like a Service, and the environment changes live beside those files as overlays, patches, image updates, labels, and generated ConfigMaps.
 
-*Kustomize changes YAML by layering patches over a base rather than running a template language.*
+Our running example is `devpolaris-orders-api`. The team runs the same API in staging and production, and both environments need a Deployment, a Service, a ConfigMap, and sometimes an Ingress or Gateway route. Staging should run one replica with a release-candidate image, while production should run three replicas with tighter resources and the production hostname.
 
+Without a packaging tool, the team might copy the whole Deployment into two folders. That copy makes the first week feel simple, then it creates review pain when one file receives a probe update and the other one stays old. Kustomize gives the team one shared base plus small environment overlays, so reviewers can focus on the differences that matter.
 
-This exists for teams that like plain manifests but dislike copying them for every environment. Instead of writing template placeholders, you keep a base that can be read as normal Kubernetes YAML and add overlays for staging, production, or preview environments.
+## The Package Shape
+<!-- section-summary: A Kustomize package usually has one shared base and one overlay directory per environment. -->
 
-For `devpolaris-orders-api`, the base contains the Deployment and Service. The staging overlay changes the namespace and replica count. The production overlay changes the namespace, replica count, image tag, and ingress host.
+The simplest layout has one `base` directory and one overlay for each environment. The base contains the shared Kubernetes objects, and each overlay references the base through its own `kustomization.yaml`.
+
+For `devpolaris-orders-api`, the repository might use this shape. The names can vary across teams, but the base and overlay split should stay obvious to a new reviewer.
+
+- `k8s/base/kustomization.yaml`
+- `k8s/base/deployment.yaml`
+- `k8s/base/service.yaml`
+- `k8s/overlays/staging/kustomization.yaml`
+- `k8s/overlays/prod/kustomization.yaml`
+- `k8s/overlays/prod/deployment-prod-patch.yaml`
+- `k8s/overlays/prod/ingress-prod-patch.yaml`
+
+A **base** is the reusable starting point. It should describe the application in a way that makes sense before staging or production adds details, so it usually avoids environment names, production-only hosts, and one-off incident changes.
+
+An **overlay** is the environment layer. It points at the base, then adds the pieces that differ: namespace, image tag, replica count, resource requests, ConfigMap values, and external routing. The overlay should read like the environment's choices rather than a second full copy of the application.
+
+That separation matters in production review. If the pull request changes only `k8s/overlays/prod/kustomization.yaml`, the reviewer can ask a narrow question: what exactly does production change on top of the shared app? If the pull request changes the base, the reviewer knows staging and production may both receive the change.
 
 ## The Base Directory
+<!-- section-summary: The base holds the shared Deployment and Service as real Kubernetes objects. -->
 
-A base is a reusable directory of ordinary Kubernetes YAML plus a `kustomization.yaml` file. Other kustomizations can reference it, and it should not know who is reusing it.
+The base starts with `kustomization.yaml`. This file lists the resources Kustomize should include and can also attach shared labels that help Kubernetes selectors, dashboards, and GitOps tools identify the app.
 
-Example: the orders API base can define the shared Deployment and Service once, while staging and production overlays decide namespace, replicas, and image tag.
-
-```text
-k8s/
-  base/
-    kustomization.yaml
-    deployment.yaml
-    service.yaml
-  overlays/
-    staging/
-      kustomization.yaml
-    prod/
-      kustomization.yaml
-```
-
-The base `kustomization.yaml` lists resources:
+Here is a small base for the orders API. The file lists resources first, then applies shared labels in one place so the Deployment and Service do not drift apart.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -60,11 +65,14 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
-commonLabels:
-  app.kubernetes.io/name: devpolaris-orders-api
+labels:
+  - pairs:
+      app.kubernetes.io/name: devpolaris-orders-api
+      app.kubernetes.io/part-of: devpolaris
+    includeSelectors: true
 ```
 
-The Deployment is ordinary Kubernetes YAML:
+The Deployment can stay ordinary Kubernetes YAML. A junior engineer who has never used Kustomize can still read the file and understand the workload shape.
 
 ```yaml
 apiVersion: apps/v1
@@ -85,16 +93,39 @@ spec:
         - name: api
           image: ghcr.io/devpolaris/orders-api:dev
           ports:
-            - containerPort: 8080
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+          envFrom:
+            - configMapRef:
+                name: orders-api-config
 ```
 
-Because the base is valid YAML, a beginner can inspect it without learning a template language first.
+The Service stays in the base because every environment needs the same internal port and selector contract. If the Service selector drifts from the Pod labels, traffic will stop reaching the Pods, so the shared base is a good place to keep that relationship visible.
 
-## The First Overlay
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpolaris-orders-api
+spec:
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: devpolaris-orders-api
+```
 
-An overlay is a kustomization that references a base and adds environment-specific changes. It exists so staging and production can share the same workload shape without copying the whole Deployment.
+This base gives us the common app shape. The next question is how staging and production can change it without copying the whole Deployment.
 
-Example: staging can set a namespace, reduce replicas to one, and use a staging image tag.
+## Staging and Production Overlays
+<!-- section-summary: Overlays describe environment choices such as namespace, image tag, replicas, and route host. -->
+
+An overlay references the base and adds environment decisions. Staging usually keeps the blast radius small, so one replica and a release-candidate image make sense for this example.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -102,30 +133,20 @@ kind: Kustomization
 namespace: devpolaris-staging
 resources:
   - ../../base
-replicas:
-  - name: devpolaris-orders-api
-    count: 1
 images:
   - name: ghcr.io/devpolaris/orders-api
     newTag: 2026.05.07-rc.2
+replicas:
+  - name: devpolaris-orders-api
+    count: 1
+configMapGenerator:
+  - name: orders-api-config
+    literals:
+      - LOG_LEVEL=debug
+      - CATALOG_API_URL=http://catalog-api.devpolaris-staging.svc.cluster.local:8080
 ```
 
-Render the overlay:
-
-```bash
-$ kubectl kustomize k8s/overlays/staging | grep -n "namespace:\\|replicas:\\|image:"
-5:  namespace: devpolaris-staging
-24:  replicas: 1
-48:          image: ghcr.io/devpolaris/orders-api:2026.05.07-rc.2
-```
-
-The source files remain readable, and the rendered output shows the final Kubernetes object.
-
-## Patching Specific Fields
-
-A Kustomize patch is a small YAML fragment that changes selected fields on a target object. Use it when a built-in customization is not enough.
-
-Example: production can add stronger resource requests to the orders API Deployment without duplicating the whole Deployment.
+Production uses the same base, then makes production choices. The image tag changes, the namespace changes, replicas go up, and extra patches can add resources and routing.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -133,14 +154,32 @@ kind: Kustomization
 namespace: devpolaris-prod
 resources:
   - ../../base
+images:
+  - name: ghcr.io/devpolaris/orders-api
+    newTag: 2026.05.07
 replicas:
   - name: devpolaris-orders-api
     count: 3
+configMapGenerator:
+  - name: orders-api-config
+    literals:
+      - LOG_LEVEL=info
+      - CATALOG_API_URL=http://catalog-api.devpolaris-prod.svc.cluster.local:8080
 patches:
-  - path: resources-patch.yaml
+  - path: deployment-prod-patch.yaml
+  - path: ingress-prod-patch.yaml
 ```
 
-The patch targets the Deployment and changes only the container resources.
+The overlay shows a nice boundary. The base says what the orders API is, while the overlay says how staging or production runs it. That boundary helps reviewers because they can compare the two overlays and see only environment decisions.
+
+Kustomize can also manage optional routing. If the team uses an Ingress controller, the production overlay can add an Ingress. If the platform uses Gateway API, the production overlay can add an HTTPRoute instead. The base should not force a routing object that every environment does not need.
+
+## Patches for Real Differences
+<!-- section-summary: Patches should change small, specific fields instead of hiding a second copy of the workload. -->
+
+A **patch** is a small YAML fragment that changes a specific object from the base. It helps when an environment needs fields that the built-in `images`, `replicas`, `namespace`, or label transformations do not cover.
+
+Production usually needs resource requests and limits. Those fields belong near the container, so the production overlay can patch the Deployment rather than copy the whole object.
 
 ```yaml
 apiVersion: apps/v1
@@ -160,18 +199,28 @@ spec:
               memory: 512Mi
 ```
 
-Keep patches small. A patch that rewrites most of the Deployment is a copied manifest with extra steps.
+This patch names the target object with `apiVersion`, `kind`, and `metadata.name`. Kustomize uses that identity to find the Deployment from the base, then it changes only the fields in the patch.
 
-## ConfigMap Generators and Name Updates
+A route patch can stay small too. If the base contains a generic Ingress with the service backend, production can patch only the host and TLS secret. If the base does not contain routing at all, production can list a full `ingress.yaml` or `httproute.yaml` as an extra resource in the overlay.
 
-A ConfigMap generator creates ConfigMap objects from literals or files during rendering. The generated name often includes a hash so Pods roll when the config changes.
+Small patches make review practical. A reviewer should be able to read `deployment-prod-patch.yaml` and explain the production-only change without opening five more files. If a patch rewrites most of the Deployment, the overlay has started to hide a copied manifest behind a nicer name.
 
-![Kustomize ConfigMap generator path showing config data, generator, hashed name, pod reference, and rollout](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/configmap-generator-name.png)
+## ConfigMap Generators and Rollouts
+<!-- section-summary: ConfigMap generators create config objects and can change names when config content changes. -->
 
-*Generated ConfigMap names can change when content changes, forcing pods to reference the new version.*
+A **ConfigMap generator** creates a ConfigMap during the Kustomize build. The generator can read literals or files, and Kustomize can add a content hash to the generated ConfigMap name.
 
+That hash helps with rollouts. Kubernetes does not restart Pods just because the data inside an existing ConfigMap changed, so teams often need a Pod template change to trigger a rollout. A generated name such as `orders-api-config-7t9h6m4k2d` changes when the config content changes, and Kustomize updates references from the Deployment to the generated name.
 
-Example: if `LOG_LEVEL` changes in the generator, Kustomize can render a new ConfigMap name and update the Deployment reference, which changes the Pod template.
+The orders API Deployment can keep a stable reference in the base. The source YAML stays readable, and Kustomize handles the generated name during rendering.
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: orders-api-config
+```
+
+The production overlay can generate the environment config. The values stay near the production overlay instead of hiding inside the shared base.
 
 ```yaml
 configMapGenerator:
@@ -181,53 +230,63 @@ configMapGenerator:
       - CATALOG_API_URL=http://catalog-api.devpolaris-prod.svc.cluster.local:8080
 ```
 
-If the Deployment references `orders-api-config`, Kustomize updates the reference to the generated name.
-
-```yaml
-envFrom:
-  - configMapRef:
-      name: orders-api-config
-```
-
-Rendered output might look like this:
+The rendered output will contain the generated ConfigMap name and the updated Deployment reference. The exact suffix can differ because Kustomize derives it from content.
 
 ```bash
-$ kubectl kustomize k8s/overlays/prod | grep -n "name: orders-api-config"
-4:  name: orders-api-config-6t7b8g7h5k
-57:          name: orders-api-config-6t7b8g7h5k
+$ kubectl kustomize k8s/overlays/prod | grep -n "orders-api-config"
+4:  name: orders-api-config-7t9h6m4k2d
+61:          name: orders-api-config-7t9h6m4k2d
 ```
 
-That hash is useful because a changed ConfigMap name changes the Pod template, which triggers a rollout. The tradeoff is that object names become less predictable, so labels and selectors matter for queries.
+This feature is useful, and it also changes how people search for objects. The team should query by labels instead of guessing the generated name, because the generated suffix can change on a normal config update.
 
-## Rendering and Applying an Overlay
+## Rendering, Diffing, and Applying
+<!-- section-summary: Kustomize work should move through render, inspect, diff, apply, and rollout verification. -->
 
-Rendering an overlay means building the final YAML from the base plus overlay changes. Kustomize is built into `kubectl`, so you can render or apply a directory with `-k`.
-
-Example: `kubectl kustomize k8s/overlays/prod` prints the production orders API manifests, while `kubectl apply -k k8s/overlays/prod` sends them to the API server.
+Rendering means building the final YAML from the base and overlay. Kustomize integrates with `kubectl`, so the team can render the production overlay with `kubectl kustomize`.
 
 ```bash
 $ kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
-$ kubectl diff -f rendered/prod.yaml
+$ grep -n "namespace:\\|replicas:\\|image:" rendered/prod.yaml
+6:  namespace: devpolaris-prod
+28:  replicas: 3
+52:          image: ghcr.io/devpolaris/orders-api:2026.05.07
+```
+
+The rendered file answers the production questions before anything touches the cluster. The reviewer can see the namespace, image tag, replica count, ConfigMap name, Service selector, and route host in the same output Kubernetes will receive.
+
+When the team has cluster access, `kubectl diff` compares the desired output with the live objects. The official `kubectl diff` command shows the live version against the would-be applied version, which makes it a good pre-apply review step.
+
+```bash
+$ kubectl diff -k k8s/overlays/prod
+diff -u -N /tmp/LIVE/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api /tmp/MERGED/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api
+@@
+-  replicas: 2
++  replicas: 3
+```
+
+Applying sends the kustomized resources to the API server. The command uses the same overlay directory that the team rendered and reviewed.
+
+```bash
 $ kubectl apply -k k8s/overlays/prod
 deployment.apps/devpolaris-orders-api configured
 service/devpolaris-orders-api unchanged
-configmap/orders-api-config-6t7b8g7h5k created
+configmap/orders-api-config-7t9h6m4k2d created
 ```
 
-Use `kubectl diff` before `apply` when you have cluster access. It shows the difference between the rendered output and the live objects. That protects you from applying an overlay that changes more than you intended.
-
-After apply, check the rollout:
+After apply, Kubernetes rollout checks still matter. Kustomize only builds and sends YAML, while the Deployment controller handles Pod replacement, readiness, and rollout status.
 
 ```bash
 $ kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
 deployment "devpolaris-orders-api" successfully rolled out
 ```
 
-Kustomize builds YAML. Kubernetes still owns rollout behavior.
+CI can do a lighter version of the same workflow. It can render every overlay, store the rendered YAML as an artifact, and run `kubectl apply --dry-run=server` against a validation cluster when that cluster is available. Server-side dry run asks the API server to validate and admit the request without persisting the objects.
 
-## Failure Mode: A Patch Targets the Wrong Object
+## Common Patch Mistakes
+<!-- section-summary: Most Kustomize mistakes show up as a target mismatch, an image mismatch, an array merge surprise, or an unsafe selector change. -->
 
-A patch target is the Kubernetes object identity the patch is supposed to change. Kustomize matches that target by fields such as `kind`, `metadata.name`, API group, version, and sometimes namespace. Suppose a patch uses the wrong Deployment name. Kustomize cannot find a target.
+The first common mistake is a patch that targets the wrong object name. If the production patch says `metadata.name: orders-api` while the base Deployment is named `devpolaris-orders-api`, Kustomize cannot find a unique target.
 
 ```yaml
 apiVersion: apps/v1
@@ -238,7 +297,7 @@ spec:
   replicas: 3
 ```
 
-The build fails:
+The build can fail with a target error. That message tells the reviewer to compare the patch identity with the base object identity.
 
 ```bash
 $ kubectl kustomize k8s/overlays/prod
@@ -246,87 +305,72 @@ Error: no matches for Id Deployment.v1.apps/orders-api.[noNs];
 failed to find unique target for patch Deployment.v1.apps/orders-api.[noNs]
 ```
 
-The diagnostic path is to list resource names in the base, then compare them with the patch metadata.
+The practical diagnosis compares the base object identity with the patch identity. The names, API version, and kind should match the object the patch intends to change.
 
 ```bash
-$ grep -n "kind:\\|name:" k8s/base/deployment.yaml k8s/overlays/prod/replica-patch.yaml
+$ grep -n "apiVersion:\\|kind:\\|name:" k8s/base/deployment.yaml k8s/overlays/prod/deployment-prod-patch.yaml
+k8s/base/deployment.yaml:1:apiVersion: apps/v1
 k8s/base/deployment.yaml:2:kind: Deployment
 k8s/base/deployment.yaml:4:  name: devpolaris-orders-api
-k8s/overlays/prod/replica-patch.yaml:2:kind: Deployment
-k8s/overlays/prod/replica-patch.yaml:4:  name: orders-api
+k8s/overlays/prod/deployment-prod-patch.yaml:1:apiVersion: apps/v1
+k8s/overlays/prod/deployment-prod-patch.yaml:2:kind: Deployment
+k8s/overlays/prod/deployment-prod-patch.yaml:4:  name: orders-api
 ```
 
-Fix the patch target name, render again, and inspect the final replica count. Do not apply until the rendered object proves the patch landed.
+The second common mistake is an image name that does not match the base. Kustomize matches the image field by name, so an overlay entry for `orders-api` will not update `ghcr.io/devpolaris/orders-api`.
 
-## When Overlays Start to Hurt
-
-Kustomize works best when the base is understandable and overlays are small. It starts to hurt when every environment has many patches that rewrite the same object in different ways. At that point, readers must mentally apply several patches before they know what will run.
-
-For `devpolaris-orders-api`, Kustomize is a good fit if the app has a few environment differences. If the team needs lots of optional resources, repeated conditional behavior, or a reusable package for many services, Helm may be a better fit.
-
-The tradeoff is directness versus flexibility. Kustomize keeps the source close to Kubernetes YAML. Helm gives you a stronger packaging model and release lifecycle. Neither choice removes the need to render, diff, and inspect the final manifest.
-
-## Reviewing an Overlay Pull Request
-
-An overlay review should connect the source patch to the final rendered object. If the patch changes production replicas, the rendered Deployment should prove the final count. If the patch changes a ConfigMap literal, the rendered ConfigMap and Deployment reference should both be checked.
-
-```diff
- replicas:
-   - name: devpolaris-orders-api
--    count: 2
-+    count: 3
+```yaml
+images:
+  - name: orders-api
+    newTag: 2026.05.07
 ```
 
-The rendered check is simple:
+The rendered Deployment will expose the problem. The source overlay changed, but the image that reaches Kubernetes stayed on the old tag.
 
 ```bash
-$ kubectl kustomize k8s/overlays/prod \
-  | grep -n "kind: Deployment\\|replicas:\\|image:"
+$ kubectl kustomize k8s/overlays/prod | grep -n "image:"
+52:          image: ghcr.io/devpolaris/orders-api:dev
+```
+
+The third common mistake involves container lists. Kubernetes strategic merge patches use the container `name` field to merge container entries. If a patch says `name: orders` while the base container is `name: api`, the patch may add a second container or fail to affect the intended one, depending on the patch type and target.
+
+The fourth common mistake is changing selector labels casually. Deployment selectors and Service selectors connect traffic to Pods, and some selector fields have immutability rules after creation. A rendered diff that changes selectors deserves careful review because it can break routing or force object replacement.
+
+## Overlay Pull Request Review
+<!-- section-summary: A good overlay review connects source changes to rendered output and then to live-cluster difference. -->
+
+A production overlay pull request should include evidence, not only source YAML. The reviewer needs the overlay change, the rendered output, and the cluster diff when a cluster comparison is possible.
+
+For an orders API release, the pull request description can include the exact commands and the important fields. That gives reviewers a short path from source change to rendered production behavior.
+
+```bash
+$ kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
+$ grep -n "kind: Deployment\\|replicas:\\|image:\\|orders.devpolaris.example" rendered/prod.yaml
 18:kind: Deployment
-26:  replicas: 3
-49:          image: ghcr.io/devpolaris/orders-api:2026.05.07
+28:  replicas: 3
+52:          image: ghcr.io/devpolaris/orders-api:2026.05.07
+91:  - host: orders.devpolaris.example
 ```
 
-Then compare with the live cluster:
+The reviewer then checks the fields that carry production risk. The image tag should match the release, replicas should match the capacity plan, the Service selector should still match Pod labels, ConfigMap references should point at generated names, and route hosts should point at the expected environment.
 
-```bash
-$ kubectl diff -k k8s/overlays/prod
-diff -u -N /tmp/LIVE/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api /tmp/MERGED/apps.v1.Deployment.devpolaris-prod.devpolaris-orders-api
-@@
--  replicas: 2
-+  replicas: 3
-```
+A good review also checks what did not change. If a simple image release changes namespace, selector labels, Service ports, or the Ingress class, the pull request needs more explanation before apply. The rendered diff gives the team a shared object to discuss instead of asking everyone to mentally combine the base and overlay.
 
-That diff should match the pull request description. If the diff includes namespace changes, selector changes, or unexpected object deletion, diagnose before applying.
+The final review step is the rollout plan. The pull request should name the apply command, the rollout status command, and the rollback path. With Kustomize, rollback often means reverting the Git commit or applying the previous rendered artifact through the delivery system, so the team should know where that previous artifact lives.
 
-## Organizing Overlays as Environments Grow
+## What's Next
 
-The common starting layout is `base`, `overlays/staging`, and `overlays/prod`. That is enough for many teams. As environments grow, avoid creating deep overlay chains that only one person understands.
+You now have the working shape of Kustomize: base, overlay, patches, generators, render, diff, apply, and review. That is enough to package a straightforward internal service like `devpolaris-orders-api` without adding a template language.
 
-```text
-k8s/
-  base/
-  overlays/
-    dev/
-    staging/
-    prod/
-    preview/
-```
-
-If preview environments need unique hostnames and image tags, keep that logic in the delivery system or generate a small overlay for each preview. Do not make production depend on preview-specific patches.
-
-For `devpolaris-orders-api`, production should stay boring. It should reference the base, set the production namespace, set production replicas, set the production image tag, and patch production resources. If production needs many special patches, revisit the base design. The base might be missing a shared behavior that all environments now need.
-
-
-![Kustomize summary covering base, overlay, patch, generator, render, and diff](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/kustomize-summary.png)
-
-*Use this checklist to keep overlays understandable as environments grow.*
+The next question is tool choice. Helm and Kustomize both produce Kubernetes YAML, and they fit different ownership, release, reuse, and incident-response workflows. The next article compares those choices through the same orders API release.
 
 ---
 
 **References**
 
-- [Declarative Management of Kubernetes Objects Using Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) - Official Kubernetes task guide for bases, overlays, generators, and applying with `-k`.
-- [kubectl kustomize](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_kustomize/) - Official command reference for rendering Kustomize directories through `kubectl`.
-- [Kustomize Official Site](https://kustomize.io/) - Official project documentation and examples for Kustomize concepts.
-- [kubectl apply](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_apply/) - Official command reference for applying rendered or kustomized resources.
+- [Declarative Management of Kubernetes Objects Using Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) - Official Kubernetes guide for Kustomize resources, generators, patches, overlays, and `kubectl apply -k`.
+- [kubectl kustomize](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_kustomize/) - Official command reference for building resources from a `kustomization.yaml` directory.
+- [kubectl diff](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/) - Official command reference for comparing live resources with would-be applied configuration.
+- [Kubernetes API dry run](https://kubernetes.io/docs/reference/using-api/api-concepts/#dry-run) - Official API concept for validation requests that do not persist objects.
+- [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Official concept guide for Services, selectors, and stable access to Pods.
+- [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Official concept guide for HTTP routing into Services.

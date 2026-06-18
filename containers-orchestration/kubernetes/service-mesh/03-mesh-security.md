@@ -1,211 +1,512 @@
 ---
 title: "Mesh Security"
-description: "Prove workload identity and authorize service-to-service calls using mTLS and mesh policies."
-overview: "IP-based firewalls break down when Pod IPs constantly change. This article explains how to enforce mTLS and authorization policies using CLI verification."
+description: "Use workload identities, encrypted service-to-service connections, and mesh access rules to block unwanted service calls."
+overview: "Follow a web -> checkout -> payments flow, then block analytics from payments by making each workload prove its identity and by allowing only the callers payments should trust."
 tags: ["kubernetes", "service-mesh", "security", "mtls", "spiffe"]
 order: 3
 id: article-containers-orchestration-kubernetes-service-mesh-mesh-security
 ---
 
-In a service mesh, security is enforced by giving every workload a cryptographic identity instead of relying on ephemeral Pod IP addresses. Because Pod IPs change every time a container restarts, scales across physical hardware, or gets recreated by a deployment rollout, a traditional IP-based firewall cannot reliably prove which application is making a request. A service mesh solves this by provisioning a unique TLS certificate to every sidecar proxy, requiring the calling application to present that certificate, encrypting the connection in transit, and verifying authorization policies before any traffic reaches the application container.
-
 ## Table of Contents
 
-- [Workload Identity](#workload-identity)
-- [Enforcing Strict mTLS](#enforcing-strict-mtls)
-- [Testing Unencrypted Traffic](#testing-unencrypted-traffic)
-- [Testing Encrypted Traffic](#testing-encrypted-traffic)
-- [Inspecting the Proxy Certificate](#inspecting-the-proxy-certificate)
-- [Authorizing One Caller](#authorizing-one-caller)
-- [Putting It All Together](#putting-it-all-together)
-- [What's Next](#whats-next)
+1. [The Scenario and the Security Chain](#the-scenario-and-the-security-chain)
+2. [Give Each Workload Its Own Service Account](#give-each-workload-its-own-service-account)
+3. [How Istio Turns Service Accounts Into Identity](#how-istio-turns-service-accounts-into-identity)
+4. [Require Strict mTLS With PeerAuthentication](#require-strict-mtls-with-peerauthentication)
+5. [Prove Plain Traffic Fails and Meshed Traffic Works](#prove-plain-traffic-fails-and-meshed-traffic-works)
+6. [Inspect the Certificate and Source Principal](#inspect-the-certificate-and-source-principal)
+7. [Allow Checkout and Block Analytics](#allow-checkout-and-block-analytics)
+8. [Rollout Guidance and Common Gotchas](#rollout-guidance-and-common-gotchas)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## Workload Identity
+## The Scenario and the Security Chain
+<!-- section-summary: Mesh security connects identity, encryption, and authorization so the cluster can allow checkout to call payments while blocking analytics. -->
 
-At its core, workload identity is the name a running workload can prove cryptographically. Instead of trusting a changing Pod IP address, the destination proxy checks a signed certificate that says which Kubernetes Service Account the caller is running under.
+Imagine the same online store running inside one Kubernetes cluster. The **web** service receives browser traffic, **web** calls **checkout**, and **checkout** calls **payments** to finish an order. A fourth service, **analytics**, reads business events and builds reports. Analytics runs in the same cluster, maybe even in the same namespace, but it should never call **payments** directly because it has no reason to create charges or read payment responses.
 
-![Service mesh workload identity path showing service account, identity certificate, sidecar proxy, and peer workload](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/mesh-workload-identity.png)
+Mesh security uses the proxy layer for identity, encryption, and access rules. When checkout calls payments, the checkout app talks to its local Envoy proxy, that proxy talks securely to the payments Envoy proxy, and the payments app receives the request after the proxy layer has checked the connection.
 
-*Mesh identity usually starts from the workload service account and becomes a certificate the proxy can present.*
+That one scenario gives us the whole security path for this article. First, each workload needs its own Kubernetes **service account**. In a mesh, the service account is the raw name Istio uses for service-to-service identity. Giving web, checkout, payments, and analytics separate service accounts gives the mesh separate names to work with. Then Istio turns the service account into a cryptographic **workload identity**, which means a name the running workload can prove during a network connection. Checkout needs its own workload identity because payments should accept checkout, while analytics needs a different workload identity because payments should reject analytics.
 
+The workload identity appears as a **SPIFFE ID**, which is a URI-shaped workload name that can fit inside a certificate. The `cluster.local` part of a typical Istio identity is the **trust domain**, which is the identity boundary for the mesh. In our store, `spiffe://cluster.local/ns/store/sa/checkout` says "the checkout service account in the store namespace, inside this mesh trust domain." A **certificate** is a signed identity document the proxy can present to another proxy, and the matching **private key** is the secret cryptographic material the proxy uses to prove it really owns that certificate. Istio's **certificate authority**, often shortened to CA, is the signing system that issues trusted workload certificates. **mTLS**, short for mutual TLS, uses those certificates so both sides of a connection can prove who they are while encrypting the traffic.
 
-Example: when your frontend web server tries to call the backend checkout service, the frontend's proxy presents a certificate. This certificate contains a standardized identity string, known as a SPIFFE ID, that looks like `spiffe://cluster.local/ns/default/sa/frontend`. The backend proxy reads this string, verifies the signature against the cluster's root certificate authority, and then decides whether to allow the connection.
+Finally, an Istio **AuthorizationPolicy** is the access-control rule that uses the caller's **source principal**, the identity Istio reads from the peer certificate, to enforce **least privilege between services**. Least privilege between services means each service can call only the other services it actually needs for its job. In the store, checkout needs payments to charge an order, but analytics only needs reporting data, so the payments proxy should allow checkout and block analytics.
 
-Under the hood, the mesh control plane acts as a Certificate Authority. When a new Pod starts, its injected Envoy proxy generates a private key in memory and sends a Certificate Signing Request to the control plane. The control plane validates the Pod's Kubernetes Service Account token, signs the request, and returns a short-lived certificate. This happens entirely in memory within the proxy container, meaning the private key is never written to a physical disk or sent across the network. Because the certificates are short-lived, often expiring in hours, stolen certificates become useless quickly without the underlying Kubernetes identity to renew them.
+The cluster network can route packets from many Pods to many other Pods. That reachability is useful, but reachability alone gives a weak security boundary. If **analytics** can resolve `payments.store.svc.cluster.local` and open a TCP connection, the network has done its job. The security question lives one layer higher: should the payments workload accept that caller?
 
-## Enforcing Strict mTLS
+In this article, we will protect the path in three stages. **Workload identity** answers "who is calling?" **mTLS** makes the caller prove that identity with a certificate and encrypts the traffic between proxies. **AuthorizationPolicy** answers "is this caller allowed to use this destination?" That chain lets **web** call **checkout**, lets **checkout** call **payments**, and blocks **analytics** from calling **payments** even though all three services run inside Kubernetes.
 
-You can loosely think of strict mTLS like disabling the unencrypted HTTP port on a web server and forcing all traffic over HTTPS, except that the client must also provide a valid certificate to prove who they are. By default, Istio and many other service meshes operate in a permissive mode. Permissive mode allows a proxy to accept both plain-text traffic and encrypted mTLS traffic. This is useful when you are slowly migrating existing applications into the mesh, but it does not prevent a compromised, unmeshed Pod from calling a secure service.
+Here is the request path we will keep using. The blocked line stays in the diagram because analytics shares the cluster with payments but should not share payment access.
 
-![Service mesh strict mTLS path showing plaintext blocked, client proxy, encrypted link, server proxy, and app](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/strict-mtls-path.png)
+```bash
+web -> checkout -> payments
+analytics -x-> payments
+```
 
-*Strict mTLS forces service-to-service traffic through authenticated encrypted proxy connections.*
+The `-x->` means the request should fail after we add authorization. The important detail is that the mesh policy lives at the destination proxy, so the **payments** proxy makes the final decision before the request reaches the payments application container.
 
+## Give Each Workload Its Own Service Account
+<!-- section-summary: Service accounts give Kubernetes workloads stable non-human names, and Istio uses those names as the starting point for mesh identity. -->
 
-To lock down the cluster, you must require strict mTLS. You enforce this by applying a `PeerAuthentication` policy. This is a configuration object that tells the mesh proxies to reject any traffic that is not encrypted and authenticated.
+In this article, the service account is the identity seed for the mesh. Dedicated service accounts give `web`, `checkout`, `payments`, and `analytics` separate caller names. The namespace's `default` service account is useful for early demos, and it makes production authorization blurry when several unrelated workloads share the same identity.
+
+For mesh security, give each application its own service account. A **workload identity** is the identity a running workload can prove to another workload, and Istio builds that identity from the Kubernetes service account and namespace. In this scenario, `checkout` and `analytics` need different identities because payments should treat them differently. If both deployments used the `default` service account, the payments proxy would see one shared caller name and your policy would have no clean way to allow checkout while blocking analytics.
+
+This manifest shows the important shape. The images are placeholders for your own application images, but the service accounts, labels, and `serviceAccountName` fields are the security pieces to pay attention to.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: store
+  labels:
+    istio-injection: enabled
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+  namespace: store
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: checkout
+  namespace: store
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payments
+  namespace: store
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: analytics
+  namespace: store
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: store
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      serviceAccountName: web
+      containers:
+        - name: web
+          image: ghcr.io/example/store-web:1.0
+          ports:
+            - containerPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  namespace: store
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: checkout
+  template:
+    metadata:
+      labels:
+        app: checkout
+    spec:
+      serviceAccountName: checkout
+      containers:
+        - name: checkout
+          image: ghcr.io/example/store-checkout:1.0
+          ports:
+            - containerPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: store
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payments
+  template:
+    metadata:
+      labels:
+        app: payments
+    spec:
+      serviceAccountName: payments
+      containers:
+        - name: payments
+          image: ghcr.io/example/store-payments:1.0
+          ports:
+            - containerPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics
+  namespace: store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics
+  template:
+    metadata:
+      labels:
+        app: analytics
+    spec:
+      serviceAccountName: analytics
+      containers:
+        - name: analytics
+          image: ghcr.io/example/store-analytics:1.0
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout
+  namespace: store
+spec:
+  selector:
+    app: checkout
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+  namespace: store
+spec:
+  selector:
+    app: payments
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+```
+
+Apply your application manifests and confirm that the Pods run with the service accounts you expect. This is a small check, but it catches a very common mistake before you start writing policies.
+
+```bash
+kubectl apply -f store-workloads.yaml
+
+kubectl get pods -n store \
+  -o custom-columns='POD:.metadata.name,SA:.spec.serviceAccountName,CONTAINERS:.spec.containers[*].name'
+
+# POD                            SA          CONTAINERS
+# web-6d7f47f65c-zg8kq           web         web,istio-proxy
+# checkout-7f65c8f4c8-b8g4q      checkout    checkout,istio-proxy
+# payments-6f7f88dd6b-w2b9z      payments    payments,istio-proxy
+# analytics-74684cf5d9-pg9q6     analytics   analytics,istio-proxy
+```
+
+The `istio-proxy` container in each Pod tells you sidecar injection happened. That container is the **sidecar proxy**, the local Envoy process that will later present certificates, enforce inbound policy, and send outbound traffic through the mesh. The service account column tells you Istio has different Kubernetes identities to work with when it issues workload certificates, so checkout and analytics will not collapse into the same caller from the payments point of view.
+
+## How Istio Turns Service Accounts Into Identity
+<!-- section-summary: Istio validates the Pod's service account and issues a signed certificate with a SPIFFE identity for the proxy. -->
+
+A **SPIFFE ID** is a URI that uniquely identifies a workload. In an Istio mesh with the default trust domain, the checkout workload normally gets a name like `spiffe://cluster.local/ns/store/sa/checkout`. The `cluster.local` part is the trust domain, `store` is the namespace, and `checkout` is the service account. That string gives the mesh a stable caller name that does not depend on Pod IPs, node names, or replica counts.
+
+A **trust domain** is the part of the identity system that says which authority is allowed to speak for a set of workload names. If payments trusts the `cluster.local` trust domain, then a checkout certificate under `cluster.local` can prove the checkout identity for this mesh. If another cluster or identity system uses a different trust domain, teams have to configure federation or migration deliberately, because payments should not guess that a similar-looking name from somewhere else is safe.
+
+A **certificate** is the signed document that carries the SPIFFE ID, and a **private key** is the secret key paired with that certificate. The proxy uses the private key during the TLS handshake to prove that it owns the certificate without sending the private key across the network. That detail matters for the store because the payments proxy should trust a checkout certificate only when the checkout proxy can prove possession of the matching private key. A copied identity string in a header should not be enough to charge an order.
+
+A **certificate authority**, often shortened to CA, signs certificates so other systems can trust them. In a default Istio install, `istiod` includes the CA behavior for workload certificates. When the checkout Pod starts, its proxy receives an identity certificate after Istio validates the workload's Kubernetes service account. The proxy keeps that certificate and private key in its own runtime and refreshes the certificate before it expires, so application code does not need to store long-lived mesh secrets.
+
+This matters because the **payments** proxy can trust a certificate signed by the mesh CA. When checkout calls payments, the checkout proxy presents its certificate during the connection setup. The payments proxy checks the signature chain, reads the SPIFFE identity from the certificate, and learns that the caller is `cluster.local/ns/store/sa/checkout`.
+
+In production, some teams integrate Istio with SPIRE or another identity system when they need stronger node attestation, cross-platform workload identity, or federation between trust domains. The beginner path is still the same: a workload gets an identity, a CA signs proof of that identity, and the destination proxy verifies the proof before trusting the caller.
+
+## Require Strict mTLS With PeerAuthentication
+<!-- section-summary: PeerAuthentication controls whether a destination workload accepts plain traffic or requires authenticated encrypted mTLS traffic. -->
+
+**mTLS** means mutual TLS. Standard TLS is what your browser uses for HTTPS: the server proves its identity to the client and the traffic is encrypted. Mutual TLS adds the other side of the proof. The client also presents a certificate, so the destination can identify the caller. In a mesh, the application containers still speak normal HTTP to their local proxies, and the proxies handle the encrypted authenticated connection between Pods.
+
+**PeerAuthentication** is the Istio resource that controls inbound mTLS behavior for workloads. It answers a specific question for the destination proxy: should this workload accept plain traffic, mTLS traffic, or only mTLS traffic? `STRICT` mode means the selected workload accepts only connections where the caller completes the mTLS handshake and presents a valid client certificate. For payments, strict mode is the line that lets checkout prove its identity through the mesh while a plain client from outside the mesh gets stopped before the payments container handles the request.
+
+Start with a workload-scoped policy for **payments** so the first rollout has a small blast radius. This protects the sensitive destination while you verify that the intended callers are already in the mesh.
 
 ```yaml
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
-  name: default-strict
-  namespace: default
+  name: payments-strict
+  namespace: store
+spec:
+  selector:
+    matchLabels:
+      app: payments
+  mtls:
+    mode: STRICT
+```
+
+Apply the policy and ask Istio to analyze the configuration before you start testing traffic. `istioctl analyze` catches many policy and selector mistakes early, especially spelling mistakes in namespaces, labels, or API fields.
+
+```bash
+kubectl apply -f payments-strict-peer-authentication.yaml
+istioctl analyze -n store
+```
+
+After every workload in the namespace has been injected and verified, many teams move to a namespace-wide strict policy. This version protects every workload in `store`, including checkout, payments, web, and analytics.
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: store
 spec:
   mtls:
     mode: STRICT
 ```
 
-When you apply this configuration with `kubectl apply`, the control plane translates the policy into low-level Envoy proxy configuration and pushes it to every proxy in the `default` namespace over a gRPC stream.
+The workload-scoped policy teaches the behavior with less risk. The namespace-wide policy is the production direction once you know that no intended caller still depends on plain traffic.
+
+## Prove Plain Traffic Fails and Meshed Traffic Works
+<!-- section-summary: A plain Pod without an Istio proxy cannot present a mesh certificate, while a meshed workload can call payments through mTLS. -->
+
+Now we can test the difference between a plain client and a meshed client. A **plain client** is a Pod without the Istio sidecar proxy. It can still send HTTP packets to the payments Service address, so Kubernetes networking may look fine, but it has no Envoy proxy to receive an Istio workload certificate, hold the private key, and speak Istio mTLS to the payments proxy. That is why the same cluster can route traffic while payments still rejects the caller.
+
+Create a namespace without injection and run a simple curl Pod there. The `plain-client` Pod should show `1/1` because it has only the curl container and no proxy sidecar.
 
 ```bash
-kubectl apply -f peer-auth.yaml
-```
+kubectl create namespace outside
 
-The proxies immediately begin dropping incoming TCP connections that do not complete the TLS handshake.
-
-## Testing Unencrypted Traffic
-
-To see this enforcement in action, you can test a connection from a Pod that does not have a proxy. When a Pod lacks a proxy, it cannot automatically acquire a certificate or perform the complex mTLS handshake required by the destination.
-
-Because the previous article enabled sidecar injection in the `default` namespace, this test must run somewhere else. Create a namespace without injection and verify that the test Pod has only one container before it calls the meshed checkout service.
-
-```bash
-kubectl create namespace plain-client
-kubectl run test-client \
-  --namespace plain-client \
-  --image=curlimages/curl \
+kubectl run plain-client \
+  -n outside \
+  --image=curlimages/curl:8.10.1 \
   --restart=Never \
   -- sleep 3600
 
-kubectl get pod test-client --namespace plain-client
+kubectl get pod plain-client -n outside
+
+# NAME           READY   STATUS    RESTARTS   AGE
+# plain-client   1/1     Running   0          18s
 ```
 
-```text
-NAME          READY   STATUS    RESTARTS   AGE
-test-client   1/1     Running   0          12s
-```
-
-Now execute `curl` from that unmeshed Pod. Use the fully qualified Service name so the Pod in `plain-client` reaches the checkout Service in the `default` namespace.
+Send a request from that unmeshed Pod to payments. The exact curl error can vary by proxy version and network timing, but the useful signal is that the application does not receive a normal `200` response.
 
 ```bash
-kubectl exec test-client --namespace plain-client -- \
-  curl -s -v http://checkout-service.default.svc.cluster.local:8080/health
+kubectl exec plain-client -n outside -- \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://payments.store.svc.cluster.local:8080/health
+
+# curl: (56) Recv failure: Connection reset by peer
+# 000
 ```
 
-```text
-*   Trying 10.96.105.14:8080...
-* Connected to checkout-service (10.96.105.14) port 8080
-> GET /health HTTP/1.1
-> Host: checkout-service:8080
-> User-Agent: curl/8.4.0
-> Accept: */*
->
-* Recv failure: Connection reset by peer
-* Closing connection
-curl: (56) Recv failure: Connection reset by peer
-```
+The network path can still route to the Service IP, but the payments proxy expects an mTLS client certificate. The plain curl Pod presents raw HTTP, so the proxy closes the connection before the payments container handles the request.
 
-The output shows a TCP connection reset. The underlying network path allows the packet to reach the destination Pod, but the destination Envoy proxy is expecting an mTLS handshake. Because it receives raw HTTP instead of a TLS Client Hello message with a client certificate, the proxy terminates the connection. The application container behind the proxy never sees the request.
-
-## Testing Encrypted Traffic
-
-When both the caller and the destination are part of the mesh, the proxies handle the cryptography transparently. The application containers still send plain-text HTTP to their local network interfaces, but the sidecar proxies intercept, encrypt, and authenticate the traffic before it ever leaves the virtual machine.
-
-You can verify this by executing a command inside a meshed frontend Pod to call the same checkout service.
+Now test from the meshed checkout workload. Checkout still sends ordinary HTTP from the application container's point of view, but its sidecar proxy upgrades the Pod-to-Pod hop into mTLS.
 
 ```bash
-kubectl exec -it deploy/frontend -c frontend -- curl -s -v http://checkout-service:8080/health
+kubectl exec -n store deploy/checkout -c checkout -- \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://payments:8080/health
+
+# 200
 ```
 
-```text
-*   Trying 10.96.105.14:8080...
-* Connected to checkout-service (10.96.105.14) port 8080
-> GET /health HTTP/1.1
-> Host: checkout-service:8080
-> User-Agent: curl/8.4.0
-> Accept: */*
->
-< HTTP/1.1 200 OK
-< content-type: application/json
-< content-length: 15
-< x-envoy-upstream-service-time: 2
-<
-{"status":"ok"}
-```
+That `200` proves the intended meshed path works while strict mTLS blocks a plain client. At this point, payments can authenticate meshed callers, but authentication alone still allows both checkout and analytics if analytics has a valid mesh identity. The next step turns identity into an access rule.
 
-Even though the `curl` command explicitly requests `http://` and shows a plain HTTP 1.1 exchange from the application's point of view, the traffic between proxies is encrypted. The frontend proxy intercepts the outbound request, initiates a TLS session with the checkout proxy, presents its certificate, and forwards the HTTP request through the encrypted channel. The checkout proxy decrypts the payload and forwards it to the checkout container through the local Pod network. The `x-envoy-upstream-service-time` header is a useful clue that Envoy was in the request path, but it is not by itself proof of mTLS. The stronger proof is the active certificate and identity that the proxy uses during the handshake.
+## Inspect the Certificate and Source Principal
+<!-- section-summary: The proxy certificate shows the SPIFFE ID that Istio later exposes to authorization as the source principal. -->
 
-## Inspecting the Proxy Certificate
+Before writing the authorization rule, it helps to inspect the actual identity Istio issued. The `istioctl proxy-config secret` command retrieves secret configuration from the Envoy proxy, including the workload certificate used for mTLS.
 
-To prove that this identity system is real, you can inspect the actual certificate the proxy holds in memory. You can use the `istioctl proxy-config secret` command to dump the Envoy proxy's active TLS configurations. By piping that output into `openssl`, you can read the cryptographic details of the certificate the frontend proxy uses to authenticate itself.
+Pick one checkout Pod and list its active secrets. The short output is a quick way to confirm that Envoy has an active certificate and root certificate.
 
 ```bash
-istioctl proxy-config secret deploy/frontend -o json \
-  | jq -r '.dynamicActiveSecrets[0].secret.tlsCertificate.certificateChain.inlineBytes' \
+CHECKOUT_POD=$(kubectl get pod -n store -l app=checkout \
+  -o jsonpath='{.items[0].metadata.name}')
+
+istioctl proxy-config secret "$CHECKOUT_POD" -n store
+
+# RESOURCE NAME     TYPE           STATUS     VALID CERT     SERIAL NUMBER
+# default           Cert Chain     ACTIVE     true           12b31c...
+# ROOTCA            CA             ACTIVE     true           6f44aa...
+```
+
+To read the SPIFFE ID inside the certificate, dump the secret as JSON, decode the certificate chain, and inspect the certificate with OpenSSL. This gives you the same identity string that the destination proxy uses during policy evaluation.
+
+```bash
+istioctl proxy-config secret "$CHECKOUT_POD" -n store -o json \
+  | jq -r '.dynamicActiveSecrets[] | select(.name == "default") | .secret.tlsCertificate.certificateChain.inlineBytes' \
   | base64 --decode \
-  | openssl x509 -text -noout \
-  | grep -A 1 "Subject Alternative Name"
+  | openssl x509 -noout -text \
+  | grep -A1 "Subject Alternative Name"
+
+# X509v3 Subject Alternative Name: critical
+#     URI:spiffe://cluster.local/ns/store/sa/checkout
 ```
 
-```text
-            X509v3 Subject Alternative Name: critical
-                URI:spiffe://cluster.local/ns/default/sa/frontend
-```
+The **source principal** is the caller identity Istio derives from the peer certificate during mTLS. In Istio authorization policy, the principal value usually drops the `spiffe://` scheme and uses the form `cluster.local/ns/store/sa/checkout`. That value is the bridge between authentication and authorization: the certificate proves that checkout is the caller, and the policy compares checkout against the allowed list for payments. When analytics calls payments, the source principal changes to `cluster.local/ns/store/sa/analytics`, which gives the payments proxy a clear reason to reject it.
 
-The output reveals the Subject Alternative Name (SAN) extension of the X.509 certificate. This is the exact field the destination proxy checks during the TLS handshake. It contains a standard SPIFFE (Secure Production Identity Framework for Everyone) URI.
+If the JSON query returns `null`, inspect the short `istioctl proxy-config secret` output first and confirm the active secret name. Istio and Envoy output shapes can change across versions, but the underlying check stays the same: find the active workload certificate and confirm the SPIFFE URI matches the service account you meant to use.
 
-Notice that the identity is bound to `sa/frontend`, which is the Kubernetes Service Account. The mesh control plane generated this certificate after validating the Kubernetes Service Account token mounted inside the Pod. When the frontend proxy connects to the checkout proxy, the checkout proxy reads this SPIFFE URI and validates the certificate chain against the mesh root CA. That gives the mesh a cryptographic caller identity that is stronger than a Pod IP address.
+## Allow Checkout and Block Analytics
+<!-- section-summary: AuthorizationPolicy lets payments allow the checkout source principal and reject analytics with the same mesh identity system. -->
 
-## Authorizing One Caller
+An **AuthorizationPolicy** is an Istio access-control resource. It runs at the destination side of the connection, inside the server-side Envoy proxy. For the payments workload, that means the payments proxy evaluates the caller before the payments container receives the request. This placement matters because checkout, analytics, and any other caller all meet the same payments-side rule instead of each caller deciding for itself whether it should be trusted.
 
-Authentication proves who made the call. Authorization decides whether that caller is allowed to do the requested action. mTLS gives the mesh an identity to check, but it does not by itself express the rule “frontend may call checkout.”
+The safest service-to-service rule here is **least privilege between services**. Checkout needs to call payments, so checkout gets access. Analytics has no business reason to call payments, so analytics gets blocked. The policy should express that exact dependency instead of trusting every Pod in the namespace.
 
-Istio uses `AuthorizationPolicy` objects for that second decision. This example allows only the `frontend` Service Account in the `default` namespace to call Pods labeled `app: checkout`.
+An **ALLOW policy** is an authorization policy that lists the requests that should pass. Once a workload has at least one matching ALLOW policy, unmatched requests are denied for that selected workload, which creates a **default-deny posture** for payments. Default-deny posture means access starts closed and you add the specific calls the service should accept. In the store, that posture is useful because analytics does not need a special deny rule; analytics simply fails because it is absent from the payments allow list.
+
+Create an allow policy on payments that accepts only checkout's source principal. This policy targets Pods with `app: payments`, uses `action: ALLOW`, and matches the caller principal `cluster.local/ns/store/sa/checkout`.
 
 ```yaml
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: checkout-allow-frontend
-  namespace: default
+  name: payments-allow-checkout
+  namespace: store
 spec:
   selector:
     matchLabels:
-      app: checkout
+      app: payments
   action: ALLOW
   rules:
     - from:
         - source:
-            serviceAccounts:
-              - default/frontend
+            principals:
+              - cluster.local/ns/store/sa/checkout
+      to:
+        - operation:
+            ports:
+              - "8080"
+            methods:
+              - GET
+              - POST
 ```
 
-When an `ALLOW` policy applies to a workload, requests that do not match an allow rule are denied. This is the part that turns the certificate identity into an access rule. The checkout proxy can now read the caller identity from the mTLS certificate and compare it with the allowed Service Account before the request reaches the checkout container.
+Apply it, analyze it, and describe a payments Pod so you can see the security configuration Istio thinks applies to that workload. The describe command is a sanity check before you rely on curl results alone.
+
+```bash
+kubectl apply -f payments-allow-checkout.yaml
+istioctl analyze -n store
+
+PAYMENTS_POD=$(kubectl get pod -n store -l app=payments \
+  -o jsonpath='{.items[0].metadata.name}')
+
+istioctl x describe pod -n store "$PAYMENTS_POD"
+```
+
+Now test the actual application paths. Web can still call checkout because this policy targets only payments. Checkout can call payments because the caller principal matches the allow rule.
+
+```bash
+kubectl exec -n store deploy/web -c web -- \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://checkout:8080/cart
+
+# 200
+
+kubectl exec -n store deploy/checkout -c checkout -- \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://payments:8080/charge
+
+# 200
+```
+
+Analytics has a valid mesh certificate, so it passes mTLS authentication. The payments proxy still denies the request because the source principal is `cluster.local/ns/store/sa/analytics`, and the allow list contains only checkout.
+
+```bash
+kubectl exec -n store deploy/analytics -c analytics -- \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+  http://payments:8080/charge
+
+# 403
+```
+
+That `403` is the result we wanted. The caller is inside the cluster, inside the mesh, and able to route to the payments Service, but the destination proxy blocks it because the service-to-service relationship falls outside the allow rule. This is the boundary we wanted: network reachability stays available, while application access follows the dependency graph.
+
+## Rollout Guidance and Common Gotchas
+<!-- section-summary: Production rollouts work best when teams verify identities first, dry-run authorization, apply small policies, and keep rollback commands ready. -->
+
+In production, roll out mesh security in small steps. Start by giving every workload a dedicated service account and checking sidecar injection. Then enable strict mTLS on one sensitive workload, such as payments, before moving to a namespace-wide policy. Watch telemetry and application errors while you do this because strict mTLS immediately exposes callers that have no proxy, stale injection, or unusual startup behavior.
+
+For authorization, **dry-run** the risky rule before enforcing it. Dry-run means Istio evaluates the authorization policy and records what would have matched, while production traffic still follows the currently enforced rules. Istio supports the `istio.io/dry-run: "true"` annotation on authorization policies for that rollout step. In our scenario, dry-run gives you a chance to confirm checkout would be allowed and analytics would be blocked before you make the payments proxy enforce the rule for real traffic.
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: payments-allow-checkout
+  namespace: store
+  annotations:
+    istio.io/dry-run: "true"
+spec:
+  selector:
+    matchLabels:
+      app: payments
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/store/sa/checkout
+```
+
+Keep rollback commands ready during the rollout window. Deleting the authorization policy reopens payments to all authenticated mesh callers, and deleting the workload-scoped peer authentication removes strict mTLS from payments. In a real incident, you should pair rollback with a ticket and follow-up review because rollback restores traffic but also removes the protection you were adding.
+
+```bash
+kubectl delete authorizationpolicy payments-allow-checkout -n store
+kubectl delete peerauthentication payments-strict -n store
+```
+
+The most common gotcha is shared service accounts. If checkout and analytics both run as `default`, Istio sees the same workload identity for both, so an allow rule cannot separate them cleanly. Fix the Deployment specs first, restart the Pods, and inspect the new certificate before changing authorization.
+
+Another common gotcha is writing the wrong principal string. The certificate SAN includes `spiffe://cluster.local/ns/store/sa/checkout`, while `AuthorizationPolicy` principals usually use `cluster.local/ns/store/sa/checkout`. If your cluster uses a custom trust domain, inspect the certificate instead of guessing the `cluster.local` part.
+
+Policy placement also trips teams up. Authorization policies apply at the destination workload selected by the policy, so the payments allow rule belongs in the payments namespace and targets the payments labels. If you accidentally put the policy on checkout, you are protecting inbound traffic to checkout, not outbound traffic from checkout.
+
+One practical testing gotcha is that production application images often do not include `curl`. When that happens, run a temporary meshed curl Pod with the same `serviceAccountName` as the caller you want to test, verify the policy result, and delete the test Pod after the rollout check.
+
+Finally, remember that an `ALLOW` policy with rules creates a **default-deny posture** for the selected workload. The posture is powerful because payments starts from "only the listed callers can enter" instead of "everything in the namespace is probably fine." It can still surprise you if payments has health checks, metrics scrapes, or admin calls from a different service account. Add those callers deliberately, test them with `curl`, and keep the allowed list close to the real dependency graph.
 
 ## Putting It All Together
+<!-- section-summary: The full flow uses service accounts for names, certificates for proof, strict mTLS for authenticated transport, and authorization for least privilege. -->
 
-IP-based security rules are too fragile for ephemeral container environments where addresses constantly shift. By relying on workload identity and mTLS, a service mesh moves the security boundary from the physical network to the application itself.
+The security flow now has clear pieces. Kubernetes service accounts give **web**, **checkout**, **payments**, and **analytics** separate names. Istio turns those service accounts into SPIFFE workload identities and signed certificates. `PeerAuthentication` in `STRICT` mode makes payments accept only callers that can complete mTLS with a trusted certificate.
 
-- The mesh control plane acts as a Certificate Authority, automatically issuing short-lived certificates to every proxy based on the Pod's Kubernetes Service Account.
-- A `PeerAuthentication` policy forces proxies to reject plain-text connections for the workloads it covers.
-- Requests from unmeshed Pods fail when strict mTLS is required because they cannot complete the TLS handshake.
-- Requests between meshed Pods are transparently encrypted and authenticated, allowing developers to write plain HTTP code while the proxies handle the cryptography.
-- The identity is embedded directly in the certificate's Subject Alternative Name as a SPIFFE URI, providing cryptographically verifiable proof of origin.
-- An `AuthorizationPolicy` turns that identity into an access decision.
+Once mTLS gives payments a verified caller identity, `AuthorizationPolicy` turns that identity into a service-to-service access decision. Checkout's source principal matches the allow rule, so checkout can call payments. Analytics has a different source principal, so payments rejects it with `403`. The cluster network still routes traffic, but the proxy layer enforces the application relationship.
+
+That is the practical shape of mesh security. Pod IPs and broad namespace trust make weak authorization signals. Dedicated workload identities, authenticated encrypted transport, and explicit allow rules give payments a caller list that matches the application design.
 
 ## What's Next
 
-Security and traffic control are powerful, but what happens when the proxy itself fails?
+Traffic rules and security rules give the mesh real power, and they also create a new operational surface. After teams add routing, mTLS, and authorization, they need to operate the proxy layer: inspect Envoy logs, understand proxy resource overhead, debug failed requests, and handle startup ordering between applications and sidecars.
 
-![Mesh security summary showing service account identity, certificates, mTLS, peer policy, authorization policy, and allowed callers.](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/mesh-security-summary.png)
-
-*The security model has two steps: mTLS proves the caller's workload identity, then authorization policy decides whether that caller is allowed through.*
+The next article moves from policy design into day-to-day operations. We will look at what changes when every request path includes a proxy, and how to debug the mesh when the application code appears healthy while traffic still fails.
 
 ---
 
 **References**
 
-- [Istio Security Concepts](https://istio.io/latest/docs/concepts/security/) - Explains Istio identity, mTLS, authentication, and authorization.
-- [Istio PeerAuthentication](https://istio.io/latest/docs/reference/config/security/peer_authentication/) - Defines mTLS modes for incoming connections.
-- [Istio AuthorizationPolicy](https://istio.io/latest/docs/reference/config/security/authorization-policy/) - Defines workload access-control rules.
-- [Istio Sidecar Injection](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/) - Explains namespace and pod-level sidecar injection behavior.
+- [Istio Security Concepts](https://istio.io/latest/docs/concepts/security/) - Explains Istio identity, certificate management, mutual TLS authentication, authorization architecture, policy updates, and the dependency between mTLS and source identity.
+- [Istio PeerAuthentication Reference](https://istio.io/latest/docs/reference/config/security/peer_authentication/) - Defines `STRICT`, `PERMISSIVE`, workload selectors, namespace policies, and mTLS mode behavior.
+- [Istio Authentication Policy Task](https://istio.io/latest/docs/tasks/security/authentication/authn-policy/) - Shows practical peer authentication examples and cleanup commands for mTLS policy testing.
+- [Istio AuthorizationPolicy Reference](https://istio.io/latest/docs/reference/config/security/authorization-policy/) - Documents selectors, actions, rules, principals, service accounts, source fields, and dry-run annotation examples.
+- [Istio Security Best Practices](https://istio.io/latest/docs/ops/best-practices/security/) - Covers safer authorization patterns, defense in depth, traffic capture limits, and production security guidance.
+- [Istio SPIRE Integration](https://istio.io/latest/docs/ops/integrations/spire/) - Describes how SPIRE can issue cryptographic identities for Istio workloads and why trust domains must match.
+- [SPIFFE Concepts](https://spiffe.io/docs/latest/spiffe-about/spiffe-concepts/) - Defines SPIFFE IDs, SVIDs, trust domains, workload identity documents, and trust bundles.
+- [Kubernetes Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/) - Defines Kubernetes service accounts as namespaced non-human identities for Pods and automation.
+- [Istioctl Command Reference](https://istio.io/latest/docs/reference/commands/istioctl/) - Documents `istioctl proxy-config secret` for retrieving Envoy secret configuration.
+- [Understand your Mesh with Istioctl Describe](https://istio.io/latest/docs/ops/diagnostic-tools/istioctl-describe/) - Shows how `istioctl x describe pod` verifies mesh membership and strict mTLS configuration.

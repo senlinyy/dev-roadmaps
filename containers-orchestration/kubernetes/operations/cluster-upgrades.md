@@ -11,62 +11,61 @@ aliases:
 
 ## Table of Contents
 
-1. [An Upgrade Changes the Floor](#an-upgrade-changes-the-floor)
-2. [Know What Is Being Upgraded](#know-what-is-being-upgraded)
-3. [Check API Compatibility First](#check-api-compatibility-first)
-4. [Prepare Workloads for Node Drains](#prepare-workloads-for-node-drains)
-5. [Upgrade Control Plane and Nodes Separately](#upgrade-control-plane-and-nodes-separately)
-6. [Validate With Real Workload Evidence](#validate-with-real-workload-evidence)
-7. [Failure Mode: Pods Cannot Move](#failure-mode-pods-cannot-move)
-8. [Upgrade Review Questions](#upgrade-review-questions)
+1. [Why Cluster Upgrades Need a Runbook](#why-cluster-upgrades-need-a-runbook)
+2. [Build the Upgrade Inventory](#build-the-upgrade-inventory)
+3. [Check API Versions Before the Window](#check-api-versions-before-the-window)
+4. [Prove Add-ons and Clients Are Compatible](#prove-add-ons-and-clients-are-compatible)
+5. [Make devpolaris-orders-api Drain-Ready](#make-devpolaris-orders-api-drain-ready)
+6. [Rehearse the Node Roll in Staging](#rehearse-the-node-roll-in-staging)
+7. [Upgrade in Phases](#upgrade-in-phases)
+8. [Validate With Application Evidence](#validate-with-application-evidence)
+9. [Handle Failed Drains and Bad Signals](#handle-failed-drains-and-bad-signals)
+10. [Upgrade Runbook Checklist](#upgrade-runbook-checklist)
+11. [What's Next](#whats-next)
 
-## An Upgrade Changes the Floor
+## Why Cluster Upgrades Need a Runbook
+<!-- section-summary: A cluster upgrade changes the shared platform, so the team needs planned evidence before, during, and after the maintenance window. -->
 
-Application deploys change one workload. Cluster upgrades change the platform every workload stands on. The Kubernetes API server, controller manager, scheduler, kubelets, container runtime, CNI plugin, CSI driver, ingress controller, and cloud controller may all be part of the upgrade path depending on the cluster.
+A **cluster upgrade** changes Kubernetes itself: the API server that accepts manifests, the controllers that reconcile objects, the scheduler that chooses nodes, and the kubelets that run Pods. In a managed cluster, the cloud provider may run many of those steps for you, yet your workloads still live through the change. The platform team needs to prove that important services still work after the version moves.
 
-That wider blast radius is why cluster upgrades need a plan. Kubernetes must be upgraded for security patches, support windows, new features, and ecosystem compatibility. A good upgrade plan makes the change observable and reversible where possible.
+We will use one production scenario across this module. The service is `devpolaris-orders-api`, it runs in the `orders` namespace, and it serves checkout traffic. It has three replicas, an internal Service, an external route through an ingress controller, and dependencies on a database and queue.
 
-For `devpolaris-orders-api`, the practical questions are concrete. Will its Deployment still use supported API versions? Can its three replicas stay available while nodes drain? Do probes and PodDisruptionBudgets behave correctly? Does the ingress controller still route traffic after nodes roll?
+The upgrade question is practical: can customers keep placing orders while the cluster moves from one supported Kubernetes version to the next? That question touches API compatibility, node drains, PodDisruptionBudgets, add-ons, observability, and rollback choices. A runbook keeps those checks in order so the maintenance window does not turn into random command execution.
 
 ```mermaid
 flowchart TD
-    A["Before upgrade"] --> B["API compatibility checks"]
-    B --> C["Control plane upgrade"]
-    C --> D["Node pool upgrade"]
-    D --> E["Workload validation"]
-    E --> F["Observe errors, latency, and events"]
+    A["Inventory current cluster"] --> B["Check API compatibility"]
+    B --> C["Verify add-ons and clients"]
+    C --> D["Rehearse drain behavior"]
+    D --> E["Upgrade control plane"]
+    E --> F["Upgrade node pools"]
+    F --> G["Validate orders API evidence"]
 ```
 
-The safe path is staged evidence, not hope.
+The important idea is **evidence before motion**. Before the upgrade, gather facts about the current cluster. During the upgrade, validate after each phase. After the upgrade, prove the application path, not only the Kubernetes version number.
 
-## Know What Is Being Upgraded
+## Build the Upgrade Inventory
+<!-- section-summary: The upgrade inventory names the exact platform pieces that might change, from API server version to add-ons and workload clients. -->
 
-A cluster upgrade is a coordinated change across the software that accepts Kubernetes objects, schedules work, and runs Pods. It can touch the control plane that stores API objects, the nodes that run Pods, and add-ons that provide DNS, networking, storage, ingress, and metrics. Managed Kubernetes services hide some operational work, but they do not remove the responsibility to understand which layer is changing.
+An **upgrade inventory** is a short record of the cluster versions, node versions, critical add-ons, and clients that matter for the upgrade. This sounds basic, but it prevents a common production mistake: treating "Kubernetes v1.x to v1.y" as one change. Real clusters also include networking, DNS, storage, ingress, metrics, autoscaling, and deployment tooling.
 
-![Kubernetes cluster upgrade layer map covering API version, control plane, node version, add-ons, workloads, and clients](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/upgrade-layer-map.png)
-
-*A cluster upgrade changes several layers, not just the version number printed by the control plane.*
-
-
-Example: a provider may upgrade the API server first, then node pools, while your platform team separately upgrades the ingress controller or CSI storage driver.
-
-Capture the starting state:
+Start with the control plane and node versions. Use the command output as the starting point for the runbook, then compare it with your provider release notes and the Kubernetes version skew policy.
 
 ```bash
 $ kubectl version
 Client Version: v1.30.4
 Server Version: v1.29.8
 
-$ kubectl get nodes
-NAME       STATUS   ROLES    AGE    VERSION
-worker-1   Ready    <none>   142d   v1.29.8
-worker-2   Ready    <none>   142d   v1.29.8
-worker-3   Ready    <none>   142d   v1.29.8
+$ kubectl get nodes -o wide
+NAME       STATUS   ROLES    AGE    VERSION   OS-IMAGE
+worker-1   Ready    <none>   142d   v1.29.8   Ubuntu 22.04.4 LTS
+worker-2   Ready    <none>   142d   v1.29.8   Ubuntu 22.04.4 LTS
+worker-3   Ready    <none>   142d   v1.29.8   Ubuntu 22.04.4 LTS
 ```
 
-Do not memorize the version numbers in this example. In real work, check the provider and Kubernetes release notes for the exact target version. Version skew rules also matter: Kubernetes components support specific version differences between control plane and nodes.
+The `Client Version` is the `kubectl` version on your machine or CI runner. The `Server Version` is the Kubernetes API server. Kubernetes documents supported version skew between components, so keep the deployment runner, local runbooks, and automation images inside the supported range for the target cluster.
 
-List critical add-ons too:
+Next, list the add-ons that your service depends on. `devpolaris-orders-api` might look like an application-only workload, but it relies on CoreDNS for service discovery, the CNI plugin for Pod networking, the ingress controller for external traffic, the CSI driver for mounted secrets or volumes, and Metrics Server for autoscaling signals.
 
 ```bash
 $ kubectl -n kube-system get deploy,daemonset
@@ -79,44 +78,82 @@ daemonset.apps/cilium                     3         3         3
 daemonset.apps/secrets-store-csi-driver   3         3         3
 ```
 
-If networking, DNS, metrics, or storage add-ons are incompatible with the target version, application health checks will fail even if the application image is unchanged.
+Record the current version and target version for each add-on if your cluster exposes that through Helm, your GitOps repo, or provider metadata. An API server upgrade can finish successfully while an old ingress controller or CSI driver still fails against the new environment. The inventory gives you a place to catch that before production users feel it.
 
-## Check API Compatibility First
+## Check API Versions Before the Window
+<!-- section-summary: API compatibility checks make sure Kubernetes still accepts the manifests and live objects that the orders service depends on. -->
 
-API compatibility means your manifests use resource versions the target Kubernetes API server still accepts. Kubernetes removes deprecated API versions over time, so a manifest that worked last year may fail against a newer API server.
+**API compatibility** means the target Kubernetes API server still accepts the resource versions your manifests use. Kubernetes removes deprecated API versions over time, and those removals matter during upgrades. A manifest using an old API version can fail to apply even when the container image, YAML fields, and application code are otherwise fine.
 
-Example: an old Ingress using `extensions/v1beta1` would fail on modern clusters, while `networking.k8s.io/v1` is the stable shape to use. Check manifests and live objects for deprecated versions before the upgrade window.
+For `devpolaris-orders-api`, inspect the live objects first. This gives you a quick view of the API versions already stored in the cluster.
 
 ```bash
-$ kubectl get ingress -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{" "}{.apiVersion}{"\n"}{end}'
-orders/devpolaris-orders-api networking.k8s.io/v1
+$ kubectl -n orders get deploy,svc,ingress,pdb -o custom-columns=KIND:.kind,NAME:.metadata.name,API:.apiVersion
+KIND                         NAME                    API
+Deployment                   devpolaris-orders-api   apps/v1
+Service                      devpolaris-orders-api   v1
+Ingress                      devpolaris-orders-api   networking.k8s.io/v1
+PodDisruptionBudget          devpolaris-orders-api   policy/v1
 ```
 
-That Ingress uses the stable `networking.k8s.io/v1` API. If you find old API versions, update manifests and controllers before upgrading the cluster.
+Those API versions are current shapes for the common workload objects in this example. If the scan finds something like an old beta Ingress API, fix the manifest and roll that fix through normal deployment before the cluster upgrade. Mixing a manifest migration with the production upgrade window gives the team two changes to debug at once.
 
-Server-side dry run can catch objects the target API server rejects when you test against an upgraded staging cluster.
+Then test the manifests against a staging cluster that already runs the target version. A **server-side dry run** asks the API server to validate the object without storing it, so it catches removed APIs, schema mistakes, and some admission policy problems.
 
 ```bash
 $ kubectl apply --server-side --dry-run=server -f k8s/orders/
 deployment.apps/devpolaris-orders-api serverside-applied (server dry run)
 service/devpolaris-orders-api serverside-applied (server dry run)
 ingress.networking.k8s.io/devpolaris-orders-api serverside-applied (server dry run)
+poddisruptionbudget.policy/devpolaris-orders-api serverside-applied (server dry run)
 ```
 
-A dry run proves the API server accepts the object shapes. Production rehearsal still needs environment-specific checks such as controllers, admission policy, and runtime behavior.
+The dry run proves only that the API server accepts the object shape. Ingress routing, image startup, and database dependency health still need runtime checks. Keep it as the first gate, then continue into runtime validation.
 
-## Prepare Workloads for Node Drains
+## Prove Add-ons and Clients Are Compatible
+<!-- section-summary: Add-on compatibility checks protect the pieces that application teams usually notice first: DNS, networking, storage, ingress, and metrics. -->
 
-A node drain is the planned process of moving Pods off a node so the node can be upgraded or maintained. A node is cordoned so no new Pods are scheduled there, then drained so existing Pods are evicted and recreated on other nodes.
+Cluster add-ons are the shared systems that make application Pods useful. **CoreDNS** resolves service names. A **CNI plugin** connects Pods to the network. A **CSI driver** mounts storage or secrets. An **ingress controller** receives external traffic. **Metrics Server** feeds `kubectl top` and many HorizontalPodAutoscaler setups.
 
-![Kubernetes node drain path showing drain node, pod eviction, rescheduling, readiness, and empty old node](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/node-drain-movement.png)
+The platform team should check add-on support before the production window, then verify add-on health during the rollout. The exact commands depend on the provider and add-on stack, but the runbook should include a small table like this.
 
-*Node upgrades depend on whether workloads can leave a node and become ready somewhere else.*
+| Add-on | Why it matters for `devpolaris-orders-api` | Practical check |
+|--------|--------------------------------------------|-----------------|
+| CoreDNS | Service names such as `postgres.orders.svc` must resolve | Run DNS lookup from a test Pod |
+| CNI plugin | Pods need Service and Pod-to-Pod networking | Curl the orders Service from inside the cluster |
+| CSI driver | Mounted secrets or volumes must attach | Restart a Pod that uses the driver in staging |
+| Ingress controller | Checkout traffic reaches the Service | Curl the external health URL |
+| Metrics Server | HPA and operations dashboards need Pod metrics | Run `kubectl top pods` and check HPA conditions |
 
+Use Kubernetes commands for the simple health checks and provider or Helm commands for version checks. The point is to collect proof from the layer that owns the behavior.
 
-Example: if `worker-2` drains, one orders API Pod may be evicted and a replacement should become ready on another node while the remaining replicas keep serving traffic.
+```bash
+$ kubectl -n kube-system rollout status deployment/coredns
+deployment "coredns" successfully rolled out
 
-For `devpolaris-orders-api`, three replicas across nodes are a good start. A PodDisruptionBudget can tell Kubernetes how much voluntary disruption is acceptable.
+$ kubectl -n kube-system rollout status deployment/metrics-server
+deployment "metrics-server" successfully rolled out
+
+$ kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller
+deployment "ingress-nginx-controller" successfully rolled out
+```
+
+Client compatibility belongs in the same checklist. The deployment pipeline, GitOps controller, policy engine, backup job, and on-call runbook all talk to the Kubernetes API. If an old controller sends objects the new API server rejects, the application team may see a failed release even though the cluster itself is healthy.
+
+## Make devpolaris-orders-api Drain-Ready
+<!-- section-summary: Drain readiness proves the service can lose one node at a time while enough replicas stay available for users. -->
+
+A **node drain** is the planned process of moving Pods away from a node before maintenance. Kubernetes first cordons the node so new Pods do not land there, then evicts eligible Pods so controllers can create replacements elsewhere. Node upgrades depend on this behavior because most providers replace or restart worker nodes during the node-pool phase.
+
+For the orders service, replicas are the first practical check. One replica gives you no room for voluntary disruption. Three replicas give the scheduler a chance to keep traffic flowing while one Pod moves, as long as the cluster has spare capacity and the Pods can run on more than one node.
+
+```bash
+$ kubectl -n orders get deploy devpolaris-orders-api
+NAME                    READY   UP-TO-DATE   AVAILABLE
+devpolaris-orders-api   3/3     3            3
+```
+
+Add a **PodDisruptionBudget**, usually called a PDB, so Kubernetes knows how much voluntary disruption the service can tolerate. This PDB says at least two orders API Pods should stay available during planned disruptions.
 
 ```yaml
 apiVersion: policy/v1
@@ -131,11 +168,63 @@ spec:
       app.kubernetes.io/name: devpolaris-orders-api
 ```
 
-This allows one replica to be voluntarily disrupted while keeping two available. It does not protect against all failures. If two nodes die at once, a PDB cannot stop that. It helps during planned operations such as drains and upgrades.
-
-Test drain behavior in staging:
+The PDB protects availability during drain, but it also blocks unsafe maintenance when the service has no spare room. That is useful pressure. If the PDB reports zero allowed disruptions, increase replicas, add node capacity, fix readiness, or adjust the rollout plan before touching production nodes.
 
 ```bash
+$ kubectl -n orders get pdb devpolaris-orders-api
+NAME                    MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS
+devpolaris-orders-api   2               N/A               1
+```
+
+Drain readiness also needs **readiness probes**, realistic resource requests, and scheduling spread. The readiness probe keeps an unready Pod out of Service endpoints. Resource requests let the scheduler find real capacity. Topology spread or pod anti-affinity helps avoid placing all replicas on one node.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpolaris-orders-api
+  namespace: orders
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/devpolaris/orders-api@sha256:8f4b9c7a9d1f6e24d5b6b0c2e9f77b0c4f37d8443c188a6eac1d2d5c07e42a91
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: devpolaris-orders-api
+```
+
+This is the part of upgrade preparation that application teams directly control. A managed provider can restart nodes carefully, but it cannot invent readiness probes or capacity for a workload that was never prepared to move.
+
+## Rehearse the Node Roll in Staging
+<!-- section-summary: A staging drain rehearsal shows whether PDBs, scheduling, capacity, and readiness behave before the production node pool rolls. -->
+
+A **node roll** is the gradual replacement or restart of worker nodes. Rehearsing it in staging turns the upgrade from a theory into a small proof. You want to know whether one orders API Pod can leave a node, start on another node, pass readiness, and rejoin the Service endpoint list.
+
+Start with a dry-run drain if your Kubernetes version and provider support it. Then run a real staging drain during a controlled test window.
+
+```bash
+$ kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data --dry-run=server
+node/worker-2 cordoned (server dry run)
+pod/devpolaris-orders-api-7c96df7d7c-dh8xq evicted (server dry run)
+
 $ kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data
 node/worker-2 cordoned
 evicting pod orders/devpolaris-orders-api-7c96df7d7c-dh8xq
@@ -143,27 +232,7 @@ pod/devpolaris-orders-api-7c96df7d7c-dh8xq evicted
 node/worker-2 drained
 ```
 
-After the drain, the Deployment should return to the desired ready count on other nodes.
-
-## Upgrade Control Plane and Nodes Separately
-
-The control plane handles API requests, validation, scheduling decisions, and reconciliation. Nodes run your Pods through kubelet and the container runtime. Many upgrade processes update the control plane first and node pools after, so treat those as separate validation points.
-
-Example: after the control plane upgrade, prove Deployments still reconcile. During node upgrades, prove Pods can restart on upgraded nodes and pass readiness.
-
-After the control plane upgrade, verify that controllers still reconcile and that normal API operations work:
-
-```bash
-$ kubectl -n orders rollout status deployment/devpolaris-orders-api
-deployment "devpolaris-orders-api" successfully rolled out
-
-$ kubectl -n orders get events --sort-by=.lastTimestamp | tail -5
-LAST SEEN   TYPE    REASON              OBJECT                              MESSAGE
-4m          Normal  ScalingReplicaSet   deployment/devpolaris-orders-api     Scaled up replica set
-2m          Normal  SuccessfulCreate    replicaset/devpolaris-orders-api...  Created pod
-```
-
-During node upgrades, watch readiness and scheduling:
+After the drain, check that the Deployment returns to its desired availability and that replacement Pods land on other nodes. The `-o wide` output matters here because it shows where each replica actually runs.
 
 ```bash
 $ kubectl -n orders get pods -o wide -l app.kubernetes.io/name=devpolaris-orders-api
@@ -173,23 +242,93 @@ devpolaris-orders-api-7c96df7d7c-q94r7   1/1     Running   worker-3
 devpolaris-orders-api-7c96df7d7c-x6s8m   1/1     Running   worker-4
 ```
 
-The new node `worker-4` is serving a ready replica. That is a better proof than "the upgrade command finished."
+Finally, uncordon the staging node if it stays in the cluster. The rehearsal should leave the environment clean for the next test.
 
-## Validate With Real Workload Evidence
+```bash
+$ kubectl uncordon worker-2
+node/worker-2 uncordoned
+```
 
-Upgrade validation is the proof that workloads still behave correctly after the platform changes underneath them. A cluster upgrade is not done when every node says `Ready`. It is done when critical workloads prove they can serve traffic, scale, resolve DNS, write storage, and report metrics.
+Write down any surprise from the rehearsal. A PDB block, FailedScheduling event, slow image pull, missing secret mount, or readiness failure is a production upgrade issue waiting for a quiet time to appear.
 
-For `devpolaris-orders-api`, a useful evidence set proves the Deployment is available, the Service can route to ready Pods, dependencies answer, and metrics still flow:
+## Upgrade in Phases
+<!-- section-summary: Separate control plane, node pool, and add-on phases give the team clear pause points and smaller validation loops. -->
+
+A phased upgrade gives you clear moments to stop and inspect. Most managed clusters upgrade the **control plane** before worker nodes. The control plane accepts API requests and runs controllers, while worker nodes run Pods through kubelet and the container runtime.
+
+After the control plane phase, prove that ordinary Kubernetes operations still work. Check API readiness, controller reconciliation, and a no-op server-side dry run for the orders manifests.
+
+```bash
+$ kubectl get --raw='/readyz?verbose'
+[+]ping ok
+[+]log ok
+[+]etcd ok
+readyz check passed
+
+$ kubectl -n orders rollout status deployment/devpolaris-orders-api
+deployment "devpolaris-orders-api" successfully rolled out
+
+$ kubectl apply --server-side --dry-run=server -f k8s/orders/
+deployment.apps/devpolaris-orders-api serverside-applied (server dry run)
+```
+
+During the node-pool phase, move slowly enough to validate one slice of capacity before continuing. Watch nodes, the orders Deployment, and namespace events together. This helps you spot whether the issue is node readiness, Pod scheduling, or application readiness.
+
+```bash
+$ kubectl get nodes
+NAME       STATUS                     VERSION
+worker-1   Ready                      v1.29.8
+worker-2   Ready,SchedulingDisabled   v1.29.8
+worker-4   Ready                      v1.30.4
+
+$ kubectl -n orders get events --sort-by=.lastTimestamp | tail -8
+LAST SEEN   TYPE    REASON             OBJECT                                      MESSAGE
+7m          Normal  Killing            pod/devpolaris-orders-api-...               Stopping container api
+6m          Normal  SuccessfulCreate   replicaset/devpolaris-orders-api-...        Created pod
+5m          Normal  Pulled             pod/devpolaris-orders-api-...               Container image already present
+3m          Normal  Ready              pod/devpolaris-orders-api-...               Readiness probe passed
+```
+
+Rollback planning needs plain language. Managed control plane rollback is provider-specific and may be unavailable after a phase completes. Worker node rollback usually means pausing the rollout, keeping old nodes in service, adding a replacement node pool on the previous version if the provider supports it, or restoring from documented backups in self-managed clusters.
+
+The runbook should name the **pause point** for each phase. A pause point is the exact signal that stops the upgrade before more capacity changes. For example, stop the next node drain if `orders` has fewer than two available replicas for more than five minutes, if CoreDNS reports unavailable replicas, or if checkout 5xx rate crosses the incident threshold.
+
+## Validate With Application Evidence
+<!-- section-summary: Post-upgrade validation proves the checkout path, service routing, dependencies, metrics, and events are healthy after the platform change. -->
+
+The upgrade is complete only when the application path proves it is healthy. Node `Ready` status is a platform signal. The orders service still needs workload signals: Deployment availability, ready endpoints, in-cluster health, external routing, logs, metrics, and alerts.
+
+Start with Kubernetes availability and endpoint state. EndpointSlices show which Pod IPs are ready behind the Service.
 
 ```bash
 $ kubectl -n orders get deploy devpolaris-orders-api
 NAME                    READY   UP-TO-DATE   AVAILABLE
 devpolaris-orders-api   3/3     3            3
 
+$ kubectl -n orders get endpointslice -l kubernetes.io/service-name=devpolaris-orders-api
+NAME                          ADDRESSTYPE   PORTS   ENDPOINTS
+devpolaris-orders-api-rb6hb   IPv4          8080    10.244.1.42,10.244.2.17,10.244.4.9
+```
+
+Then test the Service from inside the cluster. This catches DNS, CNI, Service routing, readiness, and application dependency checks in one small request.
+
+```bash
 $ kubectl -n orders run curlcheck --rm -it --image=curlimages/curl --restart=Never -- \
   curl -sS http://devpolaris-orders-api/health/ready
 {"status":"ready","database":"ok","queue":"ok"}
+```
 
+Check the external path too. The ingress controller or gateway can fail even when the internal Service path works.
+
+```bash
+$ curl -sS -o /dev/null -w '%{http_code} %{time_total}\n' \
+  https://api.devpolaris.local/orders/checkout/health
+200 0.084312
+```
+
+Finally, look at the operations dashboards that the team already trusts. For `devpolaris-orders-api`, useful panels are request rate, 5xx rate, p95 latency, Pod restarts, CPU and memory, HPA desired replicas, queue depth, database error count, and ingress error count. The dashboard should show stable behavior for the maintenance window and the cool-down period after it.
+
+```bash
 $ kubectl -n orders top pods -l app.kubernetes.io/name=devpolaris-orders-api
 NAME                                      CPU(cores)   MEMORY(bytes)
 devpolaris-orders-api-7c96df7d7c-2vd6k   220m         350Mi
@@ -197,138 +336,68 @@ devpolaris-orders-api-7c96df7d7c-q94r7   240m         361Mi
 devpolaris-orders-api-7c96df7d7c-x6s8m   235m         358Mi
 ```
 
-This proves Deployment availability, in-cluster Service routing, readiness dependencies, and metrics collection. Add ingress checks and storage checks if the service uses them.
+If any evidence is missing, keep the upgrade open. A platform version can be correct while the service still has a routing, metrics, or readiness problem.
 
-## Failure Mode: Pods Cannot Move
+## Handle Failed Drains and Bad Signals
+<!-- section-summary: Failed drains, scheduling errors, and warning events are useful signals that should pause the rollout instead of being forced through. -->
 
-Pods cannot move when Kubernetes cannot safely evict them from the node being upgraded and place replacements elsewhere. The most common cause is a PodDisruptionBudget that allows no voluntary disruption, or a cluster that lacks spare CPU, memory, or topology capacity. In an orders API upgrade, this means a drain can stop before the provider ever replaces the node.
+A failed drain is usually the cluster protecting a workload or telling you capacity is missing. Treat that signal as a pause point. For the orders service, the most common drain blocker is a PDB that allows zero voluntary disruptions.
 
 ```bash
 $ kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data
 error when evicting pods/"devpolaris-orders-api-7c96df7d7c-dh8xq":
 Cannot evict pod as it would violate the pod's disruption budget.
-```
 
-This error is useful. It says Kubernetes protected availability. Now inspect the PDB and replica count.
-
-```bash
 $ kubectl -n orders get pdb devpolaris-orders-api
 NAME                    MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS
 devpolaris-orders-api   3               N/A               0
 ```
 
-The PDB requires all three replicas to stay available, so no voluntary disruption is allowed. The fix might be to increase replicas before the upgrade, change the PDB to `minAvailable: 2`, or upgrade nodes in a way that adds surge capacity first. Do not delete the PDB just to make the command pass unless you have accepted the availability risk.
+This output says the PDB currently requires all three replicas to stay available. The fix might be to scale the Deployment to four replicas, change the PDB to `minAvailable: 2`, or add surge capacity before the node pool rolls. Deleting the PDB just to make the drain pass removes the protection that warned you.
 
-## Upgrade Review Questions
+Other bad signals have different fixes. Keep a small diagnostic table in the runbook so the on-call engineer knows where to look first.
 
-An upgrade review connects a platform version change to the application behavior that must survive it. Reviewers should be able to name the target version, the workload evidence, and the pause point if a node drain or add-on upgrade fails. For example, the `orders` namespace should have a preflight record for deprecated APIs, PDB behavior, and post-upgrade health checks before production nodes start rolling.
+| Signal | Likely meaning | First check |
+|--------|----------------|-------------|
+| `FailedScheduling` | No node has the required CPU, memory, taint toleration, or topology | `kubectl -n orders describe pod <pod>` |
+| `FailedMount` | CSI driver, secret, config, or volume problem | Pod events and CSI driver status |
+| Repeated `Unhealthy` | Readiness or liveness probe failing after reschedule | `kubectl -n orders logs <pod>` |
+| CoreDNS unavailable | Service discovery risk for all workloads | `kubectl -n kube-system rollout status deployment/coredns` |
+| New node Ready but no app Pods | Taints, labels, runtime, or image pull path mismatch | `kubectl describe node <node>` |
 
-| Question | Evidence |
-|----------|----------|
-| Which version are we moving from and to? | Provider plan and release notes |
-| Are deprecated APIs removed from manifests? | Dry run and API scan |
-| Can critical Pods move during drains? | PDBs, replicas, staging drain test |
-| Do add-ons support the target version? | DNS, CNI, CSI, ingress, metrics status |
-| What proves success after each phase? | Workload health, events, metrics, ingress checks |
-| What is the rollback or pause point? | Provider process and node pool strategy |
+When the signal points to a platform add-on, pause the node rollout and fix the add-on first. When the signal points to one workload, decide whether that workload is critical enough to pause the cluster upgrade. For checkout traffic, the answer is usually yes.
 
-For `devpolaris-orders-api`, the upgrade is acceptable only when users can still place orders, Pods can be recreated on upgraded nodes, readiness stays stable, and platform components continue reporting healthy status.
+## Upgrade Runbook Checklist
+<!-- section-summary: A useful upgrade checklist ties each phase to evidence, owners, and stop conditions so the team can run the change calmly. -->
 
-An upgrade runbook should include preflight, execution, and validation evidence. The format can be simple, but it should be written before the maintenance window.
+A runbook turns upgrade preparation into a repeatable operating habit. It should fit on one page, name the owner for each phase, and include the commands or dashboards people will actually use. Long runbooks that nobody reads during a maintenance window are less helpful than a short checklist with clear stop conditions.
 
-```text
-Cluster: devpolaris-prod-eu
-Upgrade target: provider-approved Kubernetes patch release
-Primary workload: devpolaris-orders-api
+Use this shape for `devpolaris-orders-api` and adapt it to the cluster you operate.
 
-Preflight:
-  Deprecated API scan completed
-  Add-on compatibility checked
-  PDB allows one voluntary disruption
-  Staging node drain completed
-  Rollback or pause point identified with provider
+| Phase | Evidence to collect | Stop condition |
+|-------|---------------------|----------------|
+| Preflight | Version inventory, deprecated API scan, add-on support, PDB state | Unsupported API, unsupported add-on, or zero safe disruptions |
+| Staging rehearsal | Successful drain, replacement Pod ready, Service health check passing | Failed scheduling, failed mount, readiness failures, or missing capacity |
+| Control plane | API readyz, dry-run apply, controller reconciliation | API readiness failure or controller errors |
+| Node pool | One node at a time, Deployment availability, namespace events | Orders API below two available replicas or repeated warning events |
+| Validation | Internal health, external health, metrics, alerts, logs | 5xx, latency, dependency errors, or missing metrics |
 
-Execution:
-  Control plane upgraded first
-  API server health checked
-  Node pool upgraded one node at a time
-  Workloads watched during each drain
+The final upgrade note should record what changed and what evidence proved success. It should also record any follow-up, such as "add one node of surge capacity before the next upgrade" or "move image pre-pull into the node pool workflow." That note is what makes the next upgrade less stressful.
 
-Validation:
-  orders Deployment 3/3 available
-  internal health check returns ready
-  ingress health check returns 200
-  metrics API returns Pod metrics
-  no new Warning events for orders namespace
-```
+## What's Next
 
-This kind of record keeps the team from treating the provider console as the only recovery evidence. The provider may say the upgrade completed while application endpoints are still recovering.
+Cluster upgrades ask whether the platform can move safely under a running service. The next problem is how the API server prevents unsafe changes from getting stored in the first place. That is where admission control and policy enforcement enter the operations story.
 
-A staging rehearsal should include at least one controlled drain. The point is to discover PDB, topology, and capacity problems before production.
-
-```bash
-$ kubectl -n orders get deploy,pdb devpolaris-orders-api
-NAME                                      READY   UP-TO-DATE   AVAILABLE
-deployment.apps/devpolaris-orders-api     3/3     3            3
-
-NAME                                      MIN AVAILABLE   ALLOWED DISRUPTIONS
-poddisruptionbudget.policy/devpolaris-orders-api   2       1
-
-$ kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data --dry-run=server
-node/worker-2 cordoned (server dry run)
-pod/devpolaris-orders-api-7c96df7d7c-dh8xq evicted (server dry run)
-```
-
-The dry run cannot prove every runtime detail, but it can catch obvious policy blockers. A real staging drain then proves scheduling and readiness behavior.
-
-After each upgraded node returns, inspect Pods by node. This helps catch workloads stuck on old nodes or new nodes that cannot run a class of Pod.
-
-```bash
-$ kubectl get pods -A -o wide --field-selector spec.nodeName=worker-4
-NAMESPACE     NAME                                      READY   STATUS
-kube-system   cilium-7dx2m                              1/1     Running
-kube-system   secrets-store-csi-driver-9xqwd            3/3     Running
-orders        devpolaris-orders-api-7c96df7d7c-x6s8m    1/1     Running
-```
-
-Seeing CNI, CSI, and an application Pod healthy on the new node is stronger evidence than node readiness alone.
-
-Watch events during the upgrade, but keep the namespace scoped for application validation:
-
-```bash
-$ kubectl -n orders get events --sort-by=.lastTimestamp | tail -8
-LAST SEEN   TYPE    REASON             OBJECT                                      MESSAGE
-7m          Normal  Killing            pod/devpolaris-orders-api-...               Stopping container api
-6m          Normal  SuccessfulCreate   replicaset/devpolaris-orders-api-...        Created pod
-5m          Normal  Pulled             pod/devpolaris-orders-api-...               Container image already present
-4m          Normal  Started            pod/devpolaris-orders-api-...               Started container api
-3m          Normal  Ready              pod/devpolaris-orders-api-...               Readiness probe passed
-```
-
-Those events show normal disruption and recovery. Warning events such as `FailedScheduling`, `FailedMount`, or repeated `Unhealthy` need investigation before moving to the next node pool.
-
-For add-ons, create a separate checklist. Application teams often notice DNS, ingress, storage, and metrics failures first, but platform teams own the add-on compatibility.
-
-| Add-on | Upgrade concern | Quick validation |
-|--------|-----------------|------------------|
-| CoreDNS | Service discovery breaks | Resolve `devpolaris-orders-api.orders` from a Pod |
-| CNI plugin | Pod networking breaks | Curl Pod to Service and Pod to Pod |
-| CSI driver | Volumes fail to mount | Restart a Pod that uses storage |
-| Ingress controller | External routes fail | Curl public health URL |
-| Metrics Server | HPA loses metrics | `kubectl top pods` and HPA conditions |
-
-The upgrade is ready to continue only when both platform add-ons and application workloads show healthy evidence.
-
-
-![Kubernetes cluster upgrade summary covering API checks, backups, control plane, node pools, pod budgets, and validation](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/cluster-upgrade-summary.png)
-
-*Use this checklist before treating a cluster upgrade as a routine version bump.*
+For the same `devpolaris-orders-api` service, admission policies can reject weak Pod settings, missing owner labels, or mutable image tags before they reach production. The next article shows how those checks work and how to design them so developers can fix the denied request without guessing.
 
 ---
 
 **References**
 
 - [Kubernetes: Version Skew Policy](https://kubernetes.io/releases/version-skew-policy/) - Official compatibility rules between Kubernetes components.
-- [Kubernetes: Deprecated API Migration Guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/) - Tracks removed and deprecated API versions.
-- [Kubernetes: Safely Drain a Node](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/) - Official guide to cordon, drain, and node maintenance.
+- [Kubernetes: Deprecated API Migration Guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/) - Tracks deprecated and removed Kubernetes API versions.
+- [Kubernetes: Safely Drain a Node](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/) - Official guide for cordon, drain, and node maintenance.
 - [Kubernetes: Pod Disruption Budgets](https://kubernetes.io/docs/tasks/run-application/configure-pdb/) - Explains voluntary disruption limits for workloads.
+- [Kubernetes: Assigning Pods to Nodes](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) - Documents node selection, affinity, taints, and scheduling controls.
+- [Kubernetes: Topology Spread Constraints](https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/) - Explains spreading Pods across failure domains.
+- [Kubernetes: Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Documents liveness, readiness, and startup probes.

@@ -10,43 +10,44 @@ id: article-containers-orchestration-kubernetes-configuration-storage-mounted-co
 ## Table of Contents
 
 1. [Why Some Configuration Belongs on Disk](#why-some-configuration-belongs-on-disk)
-2. [Mounting a ConfigMap as a Directory](#mounting-a-configmap-as-a-directory)
-3. [Mounting One File with items](#mounting-one-file-with-items)
-4. [Using subPath Carefully](#using-subpath-carefully)
+2. [ConfigMap Volumes as Directories](#configmap-volumes-as-directories)
+3. [Selecting and Renaming Files with items](#selecting-and-renaming-files-with-items)
+4. [File Modes and Read-Only Expectations](#file-modes-and-read-only-expectations)
 5. [Secret Files and Certificates](#secret-files-and-certificates)
-6. [Reload Behavior and Application Design](#reload-behavior-and-application-design)
-7. [Failure Mode: A Mount Hides Image Files](#failure-mode-a-mount-hides-image-files)
-8. [Diagnostics from Pod to Process](#diagnostics-from-pod-to-process)
-9. [Choosing Files or Environment Variables](#choosing-files-or-environment-variables)
-10. [File Ownership and Read-Only Expectations](#file-ownership-and-read-only-expectations)
+6. [The subPath Caveat](#the-subpath-caveat)
+7. [Update and Reload Behavior](#update-and-reload-behavior)
+8. [Mount Paths That Hide Image Files](#mount-paths-that-hide-image-files)
+9. [Diagnostics from Pod to Process](#diagnostics-from-pod-to-process)
+10. [Choosing Files or Environment Variables](#choosing-files-or-environment-variables)
+11. [Production Review Checklist](#production-review-checklist)
 
 ## Why Some Configuration Belongs on Disk
+<!-- section-summary: Mounted config files fit structured configuration, certificates, and tools that already expect paths on the filesystem. -->
 
-Environment variables are convenient for short strings, but many tools already expect configuration files. Nginx reads `.conf` files. OpenTelemetry collectors read YAML. TLS libraries often expect certificate files. Your own application may have a structured config file that is easier to validate than dozens of separate environment variables.
+Environment variables work well for short startup values. The `devpolaris-orders-api` can read `PORT`, `CATALOG_API_URL`, and `FEATURE_FAST_REFUNDS` during startup without opening any files. That approach starts to get awkward when the value has shape.
 
-Kubernetes supports this by mounting ConfigMaps and Secrets as volumes. A volume is a directory made available inside the container filesystem. For ConfigMaps and Secrets, Kubernetes builds that directory from object keys. Each key becomes a file, and the value becomes the file content.
+Imagine the orders team adds cancellation rules. The rules include nested refund settings, allowed reasons, time windows, and a few country-specific overrides. A single YAML file is easier to review than twenty environment variables with names like `CANCELLATION_REFUNDS_ALLOWED_REASON_4`. The same thing happens with TLS certificates, CA bundles, Nginx config, OpenTelemetry collector config, and any library that already expects a file path.
 
-For `devpolaris-orders-api`, imagine the team adds an embedded policy file for order cancellation rules. The file is non-sensitive multi-line YAML. Keeping it in one mounted file is easier to review than flattening it into environment variables.
+A **mounted config file** is a normal file inside the container that Kubernetes builds from a ConfigMap or Secret. The application opens the file from a path such as `/etc/devpolaris/orders/cancellation-policy.yaml`. Kubernetes supplies the content through a volume. The process reads the file like any other file.
 
 ```mermaid
-flowchart TD
-    A["ConfigMap key<br/>cancellation-policy.yaml"] --> B["Pod volume<br/>orders-policy"]
-    B --> C["Mounted path<br/>/etc/devpolaris/orders"]
-    C --> D["Application reads<br/>YAML file"]
+flowchart LR
+    CM["ConfigMap key<br/>cancellation-policy.yaml"] --> V["ConfigMap volume"]
+    S["Secret key<br/>ca.crt"] --> SV["Secret volume"]
+    V --> P["/etc/devpolaris/orders"]
+    SV --> C["/etc/devpolaris/certs"]
+    P --> A["orders API reads YAML"]
+    C --> A
 ```
 
-The mental model is simple: Kubernetes creates a small filesystem view from the API object. Your process reads ordinary files. The tricky parts are mount paths, update behavior, and the fact that mounting a directory can hide files that were already in the image at that path.
+This article follows the same app from the environment-variable article. The scalar startup contract stays in environment variables. Structured rules and certificate material move to files. That split gives the team clear review: short values in the Deployment contract, structured files in ConfigMaps and Secrets, and explicit mount paths in the Pod spec.
 
-## Mounting a ConfigMap as a Directory
+## ConfigMap Volumes as Directories
+<!-- section-summary: A ConfigMap volume turns keys into files, so multi-line non-sensitive configuration can reach the container as ordinary filesystem content. -->
 
-A mounted ConfigMap directory turns ConfigMap keys into files inside the container. The key name becomes the filename, and the key value becomes the file contents.
+A **ConfigMap volume** turns ConfigMap keys into files. Kubernetes uses the key name as the file name, and it writes the value as the file content. For non-sensitive structured configuration, this is the most common file-mount pattern.
 
-![Kubernetes mounted configuration path showing ConfigMap, volume, mount path, container file, and application](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/config-file-mount-map.png)
-
-*Mounted config turns keys into files so applications can read configuration from disk.*
-
-
-Example: a key named `cancellation-policy.yaml` can appear inside the Pod as `/etc/devpolaris/orders/cancellation-policy.yaml` so the orders API reads it like an ordinary YAML file.
+Here is the orders API cancellation policy as a ConfigMap. The key is `cancellation-policy.yaml`, and the value is a multi-line YAML document.
 
 ```yaml
 apiVersion: v1
@@ -62,9 +63,12 @@ data:
         - duplicate_order
         - customer_request
     cancellationWindowMinutes: 30
+    manualReview:
+      amountThresholdUsd: 500
+      queue: "orders-risk-review"
 ```
 
-The Deployment defines a volume from that ConfigMap and mounts it into the container. The `readOnly` flag makes the intent clear. The application should treat these files as inputs from Kubernetes, not as a place to write runtime state.
+The Deployment defines a volume from that ConfigMap and mounts it into the container. The volume name connects the ConfigMap source to the `volumeMounts` entry on the `api` container.
 
 ```yaml
 apiVersion: apps/v1
@@ -73,44 +77,50 @@ metadata:
   name: orders-api
   namespace: devpolaris-staging
 spec:
+  selector:
+    matchLabels:
+      app: orders-api
   template:
+    metadata:
+      labels:
+        app: orders-api
     spec:
       volumes:
-        - name: orders-policy
+        - name: orders-config-files
           configMap:
             name: orders-api-files
       containers:
         - name: api
           image: ghcr.io/devpolaris/orders-api:1.18.0
           volumeMounts:
-            - name: orders-policy
+            - name: orders-config-files
               mountPath: /etc/devpolaris/orders
               readOnly: true
 ```
 
-Inside the container, the app reads `/etc/devpolaris/orders/cancellation-policy.yaml`. Kubernetes handles the file creation before the application starts.
+Inside the container, Kubernetes presents the key as a file. These commands show the path and content for a non-sensitive policy file:
 
 ```bash
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- ls -l /etc/devpolaris/orders
-total 0
--rw-r--r-- 1 root root 121 May  7 12:31 cancellation-policy.yaml
-
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- cat /etc/devpolaris/orders/cancellation-policy.yaml
-refunds:
-  enabled: false
-  allowedReasons:
-    - duplicate_order
-    - customer_request
-cancellationWindowMinutes: 30
+kubectl exec deploy/orders-api -n devpolaris-staging -- ls -l /etc/devpolaris/orders
+kubectl exec deploy/orders-api -n devpolaris-staging -- cat /etc/devpolaris/orders/cancellation-policy.yaml
 ```
 
-Those commands prove the file exists, but they should not be your normal production verification for sensitive data. For non-secret config, direct inspection is fine. For Secret files, verify presence, path, and application behavior without dumping values.
+The application reads the file path from a small environment variable or from a default path. Many teams keep the path in an environment variable because it makes local development and tests simple.
 
-## Mounting One File with items
+```yaml
+env:
+  - name: CANCELLATION_POLICY_PATH
+    value: "/etc/devpolaris/orders/cancellation-policy.yaml"
+```
 
-The `items` field is an explicit file selection list for a ConfigMap or Secret volume. It lets you choose specific keys and filenames instead of mounting every key.
+That gives the app a clean startup contract. Short scalar values arrive through environment variables, and the structured document arrives through the mounted filesystem.
 
-Example: if a ConfigMap contains three policy files but the orders API needs only `cancellation-policy.yaml`, `items` can expose just that file as `policy.yaml`. This reduces accidental coupling between one ConfigMap and every container that mounts it.
+## Selecting and Renaming Files with items
+<!-- section-summary: The items field lets a Pod mount only selected keys and choose the file names that appear in the container. -->
+
+Sometimes a ConfigMap contains several keys, but one container should receive only a subset. The `items` field gives that control. Each item maps a ConfigMap key to a path inside the mounted volume.
+
+For the orders API, the same ConfigMap might hold a cancellation policy and a worker tuning file. The API container needs the policy. A worker container needs the tuning file. The API mount can select one key and rename it to a simple filename.
 
 ```yaml
 volumes:
@@ -120,124 +130,188 @@ volumes:
       items:
         - key: cancellation-policy.yaml
           path: policy.yaml
+containers:
+  - name: api
+    image: ghcr.io/devpolaris/orders-api:1.18.0
+    volumeMounts:
+      - name: orders-policy
+        mountPath: /etc/devpolaris/orders
+        readOnly: true
 ```
 
-With that mapping, the file appears as `/etc/devpolaris/orders/policy.yaml` even though the ConfigMap key is `cancellation-policy.yaml`.
+The file appears as `/etc/devpolaris/orders/policy.yaml` inside the container. The original key name stays in the ConfigMap, and the container sees the path chosen by the Pod spec.
 
-```bash
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- find /etc/devpolaris/orders -maxdepth 1 -type f -print
-/etc/devpolaris/orders/policy.yaml
-```
+`items` also gives a useful safety property. If a listed key is missing and the reference is required, the Pod cannot start. That is good for required files. A missing policy file should stop the orders API before it serves requests with unknown rules.
 
-This is useful when the application expects a fixed filename that is different from your ConfigMap key. It also makes the mounted directory easier to inspect because it contains only files the process actually uses.
+There is an `optional: true` setting for ConfigMap volume sources and item references. It can be useful for development-only files, but required production config should usually stay required. A Pod that starts with a missing policy file pushes the failure into application behavior, which makes incidents harder to understand.
 
-If a listed key does not exist, the Pod fails to start. Kubernetes treats `items` as an exact request. That failure is helpful because a missing file would probably break the application anyway.
+## File Modes and Read-Only Expectations
+<!-- section-summary: defaultMode controls file permissions, while ConfigMap and Secret volume content should be treated as read-only input from Kubernetes. -->
 
-## Using subPath Carefully
+Mounted configuration files have Unix-style file permissions. Kubernetes lets you set a `defaultMode` on the volume source, and individual `items` can set their own `mode`.
 
-`subPath` is a targeted mount for one file or subdirectory from a larger volume. It is useful when the image already contains other files in the target directory and you do not want the volume mount to hide them.
-
-Example: mount only `policy.yaml` at `/app/config/policy.yaml` while leaving `/app/config/defaults.yaml` from the image visible.
+For a policy file, world-readable permissions may be acceptable because the content is non-sensitive and the container usually runs one application process. A common mode is `0444`, which means read permission for owner, group, and others.
 
 ```yaml
-volumeMounts:
+volumes:
   - name: orders-policy
-    mountPath: /app/config/policy.yaml
-    subPath: policy.yaml
-    readOnly: true
+    configMap:
+      name: orders-api-files
+      defaultMode: 0444
+      items:
+        - key: cancellation-policy.yaml
+          path: policy.yaml
+          mode: 0444
 ```
 
-This keeps `/app/config` from being replaced by the mounted volume. Only `/app/config/policy.yaml` comes from the ConfigMap.
+For Secret files, teams often choose a narrower mode such as `0400` or `0440`, depending on the user and group the container runs as. The mode should match the container security context so the app can read the file without giving every process broad access.
 
-The tradeoff is update behavior. ConfigMap and Secret volume updates are designed around mounted directories. When you mount a single file with `subPath`, the running container may not receive updates to that file the same way. If you use `subPath` for configuration, plan on restarting Pods when the source changes.
+```yaml
+volumes:
+  - name: orders-certificates
+    secret:
+      secretName: orders-api-certificates
+      defaultMode: 0440
+```
 
-A safe rule for beginners is to prefer mounting a dedicated directory such as `/etc/devpolaris/orders`. Use `subPath` only when an existing tool requires one exact path inside a directory that must keep its image contents.
+YAML supports the octal-looking form shown above. JSON manifests require decimal numbers because JSON has no octal syntax. For example, octal `0440` is decimal `288`. This matters for teams that generate manifests through code or policy tooling.
+
+ConfigMap and Secret volume content should be treated as read-only input. Kubernetes mounts ConfigMap and Secret volumes as read-only sources. The container can create runtime files somewhere else, such as `/tmp`, an `emptyDir`, or a persistent volume, but it should not try to edit the mounted config file as its source of truth.
+
+That expectation shapes application design. The orders API can read `/etc/devpolaris/orders/policy.yaml`, parse it, and log the policy version. If the app needs to write a compiled cache, it should write that cache to a separate writable path, not back into the mounted ConfigMap directory.
 
 ## Secret Files and Certificates
+<!-- section-summary: Secret volumes are a natural fit for certificates, keys, and tokens that libraries expect to load from file paths. -->
 
-Secret file mounts look almost the same as ConfigMap file mounts, but the review and diagnostic behavior must be stricter. A common example is a certificate authority bundle or API token file.
+A **Secret volume** turns Secret keys into files. This is especially useful for certificate material because TLS libraries and database clients often expect file paths. A CA certificate, client certificate, and private key can each appear as a file inside the container.
+
+For `devpolaris-orders-api`, imagine the production database requires TLS with a private CA bundle. The Secret stores the certificate files. The Deployment mounts them under `/etc/devpolaris/certs`.
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: orders-api-client-cert
+  name: orders-api-certificates
   namespace: devpolaris-staging
-type: kubernetes.io/tls
+type: Opaque
 stringData:
-  tls.crt: "example certificate text"
-  tls.key: "example private key text"
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    example-ca-certificate-content
+    -----END CERTIFICATE-----
+  client.crt: |
+    -----BEGIN CERTIFICATE-----
+    example-client-certificate-content
+    -----END CERTIFICATE-----
+  client.key: |
+    -----BEGIN PRIVATE KEY-----
+    example-private-key-content
+    -----END PRIVATE KEY-----
 ```
 
-The Deployment can mount the Secret under a path used by the application's HTTP client.
+The Pod spec mounts the Secret and passes file paths to the application. The environment variables carry paths only, while the certificate content stays in the mounted Secret files.
 
 ```yaml
 volumes:
-  - name: client-cert
+  - name: orders-certificates
     secret:
-      secretName: orders-api-client-cert
+      secretName: orders-api-certificates
+      defaultMode: 0440
+containers:
+  - name: api
+    image: ghcr.io/devpolaris/orders-api:1.18.0
+    env:
+      - name: DATABASE_CA_PATH
+        value: "/etc/devpolaris/certs/ca.crt"
+      - name: DATABASE_CLIENT_CERT_PATH
+        value: "/etc/devpolaris/certs/client.crt"
+      - name: DATABASE_CLIENT_KEY_PATH
+        value: "/etc/devpolaris/certs/client.key"
+    volumeMounts:
+      - name: orders-certificates
+        mountPath: /etc/devpolaris/certs
+        readOnly: true
+```
+
+Secrets still need careful cluster security. Kubernetes Secret values are base64-encoded in the API representation, which means the API stores a transport-friendly representation rather than cryptographic protection. Production clusters should use encryption at rest for Secrets, least-privilege RBAC, restricted namespace access, and a managed source of truth such as an external secrets operator or cloud secret manager when the organization uses one.
+
+Mounting a Secret as a file can reduce accidental exposure compared with placing the same value in environment variables. Environment variables are often easier to print accidentally in crash reports, debug endpoints, and process dumps. Files still need care, but file paths give many libraries a cleaner interface for certificates and private keys.
+
+## The subPath Caveat
+<!-- section-summary: subPath can mount one file into an existing directory, but ConfigMap and Secret updates do not flow through subPath mounts. -->
+
+`subPath` mounts one file or directory from a volume into a specific path inside the container. It is tempting when an image already has a directory with useful files, and you want to add only one Kubernetes-supplied file.
+
+Suppose the orders image already contains `/app/config/defaults.yaml`, and the team wants to place the cancellation policy at `/app/config/cancellation-policy.yaml` without replacing the whole `/app/config` directory. A `subPath` mount can do that.
+
+```yaml
+volumes:
+  - name: orders-policy
+    configMap:
+      name: orders-api-files
+      items:
+        - key: cancellation-policy.yaml
+          path: cancellation-policy.yaml
 containers:
   - name: api
     image: ghcr.io/devpolaris/orders-api:1.18.0
     volumeMounts:
-      - name: client-cert
-        mountPath: /var/run/secrets/devpolaris/client-cert
+      - name: orders-policy
+        mountPath: /app/config/cancellation-policy.yaml
+        subPath: cancellation-policy.yaml
         readOnly: true
 ```
 
-Verification should avoid printing the private key. Check filenames, permissions, and application logs.
+This solves the one-file placement problem, but it changes update behavior. ConfigMap and Secret volume updates do not flow into a container through a `subPath` mount. The file content stays tied to what the container received when the Pod started.
+
+That caveat makes `subPath` a careful choice for config. It can be fine for files that only change during rollouts, because a new Pod receives the new content. It is a poor fit for teams expecting mounted file updates to appear in a running process.
+
+The simpler production pattern is a dedicated config directory, such as `/etc/devpolaris/orders`, mounted as the volume root. The image should keep built-in defaults somewhere else. The application can merge defaults and Kubernetes config in code, or the Deployment can mount the complete runtime config directory.
+
+## Update and Reload Behavior
+<!-- section-summary: Mounted ConfigMap and Secret volumes can update eventually, but the application still needs an explicit reload or rollout strategy. -->
+
+Mounted ConfigMap and Secret volumes have different update behavior from environment variables. Environment variables are fixed at process start. Mounted files can receive updated content after the ConfigMap or Secret changes, because the kubelet watches or checks the API object and updates the projected files on the node.
+
+The application still needs its own reload behavior before it uses the new settings. The orders API has to reread the file, watch for file changes, handle a reload signal, or restart. Many applications read config once during startup. For those apps, a mounted file update sits on disk until a new process reads it.
+
+There are three common production patterns. The right one depends on whether the application can safely reload configuration while it is serving requests.
+
+**Restart on config change** keeps behavior simple. The release pipeline updates the ConfigMap or Secret, then restarts the Deployment. New Pods read the new files during startup, readiness probes protect traffic, and rollback uses normal Deployment rollback.
 
 ```bash
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- ls -l /var/run/secrets/devpolaris/client-cert
-total 0
--rw-r--r-- 1 root root 1115 May  7 12:47 tls.crt
--rw-r--r-- 1 root root 1679 May  7 12:47 tls.key
-
-$ kubectl logs deploy/orders-api -n devpolaris-staging | grep 'client certificate loaded' | tail -1
-2026-05-07T12:47:31.902Z INFO client certificate loaded path=/var/run/secrets/devpolaris/client-cert/tls.crt
+kubectl apply -f orders-api-files.yaml
+kubectl rollout restart deployment/orders-api -n devpolaris-staging
+kubectl rollout status deployment/orders-api -n devpolaris-staging
 ```
 
-The log proves the application used the file without copying the key into output.
+**Application reload** works when the app can safely reread config. The process watches `/etc/devpolaris/orders/policy.yaml` or handles a signal such as `SIGHUP`, validates the new file, and swaps the in-memory config only after validation succeeds. This pattern needs careful testing because a partial or invalid reload can break live traffic.
 
-## Reload Behavior and Application Design
+**Sidecar reloaders** watch mounted files and call an HTTP reload endpoint or send a signal to the main process. This can help with tools such as proxies and collectors, but the main application still needs a safe reload path.
 
-Reload behavior is how a running application notices a mounted file changed. Kubernetes can update mounted ConfigMap and Secret volumes while a Pod is running, but your application still has to reread the file or restart.
+The key operational habit is to verify both the file and the process. Seeing a new file on disk proves Kubernetes delivered the content. Application logs or health checks should also show that the process loaded the new value.
 
-Example: if `devpolaris-orders-api` reads `policy.yaml` only during startup, changing the ConfigMap file does not change request behavior until the Pod restarts.
-
-For `devpolaris-orders-api`, the simplest design is startup validation plus rollout restart. The app reads `policy.yaml`, validates it, logs the policy version, and serves traffic. When the policy changes, the Deployment restarts so every Pod reads the new file from startup.
-
-```text
-2026-05-07T13:02:09.113Z INFO policy loaded path=/etc/devpolaris/orders/policy.yaml version=2026-05-07.1 cancellationWindowMinutes=30
+```bash
+kubectl exec deploy/orders-api -n devpolaris-staging -- cat /etc/devpolaris/orders/policy.yaml
+kubectl logs deploy/orders-api -n devpolaris-staging | grep "loaded cancellation policy"
 ```
 
-A more advanced design watches the file and reloads it. That reduces restarts but adds application complexity. The app must handle partial updates, invalid new files, and consistent behavior while requests are in flight.
+For certificate rotation, plan the reload path before the first emergency. Some clients can reload CA bundles from disk. Some need a process restart. Some connection pools need reconnection. The Kubernetes mount is only one part of the rotation story.
 
-| Reload Style | Good For | Risk |
-|--------------|----------|------|
-| Restart Pods | Most web APIs | Brief rollout needed for every change |
-| File watcher | Frequently changed policy files | App must reject invalid updates safely |
-| Sidecar reload signal | Tools like Nginx or collectors | More containers and coordination |
+## Mount Paths That Hide Image Files
+<!-- section-summary: A volume mounted on a directory hides files that the image already had at that same path, so mount locations need deliberate boundaries. -->
 
-Beginners should choose the boring path first: validate at startup, roll Pods deliberately, and keep the verification clear.
+Mounting a volume at a directory path overlays that directory for the container. Files from the image at the same path are hidden while the volume is mounted.
 
-## Failure Mode: A Mount Hides Image Files
+This is a common surprise. The orders image might include these files before Kubernetes mounts anything at runtime, and the developer may expect all three to stay visible. The mount changes what the process can list at that directory path:
 
-A directory mount replaces the view at the mount path. If your image already has files in `/app/config` and you mount a ConfigMap at `/app/config`, the process sees the ConfigMap files there, not the original image files.
-
-![Kubernetes mount hiding image files showing image directory, volume mount, covered files, visible files, and fixed path](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mount-hides-image-files.png)
-
-*A volume mounted on an existing image directory hides the files that were already there.*
-
-
-The failure looks like a missing file inside the application even though the file exists in the image.
-
-```text
-2026-05-07T13:15:42.606Z ERROR startup failed
-error="ENOENT: no such file or directory, open '/app/config/defaults.yaml'"
+```bash
+/app/config/defaults.yaml
+/app/config/schema.json
+/app/config/local-dev.yaml
 ```
 
-The Deployment may have caused it:
+The Pod then mounts a ConfigMap at `/app/config`. That mount path is the important part of the example because it covers the image's existing files:
 
 ```yaml
 volumeMounts:
@@ -246,92 +320,148 @@ volumeMounts:
     readOnly: true
 ```
 
-If `/app/config/defaults.yaml` was baked into the image, this mount hides it. Diagnose by listing the directory inside the running container and comparing the mount path with the Dockerfile or image contents.
+Inside the running container, `/app/config` now shows the files from the ConfigMap volume. The image files at `/app/config/defaults.yaml` and `/app/config/schema.json` are hidden behind the mount. They still exist in the image layer, but the process cannot see them at that path while the volume is mounted.
 
-```bash
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- ls -l /app/config
-total 0
--rw-r--r-- 1 root root 121 May  7 13:14 policy.yaml
-```
-
-The fix is to mount the ConfigMap at a dedicated path, or use `subPath` for one file if the application truly needs that exact location.
-
-## Diagnostics from Pod to Process
-
-A mounted file diagnostic is a path check from the Kubernetes object to the process that reads it. The value starts as a ConfigMap or Secret key, becomes a file in a mounted volume, and then becomes application input.
-
-Mounted file problems can fail at any of those layers. Kubernetes may fail to create the Pod if the object or key is missing. The container may start but the application may fail because the file path is wrong. The application may start but behave incorrectly because the file content is valid YAML with the wrong meaning.
-
-Use a layered diagnostic path:
-
-```bash
-$ kubectl describe pod orders-api-66fd48ff7f-qk9mm -n devpolaris-staging
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- mount | grep devpolaris
-$ kubectl exec deploy/orders-api -n devpolaris-staging -- find /etc/devpolaris/orders -maxdepth 1 -type f -ls
-$ kubectl logs deploy/orders-api -n devpolaris-staging | grep 'policy loaded'
-```
-
-Each command answers a different question. `describe` tells you whether kubelet mounted the volume. `mount` shows the filesystem view. `find` confirms filenames. Logs show whether the application parsed and accepted the content.
-
-That order prevents wasted effort. If the Pod event says the ConfigMap key is missing, do not debug YAML parsing yet. If the file exists but the app rejected it, do not recreate the Secret or ConfigMap blindly.
-
-## Choosing Files or Environment Variables
-
-Both environment variables and mounted files are good Kubernetes patterns. The choice depends on how the application naturally consumes configuration and how you want updates to behave.
-
-| Use Environment Variables When | Use Mounted Files When |
-|--------------------------------|------------------------|
-| Values are short strings | Values are multi-line or structured |
-| App reads config only at startup | Tool expects a file path |
-| You want the Deployment to show each key | You want a directory of related files |
-| Restart on change is acceptable | File permissions and paths matter |
-
-For `devpolaris-orders-api`, `PORT` and `LOG_LEVEL` are environment variables. `cancellation-policy.yaml` is a mounted ConfigMap file. TLS material is a mounted Secret file. That split follows the shape of the data instead of forcing every setting through one mechanism.
-
-The skill is not memorizing a preferred pattern. The skill is tracing how the value moves from a Kubernetes object to the process and knowing which layer to inspect when the process does not see what you expected.
-
-## File Ownership and Read-Only Expectations
-
-File ownership describes which user can read or write a path inside the container. Mounted ConfigMap and Secret files are meant to be Kubernetes-owned inputs, not application-owned output files. The application should not try to edit them.
-
-If `devpolaris-orders-api` needs to generate a local cache from a policy file, it should write that cache to a separate writable path such as an `emptyDir` or PVC, not back into the mounted config directory.
-
-A write attempt usually fails with a read-only filesystem error.
-
-```text
-2026-05-07T13:31:18.223Z ERROR failed to persist policy cache
-path=/etc/devpolaris/orders/policy-cache.json error="EROFS: read-only file system"
-```
-
-The fix is to separate source configuration from generated runtime data.
+The clean fix is usually a dedicated mount path:
 
 ```yaml
-volumes:
-  - name: orders-policy
-    configMap:
-      name: orders-api-files
-  - name: policy-cache
-    emptyDir: {}
 volumeMounts:
   - name: orders-policy
     mountPath: /etc/devpolaris/orders
     readOnly: true
-  - name: policy-cache
-    mountPath: /var/cache/devpolaris/orders
 ```
 
-That split makes the filesystem contract obvious. Kubernetes-owned files stay read-only. Application-owned scratch files go somewhere disposable or durable depending on their purpose.
+The app can then load image defaults from `/app/config/defaults.yaml` and Kubernetes runtime config from `/etc/devpolaris/orders/policy.yaml`. The path names tell a future reviewer which files came from the image and which files came from the cluster.
 
+`subPath` can place one file into an existing directory, but it brings the update caveat from the previous section. A dedicated config directory avoids both the hidden-file surprise and the `subPath` update surprise.
 
-![Kubernetes mounted files summary covering directory mounts, items, subPath, secret files, reload, and read-only behavior](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mounted-files-summary.png)
+## Diagnostics from Pod to Process
+<!-- section-summary: File-mount debugging works best as a chain: object exists, Pod references it, mount appears, file content is present, and the process logs that it loaded the path. -->
 
-*Use this checklist when configuration belongs on disk instead of in environment variables.*
+When mounted config fails, debug the chain from Kubernetes object to application process. Each step proves one link.
+
+The sequence starts with the source object in the same namespace as the Pod. That confirms the Pod has an object it is allowed to reference.
+
+```bash
+kubectl get configmap orders-api-files -n devpolaris-staging
+kubectl get secret orders-api-certificates -n devpolaris-staging
+```
+
+Key names can be listed without dumping sensitive Secret values. This catches spelling problems while keeping private data out of terminal output.
+
+```bash
+kubectl get configmap orders-api-files -n devpolaris-staging -o json | jq -r '.data | keys[]'
+kubectl get secret orders-api-certificates -n devpolaris-staging -o json | jq -r '.data | keys[]'
+```
+
+Pod events usually show missing ConfigMaps, Secrets, or keys before the application process starts.
+
+```bash
+kubectl describe pod -n devpolaris-staging -l app=orders-api
+```
+
+The rendered Pod spec confirms the running Pod received the expected volume and mount paths from the Deployment.
+
+```bash
+kubectl get pod -n devpolaris-staging -l app=orders-api -o json \
+  | jq '.items[0].spec.volumes, .items[0].spec.containers[] | select(.name == "api") | .volumeMounts'
+```
+
+Once the Pod is running, inspect the mount from inside the container. This verifies the filesystem view the application process can actually see.
+
+```bash
+kubectl exec deploy/orders-api -n devpolaris-staging -- ls -la /etc/devpolaris/orders
+kubectl exec deploy/orders-api -n devpolaris-staging -- stat -c '%a %n' /etc/devpolaris/orders/policy.yaml
+kubectl exec deploy/orders-api -n devpolaris-staging -- head -n 20 /etc/devpolaris/orders/policy.yaml
+```
+
+For Secret files, private keys and passwords should stay out of terminal output. File names, modes, and certificate metadata usually give enough diagnostic evidence.
+
+```bash
+kubectl exec deploy/orders-api -n devpolaris-staging -- ls -la /etc/devpolaris/certs
+kubectl exec deploy/orders-api -n devpolaris-staging -- sh -c 'test -s /etc/devpolaris/certs/ca.crt && echo ca-present'
+```
+
+The file evidence should then connect to the process. Application logs should say which config path loaded and which version or hash it accepted. They should not print secret content.
+
+```bash
+kubectl logs deploy/orders-api -n devpolaris-staging | grep "config path"
+kubectl logs deploy/orders-api -n devpolaris-staging | grep "cancellation policy"
+```
+
+This order prevents guesswork. A missing file in the container points to the Kubernetes object, volume, mount, or namespace before application code. A file that exists while logs show a different loaded path points to startup configuration. A file that exists and has been loaded points the next investigation toward file content or application behavior.
+
+## Choosing Files or Environment Variables
+<!-- section-summary: Environment variables fit small startup values, and files fit structured documents, certificates, and tools that already read paths. -->
+
+The choice is usually about shape and lifecycle. Small scalars fit environment variables. Structured documents and certificate material fit files.
+
+| Use environment variables for | Use mounted files for |
+|---|---|
+| Ports and bind addresses | YAML, JSON, TOML, INI, and conf files |
+| Small feature flags | TLS certificates and private keys |
+| Service URLs | CA bundles and trust stores |
+| Log level and release track | Nginx, Envoy, OpenTelemetry, or app config files |
+| Pod name, namespace, and labels | Multi-line policy documents |
+
+For the orders API, this split is practical:
+
+```yaml
+env:
+  - name: PORT
+    value: "8080"
+  - name: CATALOG_API_URL
+    valueFrom:
+      configMapKeyRef:
+        name: orders-api-config
+        key: CATALOG_API_URL
+  - name: CANCELLATION_POLICY_PATH
+    value: "/etc/devpolaris/orders/policy.yaml"
+  - name: DATABASE_CA_PATH
+    value: "/etc/devpolaris/certs/ca.crt"
+volumeMounts:
+  - name: orders-policy
+    mountPath: /etc/devpolaris/orders
+    readOnly: true
+  - name: orders-certificates
+    mountPath: /etc/devpolaris/certs
+    readOnly: true
+```
+
+The environment variables still form the startup contract. Some of those variables point to files. The files carry the content that belongs on disk.
+
+This split also helps local development. A developer can run the app with `CANCELLATION_POLICY_PATH=./config/policy.yaml` on a laptop and use the same application code that production uses. Kubernetes supplies a different path, but the app still follows one rule: read the path from startup config, parse the file, and fail early if it is invalid.
+
+## Production Review Checklist
+<!-- section-summary: A production review should cover source objects, mount paths, file modes, reload behavior, hidden files, and application validation. -->
+
+A mounted-file review for `devpolaris-orders-api` should answer a short list of concrete questions. These questions match the places where file-based configuration usually breaks in production.
+
+Are the ConfigMaps and Secrets in the same namespace as the workload? Pod references do not cross namespace boundaries, so every environment needs its own source objects.
+
+Do the mounted keys have clear filenames? Names such as `policy.yaml`, `ca.crt`, and `client.key` tell future maintainers what the process expects.
+
+Does the mount path have its own directory? A path such as `/etc/devpolaris/orders` avoids hiding application files under `/app/config`.
+
+Are Secret file modes strict enough for the container user and group? The mode should match the runtime security context instead of copying a permissive default.
+
+Does the app validate the file at startup or reload time? A malformed YAML policy should stop startup or reject reload before serving traffic with unclear behavior.
+
+Is the reload plan written into the operational flow? The team should know whether a ConfigMap change requires `kubectl rollout restart`, an app reload endpoint, a signal, or a sidecar-driven reload.
+
+Do diagnostics avoid leaking sensitive content? Listing Secret key names and checking file existence is usually enough. Printing private keys, database passwords, or tokens during a debug session creates a second incident.
+
+When those answers are clear, mounted files fit cleanly into the Pod contract. Kubernetes supplies files, the process reads known paths, and the release process controls how changes reach running Pods.
 
 ---
 
 **References**
 
-- [Kubernetes Volumes](https://kubernetes.io/docs/concepts/storage/volumes/) - Official concept page for Kubernetes volume types, mount behavior, and Pod-level volume configuration.
-- [Configure a Pod to Use a ConfigMap](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/) - Official task guide for mounting ConfigMaps and exposing them to containers.
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official concept page for Secret types, storage cautions, and Pod usage patterns.
-- [Troubleshooting Applications](https://kubernetes.io/docs/tasks/debug/debug-application/) - Official debugging entry point for inspecting Pods, events, logs, and application failures.
+- [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) - Defines ConfigMaps and describes consumption through environment variables and volumes.
+- [Configure a Pod to Use a ConfigMap](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/) - Shows ConfigMap volume mounts, selected keys, optional references, and update behavior.
+- [Volumes](https://kubernetes.io/docs/concepts/storage/volumes/) - Documents `configMap`, `secret`, `subPath`, read-only behavior, and tmpfs-backed Secret volumes.
+- [Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Explains Secret storage, security cautions, volume consumption, and update behavior.
+- [Distribute Credentials Securely Using Secrets](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/) - Shows Secret data exposed to containers through mounted files.
+- [Updating Configuration via a ConfigMap](https://kubernetes.io/docs/tutorials/configuration/updating-configuration-via-a-configmap/) - Walks through ConfigMap update behavior for mounted files and environment variables.
+- [Projected Volumes](https://kubernetes.io/docs/concepts/storage/projected-volumes/) - Describes combining several volume sources into one mounted directory and notes the `subPath` update caveat for projected sources.
+- [Manage TLS Certificates in a Cluster](https://kubernetes.io/docs/tasks/tls/managing-tls-in-a-cluster/) - Covers Kubernetes certificate workflows that often feed certificate files into workloads.

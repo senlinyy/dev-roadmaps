@@ -1,7 +1,7 @@
 ---
 title: "What Is a Service Mesh"
-description: "Understand the proxy data plane and control plane, and how the mesh intercepts traffic."
-overview: "Before you can control traffic, you need to understand the mesh layer. This article uses Istio sidecar mode as a concrete example and shows how proxies attach to Pods and redirect application TCP traffic."
+description: "Understand how a service mesh adds managed proxies, shared traffic rules, security, and observability to Kubernetes service-to-service communication."
+overview: "An online store with web, checkout, and inventory services is enough to see why teams add a mesh. You will install Istio, a Kubernetes service mesh, enable sidecar proxy injection, verify injected Pods, and trace how requests move through proxies before the next article turns that path into traffic control."
 tags: ["kubernetes", "service-mesh", "istio", "sidecar"]
 order: 1
 id: article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh
@@ -9,178 +9,309 @@ id: article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-m
 
 ## Table of Contents
 
-- [The Problem With Direct Pod Communication](#the-problem-with-direct-pod-communication)
-- [Installing the Control Plane](#installing-the-control-plane)
-- [Deploying an Application Without a Mesh](#deploying-an-application-without-a-mesh)
-- [Enabling Sidecar Injection](#enabling-sidecar-injection)
-- [How the Mesh Intercepts Traffic](#how-the-mesh-intercepts-traffic)
-- [Putting It All Together](#putting-it-all-together)
-- [What's Next](#whats-next)
+1. [The Whole Picture First](#the-whole-picture-first)
+2. [Kubernetes Communication Before the Mesh](#kubernetes-communication-before-the-mesh)
+3. [What the Mesh Adds](#what-the-mesh-adds)
+4. [Data Plane and Control Plane](#data-plane-and-control-plane)
+5. [Sidecar Proxies and Admission Webhooks](#sidecar-proxies-and-admission-webhooks)
+6. [Installing Istio for a First Look](#installing-istio-for-a-first-look)
+7. [Enabling Injection for the Store Namespace](#enabling-injection-for-the-store-namespace)
+8. [How Traffic Interception Works](#how-traffic-interception-works)
+9. [Verifying the Mesh Path With Curl](#verifying-the-mesh-path-with-curl)
+10. [Production Gotchas](#production-gotchas)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## The Problem With Direct Pod Communication
+## The Whole Picture First
+<!-- section-summary: A service mesh puts managed proxies on the request path so teams can control service-to-service traffic while application code stays focused on business logic. -->
 
-When you deploy microservices in a standard Kubernetes cluster, the application containers talk directly to each other over the virtual cluster network. If the frontend needs to call the backend API, the frontend process opens a socket, resolves the backend Service name to an IP address, and sends raw HTTP traffic straight to the backend Pod. This direct communication is efficient, but it leaves the application code responsible for handling all network reliability.
+A **proxy** is a network helper that receives traffic for an application, applies rules, and forwards the traffic to the next place. A **service mesh** is an infrastructure layer for service-to-service communication that uses managed proxies to handle traffic policy, encryption, observability, and reliability behavior across many services. Your application still sends normal HTTP, gRPC, or TCP requests, but the mesh gives the platform team a consistent place to manage what happens to those requests.
 
-If the network drops packets, the application code has to retry. If you need to encrypt the traffic between nodes, the application code has to manage TLS certificates. If you want to route exactly 10% of traffic to a new version of the API, the application code or an external load balancer has to calculate those routing weights. A service mesh solves this by moving all of those network responsibilities out of the application code and into a dedicated infrastructure layer.
+We will use a small online store for the whole article. The store has a `web` service that receives customer traffic, a `checkout` service that creates orders, and an `inventory` service that checks whether an item is in stock. In a quiet demo, `web` calls `checkout`, `checkout` calls `inventory`, and everything looks simple. In production, each call has failure modes: a slow inventory database, a checkout release with a bug, an overloaded Pod, a certificate rotation, or a retry storm that makes the outage worse.
 
-At its core, a service mesh is a fleet of small network proxies deployed close to your application containers. Instead of the frontend container talking directly to the backend container, the frontend talks through a local proxy. That proxy can encrypt traffic, apply retry and routing rules, and forward the request to the backend's local proxy. To make this concrete, we will use Istio, a widely used Kubernetes service mesh, and watch how its sidecar mode redirects application traffic inside a running Pod.
+One naming detail helps before the article gets busy. A lowercase service means one application capability, such as checkout or inventory. A capital-S **Kubernetes Service** means the cluster object named `checkout` that callers use as a stable target. That distinction matters because the store application teams talk about services as business pieces, while the cluster uses Service objects so those pieces can find each other by name.
 
-## Installing the Control Plane
+Here are the mesh-specific concepts before we start using them:
 
-A service mesh is split into two halves: the data plane and the control plane. The data plane is the fleet of proxies that actually move the packets. The control plane is the central brain that configures all of those proxies. To get started, you need to install the control plane.
+| Concept | Plain definition | Store example |
+|---|---|---|
+| **Proxy** | A network process that receives traffic, applies rules, and forwards it. | A mesh proxy can record metrics, enforce encrypted service-to-service traffic, and forward the `checkout` to `inventory` call. |
+| **Service mesh** | A platform layer that manages service-to-service traffic through proxies and shared configuration. | The store team manages retries, timeouts, telemetry, and encrypted service-to-service traffic for `web`, `checkout`, and `inventory` in one mesh layer. |
+| **Istio** | A popular open source service mesh for Kubernetes. | Istio provides the mesh control plane, injection behavior, and traffic APIs for the store namespace. |
+| **Envoy** | The open source proxy Istio commonly uses to process mesh traffic. | Envoy proxies handle calls between `web`, `checkout`, and `inventory` after they join the mesh. |
+| **Data plane** | The proxies that sit on the traffic path and handle requests. | Envoy proxies process the calls between `web`, `checkout`, and `inventory`. |
+| **Control plane** | The management layer that watches the cluster and sends configuration to the proxies. | Istio's `istiod` tells the proxies which services exist and which traffic rules apply. |
+| **`istiod`** | Istio's main control-plane process. | `istiod` watches the store's Services, Pods, and traffic rules, then sends proxy configuration to Envoy. |
+| **Sidecar mode** | The Istio mode where an Envoy proxy container is added to each application Pod. | The `checkout` Pod contains the `checkout` app container and an `istio-proxy` container. |
+| **Sidecar proxy** | A proxy container that runs in the same Pod as an application container. | The `checkout` Pod contains the `checkout` app container and an `istio-proxy` container. |
+| **Admission webhook** | An API-server extension point that can inspect or change an object while the request is being accepted. | Istio's webhook participates when new Pods are created in a labeled namespace. |
+| **Mutating webhook** | A type of admission webhook that can edit an object before Kubernetes stores it. | Istio uses one to add proxy containers and mesh settings to new store Pods. |
+| **Traffic interception** | The redirection of application network traffic through the mesh proxy before it leaves or enters the application container. | A call from `checkout` to `inventory` is redirected through the local proxy first. |
 
-![Service mesh control and data plane map showing control plane, sidecars, app pods, policy, and telemetry](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-control-data-plane.png)
+The order matters. Kubernetes already gives us Services and DNS, so one service can find another. The mesh builds on that base by placing proxies on the path. Once the proxies are on the path, the control plane can teach them how to route, retry, time out, encrypt, and report traffic.
 
-*A mesh separates the control plane that distributes policy from the data plane proxies that handle pod traffic.*
+## Kubernetes Communication Before the Mesh
+<!-- section-summary: Kubernetes networking gives applications stable names, while the application still owns most reliability behavior. -->
 
+In the store, `web` calls the `checkout` Service by DNS name, and Kubernetes sends the request toward one of the ready checkout Pods behind that Service. That layer answers the first question for the store: where should a caller send traffic for `checkout` right now?
 
-With Istio, you install the control plane using the `istioctl` command-line tool. The `default` profile installs the core components needed to manage the mesh.
+The mesh detail is what happens around that existing path. Istio watches the same Services, Pods, and EndpointSlices that Kubernetes already maintains. Application code keeps using familiar names such as `http://checkout:8080`, while the mesh control plane learns the backend list and sends that discovery data to Envoy proxies.
+
+The remaining behavior still needs a home: how long `web` should wait when `checkout` is slow, whether the call should be retried, whether traffic should shift gradually to `checkout-v2`, and whether service-to-service traffic should be encrypted. Application teams often add those behaviors inside each service with HTTP client libraries, shared SDKs, or framework middleware. That can work for a small system, and it gets messy when every team configures the same network behavior in a slightly different way.
+
+The online store makes the pain easy to see. If `inventory` slows down during a flash sale, `checkout` may hold open too many requests. If `web` retries too aggressively, it may create even more load on `checkout`. If you release a new `checkout` version, you may want 5% of traffic to test it before sending every customer through it. Kubernetes Services give you the stable address; the mesh gives you a shared traffic layer around that address.
+
+## What the Mesh Adds
+<!-- section-summary: The mesh gives platform-owned traffic behavior to services that still call each other using normal Kubernetes names. -->
+
+**Istio** is a popular open source service mesh for Kubernetes. It gives platform teams APIs and control-plane components for traffic management, security, and observability. **Envoy** is the open source proxy Istio commonly places on the request path. Envoy understands common service protocols such as HTTP and gRPC, so it can collect useful request data, enforce security settings, and forward traffic with mesh policy attached.
+
+In Istio **sidecar mode**, each application Pod receives an Envoy proxy container beside the application container. The application still says, "call `checkout`" or "call `inventory`." The proxy handles the extra work around that call: collecting metrics, applying routing rules, enforcing security policy, and forwarding the request to the right destination. For the store team, that means the checkout code can keep using normal Kubernetes Service names while the platform adds shared network behavior around the call.
+
+Think about the store's checkout path during a real release. The team ships `checkout-v2`, but the old `checkout-v1` is still serving most orders. The product manager wants a small canary, the SRE wants a timeout so requests have a clear limit, and the security team wants service-to-service encryption. If each team owns that behavior separately, those requirements often end up as application code, load balancer configuration, or one-off scripts. With a mesh, those requirements can be expressed as platform configuration that the proxies enforce.
+
+The mesh keeps application design important. `checkout` still needs useful error handling, idempotent order creation, and clear health checks. The value of the mesh is that common network concerns move into one consistent layer. Teams can still use normal Kubernetes Services while the platform controls the traffic around those Services.
+
+This is why service mesh discussions usually start with two halves: the proxies that touch traffic and the system that configures those proxies. Those two halves are called the data plane and the control plane.
+
+## Data Plane and Control Plane
+<!-- section-summary: The data plane carries requests, while the control plane watches cluster state and distributes proxy configuration. -->
+
+The **data plane** is the set of proxies that handles real application traffic. In Istio sidecar mode, those proxies are Envoy containers injected into application Pods. A request from `web` to `checkout` passes through a proxy near `web`, then a proxy near `checkout`, and then reaches the `checkout` application container. These proxies are the only Istio components on the normal request path.
+
+The **control plane** is the management layer that configures the data plane. Istio's main control-plane process is **`istiod`**. It watches Services, Pods, EndpointSlices, and Istio traffic configuration, then translates that state into proxy configuration and sends the result to Envoy proxies.
+
+For the store, `istiod` notices that there is a `checkout` Service with healthy Pods behind it because Kubernetes publishes that information through Services, Pods, and EndpointSlices. It also notices any traffic rules you later create, such as sending 90% of requests to `checkout-v1` and 10% to `checkout-v2`. The proxies receive that configuration and apply it to live traffic. Customer requests stay in the data plane; `istiod` handles configuration, discovery data, certificates, and policy distribution.
+
+This split is important in production. If the control plane has a problem, existing proxies may continue using their last known configuration for a while, but new configuration changes and new proxy connections are affected. If a data plane proxy has a problem, the local workload's traffic can be affected directly. Real teams monitor both halves because they fail in different ways and create different symptoms.
+
+## Sidecar Proxies and Admission Webhooks
+<!-- section-summary: In sidecar mode, Istio uses Kubernetes admission to add an Envoy proxy to new Pods in selected namespaces. -->
+
+A **sidecar proxy** is a proxy container that runs beside your application container in the same Pod. In Istio sidecar mode, that sidecar is usually an Envoy container named `istio-proxy`. The word sidecar matters because the proxy shares the Pod's network namespace with the application. That means the application container and the proxy container share the same Pod IP address and can communicate over local networking inside the Pod.
+
+In our store, a normal `checkout` Pod might start with one container:
 
 ```bash
-$ istioctl install --set profile=default -y
+$ kubectl get pods -n store -l app=checkout
+NAME                        READY   STATUS    RESTARTS   AGE
+checkout-66b7d9c7d8-px9mv   1/1     Running   0          45s
+```
+
+After sidecar injection, a newly created `checkout` Pod has two containers:
+
+```bash
+$ kubectl get pods -n store -l app=checkout
+NAME                        READY   STATUS    RESTARTS   AGE
+checkout-7d8b8f9b6f-m44qk   2/2     Running   0          28s
+```
+
+The extra ready container is usually `istio-proxy`, which runs Envoy. The application Deployment YAML often still lists only the application container. Automatic injection happens when the Pod is created, which is why `kubectl get deployment` may still show one application container while `kubectl get pod` shows two running containers.
+
+An **admission webhook** is a Kubernetes callback that runs while the API server is accepting a new or changed object. A **mutating webhook** is the type of admission webhook that can edit the object before Kubernetes stores it. Istio registers a mutating webhook that says, "for Pods matching the injection policy, add the proxy container, volumes, environment variables, and startup pieces needed for the mesh." In the store, that is how a normal `checkout` Pod spec turns into a running Pod with both the checkout app and `istio-proxy`.
+
+That also explains a common surprise: the namespace label affects Pod creation time. The webhook acts while Kubernetes accepts a new Pod. Existing `web`, `checkout`, and `inventory` Pods need a rollout restart or replacement before they receive sidecars.
+
+## Installing Istio for a First Look
+<!-- section-summary: A small Istio install gives you the control plane first, then application Pods join the mesh when injection is enabled. -->
+
+For a first hands-on look, you need a Kubernetes cluster and **`istioctl`**, Istio's command-line tool. You run `istioctl` from your terminal to install Istio resources, inspect mesh configuration, and ask Istio diagnostic questions. The examples below use Istio's default profile, which keeps the first install small and close to a production starting point.
+
+```bash
+$ istioctl install -y
 
 ✔ Istio core installed
 ✔ Istiod installed
-✔ Ingress gateways installed
 ✔ Installation complete
-Making this installation the default for injection and validation.
+Made this installation the default for injection and validation.
 ```
 
-When you run this command, `istioctl` translates the installation profile into standard Kubernetes manifests and applies them to your cluster. The output shows that three major components are now running. The core setup creates the necessary Custom Resource Definitions (CRDs) that Istio uses to store its configuration. The ingress gateway sets up a load balancer to handle traffic entering the cluster from the outside world.
-
-The most important component, however, is `istiod`. This is the control plane daemon. We can verify it is running by checking the `istio-system` namespace.
+The command creates the Istio control plane resources, usually in the `istio-system` namespace. The next check confirms that the main control plane Pod is running before we bring application traffic into the mesh.
 
 ```bash
 $ kubectl get pods -n istio-system
 
-NAME                                    READY   STATUS    RESTARTS   AGE
-istio-ingressgateway-6d8b6c4b8d-2x4x6   1/1     Running   0          2m
-istiod-7b494d9b4b-9z8z2                 1/1     Running   0          2m
+NAME                      READY   STATUS    RESTARTS   AGE
+istiod-7f58d6d77b-q9wzp   1/1     Running   0          90s
 ```
 
-The `istiod` Pod does not handle any of your application traffic. If the frontend calls the backend, those packets never touch `istiod`. Instead, `istiod` sits in the background and watches the Kubernetes API server for new Services, Endpoints, and routing rules. When you create a new rule, `istiod` translates that rule into low-level proxy configuration and pushes it out to the data plane proxies over a persistent gRPC connection.
+Some learning guides use the larger `demo` profile because it turns on more features for exploration. Many production teams prefer an `IstioOperator` YAML file or Helm values checked into Git so the install is reviewable and repeatable. For a beginner, the practical order is to install the control plane first, then choose which namespaces or workloads join the mesh.
 
-## Deploying an Application Without a Mesh
-
-To understand how the data plane actually attaches to your application, we first need to see what a normal, non-mesh Pod looks like. Let's deploy a standard Nginx web server into the default namespace.
+For our store, keep the application in a dedicated namespace. That keeps the example clean and mirrors production practice, where teams usually onboard namespaces intentionally instead of turning injection on for the whole cluster at once.
 
 ```bash
-$ kubectl run nginx --image=nginx
-pod/nginx created
-
-$ kubectl get pods
-
-NAME    READY   STATUS    RESTARTS   AGE
-nginx   1/1     Running   0          12s
+$ kubectl create namespace store
+namespace/store created
 ```
 
-When you inspect the `READY` column in the output, it shows `1/1`. This means the Pod contains exactly one container, and that one container is ready to accept traffic. In this state, any incoming network connections go straight to the Nginx process listening on port 80. The application is completely responsible for handling the raw TCP connection.
+## Enabling Injection for the Store Namespace
+<!-- section-summary: Namespace injection labels tell Istio which new Pods should receive sidecar proxies. -->
 
-If you want this Pod to participate in the service mesh, you need to place a proxy in front of it. However, asking developers to manually edit their deployment YAML to include proxy containers would be slow and prone to errors. Instead, the mesh can inject the proxy automatically.
-
-## Enabling Sidecar Injection
-
-A service mesh proxy runs as a "sidecar" container. A sidecar is simply a second container that runs in the exact same Pod as your main application container. Because both containers share the same Pod, they also share the same network namespace, meaning they share the same IP address and the same local loopback interface (`localhost`).
-
-To tell Istio to automatically inject this sidecar proxy into your Pods, you add a specific label to your Kubernetes namespace. The control plane watches for this label.
+To enable automatic sidecar injection for new Pods in the store namespace, add the Istio injection label. Istio's webhook uses that namespace label as a simple onboarding signal. In the store, this lets the platform team bring `web`, `checkout`, and `inventory` into the mesh together without editing each Deployment manifest first.
 
 ```bash
-$ kubectl label namespace default istio-injection=enabled
-namespace/default labeled
+$ kubectl label namespace store istio-injection=enabled --overwrite
+namespace/store labeled
 ```
 
-Labeling the namespace does not immediately change existing Pods. Kubernetes Pods are immutable; you cannot add a new container to a Pod that is already running. To get the proxy, we have to delete the old Pod and let Kubernetes recreate it. Since we created a bare Pod, we will just delete it and recreate it with the same run command, but we will watch the creation process.
+You can check the namespace label directly:
 
 ```bash
-$ kubectl delete pod nginx
-pod "nginx" deleted
+$ kubectl get namespace store -L istio-injection
 
-$ kubectl run nginx --image=nginx
-pod/nginx created
-
-$ kubectl get pods -w
-
-NAME    READY   STATUS            RESTARTS   AGE
-nginx   0/2     Pending           0          0s
-nginx   0/2     Init:0/1          0          1s
-nginx   0/2     PodInitializing   0          2s
-nginx   1/2     Running           0          3s
-nginx   2/2     Running           0          4s
+NAME    STATUS   AGE   ISTIO-INJECTION
+store   Active   2m    enabled
 ```
 
-The output now shows `2/2` in the `READY` column. The Pod has two containers because Istio changed the Pod spec at creation time. When the Kubernetes API server received your request to create the Pod, Istio's mutating admission webhook matched the `istio-injection=enabled` namespace label and added the sidecar proxy before the Pod was stored.
-
-## How the Mesh Intercepts Traffic
-
-The sidecar proxy is only useful if application traffic passes through it. If the Nginx container is still answering connections directly, the proxy cannot enforce retries, routing rules, or encryption. In Istio sidecar mode, the mesh redirects configured TCP traffic before it reaches the application.
-
-![Service mesh sidecar interception path showing app container, local proxy, outbound traffic, inbound proxy, and peer service](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/sidecar-intercept-path.png)
-
-*The mesh changes traffic by moving it through local proxies before it leaves or enters the pod.*
-
-
-We can see exactly how it does this by inspecting the detailed configuration of the newly injected Pod.
+Before restarting workloads, it is useful to ask Istio whether injection will happen. The `istioctl experimental check-inject` command checks the matching webhooks and explains the reason. It helps catch label or revision mistakes before you wait for a rollout.
 
 ```bash
-$ kubectl describe pod nginx
+$ istioctl experimental check-inject -n store deploy/web
 
-...
+WEBHOOK                    REVISION  INJECTED  REASON
+istio-sidecar-injector     default   ✔         Namespace label istio-injection=enabled matches
+```
+
+Now restart the store Deployments so Kubernetes creates fresh Pods and the webhook can mutate them:
+
+```bash
+$ kubectl rollout restart deployment/web deployment/checkout deployment/inventory -n store
+deployment.apps/web restarted
+deployment.apps/checkout restarted
+deployment.apps/inventory restarted
+```
+
+Then verify that the new Pods show `2/2` containers ready:
+
+```bash
+$ kubectl get pods -n store
+
+NAME                         READY   STATUS    RESTARTS   AGE
+web-74db7d9c96-ppx7m         2/2     Running   0          34s
+checkout-7d8b8f9b6f-m44qk    2/2     Running   0          33s
+inventory-56f8d84b7c-nnb8c   2/2     Running   0          32s
+```
+
+That `2/2` output is the first visible sign that the data plane has reached your application Pods. The next question is what those proxies actually do with traffic.
+
+## How Traffic Interception Works
+<!-- section-summary: Traffic interception redirects configured inbound and outbound traffic through the local proxy so the mesh can apply policy. -->
+
+**Traffic interception** means the Pod's network rules redirect application traffic through the local proxy. When `checkout` opens a connection to `inventory`, the `checkout` application thinks it is making a normal outbound call. Inside the Pod, networking rules send that connection through `istio-proxy` first. The proxy applies mesh behavior, chooses the destination, and forwards the request.
+
+In classic Istio sidecar mode, a small init container named `istio-init` often sets up these network rules before the application starts. It configures Linux packet redirection so inbound and outbound TCP traffic can pass through Envoy. You may see this in a described Pod:
+
+```bash
+$ kubectl describe pod -n store -l app=checkout
+
 Init Containers:
   istio-init:
-    Image:         docker.io/istio/proxyv2:1.20.0
-    Command:
-      istio-iptables
-      -p
-      15001
-      -z
-      15006
-      -u
-      1337
-...
+    Image: docker.io/istio/proxyv2:...
 Containers:
-  nginx:
-    Image:         nginx
+  checkout:
+    Image: ghcr.io/example/store-checkout:...
   istio-proxy:
-    Image:         docker.io/istio/proxyv2:1.20.0
-    Args:
-      proxy
-      sidecar
-      --domain
-      default.svc.cluster.local
-...
+    Image: docker.io/istio/proxyv2:...
 ```
 
-The `describe` output reveals one common traffic-redirection path: an Init Container named `istio-init`. Init Containers are special containers that run to completion before the main application containers are allowed to start.
+Many production clusters use **Istio CNI** instead. CNI stands for Container Network Interface, which is the plugin system Kubernetes uses when it sets up Pod networking on a node. With Istio CNI, a privileged node-level agent handles the traffic redirection setup, so application Pods can avoid a privileged `istio-init` container for that job. This matters in restricted store clusters where security policy blocks application Pods from using capabilities such as `NET_ADMIN`.
 
-When the Pod boots up, the `istio-init` container runs a small binary called `istio-iptables`. Because this container shares the Pod's network namespace, it can rewrite the low-level Linux networking rules (`iptables`) for the Pod. In the default sidecar setup without Istio CNI, those rules redirect inbound TCP traffic to port `15006` and outbound TCP traffic leaving the application to port `15001`, except for ports and ranges that Istio deliberately excludes.
+Across those setup styles, the proxy must be on the path. Once `checkout` traffic flows through Envoy, the mesh can collect request metrics, apply encrypted service-to-service traffic, use service discovery data, and later enforce routing rules. Without traffic interception, the proxy would just sit beside the app while the app talked directly to the network.
 
-Once the `iptables` rules are written, the `istio-init` container exits, and the main containers start. The `istio-proxy` container, running Envoy under the hood, begins listening on those exact redirect ports.
+Istio also has **ambient mode**, which is another way to run the mesh data plane. Ambient mode uses a per-node Layer 4 proxy for base mesh traffic and can add waypoint proxies when a workload needs Layer 7 behavior such as HTTP routing policy. For the store, ambient mode would let a platform team choose a mesh shape with fewer per-Pod proxy containers, while this article stays with sidecar mode because the app container and Envoy container are easy to see together inside one Pod.
 
-When an external client tries to connect to Nginx on port 80, the Linux kernel intercepts the packet and silently hands it to the `istio-proxy` container instead. The proxy inspects the request, applies any necessary routing rules, and then opens a new local connection over `localhost` to the actual Nginx process. The application never knows it was intercepted. It just sees normal HTTP requests arriving from `localhost`.
+## Verifying the Mesh Path With Curl
+<!-- section-summary: A small curl Pod and a service-to-service request can confirm that DNS, Services, Pods, and sidecars are working together. -->
 
-Some clusters install Istio CNI so the node-level CNI plugin performs the traffic-redirection setup instead of an `istio-init` container. Istio also has ambient mode, which uses a different data-plane shape. The beginner habit is to ask which data-plane mode the cluster uses before assuming every Pod has an init container.
+After injection, verify the path with something small before you start writing traffic policy. A simple curl Pod gives you a client inside the same namespace as the store services. Because the namespace is labeled for injection, this test Pod should also receive an Istio sidecar.
+
+```bash
+$ kubectl run mesh-curl -n store \
+  --image=curlimages/curl \
+  --restart=Never \
+  --command -- sleep 1h
+
+pod/mesh-curl created
+```
+
+Check that the curl Pod has both containers:
+
+```bash
+$ kubectl get pod -n store mesh-curl
+
+NAME        READY   STATUS    RESTARTS   AGE
+mesh-curl   2/2     Running   0          20s
+```
+
+Now make a request to the `web` Service by Kubernetes DNS name:
+
+```bash
+$ kubectl exec -n store mesh-curl -c mesh-curl -- \
+  curl -sS http://web.store.svc.cluster.local:8080/health
+
+ok
+```
+
+You can also test the internal call that matters most for the example, from `web` toward `checkout` or from `checkout` toward `inventory`:
+
+```bash
+$ kubectl exec -n store deploy/web -c web -- \
+  curl -sS http://checkout:8080/health
+
+ok
+```
+
+These tests confirm several layers at once. Kubernetes DNS resolves the Service name, the Service selects healthy Pods, the application container can make the request, and the sidecar is present on the Pod. If this basic call fails, fix the Service selector, port, DNS name, container health, or injection state before adding routing rules.
+
+In production, teams usually add stronger verification. They check proxy readiness, inspect sidecar logs, run `istioctl proxy-status`, and look at dashboards such as Prometheus, Grafana, or Kiali. Those tools are useful, but the small curl test is still valuable because it proves the simplest request path before you debug a more advanced mesh feature.
+
+## Production Gotchas
+<!-- section-summary: Most early mesh problems come from injection timing, namespace labels, security restrictions, port naming, and direct Pod IP calls. -->
+
+The first gotcha is injection timing. The namespace label affects new Pods. If `web`, `checkout`, and `inventory` were already running before the label was added, they keep their original one-container shape until a rollout creates replacement Pods. When a team says "the namespace is labeled but my Pod is still `1/1`," the usual answer is to restart the Deployment and then check the new Pod.
+
+The second gotcha is conflicting injection policy. Istio can use `istio-injection=enabled`, revision labels such as `istio.io/rev=canary`, and per-Pod labels such as `sidecar.istio.io/inject`. Mixed labels can produce surprising results during upgrades or canary control-plane rollouts. `istioctl experimental check-inject` is useful because it reports which webhook matched and why.
+
+The third gotcha is cluster security. Classic sidecar traffic redirection may require an init container with networking capabilities. Restricted clusters often prefer Istio CNI so the privileged networking work lives in a node agent instead of every application Pod. This is one of those details that should be decided with the platform team before onboarding production namespaces.
+
+The fourth gotcha is Service port naming and protocol detection. Istio can proxy TCP traffic, and it can automatically detect common HTTP traffic, but richer HTTP routing and metrics depend on the proxy understanding the protocol. Naming Service ports clearly, such as `http`, `http-web`, `grpc`, or `tcp-metrics`, helps the mesh treat traffic correctly later.
+
+The fifth gotcha is direct Pod IP traffic. Mesh traffic features are designed around Services and the proxy's service discovery view. If application code calls a Pod IP directly, later routing rules and telemetry may miss important context. In the store, `web` should call `checkout` through the `checkout` Service, and `checkout` should call `inventory` through the `inventory` Service.
+
+The final gotcha is cost. Every proxy uses CPU and memory, every injected Pod has more startup pieces, and every mesh upgrade has to account for both the control plane and the data plane. Real teams use a mesh when the shared traffic, security, and observability value is worth that operational cost. For a three-service toy app, the mesh may look like extra machinery. For a production platform with dozens of teams and hundreds of services, the consistent control point can be worth it.
 
 ## Putting It All Together
+<!-- section-summary: A mesh starts with normal Kubernetes Services, adds proxies to the traffic path, and uses the control plane to configure those proxies. -->
 
-A service mesh removes network complexity from your application code by inserting a dedicated proxy layer.
+Let's connect the store flow from the beginning. The Kubernetes networking layer gives `web`, `checkout`, and `inventory` stable Service names. `web` can call `checkout`, and `checkout` can call `inventory`, even though individual Pods are replaced during rollouts. That base layer is the prerequisite this module builds on.
 
-- **The Control Plane (`istiod`)**: A central daemon that watches the cluster and configures the proxies. It does not touch your application traffic.
-- **The Data Plane (`istio-proxy`)**: A fleet of sidecar containers injected into your Pods. They handle the actual packet routing, encryption, and retries.
-- **Traffic Redirection**: In default sidecar mode without Istio CNI, `istio-init` rewrites Linux `iptables` rules inside the Pod so configured TCP application traffic passes through the sidecar proxy.
+Istio adds the mesh layer. The control plane, `istiod`, watches Kubernetes and Istio configuration. The data plane, made of Envoy proxies, handles requests. In sidecar mode, the Envoy proxy runs in each application Pod as `istio-proxy`.
+
+Automatic injection uses a Kubernetes mutating admission webhook. You label the `store` namespace, create or restart Pods, and the webhook adds the proxy pieces to new Pods. `kubectl get pods -n store` showing `2/2` tells you each application Pod has both the app container and the proxy container ready.
+
+Traffic interception puts the proxy on the path. A call from `checkout` to `inventory` moves through the local proxy, across the network, through the destination proxy, and then to the inventory application. The application code still uses ordinary HTTP clients and Kubernetes DNS names, but the platform now has a place to apply shared behavior.
+
+That is the reason service meshes matter. They turn service-to-service networking from scattered application behavior into a managed platform layer. The next step is to use that layer for traffic control.
 
 ## What's Next
 
-Now that the data plane proxies are in place and application TCP traffic is passing through them, the proxies are ready to receive routing instructions. In the next article, we will use the control plane to write our first traffic routing rules, allowing us to split traffic between two different versions of an application without touching a single line of code.
+Now that the proxies are on the request path, the store has a new capability. The platform can tell those proxies how to handle traffic while the `web`, `checkout`, and `inventory` code stays the same.
 
-![Service mesh summary showing application containers, local proxies, data plane traffic, control plane configuration, TCP redirection, and the Istio CNI option.](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/service-mesh-summary.png)
-
-*Use this as the service mesh mental model: application containers keep their code simple while local proxies carry routing, encryption, and traffic policy from the control plane.*
+The next article moves from "what is the mesh?" to "what can the mesh do?" We will use routing, retries, timeouts, and canaries so `checkout-v2` can receive a small slice of traffic, slow calls can fail cleanly, and production rollouts can happen with more control.
 
 ---
 
 **References**
 
-- [Istio Architecture](https://istio.io/latest/docs/ops/deployment/architecture/) - Details the separation of the control plane and data plane.
-- [Istio Traffic Management](https://istio.io/latest/docs/concepts/traffic-management/) - Explains how Envoy proxies intercept and route traffic inside the Pod.
-- [Istio Sidecar Injection](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/) - Describes namespace-based automatic proxy injection.
-- [Istio CNI](https://istio.io/latest/docs/setup/additional-setup/cni/) - Explains the alternative CNI-based traffic redirection path.
+- [Istio Architecture](https://istio.io/latest/docs/ops/deployment/architecture/) - Defines Istio's control plane and data plane, including Envoy sidecars and `istiod`.
+- [Istio Sidecar or Ambient](https://istio.io/latest/docs/overview/dataplane-modes/) - Explains the sidecar and ambient data plane modes.
+- [Istio Install with Istioctl](https://istio.io/latest/docs/setup/install/istioctl/) - Documents `istioctl install`, profiles, and install customization.
+- [Istio Installing the Sidecar](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/) - Documents automatic sidecar injection, namespace labels, and webhook behavior.
+- [Istio Check-Inject](https://istio.io/latest/docs/ops/diagnostic-tools/check-inject/) - Documents `istioctl experimental check-inject` for injection diagnostics.
+- [Istio CNI Node Agent](https://istio.io/latest/docs/setup/additional-setup/cni/) - Explains CNI-based traffic redirection and the relationship to privileged init containers.
+- [Istio Application Requirements](https://istio.io/latest/docs/ops/deployment/application-requirements/) - Covers sidecar-related Pod requirements, Istio ports, outbound traffic, and Service usage.
+- [Istio Protocol Selection](https://istio.io/latest/docs/ops/configuration/traffic-management/protocol-selection/) - Explains protocol detection and explicit Service port naming.
+- [Envoy: What Is Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy) - Defines Envoy as a proxy designed for modern service-oriented architectures.
+- [Kubernetes EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Explains how Kubernetes tracks subsets of Service backend endpoints.
+- [Kubernetes Dynamic Admission Control](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/) - Explains admission webhooks and mutating admission webhooks.
+- [Kubernetes Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/) - Defines sidecar containers and how they run alongside application containers in a Pod.
