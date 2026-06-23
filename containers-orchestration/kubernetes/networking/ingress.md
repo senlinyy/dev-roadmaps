@@ -31,14 +31,9 @@ The progress API Pods already live inside the cluster. They have Pod IPs, labels
 
 There are a few concepts connected together here. A **Service** gives the Pods a stable internal address. An **Ingress rule** maps a public host and path to that Service. An **Ingress controller** is the running software that reads the rule and configures a proxy or load balancer. **DNS** points the public hostname at the controller's address. **TLS** gives the browser a trusted HTTPS connection.
 
-```mermaid
-flowchart LR
-    Browser[Browser] --> DNS[api.devpolaris.example]
-    DNS --> Edge[Ingress controller]
-    Edge --> Rule[Ingress rule: /progress]
-    Rule --> Service[progress-api Service]
-    Service --> Pods[ready progress API Pods]
-```
+![Ingress request path showing browser, DNS, Ingress controller, Ingress rule, progress-api Service, and ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-request-path.png)
+
+*Ingress is the route description, and the controller makes that route real by accepting traffic for the hostname and forwarding it to the Service.*
 
 That is the whole article in one path. We will start at the Service because the Service owns Pod selection and stable backend naming. Then we will add the Ingress object, the controller that makes it real, the hostname and path rules, TLS, DNS, rollout checks, and debugging. Each part answers one question in the request: where did the client enter, which rule matched, which Service received it, and which Pods handled it?
 
@@ -249,6 +244,10 @@ curl --resolve api.devpolaris.example:443:203.0.113.20 \
 {"userId":"u_123","completedLessons":42}
 ```
 
+![Ingress rollout evidence chain showing TLS Secret, Ingress ADDRESS, DNS record, curl --resolve preflight, and HTTPS 200](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-tls-dns-rollout.png)
+
+*A safe Ingress rollout proves the certificate, reported address, DNS target, and hostname request before relying on live public DNS.*
+
 This check follows the same shape as a real browser request. It uses the public hostname, the public path, the controller address, TLS, the Ingress rule, the Service, and the Pods. That makes it much stronger than only curling a Pod IP or only reading the YAML.
 
 ## Rollout Checks for a New Ingress
@@ -363,6 +362,10 @@ This table maps the user-visible symptom to the layer that deserves attention ne
 | Controller returns `404` | Host or path rule | Check `host`, `path`, and `pathType` |
 | Controller returns `502` or `503` | Backend routing | Check Service port, EndpointSlices, Pods, NetworkPolicy |
 | App returns `500` | Application | Check app logs, traces, and upstream dependencies |
+
+![Ingress debugging summary mapping wrong DNS, TLS mismatch, route 404, backend 502 or 503, and app 500 to the next layer to inspect](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-debugging-summary.png)
+
+*The user sees one broken request, but DNS, TLS, route matching, backend reachability, and application errors each leave different evidence.*
 
 This style of debugging keeps the layers separate. It also gives a clean incident timeline: DNS was correct, TLS was correct, the controller matched the rule, the Service had no ready endpoints, and the Deployment rollout caused the endpoints to disappear. That story is much easier to fix than "Ingress is broken."
 

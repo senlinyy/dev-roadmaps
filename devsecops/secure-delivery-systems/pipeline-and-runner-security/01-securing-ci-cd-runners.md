@@ -1,222 +1,368 @@
 ---
 title: "Securing CI/CD Runners"
-description: "Separate untrusted code execution from trusted environments and secure the machines running your builds."
-overview: "Build pipelines run arbitrary code on real servers. This article explains runner security boundaries, job token scoping, environment isolation, and pinned dependency strategies."
-tags: ["runners", "ci", "github-actions", "isolation"]
+description: "Separate untrusted workflow code from trusted deployment machines, secrets, caches, artifacts, and private networks."
+overview: "A CI/CD runner is the machine that executes pipeline jobs. This article follows Summit Retail's checkout-api pipeline through runner trust, hosted and self-hosted choices, pull request isolation, runner groups, clean environments, cache and artifact handling, network exposure, and a practical hardening checklist."
+tags: ["devsecops", "ci-cd", "runners", "isolation"]
 order: 1
 id: article-devsecops-pipeline-security-securing-cicd-runners
-aliases:
-  - securing-cicd-runners
-  - article-devsecops-pipeline-security-securing-cicd-runners
-  - devsecops/pipeline-security/securing-cicd-runners.md
-  - devsecops/pipeline-security/01-runner-isolation.md
-  - devsecops/pipeline-security/01-runner-isolation
-  - pipeline-security/01-runner-isolation
 ---
 
 ## Table of Contents
 
-1. [The Danger of Untrusted Pipeline Execution](#the-danger-of-untrusted-pipeline-execution)
-2. [What Is a CI/CD Runner?](#what-is-a-cicd-runner)
-3. [The Pull Request Trust Boundary](#the-pull-request-trust-boundary)
-4. [Isolating Ephemeral vs Persistent Runners](#isolating-ephemeral-vs-persistent-runners)
-5. [Enforcing Least Privilege GITHUB_TOKEN Rules](#enforcing-least-privilege-github_token-rules)
-6. [Pinning Third-Party Action Dependencies](#pinning-third-party-action-dependencies)
-7. [Case Study: The TanStack Supply Chain Breach](#case-study-the-tanstack-supply-chain-breach)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [What a Runner Does](#what-a-runner-does)
+2. [Why Runner Trust Matters](#why-runner-trust-matters)
+3. [Hosted and Self-Hosted Runners](#hosted-and-self-hosted-runners)
+4. [Untrusted Pull Request Workflows](#untrusted-pull-request-workflows)
+5. [Runner Groups, Labels, and Job Routing](#runner-groups-labels-and-job-routing)
+6. [Ephemeral and Clean Runner Patterns](#ephemeral-and-clean-runner-patterns)
+7. [Caches, Artifacts, and Workspaces](#caches-artifacts-and-workspaces)
+8. [Network and Secret Exposure](#network-and-secret-exposure)
+9. [A Practical Runner Hardening Checklist](#a-practical-runner-hardening-checklist)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Danger of Untrusted Pipeline Execution
+## What a Runner Does
+<!-- section-summary: A runner is the machine that receives a pipeline job, checks out code, and runs the commands written in the workflow. -->
 
-CI/CD automation is designed to run scripts. When we configure a pipeline, we tell a server to download our repository and execute commands. This execution model works perfectly when we trust all changes, but it introduces critical vulnerabilities when we build unreviewed code. Consider these three scenarios:
+A **runner** is the computer that executes a CI/CD job. The CI/CD platform decides that a job is ready to run, then the runner downloads the job instructions, prepares a workspace, checks out the repository, and runs each step. In GitHub Actions the machine is called a runner, in GitLab the same idea usually appears as a GitLab Runner, and in Jenkins the worker machines are usually called agents.
 
-* **The Fork Key Theft**: A contributor submits a pull request from an external fork. The pipeline automatically runs tests on their proposed branch, but a malicious dependency hook inside the PR's setup scripts runs silently, reading the repository's production secrets and posting them to an external endpoint.
-* **The Shared Host Compromise**: A build job escapes its local container namespace, modifying the host build server's persistent operating system. The next unrelated build job running on that same server inherits the compromised environment, allowing attackers to inject malicious packages.
-* **The Poisoned Build Cache**: A test run on a pull request writes custom execution parameters to a shared repository cache. A subsequent release job on the main branch restores that cache, loading poisoned execution binaries and running them with administrative cloud publishing credentials.
+For Summit Retail, picture a service called `checkout-api`. It receives cart data, calls a payment provider, creates an order record, and returns the checkout result to the frontend. Every pull request to that repository runs tests, and every merge to `main` builds a container image for deployment. Those tasks sound harmless until you remember that tests, build scripts, package install hooks, Docker builds, and deployment commands all run real code on the runner.
 
-To defend our systems against these vulnerabilities, we must establish strict physical and logical boundaries on our build machines. We call this discipline **Runner Security**.
-
-## What Is a CI/CD Runner?
-
-A CI/CD runner is the computing environment (a physical server, virtual machine, or container) that executes the steps defined in a pipeline workflow file. When a runner receives a job, it checks out the source code, resolves package dependencies, runs build commands, uploads artifacts, and handles authentication.
-
-It is easy to forget that pipeline instructions are executed as real code on a real machine. Consider a standard test instruction:
+Here is a small GitHub Actions workflow for `checkout-api`:
 
 ```yaml
-- name: Execute test suites
-  run: npm test
-```
-
-This single line appears simple in code review, but during pipeline execution, `npm test` can run any arbitrary code written in the pull request. It can inspect local workspace folders, read environment variables, modify local caches, and initiate outbound TCP connections. 
-
-The core rule of runner security is that **any job that runs untrusted code must be treated as hostile**. If a job handles unreviewed changes, it must be sandboxed and denied any credentials or target cloud publishing roles.
-
-## The Pull Request Trust Boundary
-
-To secure our pipelines, we must define the entry point of our codebase as a clear boundary. We split repository operations into two distinct trust levels based on the origin of the code:
-
-The first level is the untrusted validation phase, which maps to the pull request event. When an external contributor or developer opens a pull request, the input is unreviewed source code. The runner's only job during this phase is to confirm that the changes compile and pass basic tests. Because this code has not been vetted by a peer, the runner is an active sandbox. It is denied access to environment-level secrets, write tokens, and target deployment capabilities. If the code is malicious, the impact is isolated to a single, sandboxed run.
-
-The second level is the trusted release phase, which maps to pushes or merges on the main branch. The input here is verified source code that has successfully passed peer reviews and automated checks. Because the code has met all quality gates, the runner can safely assume a higher level of authority. This job is granted write permissions to registry packages and is permitted to request short-lived OIDC deployment roles to update production infrastructure. By restricting these high-power permissions to the main branch, we ensure that untrusted changes must always pass through human and automated audits before acquiring any deployment authority.
-
-To enforce this boundary in GitHub Actions, we write explicit event rules in our workflow file:
-
-```yaml
-name: orders-api-delivery
+name: checkout-api ci
 
 on:
   pull_request:
-    branches: ["main"]
-  push:
-    branches: ["main"]
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  test-pr:
-    if: github.event_name == 'pull_request'
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: "npm"
-      - run: npm ci --ignore-scripts
-      - run: npm test
-
-  publish-image:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
+          node-version: 22
+          cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: docker build -t ghcr.io/devpolaris/orders-api:${{ github.sha }} .
-      - run: docker push ghcr.io/devpolaris/orders-api:${{ github.sha }}
+      - run: npm test -- --runInBand
 ```
 
-Notice the logical division configured in this workflow:
+The `runs-on: ubuntu-latest` line tells GitHub Actions which runner type runs the job. The `steps` are the work the runner performs. The runner checks out the source code, prepares Node.js, installs dependencies, and runs the test command. If a package has an install script, that script also runs on the runner during `npm ci`.
 
-* **Event Separation**: The `test-pr` job only executes during pull requests, using low-power tokens. It uses `npm ci --ignore-scripts` to block custom dependency lifecycle scripts from executing during setup.
-* **Release Constraints**: The `publish-image` job is blocked from running on pull requests. It has a strict condition ensuring it only executes on push events on the protected `main` branch, which grants it `packages: write` permissions.
+That last detail matters. A runner sits inside the production delivery system because it executes build and release code. Once we see the runner as a machine executing repository code, the next question is simple: which code deserves to run on which machine?
 
-## Isolating Ephemeral vs Persistent Runners
+## Why Runner Trust Matters
+<!-- section-summary: Runner trust matters because workflow code can read local files, call networks, write caches, and reach any secret exposed to the job. -->
 
-The physical and virtual environment where a build machine executes determines its blast radius. We categorize runners into two primary operational models based on how they manage state and machine lifecycles:
+**Runner trust** means how much sensitive access the runner has and how much we trust the code that will run on it. A runner with no secrets, no private network route, and a short-lived workspace has a small blast radius. A runner with production deploy credentials, a route to internal databases, and a persistent disk has a much larger blast radius.
 
-The first model relies on Ephemeral Runners, which are short-lived, single-use environments. In this model, the hosting platform provisions a completely fresh, isolated virtual machine or container namespace for every single job run. Once the job concludes—whether it succeeds or fails—the entire environment is immediately destroyed by the orchestrator. Ephemeral runners are the industry standard for security because they enforce a blank slate. If an untrusted pull request contains a script that attempts to modify system configurations, download malicious packages, or install persistent rootkits, the entire compromise is erased from existence seconds later. The attacker cannot leave any traces behind because the virtual disk is deleted, preventing silent, persistent infections from spreading.
+The important idea is **workflow code execution**. The workflow file is code. The repository scripts are code. Third-party actions are code. Dependency install scripts are code. If Summit Retail lets a pull request run `npm ci`, then the pull request controls part of what executes, because it can change `package.json`, `package-lock.json`, test files, and build scripts.
 
-The second model relies on Persistent Runners, which are long-lived build servers that process multiple sequential jobs over weeks or months (often used for self-hosted physical hardware). Persistent runners are popular because they eliminate the latency of provisioning new virtual machines and speed up builds by reusing local caches. However, they introduce severe security risks because they lack isolation boundaries. If an untrusted job successfully compromises the filesystem, it can drop malicious files in shared directories, hijack shared build processes, or poison local Docker layers. Any subsequent job that runs on that same server inherits the compromised host environment. This allows attackers to execute cross-contamination attacks, using a low-trust test job to infect a high-trust release build that runs later on the same machine.
+Imagine someone opens a pull request to `checkout-api` that looks like a small coupon bug fix. Hidden inside the change is a new `postinstall` script that prints environment variables and sends them to a server on the internet. If the job has no secrets and no private network access, the damage is limited. If the same job runs on a self-hosted runner inside Summit Retail's network with deployment credentials available, the attacker has a path to secrets and internal systems.
 
-If your team must operate self-hosted, persistent runners to save compute costs, you must implement strict isolation and cleanup guardrails. First, sandboxing is mandatory: isolate each runner process in single-use virtual machines or locked container namespaces that reset their disk states automatically between builds. Second, enforce network isolation: ensure these build machines reside in highly restricted subnet zones that are blocked from contacting sensitive internal databases, cloud management consoles, or private engineering tools. Finally, write explicit, automated teardown scripts that execute at the end of every run. These scripts must aggressively purge local workspaces, reset process environments, delete unverified caching directories, and prune Docker build layers to ensure that one job cannot leave any artifacts behind for the next execution.
+This is why teams talk about a **trust boundary** around runners. A trust boundary is the line between code and systems with different levels of trust. External pull request code sits on the low-trust side. Main branch deployment jobs sit on the high-trust side. Runner security is the work of keeping those sides separated.
 
-## Enforcing Least Privilege GITHUB_TOKEN Rules
+There is also a second problem: runners carry state. A job can write files to the workspace, populate a cache, create Docker images, change global tool configuration, or leave processes behind. If the next job lands on the same machine, that next job may inherit more than the team expected. This is where runner cleanup and ephemeral machines enter the story, but first we need to separate the two main runner types.
 
-Every runner receives a temporary environment token, known as the `GITHUB_TOKEN`, to authenticate requests back to the source repository and external platform services. This token is generated dynamically at the start of a job run and is destroyed immediately upon completion. If a workflow file does not explicitly declare its required scope, the runner inherits broad default privileges. On older repositories or custom enterprise organizations, these default privileges often default to full read-and-write permissions. This means that if an attacker compromises a test suite, they inherit a highly privileged token that can write to the repository, delete release tags, or modify protected environments.
+![Runner trust boundary showing untrusted pull request code limited to low-trust hosted runners while reviewed main-branch deploys use trusted runners with secrets and private network access](/content-assets/articles/article-devsecops-pipeline-security-securing-cicd-runners/runner-trust-boundary.png)
 
-To enforce least privilege, we must define explicit `permissions` blocks for every job. Declaring permissions directly in our workflow files disables the broad platform defaults, downgrading the automatic token to a strict, read-only status unless a specific write capability is explicitly requested. This makes our active security boundaries transparent directly in the code:
+*The runner boundary keeps unknown pull request code on a low-trust path, while reviewed deployment work uses the runner tier that can reach secrets, private networks, and production systems.*
+
+## Hosted and Self-Hosted Runners
+<!-- section-summary: Hosted runners are operated by the CI/CD provider, while self-hosted runners are machines your team owns, patches, routes, and cleans. -->
+
+A **hosted runner** is a runner operated by the CI/CD provider. In GitHub Actions, GitHub-hosted runners run on GitHub-managed infrastructure with common tools preinstalled. They are a strong default for ordinary pull request checks because the platform handles machine lifecycle, base image updates, and job isolation details.
+
+A **self-hosted runner** is a machine that your team registers with the CI/CD platform. The runner application connects back to GitHub, GitLab, or Jenkins, waits for a matching job, and runs that job on your infrastructure. The platform schedules the work, but your team owns the operating system, network route, installed tools, credential exposure, cleanup, monitoring, and patching.
+
+Summit Retail might use both. Hosted runners work well for `checkout-api` unit tests because those tests only need the repository and public package downloads. Self-hosted runners may make sense for a deployment job that needs private access to an internal Kubernetes API, a private package mirror, or a compliance-approved network segment.
+
+| Question | Hosted runner answer | Self-hosted runner answer |
+|---|---|---|
+| Who operates the machine? | The CI/CD provider operates the machine and image lifecycle. | Summit Retail operates the machine, image, network, and cleanup. |
+| What is the normal use case? | Pull request checks, unit tests, linting, and ordinary builds. | Private network access, custom hardware, special tools, larger machines, or regulated deployment paths. |
+| What is the security job? | Small workflow permissions and no secret exposure for untrusted events. | Build isolation, host patching, separate runner groups, controlled network egress, and residue removal. |
+| What can go wrong? | A workflow may still misuse tokens, actions, caches, or artifacts. | A malicious job may reach internal systems or leave state for later jobs if the runner persists. |
+
+Self-hosted runners deserve special care because they are often placed close to valuable systems. A runner inside the same network as the checkout database, container registry, deployment cluster, and secret manager has a strong operational reason to exist. That same placement also means any code running on the runner may try to reach those systems unless the network and credentials block it.
+
+Hosted versus self-hosted is only the first split. The next split is about event trust. A pull request from an unknown fork and a deployment from `main` need different paths through the pipeline.
+
+## Untrusted Pull Request Workflows
+<!-- section-summary: Pull request workflows test code without giving that code secrets, write tokens, private network routes, or privileged runner access. -->
+
+An **untrusted pull request workflow** is a workflow that runs code from a branch the team has not reviewed and accepted yet. The source may be a fork, a new branch from a contractor, or a branch from an internal engineer who made a mistake. The code may be useful, broken, or malicious, so the pipeline treats it as code that can run tests but cannot touch deployment power.
+
+For Summit Retail, pull request checks for `checkout-api` answer questions like "Do the unit tests pass?" and "Does the Dockerfile still build?" They stay away from questions like "Can this branch deploy to staging?" or "Can this branch read production-like secrets?" Deployment belongs to trusted events after review, merge, and environment approval.
+
+This is a reasonable pull request shape:
 
 ```yaml
+name: checkout-api pull request checks
+
+on:
+  pull_request:
+    branches: [main]
+
 permissions:
   contents: read
 
 jobs:
-  test-pr:
-    permissions:
-      contents: read # Restricts PR tokens to read-only source access
-
-  publish-image:
-    permissions:
-      contents: read
-      packages: write # Grants image publishing rights to main merges
-
-  deploy-prod:
-    environment: production
-    permissions:
-      contents: read
-      id-token: write # Grants temporary cloud role exchange access
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --runInBand
 ```
 
-This structure is self-documenting and enforces compiler-level security. If an engineer attempts to add a high-privilege deployment script to the low-trust `test-pr` job, the build fails immediately because the job has not been granted `id-token: write` access. If an editor tries to request cloud identity, reviewers can catch the over-scoped permission block during the pull request code review. By explicitly scoping permissions, we ensure that even if a dependency in the test suite is compromised, the GITHUB_TOKEN it steals cannot be used to modify our source code or hijack our registry.
+The job runs on a hosted runner, receives only read access to repository contents, and checks out the pull request code without persisting the checkout credential into the local Git config. That last setting reduces accidental token reuse by later shell commands. The workflow still runs untrusted code, so the key control is that the runner has no production secret and no direct route into Summit Retail's private deployment network.
 
-## Pinning Third-Party Action Dependencies
-
-Build workflows frequently rely on third-party helper scripts called Actions to perform common tasks, such as checking out code, setting up software runtimes, or uploading coverage reports. By default, developers reference these actions using mutable tags, such as `@v4` or `@main`. 
-
-However, mutable tags are merely friendly names, not cryptographic content references. In the Git version control system, a tag is a pointer that can be updated at any time. If an attacker compromises a third-party action repository or gains administrative access to the maintainer's account, they can push a malicious code update and force-push the `@v4` tag to point to that malicious commit. The next time your build runner executes, it will download and run the compromised action, exposing your build environment to an unreviewed script.
-
-To protect our workflows from this supply-chain threat, we must pin all third-party actions to immutable Git commit SHAs. A commit SHA is a unique cryptographic hash of the commit's contents, making it mathematically impossible for an attacker to alter the underlying script without changing the hash:
+Now compare that with a risky shape Summit Retail would remove during review:
 
 ```yaml
-steps:
-  # Pin actions/checkout using a unique, validated commit SHA
-  - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-  
-  # Pin setup-node to a cryptographic commit SHA
-  - uses: actions/setup-node@3922559a8212c7fc3577ad91a00214a41df15950 # v4.1.0
-    with:
-      node-version: "22"
+name: risky privileged pull request check
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: write
+
+jobs:
+  test-pr-head:
+    runs-on:
+      group: summit-prod-deploy
+      labels: checkout-api-deploy
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm ci
+      - run: npm test
 ```
 
-The long hexadecimal string after the `@` symbol identifies one exact snapshot of the action's codebase. A reviewer can audit that specific commit to confirm the action is safe, knowing that the workflow will execute that exact code until the workflow file is intentionally updated. To make this process maintainable, we append a human-readable comment showing the target version (like `# v4.2.2`) and utilize automated dependency bots to monitor updates, compile the new commit SHAs, and propose them via standard pull requests.
+The `pull_request_target` event runs in the context of the base repository. Teams sometimes use it for safe metadata tasks like labeling, commenting, or checking policy files from the base branch. The danger arrives when the workflow checks out and runs the pull request head code while also using a privileged token, secrets, or a trusted self-hosted runner group.
 
-## Case Study: The TanStack Supply Chain Breach
+A safer pattern is to split the work. The untrusted pull request workflow runs tests with no secrets and publishes only low-risk results, such as a test summary. A separate trusted workflow handles labels, comments, deployment decisions, or environment approvals using code from the protected base branch. That separation keeps pull request code away from the runner and token paths used for delivery.
 
-To understand how runner security, build caches, and token boundaries interact, let us analyze the TanStack open-source project supply-chain incident of May 2026. 
+Once untrusted pull requests have their own low-trust path, the trusted jobs still need careful routing. That is where runner groups and labels help the platform choose the right machine.
 
-In this compromise, an attacker successfully published 84 malicious versions across 42 different `@tanstack/*` packages on the public npm registry. The compromise did not occur because the maintainers shared their passwords or left their registry tokens in plain text. Instead, the attack sequence succeeded by exploit of a series of trust-boundary gaps inside the automated CI/CD pipeline.
+## Runner Groups, Labels, and Job Routing
+<!-- section-summary: Runner groups decide which repositories can use a set of self-hosted runners, and labels describe which capabilities a job needs. -->
 
-First, the project configured a validation pipeline using the elevated `pull_request_target` event. The `pull_request_target` event is a unique runner trigger designed to let validation workflows access repository secrets (like browser testing keys) even when triggered by external forks. However, the workflow combined this trigger with an explicit instruction to check out the untrusted branch code of the external pull request onto the runner. This action broke the primary runner trust boundary, placing unreviewed, hostile code directly inside a high-privilege execution environment.
+A **runner group** is an access grouping for self-hosted runners. In GitHub Actions, runner groups let an organization or enterprise decide which repositories can use a set of runners. A production deployment runner group might be available only to the `checkout-api` repository and a small set of release repositories.
 
-Second, the attacker used this execution slot to poison the shared repository cache. When the builder ran `npm install` to set up the workspace, the package manager executed custom installation hooks written by the attacker inside the pull request. These hooks executed silently on the runner, writing malicious binaries into the standard `node_modules` folder and poisoning the local project cache directories. Because the runner had write-access to the repository's shared caching system, it uploaded these compromised directories back to the central build cache as a valid cache entry for the project.
+A **runner label** is routing metadata. Labels describe a runner's operating system, architecture, toolchain, or purpose. A job asks for labels, and the CI/CD platform finds a runner with matching labels. Labels help the scheduler choose a machine with the right capability, while runner group policy and repository settings carry the access decision.
 
-Third, the poisoned cache bridged the trust boundary to hijack the release process. When a project maintainer merged a completely separate, trusted pull request to the main branch, a high-trust release workflow was triggered. To speed up the compilation, the release runner restored the shared cache. It downloaded the poisoned directories directly into its environment, replacing standard build files with the attacker's pre-compiled malware. When the runner compiled the application and executed its publish commands, it ran the malicious binaries, using the workflow's high-privilege administrative credentials to upload the compromised packages directly to the npm registry.
+Here is how Summit Retail might route an internal staging deployment:
 
-The critical lesson of the TanStack breach is that using short-lived credentials or restricting write tokens is not enough if your runner's state is compromised. If untrusted code can write to shared caches or persistent filesystems, that poisoned state can lie dormant, bridge the trust boundary, and hijack high-power credentials during subsequent release runs.
+```yaml
+name: checkout-api staging deploy
 
-To defend our pipelines against similar caching attacks, we must implement two strict controls:
-* **Scope cache keys by branch and trust boundary**: We must ensure that low-power validation runs triggered by pull requests can only read from caches but are strictly blocked from writing to cache entries consumed by release or deployment jobs.
-* **Deny unreviewed code access to elevated triggers**: We must avoid using `pull_request_target` to check out and execute unreviewed code from external forks, keeping all pull request validations strictly sandboxed under the low-power `pull_request` event.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-staging:
+    runs-on:
+      group: summit-staging-deploy
+      labels: checkout-api-deploy
+    environment: staging
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/deploy-staging.sh
+```
+
+The group name says which pool of self-hosted runners the job may use. The label says the job needs a runner prepared for `checkout-api` deployment. The environment setting gives Summit Retail another place to attach approval rules, deployment secrets, and audit trails.
+
+A practical group design uses trust tiers:
+
+| Runner tier | Example group or path | Jobs allowed there |
+|---|---|---|
+| Pull request checks | Hosted runners only for `pull_request` jobs | Unit tests, linting, static checks, and builds with no secrets. |
+| Internal builds | `summit-internal-build` | Jobs from protected branches that build images, run scanners, and publish signed build outputs. |
+| Staging deployment | `summit-staging-deploy` | Main branch jobs that deploy to staging after tests and scans pass. |
+| Production deployment | `summit-prod-deploy` | Approved release jobs with short-lived deployment credentials and the narrowest network route. |
+
+GitLab and Jenkins use similar ideas with different words. GitLab Runner uses tags to match jobs to runners, and protected runners can limit execution to protected branches and tags. Jenkins agents use labels for selection, while Jenkins permissions control who can configure agents, create jobs, and access build workspaces. The industry practice is consistent: the pipeline routes work by both capability and trust level.
+
+Groups and labels help send the job to the right place, but a self-hosted runner can still carry state from old work. The next control is the runner lifecycle itself.
+
+![Runner routing tiers showing pull request checks, internal builds, staging deploys, and production deploys routed by group policy and labels](/content-assets/articles/article-devsecops-pipeline-security-securing-cicd-runners/runner-routing-tiers.png)
+
+*Runner groups and labels should describe trust level and capability together, so a pull request check never lands on the same runner tier as a production deployment.*
+
+## Ephemeral and Clean Runner Patterns
+<!-- section-summary: Ephemeral runners handle one job and then disappear, which reduces the chance that files, processes, credentials, or tool changes survive into later jobs. -->
+
+An **ephemeral runner** is a runner that accepts one job and then leaves service. The usual pattern is simple: create a fresh virtual machine or container, register it with the CI/CD platform, run one job, collect logs, deregister the runner, and destroy the machine. The next job receives a fresh machine instead of a reused workspace.
+
+This pattern is common because build jobs can change the machine. A Docker build can leave images and layers behind. A package install can modify tool caches. A test can write files under the repository checkout. A malicious script can create a background process or modify shell startup files. An ephemeral runner throws away the whole machine after the job, so cleanup relies on platform teardown instead of only a final shell script inside the same potentially compromised job.
+
+In GitHub Actions, a self-hosted runner can be configured for ephemeral use. A simplified registration flow for an automated runner image looks like this:
+
+```bash
+./config.sh \
+  --url https://github.com/summit-retail/checkout-api \
+  --token "$RUNNER_REGISTRATION_TOKEN" \
+  --ephemeral \
+  --unattended
+
+./run.sh
+```
+
+In production, Summit Retail would wrap that flow in automation. A controller, image pipeline, or autoscaling system requests a fresh registration token, starts a clean runner image, runs the job, uploads runner logs, and deletes the VM or container. GitHub Actions Runner Controller scale sets, GitLab Runner autoscaling executors, and Jenkins cloud agents all support this broad production pattern.
+
+Persistent self-hosted runners still exist in many companies. They may be used for large hardware, legacy tools, or environments where autoscaling is still being built. For those runners, cleanup needs several layers: the runner uses a dedicated operating system account, runs one job at a time, clears the workspace after every job, prunes Docker images and volumes, rotates temporary credentials, removes leftover processes, and rebuilds from a trusted image on a schedule.
+
+Here is a cleanup step that helps with ordinary residue on a persistent Linux runner:
+
+```yaml
+- name: Clean runner residue
+  if: always()
+  run: |
+    rm -rf "$GITHUB_WORKSPACE"/*
+    rm -rf "$GITHUB_WORKSPACE"/.[!.]* "$GITHUB_WORKSPACE"/..?* || true
+    docker system prune -af --volumes || true
+```
+
+This step has limits. If hostile code already controls the job, it may interfere with later steps or hide files outside the workspace. For sensitive work such as production deployment, Summit Retail's production jobs use an ephemeral runner or a VM image rebuilt after each job.
+
+The lifecycle cleans the machine. The next issue is the data that pipelines intentionally carry from one job to another: caches, artifacts, and workspace files.
+
+## Caches, Artifacts, and Workspaces
+<!-- section-summary: Caches speed up builds, artifacts move files between jobs, and workspaces hold checked-out code, so each one needs a trust rule. -->
+
+A **workspace** is the directory where the runner checks out the repository and runs job commands. In GitHub Actions, the path is available through `GITHUB_WORKSPACE`. In GitLab CI and Jenkins, each runner or agent has an equivalent build directory. Any file created there may influence later steps in the same job, and on persistent runners it may influence later jobs if cleanup fails.
+
+A **cache** stores files so future jobs can reuse them. Node package caches, Maven repositories, Gradle caches, and Docker layer caches all save time. The security issue is that caches are also a way to carry data from an earlier run into a later run. If untrusted pull request code can write a cache that a trusted `main` branch job restores, the cache turns into a supply chain path.
+
+A **build artifact** is a file uploaded from one job and downloaded later, such as a test report, compiled binary, coverage result, or deployment package. Artifacts are useful because pipelines often need to pass outputs between stages. Summit Retail treats artifacts from untrusted code as data for review rather than scripts or packages that trusted jobs execute.
+
+For `checkout-api`, Summit Retail can keep cache keys separated by event and branch:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: ~/.npm
+    key: npm-${{ runner.os }}-${{ github.event_name }}-${{ github.ref_name }}-${{ hashFiles('package-lock.json') }}
+    restore-keys: |
+      npm-${{ runner.os }}-${{ github.event_name }}-${{ github.ref_name }}-
+```
+
+This cache key makes pull request caches and main branch caches land in different namespaces. The hash ties the cache to the lockfile, so dependency changes create a new cache. Teams with strict trust rules often go further by allowing untrusted jobs to restore a cache while saving caches only from trusted branches.
+
+Artifacts deserve similar handling. A pull request job may upload `coverage.xml` or `junit.xml`, and a trusted workflow can display the result or comment on the pull request. A trusted deployment workflow keeps untrusted artifacts out of shell execution, binaries, and Docker images. If Summit Retail wants to promote an artifact to staging, the artifact comes from a protected branch build with a known workflow, signed provenance, and a recorded digest.
+
+Workspace cleanup ties the section back to runners. Hosted runners reduce workspace persistence by design, while self-hosted runners need explicit cleanup or replacement. Caches and artifacts may survive outside the runner, so the team still needs naming rules, retention limits, and trust separation even with clean machines.
+
+The files are one side of exposure. The other side is everything the runner can reach while a job is running.
+
+## Network and Secret Exposure
+<!-- section-summary: A runner exposes whatever the job can reach: environment secrets, tokens, private APIs, package registries, cloud metadata, Docker sockets, and outbound internet. -->
+
+A **secret** is a sensitive value injected into a job, such as an API key, webhook token, database password, or signing key. A **token** is a credential that proves the job can call an API. GitHub's `GITHUB_TOKEN`, GitLab job tokens, Jenkins credentials, cloud access tokens, and package registry tokens all give workflow code some level of authority.
+
+Network access matters as much as secrets. If a runner has a route to a private Kubernetes API, internal package registry, payment test environment, or production database subnet, code running on that runner can try to connect. A job can cause harm without an explicit secret if the network trusts the runner's IP address or if the runner host has a privileged Docker socket mounted.
+
+Summit Retail separates `checkout-api` runner networks by job purpose. Pull request jobs can run on hosted runners with ordinary internet access for package downloads. Internal build runners can reach the private container registry and scanner services. Production deployment runners can reach only the deployment API and the minimum support services needed for that deployment.
+
+Secrets follow the same separation. Pull request checks receive no deployment secrets. Main branch build jobs receive only build and publish credentials. Production deployment jobs receive short-lived deployment credentials through a trusted identity flow, such as GitHub Actions OpenID Connect with a cloud provider role, rather than static cloud keys stored on the runner disk.
+
+The job permission block stays deliberate:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
+
+For a deployment job, `contents: read` lets the workflow read repository contents, and `id-token: write` lets the workflow request an OIDC token for cloud identity federation. The cloud provider then exchanges that token for short-lived credentials if the repository, branch, environment, and workflow claims match the trust policy. The next article covers those token boundaries in detail.
+
+Runner network hardening looks practical in production. The runner subnet has egress rules, so jobs can reach the package registry, container registry, deployment API, and logging endpoint, while direct database routes stay closed. Cloud metadata access is restricted where possible. The Docker socket stays away from untrusted jobs because access to the host Docker socket usually gives strong control over the host.
+
+At this point the pieces are on the table: event trust, hosted versus self-hosted runners, groups and labels, clean machines, cache boundaries, artifact rules, network routes, and secrets. The next section turns those pieces into a checklist Summit Retail can actually use.
+
+## A Practical Runner Hardening Checklist
+<!-- section-summary: Runner hardening means making sure each job runs on a machine with the minimum trust, state, network, and credentials needed for that job. -->
+
+**Hardening** means reducing the number of ways a runner can leak secrets, keep state, or give untrusted code access to trusted systems. It is ordinary engineering work: inventory, separation, configuration, cleanup, monitoring, and review. For `checkout-api`, the checklist stays simple enough that a reviewer can apply it during workflow review.
+
+| Control | Summit Retail practice | Healthy signal |
+|---|---|---|
+| Runner inventory | Each self-hosted runner group has an owner, purpose, repository allow-list, labels, base image, and network segment. | Security can answer which jobs may land on each runner group. |
+| Event separation | `pull_request` jobs use hosted runners, read-only permissions, and no deployment secrets. | A forked pull request cannot reach self-hosted deploy runners. |
+| Group boundaries | Production runner groups are available only to release repositories and trusted workflows. | A random repository cannot target `summit-prod-deploy`. |
+| Label discipline | Labels describe capability, such as `node-22`, `docker-build`, or `checkout-api-deploy`. | Labels help routing, while access control lives in groups and repository policy. |
+| Ephemeral lifecycle | Sensitive self-hosted jobs use one-job runners that deregister and disappear after completion. | A compromised job has no long-lived machine to poison for the next job. |
+| Persistent cleanup | Long-lived runners clear workspaces, prune containers, kill leftover processes, rotate local temporary files, and rebuild from images regularly. | Job residue gets removed during normal runs, and rebuilds reset hidden drift. |
+| Cache separation | Cache keys include event and branch context, and untrusted jobs cannot feed trusted deployment caches. | A pull request cache cannot alter a `main` branch release build. |
+| Artifact rules | Trusted workflows treat untrusted artifacts as reports, while deployable artifacts come from protected branch builds. | Production deployment consumes signed or digest-recorded outputs from trusted jobs. |
+| Secret exposure | Secrets are scoped by environment and job purpose, and production credentials are short-lived. | Pull request logs and runner disks contain no deploy secrets. |
+| Network exposure | Runner subnets allow only required endpoints, and deployment runners lack direct database routes. | A workflow compromise cannot freely explore the internal network. |
+| Workflow permissions | Each workflow declares the smallest `permissions` block that fits the job. | The default token cannot write repository contents unless the job truly needs it. |
+| Logging and updates | Runner logs, version updates, image rebuilds, and security patches are part of operations. | The team can investigate a suspicious job and patch runner fleets quickly. |
+
+A good review question for Summit Retail is: "If this job ran hostile code, what could it read, write, call, cache, or leave behind?" That question connects every row of the checklist. The answer needs to match the purpose of the job instead of the convenience of the nearest available runner.
+
+The checklist also helps during incidents. If a suspicious pull request ran on a hosted runner with no secrets and no private route, the response can focus on repository review and logs. If it ran on a persistent self-hosted runner with network access, the response expands to runner rebuilds, cache invalidation, credential rotation, and network investigation.
 
 ## Putting It All Together
+<!-- section-summary: A secure runner design routes Summit Retail's checkout-api work through separate paths for pull requests, internal builds, staging deployments, and production releases. -->
 
-A CI/CD runner is an active computing environment that executes arbitrary scripts on real machines. By establishing logical boundaries between untrusted validation runs and high-power release runs, sandboxing our execution environments, pinning third-party dependencies, and isolating build caches, we build a pipeline that is resilient against external exploits.
+Here is the full `checkout-api` flow Summit Retail is aiming for:
 
-When securing and auditing your runner infrastructure, ensure you maintain these five core practices:
+![Runner hardening summary with separate trust levels, ephemeral runners, clean workspaces, separate caches, limited network paths, and runner usage audit logs](/content-assets/articles/article-devsecops-pipeline-security-securing-cicd-runners/runner-hardening-summary.png)
 
-First, enforce logical separation between trust levels. All validations of unreviewed code must be completely restricted to low-power, read-only sandboxes. High-power publishing credentials and OIDC deployment roles must be restricted to jobs that run exclusively on protected branches after peer approval has occurred.
+*The full runner design combines routing, lifecycle, cleanup, network limits, and audit evidence instead of relying on one isolated setting.*
 
-Second, disable dependency lifecycle scripts. When installing external libraries in low-trust validation sandboxes, always run package managers with explicit script-blocking flags, such as `npm ci --ignore-scripts`. This blocks packages from executing arbitrary setup scripts during the installation phase, neutralizing pre-install malware.
+The pull request path runs unknown code with a narrow token and no secrets. The internal build path runs trusted branch code and produces a container image with a recorded digest. The staging path uses a self-hosted runner because it needs private deployment access. The production path adds approval, short-lived credentials, a narrow network route, and an ephemeral runner lifecycle.
 
-Third, pin third-party actions to immutable git commit SHAs. Never reference external actions using mutable version tags or branch names. By pinning to a specific cryptographic SHA, you guarantee that the code running on your build servers cannot be changed without an explicit, auditable pull request.
+Notice how each runner decision follows the same question: how much do we trust the code, and what can the machine reach? Hosted runners handle low-trust tests. Self-hosted runners handle trusted jobs that need private access. Ephemeral runners handle sensitive jobs where leftover state creates unacceptable risk.
 
-Fourth, isolate build caches. Ensure that your caching configuration is scoped by branch and permissions. A low-trust pull request must never have write-access to the caches used by your production releases, preventing attackers from injecting poisoned files into subsequent build stages.
+GitLab Runner and Jenkins agents follow the same design even though the configuration syntax changes. GitLab teams use protected runners, tags, job tokens, and isolated executors. Jenkins teams use agent labels, node permissions, credentials binding, folder permissions, and disposable cloud agents. The tool names change, while the delivery security goal keeps untrusted code away from the runner, token, cache, artifact path, and network route used by trusted release work.
 
-Fifth, commit to ephemeral runner environments. Avoid using shared, persistent self-hosted servers for building untrusted code. By ensuring that every single job runs in a fresh, single-use container or virtual machine that is destroyed immediately upon completion, you eliminate the risk of persistent host compromise.
+Runner security is the foundation for the rest of pipeline security. Once Summit Retail has the right code on the right runner, the next job is controlling the tokens available inside that job.
 
 ## What's Next
 
-Securing the runner machine limits what scripts can do during execution. In the next chapter, we will cover **Scanning Code and Secrets**, learning how to audit our source repositories to catch hardcoded API keys and trace coding vulnerabilities (SAST) before they ever reach the builder runner.
+Runner boundaries decide where code can execute. Token boundaries decide what that code can do after the job starts, which is why the next article moves from machines to permissions.
 
-![CI/CD runner security summary map](/content-assets/articles/article-devsecops-pipeline-security-securing-cicd-runners/runner-security-summary.png)
-
-*This summary separates untrusted pull request execution, runner lifetime, token scope, pinned dependencies, and cleanup responsibilities.*
+Next, we will look at pipeline permissions and token boundaries for `checkout-api`: `GITHUB_TOKEN` scopes, OIDC claims, environment secrets, cloud role trust policies, and the difference between a useful automation token and an overpowered one.
 
 ---
 
 **References**
 
-- [GitHub Actions - Security Hardening for GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions) - Standard practices for limiting repository tokens, securing OIDC trust, and handling forks.
-- [GitHub Actions - Workflow Syntax permissions](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#permissions) - Reference guide for configuring explicit, job-level scopes.
-- [GitHub Actions - Cache Access Restrictions](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-runs/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache) - Explains how repository branches isolate cache reading and writing privileges.
-- [OWASP Secure SDLC - Build Environment Security](https://owasp.org/www-project-integration-standards/writeups/build_environment_security/) - OWASP guidelines on runner isolation, host hardening, and credential sandboxing.
-- [TanStack Incident Report - npm supply chain compromise](https://tanstack.com/blog/npm-supply-chain-compromise-postmortem) - Retrospective analysis of the May 2026 TanStack attack chain and follow-up mitigations.
+- [GitHub Actions secure use reference](https://docs.github.com/en/actions/reference/security/secure-use) - Official guidance on secure workflow use, untrusted input, `pull_request_target`, secrets, tokens, and self-hosted runner hardening.
+- [GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners) - GitHub documentation for hosted runner behavior and runner images.
+- [Adding self-hosted runners](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners) - Official setup flow for registering self-hosted runners.
+- [Using self-hosted runners in a workflow](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow) - Official syntax for targeting self-hosted runners with labels and groups.
+- [Self-hosted runners reference](https://docs.github.com/en/actions/reference/runners/self-hosted-runners) - GitHub reference for self-hosted runner behavior, labels, routing, and ephemeral runner options.
+- [Getting started with self-hosted runners for your enterprise](https://docs.github.com/en/enterprise-cloud@latest/admin/managing-github-actions-for-your-enterprise/getting-started-with-github-actions-for-your-enterprise/getting-started-with-self-hosted-runners-for-your-enterprise) - Enterprise guidance for runner groups, runner management, and trust tiers.
+- [Using secrets in GitHub Actions](https://docs.github.com/actions/security-guides/using-secrets-in-github-actions) - Official guidance on secrets, forked pull requests, and OIDC as a secret-reduction pattern.
+- [Compromised runners](https://docs.github.com/en/actions/concepts/security/compromised-runners) - GitHub guidance on the impact of compromised runners and response considerations.
+- [GitLab token security](https://docs.gitlab.com/security/tokens/) - GitLab documentation for token types, token exposure, and token handling across CI/CD.
+- [GitLab Runner security](https://docs.gitlab.com/runner/security/) - GitLab Runner guidance for executor choice, runner isolation, and job security.
+- [Jenkins permissions](https://www.jenkins.io/doc/book/security/access-control/permissions/) - Jenkins documentation for agent, credential, job, and administration permissions.
+- [Jenkins controller isolation](https://www.jenkins.io/doc/book/security/controller-isolation/) - Jenkins guidance for isolating the controller and handling build execution risk.

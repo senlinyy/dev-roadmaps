@@ -13,49 +13,42 @@ aliases:
 
 ## Table of Contents
 
-1. [The Build Starts with Two Inputs](#the-build-starts-with-two-inputs)
-2. [The Build Context](#the-build-context)
-3. [The `.dockerignore` File](#the-dockerignore-file)
-4. [Dockerfile Instructions](#dockerfile-instructions)
-5. [Dependency Installs and Source Files](#dependency-installs-and-source-files)
-6. [Runtime Defaults](#runtime-defaults)
+1. [The Build Story for shipping-api](#the-build-story-for-shipping-api)
+2. [Dockerfile and Build Context](#dockerfile-and-build-context)
+3. [Keeping the Context Clean with .dockerignore](#keeping-the-context-clean-with-dockerignore)
+4. [The First Dockerfile Instructions](#the-first-dockerfile-instructions)
+5. [Dependency Ordering and Repeatable Builds](#dependency-ordering-and-repeatable-builds)
+6. [ARG, ENV, and Build Secrets](#arg-env-and-build-secrets)
 7. [A Clean First Dockerfile](#a-clean-first-dockerfile)
-8. [Common Build Problems](#common-build-problems)
-9. [What's Next](#whats-next)
+8. [Production Review Guidance](#production-review-guidance)
+9. [Troubleshooting the First Build](#troubleshooting-the-first-build)
+10. [What's Next](#whats-next)
 
-## The Build Starts with Two Inputs
-<!-- section-summary: A Docker image build combines a recipe with a selected set of project files, so the first job is knowing what enters the build. -->
+## The Build Story for shipping-api
+<!-- section-summary: The team wants one repeatable image that works on laptops, in CI, and later from a registry. -->
 
-When a team first puts an application into Docker, the first version often feels simple. You have a project folder, you write a few Dockerfile lines, you run `docker build`, and Docker gives you an image. That feels like copying your laptop folder into a small Linux machine, installing dependencies, and saving the result.
+Let's set up the story first. Your team owns a small Node.js service named `shipping-api`, and it exposes routes like `/health`, `/shipments`, and `/rates`. Developers run it locally with npm, the CI system needs to build it on every pull request, and the release pipeline will later push the image to a registry so a runtime platform can deploy it.
 
-That picture helps for the first five minutes. A production build needs a little more care. A Docker build has two main inputs: the **Dockerfile** and the **build context**. The Dockerfile gives the builder a recipe. The build context gives the builder the files that recipe can use.
+A **Docker image** is a packaged filesystem plus default runtime metadata. It contains the operating system files, application files, installed dependencies, environment defaults, user setting, and startup command that a container uses. For `shipping-api`, the image should contain Node.js, production dependencies, and `src/server.js`, then start the service the same way on every machine.
 
-We will follow a small Node.js service called `shipping-api`. The team wants the same image to run on a developer laptop, in CI, and later in a container orchestrator. The service needs `package.json`, `package-lock.json`, `src/`, and maybe a small public config file. Local-only files such as `.env`, `.git`, local `node_modules`, test screenshots, editor settings, and database dumps should stay on the host.
+That repeatability matters because laptops and CI runners rarely look identical. One developer may have Node 22 installed, another may have Node 24, and CI may start from a clean Linux machine with no local dependencies at all. The Docker build gives the team a single recipe for creating the same application image from the same source files.
 
-A **Dockerfile** is a plain text build recipe. Each instruction says something specific, like choose a base image, set the working directory, copy files, install packages, or define the command that runs when a container starts. Docker reads those instructions from top to bottom and creates an image from the result.
+The first Docker image build has two main inputs: a **Dockerfile** and a **build context**. The Dockerfile tells Docker what to do. The build context tells Docker which files the Dockerfile may use. Once those two pieces make sense, the rest of the article can move from "why did Docker copy that file?" to "how do we write a clean first production-ready build?"
 
-A **build context** is the file set Docker makes available to that build. For a local build, the context usually comes from a directory on your machine. In `docker build -t shipping-api:local .`, the final dot means "use this current directory as the context." The Dockerfile can only copy files that exist inside that context, plus files produced by earlier build stages.
+## Dockerfile and Build Context
+<!-- section-summary: The Dockerfile is the recipe, and the build context is the selected file set that recipe can copy from. -->
 
-Those two inputs explain many beginner Docker problems. A build can fail because the Dockerfile asks for a file that never entered the context. A build can leak secrets because the context included `.env` and the Dockerfile copied too much. A build can take five minutes before the first instruction runs because Docker had to scan and send a huge local folder.
+A **Dockerfile** is a plain text build recipe. Each line uses an instruction such as `FROM`, `COPY`, `RUN`, or `CMD`, and Docker reads those instructions from top to bottom. For `shipping-api`, the Dockerfile chooses a Node base image, creates `/app`, installs dependencies, copies source files, and records the command that starts the server.
 
-So before we write a cleaner Dockerfile, we need to slow down and look at the context.
-
-## The Build Context
-<!-- section-summary: The build context is the snapshot of files the builder can see, and its size and contents affect speed, security, and repeatability. -->
-
-The **build context** is the selected project snapshot that Docker sends to the builder. Think about it as the allowed input folder for the build. If the file remains in the context after filtering, Dockerfile instructions such as `COPY` and `ADD` can use it. Files outside the context stay outside the builder's reach.
-
-In day-to-day local work, the context often appears as a single dot:
+A **build context** is the collection of files Docker makes available to the build. In the command below, the final dot selects the current directory as the context. Docker can copy files from that directory after ignore rules run, and Docker keeps files outside that directory away from the build.
 
 ```bash
 docker build -t shipping-api:local .
 ```
 
-That command gives Docker a tag name, `shipping-api:local`, and a context path, `.`. The context path matters as much as the Dockerfile. If you run the command from the repository root, Docker sees the repository root. If you run it from a nested `services/shipping-api` folder, Docker sees that nested folder instead.
+That final dot looks tiny, and it carries a lot of meaning. If the shell sits inside the `shipping-api` folder, Docker uses that service folder as the context. If the shell sits at a monorepo root and the command uses `.` there, Docker uses the whole repository root as the context.
 
-Docker uses this separation because the builder may run somewhere else. The builder might be the local Docker engine, a BuildKit builder, or a remote build service in CI. The client prepares a context and sends that context to the builder instead of depending on live access to your laptop filesystem.
-
-Here is the shape of our `shipping-api` repository:
+Here is the local project shape we will use through the article. Keep this folder in mind because every later Dockerfile line either copies from it, filters it, or ignores it.
 
 ```markdown
 shipping-api/
@@ -67,64 +60,70 @@ shipping-api/
     server.js
     routes.js
   test/
-    fixtures/
+    shipping-rates.test.js
+  coverage/
   .env
   .git/
   node_modules/
 ```
 
-The application only needs a few of these paths for the production image. The rest may help local development, testing, or version control. Those local paths should stay outside the image build input because Docker has to evaluate the context before a `COPY` line can run.
+The production image needs `package.json`, `package-lock.json`, and `src/`. The local folder also contains test output, local dependencies, Git history, and `.env` secrets. Those local files help development, and they should stay out of the image build input.
 
-A large context hurts the build in two ways. First, Docker spends time scanning and transferring files that the image never needs. Second, every extra file becomes a possible source of cache changes. If a test screenshot or local log file changes, a broad `COPY . .` can make Docker rebuild steps that had nothing to do with the application.
+Docker separates the context from the Dockerfile because the builder may run somewhere other than your laptop process. The Docker client prepares the context and sends it to the builder, which could be the local Docker engine, a BuildKit builder, or a remote builder used by CI. That design explains why Docker complains about files "outside the build context" and why a large context can slow down a build before the first real instruction runs.
 
-A context with secrets creates a stronger problem. If `.env` enters the context, a careless `COPY . .` can place database passwords or API keys inside an image layer. Once a secret enters an image layer and somebody pushes the image to a registry, the cleanup becomes incident response work rather than ordinary refactoring.
+![Docker build context gate infographic showing the shipping-api project folder, a .dockerignore filter, the files that enter the build context, the Dockerfile recipe, the builder, and the final Docker image](/content-assets/articles/article-containers-orchestration-docker-dockerfiles/build-context-gate.png)
 
-That is why the next file exists.
+_This infographic shows the build context as the controlled input to the builder: useful files pass through, local-only files stay out, and `COPY` can only reach what survived the context gate._
 
-## The `.dockerignore` File
-<!-- section-summary: A .dockerignore file removes local-only files from the build context before Dockerfile instructions can copy them. -->
+Now that the build input has a name, the next job is choosing what stays in that input.
 
-A **`.dockerignore` file** is the filter Docker applies to the build context. It works like a gate at the entrance to the build. The file lives at the root of the context, and its patterns tell Docker which files and directories should stay out of the context snapshot.
+## Keeping the Context Clean with .dockerignore
+<!-- section-summary: The .dockerignore file filters local-only files out of the build context before COPY can use them. -->
 
-For `shipping-api`, a practical first version looks like this:
+A **`.dockerignore` file** is a filter for the build context. It lives at the root of the context and lists files or directories that Docker should exclude before sending the context to the builder. For `shipping-api`, this file protects the image from local secrets, local dependency folders, generated reports, and source-control history.
+
+A practical first version can look like this. The exact list changes by team, and the categories should stay the same: secrets, generated output, local dependencies, logs, and local-only tooling.
 
 ```dockerignore
 .git
 .github
 .env
 .env.*
+.npmrc
 node_modules
-npm-debug.log
+npm-debug.log*
+yarn-error.log*
 coverage
 dist
 build
 tmp
 *.log
+*.pem
 Dockerfile.local
 compose.override.yaml
 ```
 
-This file keeps version control history, local secrets, local dependencies, test output, build output, and developer-only Docker files out of the context. The image build still gets the files it needs: `package.json`, `package-lock.json`, and `src/`. The context becomes smaller, and the Dockerfile loses access to files that should never reach a production image.
+This file gives the team two wins right away. The build context gets smaller because Docker no longer scans and sends `node_modules`, coverage reports, and Git history. The security review also gets simpler because `.env`, `.npmrc`, private key files, and logs stay outside the input that `COPY` can place into an image layer.
 
-Docker's ignore rules support normal pattern matching and a special `**` wildcard for matching across directories. They also support exceptions with `!`. For example, a documentation-heavy repository might exclude markdown files while keeping the application README:
+Ignore rules support patterns and exceptions. Docker also supports `**` for matching across any number of directories, and a line starting with `!` can bring a file back after a broader rule excluded it. A documentation-heavy repository might keep one README while excluding the rest of the markdown files from a service build.
 
 ```dockerignore
-*.md
+**/*.md
 !README.md
 ```
 
-The order matters because the last matching line decides whether Docker includes or excludes a file. A team should keep `.dockerignore` simple enough that the whole file can be reviewed during a security pass. Complicated exception chains make security review slower because reviewers have to trace every later override.
+The last matching rule wins, so exception-heavy files deserve careful review. A security reviewer should be able to answer a plain question: "Can a local secret enter this build context?" If the answer takes five minutes of pattern tracing, the ignore file needs cleanup before the team trusts the image.
 
-There is one Docker detail worth knowing early. Docker may still send the Dockerfile and `.dockerignore` to the builder because the builder needs them to run the build. If those files match ignore patterns, Dockerfile instructions lose access to them for image copies. So a line such as `COPY .dockerignore /app/.dockerignore` can fail when `.dockerignore` excludes itself.
+Docker still sends the Dockerfile and `.dockerignore` to the builder because the builder needs them to run the build. If `.dockerignore` excludes either file, Dockerfile instructions cannot copy that file into the image with `COPY`, `ADD`, or a bind mount. That detail surprises people when they try to copy `.dockerignore` into `/app` for debugging and Docker reports that the file does not exist in the context.
 
-Now our context is safer and smaller. The builder has the right input files. The next question is how the Dockerfile should use them.
+At this point, `shipping-api` has a safer input folder. The next step is learning the Dockerfile instructions that turn those input files into an image.
 
-## Dockerfile Instructions
-<!-- section-summary: Dockerfile instructions describe the base image, filesystem changes, metadata, and default process for the image. -->
+## The First Dockerfile Instructions
+<!-- section-summary: Dockerfile instructions choose the base image, copy files, run build commands, and set runtime defaults. -->
 
-A **Dockerfile instruction** is one step in the image recipe. Docker reads the file from top to bottom, and each instruction changes either the image filesystem, the image metadata, or the build state used by later instructions.
+A **Dockerfile instruction** is one step in the image recipe. Some instructions change the filesystem, such as `COPY` and `RUN`. Other instructions set image metadata, such as `ENV`, `USER`, `EXPOSE`, and `CMD`.
 
-Here is a small Dockerfile that has the important pieces:
+Here is a compact Dockerfile that shows the main instructions before we improve it. This version gives us a shared vocabulary first, then the later sections tighten the build for review and CI.
 
 ```dockerfile
 FROM node:22-alpine
@@ -137,41 +136,46 @@ RUN npm ci --omit=dev
 COPY src ./src
 
 ENV NODE_ENV=production
+ENV PORT=3000
+
 USER node
+
 EXPOSE 3000
 
 CMD ["node", "src/server.js"]
 ```
 
-`FROM` chooses the **base image**. A base image gives your build a starting filesystem and runtime. For `shipping-api`, `node:22-alpine` gives the image Node.js and a small Linux userland. A Python service might start from `python:3.13-slim`. A Go binary might use one image for building and a tiny runtime image later.
+The instructions above cover the first vocabulary a Docker image author needs. Each instruction has a small job, and together they describe both the build-time filesystem and the runtime defaults.
 
-`WORKDIR` sets the working directory for following instructions. After `WORKDIR /app`, later `COPY`, `RUN`, and `CMD` instructions run relative to `/app` unless they use absolute paths. This avoids a pile of repeated `/app/...` paths and makes the image layout easier to inspect.
+| Instruction | What it means for `shipping-api` |
+|---|---|
+| **FROM** | Chooses the base image that provides Linux files and Node.js. The rest of the build starts from this image. |
+| **WORKDIR** | Sets `/app` as the working directory for later `COPY`, `RUN`, and `CMD` instructions. Docker creates it if it does not already exist. |
+| **COPY** | Copies files from the build context into the image. The source paths must exist after `.dockerignore` filtering. |
+| **RUN** | Executes a command during the image build. `npm ci --omit=dev` installs production dependencies into the image filesystem. |
+| **ENV** | Stores default environment variables in image metadata. Containers started from the image receive these values unless the runtime overrides them. |
+| **USER** | Sets the default Linux user for later build steps and for the running container process. A non-root runtime user reduces the power of the application process. |
+| **EXPOSE** | Records the port the service expects to listen on. A local `-p` flag or a production service still controls actual traffic publishing. |
+| **CMD** | Defines the default command for a container created from the image. The JSON-array form runs the program directly instead of through a shell. |
 
-`COPY` moves files from the build context into the image. `COPY package.json package-lock.json ./` copies two manifest files into `/app`. `COPY src ./src` copies the application source into `/app/src`. The source files must exist in the context after `.dockerignore` filtering, or Docker will stop with a missing file error.
+The timing matters. `RUN npm ci --omit=dev` runs while Docker builds the image, so the image stores the installed dependencies. `CMD ["node", "src/server.js"]` runs later when someone starts a container from that image. That split explains why a build can succeed while the container still fails at startup: the build and runtime phases answer different questions.
 
-`RUN` executes a command during the build. In this example, `RUN npm ci --omit=dev` installs dependencies into the image filesystem. The important detail is timing: `RUN` happens while building the image, long before any container starts from the image.
+The `USER` line also deserves early attention. Build steps often need root permissions because package managers create directories and install files. The running application usually needs only enough permission to read its files, open a network port above 1024, and write logs to standard output. A production review should check where the Dockerfile switches away from root and whether the app has write access only where it needs it.
 
-`ENV` writes environment variables into the image metadata. `ENV NODE_ENV=production` gives the runtime process a default value. Application teams often use `ENV` for safe defaults. Secrets should come from the runtime platform, such as Docker secrets, Kubernetes secrets, or a cloud secret manager.
+Now the team can read the Dockerfile instructions. The next production concern is instruction order, because order controls how much work Docker repeats during everyday development.
 
-`USER` sets the default Linux user for the container process. The Node official images include a `node` user, so this Dockerfile runs the application without root privileges. In production, running as a non-root user reduces the damage from many application-level bugs.
+## Dependency Ordering and Repeatable Builds
+<!-- section-summary: Copy lockfiles before source files so dependency installs depend on dependency changes, not every code edit. -->
 
-`EXPOSE` documents the port the service listens on. It acts as image metadata for humans and tools. A local `docker run -p 3000:3000 ...` or an orchestrator service still controls network publishing.
+Most application builds have one expensive step. A Node service downloads packages, a Python service installs wheels, a Java service downloads Maven artifacts, and a Rust service compiles crates. For `shipping-api`, the expensive step is `npm ci --omit=dev`.
 
-`CMD` gives the default command for containers started from the image. The JSON-array form is called **exec form**. Docker runs the executable directly with its arguments, which gives cleaner signal handling than wrapping everything in a shell string.
+The dependency identity lives in `package.json` and `package-lock.json`. The application behavior lives in `src/`, and those source files change much more often than the lockfile. A clean Dockerfile separates those two kinds of change so Docker can reuse earlier build work when only route code changes.
 
-Now that we know the instruction vocabulary, the next production problem appears in the order of those instructions.
-
-## Dependency Installs and Source Files
-<!-- section-summary: Stable dependency files should enter the image before noisy source files so ordinary code edits keep expensive build work reusable. -->
-
-Most application Dockerfiles have one expensive step: installing dependencies. A Node service downloads npm packages. A Python service resolves wheels. A Java service downloads Maven artifacts. A Rust service compiles crates. That work can take seconds on a warm laptop and several minutes in a cold CI runner.
-
-For `shipping-api`, the dependency identity lives in `package.json` and `package-lock.json`. The application source code lives in `src/`. Source files change many times a day. Lockfiles change only when the dependency set changes. A good Dockerfile keeps those two kinds of change separate.
-
-This version creates unnecessary rebuild work:
+This version creates extra work during normal edits. It copies source files and dependency files together before the expensive install step.
 
 ```dockerfile
 FROM node:22-alpine
+
 WORKDIR /app
 
 COPY . .
@@ -180,12 +184,13 @@ RUN npm ci --omit=dev
 CMD ["node", "src/server.js"]
 ```
 
-The broad `COPY . .` copies every included context file before the dependency install. A change to `src/routes.js` changes the input to that `COPY` instruction. Docker then has to rerun the later `RUN npm ci --omit=dev` step, even though the dependency files stayed the same.
+The broad `COPY . .` instruction pulls every included context file into the image before the dependency install. A one-line edit in `src/routes.js` changes the input to that copy step, so the later npm install step has to run again. The dependency files stayed the same, yet the Dockerfile gave Docker no clean boundary between dependency changes and source changes.
 
-This version separates stable dependency files from noisy source files:
+This version gives Docker that boundary. The dependency files enter first, and the source files enter after the install step.
 
 ```dockerfile
 FROM node:22-alpine
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -196,144 +201,238 @@ COPY src ./src
 CMD ["node", "src/server.js"]
 ```
 
-Now Docker can reuse the dependency install result when only `src/` changes. The source copy still changes, and the final image still contains the new application code. The expensive package install stays cached for ordinary route edits.
+Now Docker sees dependency files first, runs the install, and copies source code after that. When a developer changes `src/routes.js`, the source copy changes and the final image contains the new code. The dependency install can stay reusable because its inputs, `package.json` and `package-lock.json`, did not change.
 
-The same pattern works across stacks. A Python project copies `pyproject.toml` and lockfiles before `pip install`. A Java project copies `pom.xml` or Gradle files before source. A Go project copies `go.mod` and `go.sum` before the rest of the module. The names change, but the build idea stays the same: dependency identity first, source code after.
+The same pattern works across languages. A Python image copies `pyproject.toml` and the lockfile before installing dependencies. A Go image copies `go.mod` and `go.sum` before copying the rest of the module. A Java image copies Maven or Gradle metadata before copying `src/`.
 
-This instruction order also improves reviews. When a teammate reads the Dockerfile, they can see which files control dependencies and which files are runtime source. That makes it easier to spot accidental context leaks and slow cache behavior before the pipeline starts hurting.
+This ordering also helps CI and review. CI spends less time repeating dependency installs for ordinary source edits, and reviewers can see which files control the dependency graph. When the team later studies image layers and cache, this article's ordering will become the foundation for faster builds.
 
-We have a build recipe now. The final piece in this first Dockerfile is the shape of the running process.
+The Dockerfile now handles normal public dependency installs. Some teams also need private packages, build-time version values, or environment defaults, so we need to separate `ARG`, `ENV`, and build secrets before we call the Dockerfile production-ready.
 
-## Runtime Defaults
-<!-- section-summary: Runtime defaults define how containers start, which user they use, and which safe metadata travels with the image. -->
+## ARG, ENV, and Build Secrets
+<!-- section-summary: ARG configures the build, ENV configures image defaults, and build secrets handle sensitive values for one build step. -->
 
-A Docker image also carries **runtime defaults**. These defaults tell Docker what should happen when somebody runs the image with a short command line. Deployment configuration still controls environment-specific behavior, and image defaults give every environment a consistent starting point.
-
-`CMD` and `ENTRYPOINT` control the process. `CMD ["node", "src/server.js"]` says the default container process should start the Node server. `ENTRYPOINT` can lock in the executable while `CMD` supplies default arguments. Many application images only need `CMD`; tool images often use `ENTRYPOINT` because the image behaves like a command-line program.
-
-The exec form matters here:
+An **`ARG` value** is a build-time variable. It can parameterize Dockerfile instructions, such as a release version or a base-image variant. For `shipping-api`, CI might pass the Git commit SHA into the build so the application can report which version it runs.
 
 ```dockerfile
-CMD ["node", "src/server.js"]
+ARG APP_VERSION=local
+ENV APP_VERSION=$APP_VERSION
 ```
 
-The shell form also exists:
+```bash
+GIT_SHA="$(git rev-parse --short HEAD)"
+docker build --build-arg APP_VERSION="$GIT_SHA" -t shipping-api:"$GIT_SHA" .
+```
+
+An **`ENV` value** is an image environment default. Containers created from the image receive that value unless the runtime overrides it. `ENV NODE_ENV=production` and `ENV PORT=3000` make sense because they are safe defaults for the process and they do not contain passwords, API tokens, or private database URLs.
+
+The boundary is important because both `ARG` and `ENV` can expose values through image metadata, build history, provenance, or runtime inspection. A build argument works well for a non-secret version string. An environment variable works well for a non-secret default. A secret needs a different path.
+
+A **build secret** is a sensitive value that Docker exposes only to a specific build instruction. The common `shipping-api` example is a private npm registry token. The build needs the token during `npm ci`, and the final image should not contain that token afterward.
+
+The local build command can pass an npm config file as a secret. The file stays on the build client, and Docker exposes it only to instructions that explicitly request it.
+
+```bash
+docker build \
+  --secret id=npmrc,src="$HOME/.npmrc" \
+  -t shipping-api:local .
+```
+
+The Dockerfile can consume that secret for the install step. The mount target gives npm the same config shape it expects without copying the file from the context.
 
 ```dockerfile
-CMD node src/server.js
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    npm ci --omit=dev
 ```
 
-The shell form runs through a command shell. The exec form runs the executable directly. For long-running services, teams usually prefer exec form so the application process receives signals from Docker and the orchestrator in a predictable way during shutdown.
+That secret mount exists for that `RUN` instruction. The file does not become a normal copied file in the image, and the Dockerfile avoids putting sensitive values in `ARG` or `ENV`. Docker's build checks also flag suspicious `ARG` or `ENV` names that look like they hold secrets, which gives CI another way to catch risky Dockerfiles before a release.
 
-`USER` controls the Linux user for the default process:
+There is a related runtime secret boundary. If `shipping-api` needs `DATABASE_URL` in production, the image should receive that value from the platform that starts the container: Docker Compose for local development, Kubernetes Secrets, a cloud container service, or a secret manager integration. The image should carry the application and safe defaults; the runtime should provide environment-specific secrets.
 
-```dockerfile
-USER node
-```
+![ARG ENV and build secret boundary infographic showing build arg version labels, safe environment defaults, a temporary npm token secret mount used for one install step, and a final shipping-api image with no token](/content-assets/articles/article-containers-orchestration-docker-dockerfiles/arg-env-secret-boundary.png)
 
-This line matters because many base images start as root during the build. Root can install packages and create directories, which helps the build. The application process usually needs much less power at runtime. If the base image provides a non-root user, the Dockerfile can switch to it after file ownership and installs are complete.
+_This infographic separates the three inputs: build arguments label the image, environment variables provide safe defaults, and secret mounts handle sensitive values without keeping them in image layers._
 
-`ENV` gives safe defaults:
-
-```dockerfile
-ENV NODE_ENV=production
-```
-
-This value becomes part of the image metadata. Anyone who can inspect the image can see it, so it should hold normal configuration. Passwords, database URLs with credentials, Stripe keys, and cloud tokens should arrive from the runtime environment.
-
-`EXPOSE` tells readers and tools which port the service expects:
-
-```dockerfile
-EXPOSE 3000
-```
-
-The line communicates intent. Local runs still need a publishing rule such as `-p 3000:3000`, and orchestrators still need service configuration to make port `3000` reachable.
-
-At this point, the Dockerfile has a safe context, stable dependency order, and a clean default process. Now we can put the first version together.
+Now the build input, instruction order, and secret boundary fit together. We can write the first Dockerfile the team can actually use.
 
 ## A Clean First Dockerfile
-<!-- section-summary: A practical first Dockerfile keeps the context filtered, installs dependencies from lockfiles, copies only needed source, and runs with safe defaults. -->
+<!-- section-summary: A clean first Dockerfile filters the context, installs from lockfiles, switches to a non-root user, and starts one process. -->
 
-Here is a complete first Dockerfile for `shipping-api`:
+Here is a complete first Dockerfile for `shipping-api`. It keeps the article's first-build scope, so multi-stage builds and cache mounts wait for the next article.
 
 ```dockerfile
+# syntax=docker/dockerfile:1
+
 FROM node:22-alpine
 
 WORKDIR /app
 
+RUN addgroup -S app && adduser -S app -G app
+
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev && chown -R app:app /app
 
-COPY src ./src
+COPY --chown=app:app src ./src
 
+ARG APP_VERSION=local
+ENV APP_VERSION=$APP_VERSION
 ENV NODE_ENV=production
-USER node
+ENV PORT=3000
+
+USER app
+
 EXPOSE 3000
 
 CMD ["node", "src/server.js"]
 ```
 
-And here is the matching `.dockerignore`:
+The first line selects the Dockerfile syntax frontend. That line keeps newer BuildKit Dockerfile features available in a clear, explicit way, including secret mounts when the team needs them. The `FROM` line chooses the Node base image, and the `WORKDIR` line gives the application a stable home.
+
+The `RUN addgroup` line creates a dedicated runtime user. The package install still runs before the `USER app` switch, which keeps the build simple. After npm installs production dependencies, `chown -R app:app /app` gives the runtime user ownership of the application directory.
+
+The two `COPY` groups keep dependency files and source files separate. `COPY package.json package-lock.json ./` feeds the dependency install. `COPY --chown=app:app src ./src` brings in the service code after dependencies and gives the runtime user ownership immediately.
+
+The environment defaults carry safe runtime information. `APP_VERSION` can hold a commit SHA, `NODE_ENV` tells Node libraries to use production behavior, and `PORT` documents the port the app reads. Secrets such as `DATABASE_URL`, `JWT_SECRET`, and registry tokens stay outside this Dockerfile.
+
+The matching `.dockerignore` should live beside the Dockerfile. This keeps local-only files out of the context before any `COPY` instruction has a chance to use them.
 
 ```dockerignore
 .git
 .github
 .env
 .env.*
+.npmrc
 node_modules
-npm-debug.log
+npm-debug.log*
+yarn-error.log*
 coverage
 dist
 build
 tmp
 *.log
+*.pem
 Dockerfile.local
 compose.override.yaml
 ```
 
-The build command stays boring:
+The local build command can stay small. The tag names this local image so the team can run it without pushing anything to a registry.
 
 ```bash
 docker build -t shipping-api:local .
 ```
 
-This first version gives the team a repeatable base. The build context contains only the files the image should consider. The dependency install depends on the lockfiles. The source copy happens after dependencies. The image runs the service as the `node` user and documents port `3000`.
+The local smoke test can start the container and call the health route. This proves that the default `CMD`, port, and runtime user work together before CI gets involved.
 
-In a real production pipeline, the team would add more checks around this. CI might run tests before building the production image. Security scanning might inspect the result. The release job might push the image with an immutable version tag and record the digest. Those pieces belong to later articles in this module, but this Dockerfile gives them a clean artifact to work from.
+```bash
+docker run --rm -d --name shipping-api-smoke -p 3000:3000 shipping-api:local
+curl -fsS http://localhost:3000/health
+docker rm -f shipping-api-smoke
+```
 
-There are still improvements coming. Multi-stage builds can keep build tools out of the final runtime image. Build cache mounts can speed up dependency downloads. Digest pinning can make base image updates explicit. Those ideas sit on top of this first recipe rather than replacing it.
+This Dockerfile gives the team a good first production shape. It has a filtered input, a clear dependency boundary, one process, safe defaults, a non-root runtime user, and an obvious path for CI to tag and push the same artifact later.
 
-Before we move to layers and cache, let us handle the errors this file will help you recognize.
+## Production Review Guidance
+<!-- section-summary: Production review checks the image input, secret handling, runtime user, startup command, and registry handoff. -->
 
-## Common Build Problems
-<!-- section-summary: Many Dockerfile errors come from context filtering, broad copy steps, misplaced secrets, or confusing build-time and runtime configuration. -->
+A production Dockerfile review should sound practical. The reviewer should ask what enters the build, what enters the final image, which user runs the process, and how the same image moves from local build to CI to registry. For `shipping-api`, those questions can turn into a short review checklist.
 
-The first common problem is a missing file during `COPY`. The Dockerfile says `COPY src ./src`, but Docker prints an error because `src/` did not enter the context. The usual causes are a wrong build directory, a `.dockerignore` rule that matched too much, or a CI job running `docker build` from a different folder than local developers.
+**Context review** checks the build command and `.dockerignore`. The team should know whether CI builds from `shipping-api/` or from a monorepo root. The Dockerfile paths should match that choice, and the context should exclude local dependencies, Git history, coverage output, logs, private key files, `.env`, and token-bearing `.npmrc` files.
 
-A good debugging habit is to check the build command first. In a monorepo, `docker build -f services/shipping-api/Dockerfile .` uses the repository root as the context, while `docker build .` from inside `services/shipping-api` uses only that service folder. Both can be valid, but the Dockerfile paths must match the chosen context.
+**Dockerfile review** checks instruction order and runtime defaults. Dependency manifests should enter the image before source files, broad `COPY . .` should have a clear reason, and `CMD` should use exec form for a long-running service. `EXPOSE 3000` should match the app's listener, and the app should bind to `0.0.0.0` inside the container so Docker's published port can reach it.
 
-The second problem is a secret inside the image. This usually comes from `COPY . .` combined with a weak `.dockerignore`. If a local `.env` enters the context and then enters an image layer, deleting the file in a later Dockerfile line leaves the earlier layer history intact. The safer fix is keeping the secret out of the context before the build starts.
+**Secret review** checks every `ARG`, `ENV`, and copied config file. Build-time tokens should use `--secret` and a secret mount. Runtime secrets should come from the deployment platform, so the same image can move from staging to production while the secret values change outside the image.
 
-The third problem is a slow build with no obvious expensive instruction. The context may be the expensive part. Local `node_modules`, `.git`, coverage files, screenshots, and generated bundles can make the client send a huge context before the first Dockerfile instruction does useful work. A tighter `.dockerignore` often cuts minutes from the build loop.
+**User review** checks the default runtime identity. The container should run as `app`, `node`, or another dedicated non-root user. If the app needs a writable directory, the Dockerfile should create and own that directory explicitly instead of giving the whole container root permissions.
 
-The fourth problem is putting runtime configuration into the image. A Dockerfile can set safe defaults with `ENV`. Environment-specific values should come from the environment that runs the container, so the same image can move from staging to production while a database hostname or feature flag changes outside the build.
+**Registry review** checks how CI tags and pushes the image. A real pipeline often uses the Git SHA as an immutable tag, pushes the image to a registry, and records the digest returned by the registry. The digest identifies the exact image content and gives deployment systems a precise artifact to promote.
 
-The fifth problem is treating `EXPOSE` like a firewall or port publish rule. `EXPOSE 3000` records intent in image metadata. Local Docker still needs `docker run -p 3000:3000 shipping-api:local`, and a production platform still needs its own service or ingress configuration.
+A simple CI build and smoke-test sequence can look like this. The example uses the Git SHA as a tag so the pushed image maps back to a specific source revision.
 
-These problems all connect back to the same first principle for Docker images: define the input files clearly, then write the recipe clearly. Once that feels normal, the next article can explain why Docker rebuilds some steps and reuses others.
+```bash
+GIT_SHA="$(git rev-parse --short HEAD)"
+IMAGE="ghcr.io/acme/shipping-api:${GIT_SHA}"
+
+docker build --pull --build-arg APP_VERSION="$GIT_SHA" -t "$IMAGE" .
+docker run --rm -d --name shipping-api-smoke -p 3000:3000 "$IMAGE"
+curl -fsS http://localhost:3000/health
+docker rm -f shipping-api-smoke
+docker push "$IMAGE"
+```
+
+That flow builds the image, proves that the default command starts the service, and pushes the same image that passed the smoke test. Later deployment steps can pull the tag or digest from the registry and run it in the target environment.
+
+The review work also sets up better troubleshooting. When a build fails, the team can ask whether the failure came from the context, the Dockerfile instruction order, the secret boundary, or the runtime defaults.
+
+## Troubleshooting the First Build
+<!-- section-summary: Common first-build failures usually come from context paths, ignore rules, secret handling, port publishing, or file ownership. -->
+
+The most common first error is a missing file during `COPY`. The Dockerfile says `COPY src ./src`, and Docker reports that `src` cannot be found. The usual causes are a build command launched from the wrong directory, a monorepo context that does not match the Dockerfile paths, or a `.dockerignore` rule that excluded too much.
+
+The build command should match the context you intended. In a monorepo, this command uses the service folder as the context while reading the Dockerfile from that same folder:
+
+```bash
+docker build -t shipping-api:local services/shipping-api
+```
+
+This command uses the monorepo root as the context and points Docker at the service Dockerfile. That shape makes sense when the build needs files shared from the repository root.
+
+```bash
+docker build -f services/shipping-api/Dockerfile -t shipping-api:local .
+```
+
+Both patterns can work. The Dockerfile's `COPY` paths need to match the chosen context, and the `.dockerignore` file that applies to the build needs to live at the context root or use the Dockerfile-specific ignore file pattern that the team has chosen.
+
+Another common problem is a huge build context. Docker's build output shows a "transferring context" step, and that step may show hundreds of megabytes before Docker runs `npm ci`. That usually means `node_modules`, `.git`, coverage reports, screenshots, or generated bundles entered the context.
+
+The fastest fix is reviewing `.dockerignore` and rebuilding. The next build output should show a smaller context transfer before dependency installation starts.
+
+```bash
+docker build --progress=plain -t shipping-api:local .
+```
+
+The plain progress output makes the context transfer and each build step easier to see in CI logs. If the context still looks large, the team should check generated directories and token files first because those files carry both performance and security risk.
+
+Secret warnings need a different fix. If Docker reports a `SecretsUsedInArgOrEnv` build check, the Dockerfile likely has a variable name such as `NPM_TOKEN`, `AWS_SECRET_ACCESS_KEY`, or `DATABASE_PASSWORD` in `ARG` or `ENV`. The safer build shape passes the value through `docker build --secret` and consumes it with a `RUN --mount=type=secret` instruction.
+
+Permission errors usually appear after adding `USER app`. The process may try to write into `/app`, create a cache directory, or write a temporary file in a root-owned path. The Dockerfile should create the needed writable path and give ownership to the runtime user.
+
+```dockerfile
+RUN mkdir -p /app/tmp && chown -R app:app /app
+```
+
+Port problems often come from confusing `EXPOSE` with publishing. `EXPOSE 3000` documents the port in image metadata, and local Docker still needs a `-p` flag to publish traffic from the host into the container. The Node server also needs to listen on `0.0.0.0`, because binding only to `localhost` inside the container keeps the service inside the container namespace.
+
+```bash
+docker run --rm -p 3000:3000 shipping-api:local
+```
+
+Startup failures belong to the runtime side of the story. The build can finish successfully while `CMD ["node", "src/server.js"]` points to a missing file, the app expects a runtime secret, or the health route crashes during boot. A short container run plus logs usually gives the next clue.
+
+```bash
+docker run -d --name shipping-api-debug shipping-api:local
+docker logs shipping-api-debug
+docker rm -f shipping-api-debug
+```
+
+These debugging paths all connect back to the same first build discipline: define the input files, copy them intentionally, keep secrets out of image metadata, and make the runtime defaults visible. Once that foundation works, Docker layers and cache explain why some changes rebuild quickly while others rebuild from the beginning.
+
+![Dockerfile review summary infographic showing small context, lockfiles before src, no secrets in image, non-root user, smoke test, and the final shipping-api local image](/content-assets/articles/article-containers-orchestration-docker-dockerfiles/dockerfile-review-summary.png)
+
+_This summary image turns the first Dockerfile into a review checklist: keep the input small, install from lockfiles, avoid baked-in secrets, run as a non-root user, and smoke test the image before CI publishes it._
 
 ## What's Next
 
-You now have the two inputs of an image build: the Dockerfile and the build context. You also have the first practical shape of a clean Dockerfile: filter the context, copy dependency files before source files, install from lockfiles, and set safe runtime defaults.
+You now have the first complete Docker image build for `shipping-api`. The team knows what a Dockerfile does, what the build context contains, how `.dockerignore` protects the input, why dependency files come before source files, and where `ARG`, `ENV`, and build secrets belong.
 
-The next article goes under that build recipe. We will look at image layers, cache invalidation, and multi-stage builds. That is where a Dockerfile moves from "it works" to "it builds fast and ships a smaller runtime image."
+The next article goes one level deeper into image layers and cache. That is where the Dockerfile changes from a working recipe into a faster, smaller, and easier-to-review build pipeline.
 
 ---
 
 **References**
 
-- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Official reference for Dockerfile instructions, shell and exec forms, `.dockerignore`, `COPY`, `RUN`, `CMD`, `ENTRYPOINT`, `USER`, and related syntax.
-- [Build context](https://docs.docker.com/build/concepts/context/) - Explains local build contexts, `.dockerignore` behavior, wildcard patterns, negation rules, and files available to the builder.
-- [Building best practices](https://docs.docker.com/build/building/best-practices/) - Covers practical Dockerfile guidance, including excluding unnecessary files with `.dockerignore`.
-- [CopyIgnoredFile build check](https://docs.docker.com/reference/build-checks/copy-ignored-file/) - Documents why files excluded by `.dockerignore` are unavailable to `ADD` and `COPY`.
-- [docker buildx build](https://docs.docker.com/reference/cli/docker/buildx/build/) - Documents modern build command options, including build contexts and BuildKit behavior.
+- [Build context](https://docs.docker.com/build/concepts/context/) - Official Docker documentation for local and remote build contexts, `.dockerignore` files, pattern rules, named contexts, and files available to the builder.
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Official reference for Dockerfile instructions including `FROM`, `COPY`, `RUN`, `ENV`, `USER`, `EXPOSE`, and `CMD`.
+- [Building best practices](https://docs.docker.com/build/building/best-practices/) - Official Docker guidance for `.dockerignore`, build cache, base images, CI builds, and maintainable Dockerfiles.
+- [Build secrets](https://docs.docker.com/build/building/secrets/) - Official guidance for passing sensitive values to a build through secret mounts, SSH mounts, and Git authentication for remote contexts.
+- [Build variables](https://docs.docker.com/build/building/variables/) - Official explanation of `ARG` and `ENV`, including their build-time and runtime behavior.
+- [SecretsUsedInArgOrEnv](https://docs.docker.com/reference/build-checks/secrets-used-in-arg-or-env/) - Official Docker build check that warns when likely secret values appear in `ARG` or `ENV`.

@@ -52,6 +52,10 @@ This wrapper gives Kubernetes a place to store runtime details that belong aroun
 
 The important production lesson is that Pod state and container state are related but separate signals. A container can be running while the Pod stays unready. A Pod can be scheduled while the image still fails to pull. A Pod can show `CrashLoopBackOff` while Kubernetes keeps retrying the same container because the restart policy allows it.
 
+![Pod runtime wrapper infographic showing a manifest becoming a Pod with an orders-api container, Pod IP, labels, probes, volumes, worker node placement, and Pod status](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/pod-runtime-wrapper.png)
+
+_This infographic shows the Pod as the Kubernetes wrapper around the container, where runtime details such as labels, probes, volumes, network identity, and status travel with the workload._
+
 ## A One-Container Pod for the Orders API
 <!-- section-summary: A single-container Pod is the normal first shape for an API, and the manifest shows how Kubernetes receives the image, labels, ports, and configuration. -->
 
@@ -171,6 +175,10 @@ Common status values point to different parts of that path:
 | `ImagePullBackOff` | The kubelet cannot pull the image and is backing off between retries | Image name, tag, registry auth, network access |
 
 Behind the scenes, Kubernetes separates a broad **Pod phase** from more specific container waiting reasons. The `STATUS` column in `kubectl get pod` often shows the useful waiting reason, such as `CrashLoopBackOff`, even though the Pod phase itself has a smaller official set of values. That detail explains why the table view can look more specific than the conceptual lifecycle diagram.
+
+![Pod lifecycle signals infographic showing accepted, scheduled, image pulled, container running, and ready states with Pending, ImagePullBackOff, CrashLoopBackOff, readiness, events, logs, and probes as troubleshooting clues](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/pod-lifecycle-signals.png)
+
+_This infographic turns Pod status into a debugging path, so each failure reason points toward scheduling, image pull, container startup, readiness, or evidence collection._
 
 ## Readiness, Liveness, and Startup Probes
 <!-- section-summary: Probes let Kubernetes ask the application separate questions about startup, traffic readiness, and whether the container should be restarted. -->
@@ -434,6 +442,10 @@ The resource request gives the scheduler a real signal about the capacity the Po
 Configuration deserves the same care. ConfigMaps are useful for non-secret configuration such as feature flags, hostnames, and tuning values. Secrets are the Kubernetes object for sensitive values, though teams still need encryption at rest, restricted RBAC, and external secret management practices in serious production environments. A Pod spec should keep raw passwords out of plain YAML committed to a repository.
 
 The last guidance is simple and important: use direct Pods for learning, diagnostics, and special cases, then use controllers for services. A direct Pod can teach the object clearly, but `devpolaris-orders-api` as a production API needs a Deployment so Kubernetes can keep replicas alive and roll out new templates deliberately.
+
+![Production Pod checklist infographic showing Pod template labels, requests, probes, config, controller ownership, and the describe, events, logs, exec debugging path](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/production-pod-checklist.png)
+
+_This infographic summarizes the production Pod review loop: build a clear Pod template, let a controller own it, then debug from Kubernetes evidence before jumping into the container._
 
 ## References
 

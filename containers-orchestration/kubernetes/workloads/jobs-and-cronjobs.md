@@ -43,6 +43,10 @@ This distinction changes the Kubernetes object you choose. A Deployment treats a
 
 For the orders team, this is the first rule during release planning. The API server stays in a Deployment. The release migration runs as a Job. The nightly checkout cleanup runs as a CronJob because it repeats on a schedule. The same container image can support all three paths, but each path needs the workload controller that matches how the process should behave.
 
+![Job runs to completion infographic showing a Job creating Pod attempts, retrying failed attempts, and reaching Complete after an exit zero result with status, events, and logs as evidence](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/job-runs-to-completion.png)
+
+_This infographic shows why a Job fits finite work: Kubernetes treats a successful exit as the goal and keeps status, events, and logs around for evidence._
+
 ## A One-Time Migration Job
 <!-- section-summary: A Job wraps a Pod template and records success after the required Pod completions finish. -->
 
@@ -173,6 +177,10 @@ kubectl logs -n orders -l job-name=orders-risk-score-backfill --all-containers=t
 ```
 
 The important design habit is to make batch work **idempotent**. An idempotent script can run again for the same input and still leave correct data. For the risk-score backfill, that could mean updating rows by primary key, writing a `backfilled_at` timestamp only after a successful calculation, and skipping rows that already have a valid score from the same algorithm version.
+
+![Indexed Job shards infographic showing eight million orders split into shards zero through nineteen, parallelism four, completion index, idempotent processing, and safe writes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/indexed-job-shards.png)
+
+_This infographic shows the backfill pattern visually: each indexed Pod owns a predictable shard, while parallelism limits how much database pressure the Job creates at once._
 
 ## Retries, Deadlines, and Idempotency
 <!-- section-summary: retry settings protect transient failures, while deadlines and idempotent scripts protect production from endless or unsafe work. -->
@@ -406,6 +414,10 @@ The choice starts with the process lifecycle. If the process should keep running
 | CronJob | Scheduled finite work | Nightly abandoned checkout cleanup |
 
 The production habits carry across all of them. Put manifests in version control, use stable labels, set resource requests, read events before guessing, ship logs to a central system, and make scripts safe to retry. Kubernetes gives you the controller behavior, and your application code gives the business safety.
+
+![Workload choice for orders work infographic comparing Deployment keeps serving, Job finishes once, CronJob runs on schedule, and the shared operation key, retry safety, and central logs practices](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/workload-choice-orders-work.png)
+
+_This infographic summarizes the controller choice around the same application: keep services running with Deployments, finish one unit with Jobs, and schedule repeated finite work with CronJobs._
 
 ---
 

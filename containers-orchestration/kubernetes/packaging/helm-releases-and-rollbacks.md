@@ -49,6 +49,10 @@ orders  devpolaris-prod       3         2026-06-16 10:05:18 UTC  deployed  order
 
 That output tells the operator there are two releases with the same name. The production release exists in `devpolaris-prod`, so the rest of the production commands in this article carry that namespace explicitly.
 
+![Helm release timeline showing install revision one, upgrade revision two, rollback revision three, stored manifest, and namespace](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/helm-release-timeline.png)
+
+*A Helm release is easier to operate when the team sees the name, namespace, stored manifests, and revision timeline as one connected record.*
+
 ## Installing devpolaris-orders-api
 <!-- section-summary: Helm install creates the first release revision and applies the chart's rendered Kubernetes objects to the chosen namespace. -->
 
@@ -179,6 +183,10 @@ deployment "orders-devpolaris-orders-api" successfully rolled out
 ```
 
 This verification closes the gap between Helm release state and live workload state. If Helm shows revision `2` but the Deployment still shows the previous image, the operator should investigate namespace mix-ups, another controller changing the Deployment, or a GitOps reconciler applying a different source of truth.
+
+![Release verification path showing helm upgrade, Deployment, ready Pods, working Service, and smoke test checks](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/release-verification-path.png)
+
+*Helm can record a successful revision, but operators still need Kubernetes readiness and a small application check to prove the release actually works.*
 
 ## History, Status, Values, and Manifests
 <!-- section-summary: Helm inspection commands answer different questions about revision timeline, release state, supplied values, and stored rendered manifests. -->
@@ -471,6 +479,10 @@ Follow-up: add ORDERS_EVENT_TOPIC value, schema requirement, and release test be
 ```
 
 This habit turns release operations into a trail that people can trust. It also makes post-incident review fairer because the team can see the exact input, output, and verification path instead of guessing from memory.
+
+![Rollback on failure flow showing unready Pods, wait timeout, atomic recovery, previous revision, and release record](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/rollback-on-failure.png)
+
+*Rollback works best when readiness failure, recovery command, previous revision, and release record all point to the same production story.*
 
 ## What's Next
 

@@ -37,14 +37,9 @@ The cluster network can route packets from many Pods to many other Pods. That re
 
 In this article, we will protect the path in three stages. **Workload identity** answers "who is calling?" **mTLS** makes the caller prove that identity with a certificate and encrypts the traffic between proxies. **AuthorizationPolicy** answers "is this caller allowed to use this destination?" That chain lets **web** call **checkout**, lets **checkout** call **payments**, and blocks **analytics** from calling **payments** even though all three services run inside Kubernetes.
 
-Here is the request path we will keep using. The blocked line stays in the diagram because analytics shares the cluster with payments but should not share payment access.
+![Mesh security chain infographic showing web to checkout to payments allowed through identity, mTLS, and AuthorizationPolicy while analytics is blocked at the payments destination proxy](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/security-chain.png)
 
-```bash
-web -> checkout -> payments
-analytics -x-> payments
-```
-
-The `-x->` means the request should fail after we add authorization. The important detail is that the mesh policy lives at the destination proxy, so the **payments** proxy makes the final decision before the request reaches the payments application container.
+*The destination proxy makes the final access decision. Checkout is part of the payment path, while analytics shares the cluster but should not share payment access.*
 
 ## Give Each Workload Its Own Service Account
 <!-- section-summary: Service accounts give Kubernetes workloads stable non-human names, and Istio uses those names as the starting point for mesh identity. -->
@@ -233,6 +228,10 @@ A **certificate authority**, often shortened to CA, signs certificates so other 
 This matters because the **payments** proxy can trust a certificate signed by the mesh CA. When checkout calls payments, the checkout proxy presents its certificate during the connection setup. The payments proxy checks the signature chain, reads the SPIFFE identity from the certificate, and learns that the caller is `cluster.local/ns/store/sa/checkout`.
 
 In production, some teams integrate Istio with SPIRE or another identity system when they need stronger node attestation, cross-platform workload identity, or federation between trust domains. The beginner path is still the same: a workload gets an identity, a CA signs proof of that identity, and the destination proxy verifies the proof before trusting the caller.
+
+![SPIFFE certificate flow infographic showing a checkout service account, istiod CA, certificate with SPIFFE ID, mTLS handshake, source principal, and payments verification](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/spiffe-certificate-flow.png)
+
+*The service account becomes a certificate-backed workload identity, and the destination proxy reads that identity as the source principal during policy checks.*
 
 ## Require Strict mTLS With PeerAuthentication
 <!-- section-summary: PeerAuthentication controls whether a destination workload accepts plain traffic or requires authenticated encrypted mTLS traffic. -->
@@ -489,6 +488,10 @@ The security flow now has clear pieces. Kubernetes service accounts give **web**
 Once mTLS gives payments a verified caller identity, `AuthorizationPolicy` turns that identity into a service-to-service access decision. Checkout's source principal matches the allow rule, so checkout can call payments. Analytics has a different source principal, so payments rejects it with `403`. The cluster network still routes traffic, but the proxy layer enforces the application relationship.
 
 That is the practical shape of mesh security. Pod IPs and broad namespace trust make weak authorization signals. Dedicated workload identities, authenticated encrypted transport, and explicit allow rules give payments a caller list that matches the application design.
+
+![Payments security summary infographic showing strict mTLS, AuthorizationPolicy, checkout allowed, analytics 403, plain client blocked, and rollout steps from service accounts to rollback](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/payments-security-summary.png)
+
+*Payments gets a narrow caller list: checkout can enter, analytics receives `403`, and a plain client cannot complete the mesh-authenticated path.*
 
 ## What's Next
 

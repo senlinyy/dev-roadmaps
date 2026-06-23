@@ -183,6 +183,10 @@ Here is the merge story in one small table. The table shows how each later input
 
 The rendered manifest only has one image tag and one replica count. Reviewers should care about that final output because Kubernetes never sees the merge history. Kubernetes only receives the YAML Helm sends after template rendering.
 
+![Helm values merge order showing chart defaults, staging file, production file, CLI override, final values, and later inputs winning](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-merge-order.png)
+
+*The merge stack is useful during review because it shows where the final values came from, even though Kubernetes only receives the rendered result.*
+
 ## Values That Render Real Kubernetes Objects
 <!-- section-summary: Values matter because they land in Deployment, Service, ConfigMap, and routing manifests that Kubernetes actually reconciles. -->
 
@@ -280,6 +284,10 @@ spec:
 ```
 
 This is the main review loop. A value changes, a template renders it, and a Kubernetes object receives the final field. If that chain stays visible, values files help teams move fast without hiding production risk.
+
+![Helm values becoming Kubernetes objects, with image tag, replicas, resources, and host landing in Deployment, Service, and Ingress output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-become-objects.png)
+
+*Values stay understandable when each important input maps to a real Kubernetes field reviewers can inspect in the rendered output.*
 
 ## Required Values and Schema Validation
 <!-- section-summary: Required checks and values.schema.json turn the chart's expected inputs into a contract that fails early during render and release commands. -->
@@ -485,6 +493,10 @@ For `devpolaris-orders-api`, a production values review should answer these ques
 This table also helps incident review. If a rollout breaks after a values change, the team can inspect the same areas in reverse: input values, rendered manifest, live Deployment, live ConfigMap, live Secret reference, and application logs. That path keeps diagnosis grounded in actual objects.
 
 A strong values process stays boring in the best way. Developers change a few clear inputs, CI renders the chart, reviewers inspect the exact output, and the release system applies the same output to Kubernetes. There is no hidden programming layer inside values, and there is no production-only command that nobody reviewed.
+
+![Helm values CI review showing schema check, render each environment, secret boundary, diff, and approval](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-ci-review.png)
+
+*CI keeps values changes reviewable by validating the input contract, rendering every important environment, checking secret boundaries, and showing the diff before approval.*
 
 ## What's Next
 

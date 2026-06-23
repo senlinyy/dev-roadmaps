@@ -9,62 +9,89 @@ id: article-containers-orchestration-docker-users-permissions-and-resource-limit
 
 ## Table of Contents
 
-1. [The Runtime Controls](#the-runtime-controls)
-2. [Users, UIDs, and GIDs](#users-uids-and-gids)
-3. [Build an Image That Runs as Non-Root](#build-an-image-that-runs-as-non-root)
-4. [Bind Mount Permissions](#bind-mount-permissions)
-5. [Linux Capabilities](#linux-capabilities)
-6. [Privileged Containers](#privileged-containers)
-7. [Memory Limits](#memory-limits)
-8. [CPU Limits](#cpu-limits)
-9. [Inspecting Runtime State](#inspecting-runtime-state)
-10. [Putting It All Together](#putting-it-all-together)
+1. [The Last Runtime Boundary](#the-last-runtime-boundary)
+2. [Containers Are Host Processes](#containers-are-host-processes)
+3. [Users, UIDs, and GIDs](#users-uids-and-gids)
+4. [Build an Image That Runs as Non-Root](#build-an-image-that-runs-as-non-root)
+5. [Runtime User Overrides for Local Files](#runtime-user-overrides-for-local-files)
+6. [Capabilities and Security Profiles](#capabilities-and-security-profiles)
+7. [Privileged Containers and Debug Exceptions](#privileged-containers-and-debug-exceptions)
+8. [User Namespaces and Rootless Docker](#user-namespaces-and-rootless-docker)
+9. [Memory Limits](#memory-limits)
+10. [CPU Limits](#cpu-limits)
+11. [Inspecting Runtime State](#inspecting-runtime-state)
+12. [Common Failure Patterns](#common-failure-patterns)
+13. [Putting It All Together](#putting-it-all-together)
 
-## The Runtime Controls
-<!-- section-summary: A container is a host process shaped by users, permissions, capabilities, and cgroup resource controls. -->
+## The Last Runtime Boundary
+<!-- section-summary: Runtime user, privilege, and resource controls decide what the container process can do after networking and storage are already wired. -->
 
-The catalog stack now has clear network paths and clear storage lifetimes. The browser reaches the API, the API reaches Postgres, and database files live in a named volume. Then the next set of problems appears during normal development work.
+The catalog stack now has two working stories behind it. Networking explains how the browser reaches `web`, how `web` reaches `api`, and how `api` reaches Postgres at `db:5432`. Storage explains why Postgres uses a named volume, why source code uses a bind mount, and why generated reports need a clear writer.
 
-The test container writes reports into the host repository, and the editor fails to replace them. A worker process imports a huge CSV and gets killed halfway through. A network-debug container tries to change an interface setting and gets `Operation not permitted`. Each problem comes from a runtime control such as process identity, kernel privilege, or cgroup capacity.
+The next problems sound different. A test container writes root-owned files into `./reports`, and the editor cannot clean them. A CSV import worker grows until the laptop slows down. A temporary network-debug container tries to adjust routing and receives `Operation not permitted`. These failures come from **runtime controls**: the process user, file permissions, Linux capabilities, security profiles, and resource limits.
 
-Docker runs container processes through the host kernel. The kernel still enforces **user IDs**, **group IDs**, **file modes**, **Linux capabilities**, and **cgroups**. Docker combines those controls so the process gets a narrowed view of the host and a set of runtime limits.
+Docker runs containers through the host operating system kernel. That means the kernel still enforces **UIDs**, **GIDs**, file modes, capabilities, cgroups, namespaces, and security profiles. Docker packages those controls into flags, Dockerfile instructions, and Compose fields so teams can describe how much access and capacity a container should receive.
 
-The article follows the same catalog application through five questions. **Which user runs the process?** **Which user writes mounted files?** **Which privileged operations can the process attempt?** **How much memory can it use?** **How much CPU time can it consume?** Those questions connect the permission and resource parts of the runtime boundary.
+We will stay with the same catalog application. The API serves requests, the worker imports a large supplier CSV, the database keeps catalog rows, and the test runner writes reports back into the host repository. Each section answers one production-style question: who runs the process, who writes the files, which privileged operations are allowed, and how much memory and CPU the process can consume.
+
+## Containers Are Host Processes
+<!-- section-summary: A container process uses Linux kernel controls, so Docker isolation depends on the host enforcing namespaces, permissions, and limits. -->
+
+A **container process** is a normal process on the Docker host with extra isolation around it. Docker gives that process its own view of parts of the system, such as the filesystem, process list, network stack, and hostname. The process still reaches the host kernel for file access, networking, memory allocation, CPU scheduling, and privileged operations.
+
+That detail explains why Docker runtime settings matter. The API process may see `/app` as its application directory, and it may see `api` and `db` on a private Docker network. The host kernel still decides whether the process can write a bind-mounted file, open a low-level network operation, allocate another 500 MB of memory, or use more CPU time. Here is the catalog API running with several runtime choices in one command:
+
+```bash
+docker run --rm \
+  --name catalog-api \
+  --user 10001:10001 \
+  --cap-drop ALL \
+  --memory 512m \
+  --cpus "1.0" \
+  --mount type=bind,src="$(pwd)/reports",dst=/reports \
+  catalog-api:prod
+```
+
+This command gives the process a numeric user, removes Linux capabilities from the default set, gives it a memory ceiling, gives it a CPU ceiling, and mounts a host report directory. Those choices describe the runtime boundary more clearly than the image tag alone. The image says what code runs, and the runtime settings say how that code may behave on this host. The first runtime setting to understand is the user, because file ownership issues show up quickly in local Docker work.
+
+![Container runtime controls infographic showing catalog-api process wrapped by UID and GID, capabilities, seccomp, memory cgroup, CPU cgroup, user namespace, and host kernel controls](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/container-runtime-controls.png)
+
+_This infographic shows the container as a host process wrapped by kernel controls, so user identity, capabilities, security profiles, namespaces, memory, and CPU all stay visible._
 
 ## Users, UIDs, and GIDs
-<!-- section-summary: Container file access follows numeric Linux user and group IDs, even when names differ between host and container. -->
+<!-- section-summary: Linux checks numeric user and group IDs, so container names and host names matter less than the UID and GID. -->
 
-A **container user** is the Linux user that runs the main process inside the container. Linux represents that user with a numeric **UID**, and it represents the primary group with a numeric **GID**. Usernames such as `node`, `postgres`, or `app` make output readable, while the numeric IDs drive permission checks.
+A **user** is the identity the process runs as. Linux stores that identity as a numeric **UID**, and it stores the primary group as a numeric **GID**. Usernames such as `node`, `postgres`, and `app` make shells and logs readable, but the numeric IDs drive permission checks.
 
-Docker's `docker container run` documentation states that the default user inside a container is root, UID `0`, unless the image sets a different default with the Dockerfile `USER` instruction or the runtime command overrides it with `--user`. That default explains many beginner surprises. A process may feel "inside Docker" while still writing files as UID `0` through a bind mount.
+Docker's container run reference states that the default user inside a container is root, UID `0`, unless the image sets a different user with the Dockerfile `USER` instruction or the runtime command supplies `--user`. Beginners often miss that because the process looks separated from the host by Docker, while the file write still carries a UID and bind mounts expose that UID to the host filesystem.
 
-The catalog API can show its runtime identity with `id`:
+The catalog team can check the API process identity from inside the running service. The `id` command gives the numeric values that matter for file permissions.
 
 ```bash
 docker compose exec api id
 ```
 
-Example output might look like this:
+Example output might look like this. The name in parentheses helps humans, while the numbers are the part Linux checks.
 
 ```bash
 uid=10001(app) gid=10001(app) groups=10001(app)
 ```
 
-The process runs as UID `10001` and GID `10001`. If it writes inside the image filesystem to a path owned by that UID, the write succeeds. If it writes to a bind-mounted host path, the host filesystem checks the same numeric writer against the host file ownership and mode bits.
+That output says the API process runs as UID `10001` and GID `10001`. If the process writes to a directory owned by `10001:10001` inside the image, the write should succeed. If it writes through a bind mount into the host repository, the host sees a write from numeric user `10001`, even if the host has no username called `app`.
 
-This is where the storage article connects to runtime identity. A named volume gives data a separate lifetime. A bind mount gives the container a real host path. The user running the process decides how writes across that mount appear on the host.
+This connects directly to the storage article. A named volume usually belongs to the service process that owns the data. A bind mount belongs to the host path first, and the container process must line up with that host path's permissions. The article now turns that into a Dockerfile pattern.
 
 ## Build an Image That Runs as Non-Root
-<!-- section-summary: A good application image creates a runtime user, makes app paths writable, and sets USER before the main command. -->
+<!-- section-summary: A production application image should create a runtime user, prepare writable paths, and set USER before the main command. -->
 
-Running application processes as **non-root** is a practical baseline. It reduces the set of files the process can modify inside the container and makes accidental privileged behavior less likely. The image should prepare its directories so the runtime user can work without switching back to UID `0`.
+Running application code as **non-root** is a normal baseline for container images. It reduces accidental writes to root-owned paths inside the container and keeps the process away from broad root behavior unless the application has a real reason for it. Non-root execution also makes Kubernetes, CI runners, and security scanners much happier with the image later.
 
-For the catalog API, an Alpine-based Node image might create an `app` user and assign ownership of `/app` before setting `USER`:
+For the catalog API, the Dockerfile can create a dedicated application user, copy the app, prepare writable paths, and set `USER` before `CMD`. The important detail is that ownership is prepared while the build can still make those filesystem changes.
 
 ```dockerfile
 FROM node:22-alpine
 
-RUN addgroup -S app && adduser -S -G app app
+RUN addgroup -g 10001 app && adduser -D -u 10001 -G app app
 
 WORKDIR /app
 COPY package*.json ./
@@ -72,31 +99,40 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-RUN chown -R app:app /app
-USER app
+RUN mkdir -p /app/tmp /app/logs \
+  && chown -R app:app /app
 
+USER 10001:10001
 CMD ["node", "dist/server.js"]
 ```
 
-The important sequence is the part near the end. The image creates or copies the application files, changes ownership to the runtime user, then sets `USER app` before the command starts. The main process now runs as the `app` user by default.
+The image creates UID `10001` and GID `10001`, gives `/app` and the writable runtime directories to that user, and then starts the main process as that user. The runtime process can write to `/app/tmp` and `/app/logs` because the Dockerfile prepared those paths before switching users.
 
-Some teams prefer numeric IDs in images, especially when they want consistent behavior across base images:
+Numeric IDs help teams keep behavior steady across base images. A name such as `app` is useful for humans, while `10001:10001` makes the file-permission contract explicit. The numeric choice should be documented in the image or team convention so related services, mounted directories, and CI jobs know which identity the image expects.
 
-```dockerfile
-RUN addgroup -g 10001 app && adduser -D -u 10001 -G app app
-USER 10001:10001
+Some applications need package installs or build steps as root during image build. That can still be fine. The important line is where the runtime user changes before the main command. Build-time root and runtime root create different risk profiles, so the Dockerfile should make the runtime choice visible near the end.
+
+The image-level user handles the normal service. Local development and test commands sometimes need a per-run override so host-visible files come back with host-friendly ownership.
+
+## Runtime User Overrides for Local Files
+<!-- section-summary: The --user flag lets one-off containers write bind-mounted files with the host developer's numeric identity. -->
+
+A **runtime user override** changes the user for one container run without rebuilding the image. Docker exposes that with `--user`, and Compose exposes it with the `user` field. This is useful when a container writes into a bind-mounted host directory during local development.
+
+The catalog test runner writes JSON reports into `./reports`. That directory belongs to the host repository, so the writer matters as much as the output path.
+
+```bash
+mkdir -p reports
+
+docker run --rm \
+  --mount type=bind,src="$(pwd)/reports",dst=/reports \
+  catalog-api:test \
+  npm test -- --reporter json --output /reports/results.json
 ```
 
-Numeric IDs make the runtime identity explicit. The tradeoff is readability, because logs and shells may show numbers instead of friendly names unless `/etc/passwd` contains a matching entry. Either way, the key point is that the image chooses a deliberate runtime user.
+If the image or command runs as root, the host may see `./reports/results.json` as root-owned on a Linux host. The test passed, but the developer may need elevated permissions to delete or replace the report. That makes a normal test command feel broken.
 
-The image user handles the normal container filesystem. Bind mounts add the host filesystem to the story, and that is where local development often needs one more runtime choice.
-
-## Bind Mount Permissions
-<!-- section-summary: A bind mount exposes host ownership rules, so development commands often need a deliberate --user value. -->
-
-**Bind mount permissions** come from the host path and the container process identity. If the catalog test command writes reports into `./reports`, Linux records the numeric UID and GID of the writer. On a Linux host, files written as UID `0` usually appear as root-owned files.
-
-A local test command can line up the writer with the host developer:
+For one-off tools that write into the repository, the command can borrow the host developer's numeric UID and GID. The container still runs the same test image, while the file write uses the host-friendly numeric identity.
 
 ```bash
 docker run --rm \
@@ -106,9 +142,7 @@ docker run --rm \
   npm test -- --reporter json --output /reports/results.json
 ```
 
-The container process runs with the host user's numeric UID and GID for this command. The report file arrives on the host with ownership the editor can usually modify. This works well for one-off tools, code generators, and test containers that write into the repository.
-
-Compose can express the same idea for a development service:
+Now the report file arrives with the host developer's numeric ownership. This pattern works well for formatters, code generators, test reporters, local docs builds, and export jobs. It should stay attached to host-owned outputs, and application images should still define a proper runtime user for normal service work. Compose can carry the same local setting:
 
 ```yaml
 services:
@@ -116,124 +150,162 @@ services:
     build: ./api
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - ./api:/app
-      - ./reports:/reports
+      - type: bind
+        source: ./api/src
+        target: /app/src
+      - type: bind
+        source: ./reports
+        target: /reports
 ```
 
-The environment variables come from the developer's shell or a local `.env` file. The values should be documented in team setup instructions because macOS, Linux, WSL, and remote Docker daemons can expose slightly different host-file behavior.
+Many teams put `UID` and `GID` in a local `.env` file or export them from the shell before starting Compose. Docker Desktop, WSL, Linux hosts, and remote Docker daemons can show slightly different host-file behavior, so the team should test the report-writing workflow on the environments developers actually use. User identity controls file access. The next runtime control covers privileged kernel operations that file permissions cannot express on their own.
 
-There is another useful approach: keep source bind mounts read-only and write generated output to a named volume or a dedicated output directory. That reduces accidental host edits. It also makes cleanup clearer because one path exists for generated artifacts instead of letting tools write across the whole repository.
+![UID writes through mounts infographic comparing a root writer creating a root-owned report through a bind mount and a host user writer creating an editable report with a user override](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/uid-mount-writes.png)
 
-Once file writes are under control, the next question is privilege. A process can run as root or non-root and still have a separate list of kernel-level operations it may attempt.
+_This infographic makes the bind-mount ownership issue concrete: the same `./reports` mount can produce root-owned output or host-editable output depending on the numeric writer._
 
-## Linux Capabilities
-<!-- section-summary: Linux capabilities split privileged operations into smaller permissions that Docker can add or drop. -->
+## Capabilities and Security Profiles
+<!-- section-summary: Capabilities and security profiles narrow privileged operations beyond the process UID. -->
 
-**Linux capabilities** are small privilege flags for kernel-level operations. Classic Unix treated UID `0` as the broad privileged identity. Modern Linux splits many privileged actions into capability bits such as `NET_ADMIN`, `SYS_ADMIN`, `CHOWN`, and `NET_BIND_SERVICE`.
+**Linux capabilities** split privileged operations into smaller flags. Classic Unix treated UID `0` as the broad privileged identity. Modern Linux uses capability bits such as `NET_ADMIN`, `CHOWN`, `SYS_ADMIN`, and `NET_BIND_SERVICE` to control categories of privileged operations.
 
-Docker starts containers with a default capability set and drops many dangerous capabilities. That is why a process can run as root inside the container and still fail to mount a filesystem or change network settings. Root identity and capability permission are related, but they answer different questions.
+Docker starts containers with a default capability set and drops many powerful operations. That is why a process can run as root inside a container and still fail to mount a filesystem, change routing tables, or perform other low-level actions. UID and capabilities answer related questions, and both affect the runtime boundary.
 
-For the catalog API, the normal web process should need no extra capabilities. It reads config, opens a network listener, talks to Postgres, and writes logs. A separate network-debug container might need a capability such as `NET_ADMIN` for a short troubleshooting session.
+The catalog API should need no extra capabilities for normal work. It reads config, listens on a port above `1024`, talks to Postgres, and writes application files. A temporary network-debug container has a different job and might need a specific capability for that session:
 
 ```bash
 docker run --rm \
+  --network catalog_default \
   --cap-add NET_ADMIN \
   nicolaka/netshoot \
   ip route
 ```
 
-Compose can express capability changes too:
+Compose can express the same narrow debug choice. The debug service carries the capability, and the normal API service can keep its smaller runtime boundary.
 
 ```yaml
 services:
   network-debug:
     image: nicolaka/netshoot
+    network_mode: service:api
     cap_add:
       - NET_ADMIN
 ```
 
-The safer pattern is to start from the smallest set of capabilities. For workloads that can run with very little privilege, Docker can drop all capabilities and then add back one specific capability when the workload truly needs it.
-
-```bash
-docker run --rm \
-  --cap-drop ALL \
-  --cap-add NET_BIND_SERVICE \
-  catalog-api:prod
-```
-
-That example focuses on narrowing privileged operations instead of fixing application bugs. If a container asks for `SYS_ADMIN` or a broad capability list, the team should pause and name the exact operation that requires it. The next section covers the broad shortcut that often hides that conversation.
-
-## Privileged Containers
-<!-- section-summary: The privileged flag grants broad host-level access, so application containers should reach for narrower capabilities first. -->
-
-`--privileged` is Docker's broad runtime privilege switch. Docker's CLI reference explains that privileged containers receive all Linux kernel capabilities, lose several default security profiles, gain access to host devices, and can do much more against the host system. That flag exists for special cases such as Docker-in-Docker or low-level system tooling.
-
-For an application container like the catalog API, privileged mode is usually a sign that the real requirement still needs a clear name. The service may need one device, one capability, a read-only config mount, or a different file permission. `--privileged` grants a large bundle when the workload often needs one small piece.
-
-A better troubleshooting conversation sounds like this: "The packet capture tool needs raw socket access for ten minutes in development, so we will run a separate debug container with the specific capability and no application secrets." That keeps the privilege decision attached to a concrete job.
-
-Compose has a `privileged` service key, and it should receive the same caution:
+For application services, many teams move in the opposite direction and drop capabilities. This makes the expected privilege set explicit in the Compose file.
 
 ```yaml
 services:
-  system-tool:
-    image: internal/system-tool:debug
+  api:
+    build: ./api
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+```
+
+`cap_drop: [ALL]` removes Linux capabilities from the service. `no-new-privileges:true` asks the kernel to keep the process from gaining extra privileges through exec paths such as setuid binaries. Docker also uses a default seccomp profile on Linux to block or restrict selected system calls, and custom seccomp profiles can tighten or change that behavior for specialized workloads.
+
+The practical review question stays concrete. The team should name the operation that needs a capability or security-profile exception. "The API needs to serve HTTP traffic" rarely explains `SYS_ADMIN`. "The debug helper needs to inspect network routes in a development session" gives the exception a job, a tool, and a short lifetime. The broad shortcut for privilege has its own section because it changes many controls at once.
+
+## Privileged Containers and Debug Exceptions
+<!-- section-summary: Privileged mode grants a broad host-facing bundle, so application services should keep exceptions narrow and temporary. -->
+
+`--privileged` is Docker's broad privilege switch. Docker's CLI reference explains that privileged containers receive all Linux capabilities, receive expanded access to host devices, and bypass several normal isolation settings. That flag exists for special system-level cases, and it is a large runtime change.
+
+For the catalog API, privileged mode should raise a review conversation. The service may need one bind mount, one device, one capability, or a separate helper container. A broad privileged flag grants many powers at once, and the team loses the ability to explain the exact permission the app needs. Here is the shape that should make reviewers slow down:
+
+```yaml
+services:
+  api:
+    build: ./api
     privileged: true
 ```
 
-That YAML should be rare, reviewed, and separated from normal application services. The runtime boundary gets weaker as privilege grows, so broad privilege deserves a clear reason, a short lifetime, and a narrow environment.
+That setting mixes normal application traffic, application secrets, database credentials, mounted source code, and broad host-level privileges. A cleaner troubleshooting path separates the concern by leaving the API ordinary and putting debug privilege on a short-lived helper.
 
-Permissions and privileges control what the process may do. Resource limits control how much host capacity the process may consume.
+```yaml
+services:
+  api:
+    build: ./api
+    user: "10001:10001"
+
+  packet-debug:
+    image: nicolaka/netshoot
+    network_mode: service:api
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    profiles:
+      - debug
+```
+
+The debug service exists only when someone starts the `debug` profile. It shares the network view needed for investigation and carries the specific capabilities for packet or route work. The API keeps its normal runtime boundary, and the exception stays visible in the Compose file.
+
+Capabilities and privileged mode affect one container's access. Docker also has host-level options that change how container UIDs map to host UIDs and how the Docker daemon itself runs.
+
+## User Namespaces and Rootless Docker
+<!-- section-summary: User namespace remapping and rootless Docker reduce how container root maps onto the host. -->
+
+A **user namespace** lets Linux map user IDs inside a namespace to different user IDs outside it. Docker's user namespace remapping feature uses this idea so UID `0` inside a container maps to an unprivileged UID range on the host. The container may think a process is root inside its own view, while the host sees a less privileged host UID.
+
+This matters for teams that run untrusted workloads, shared development hosts, CI runners, or multi-user lab machines. If a process breaks out of a weak container boundary or writes through certain host-facing paths, user namespace remapping can reduce the host-level power attached to container root.
+
+There is a tradeoff. User namespace remapping changes UID and GID behavior for bind mounts, volume ownership, and some low-level workflows. A team should test existing Compose files and host mounts before turning it on for a shared Docker host. The feature helps most when the team owns the host configuration and can document the mapping.
+
+**Rootless Docker** goes one level wider. In rootless mode, the Docker daemon and containers run inside a user namespace under an unprivileged user instead of a root-owned daemon. This can reduce the host impact of daemon or container issues, especially on developer machines or shared build hosts.
+
+Rootless mode also has operational differences. Some networking, storage, port, and cgroup behaviors can vary by host configuration. Docker's rootless documentation covers the setup details and limitations, so teams should treat rootless mode as a host design choice, not a random per-container flag.
+
+For the catalog stack, the everyday article takeaway is smaller. Build app images to run as non-root. Use `--user` for host-owned outputs. Add capabilities only for named operations. Consider user namespace remapping or rootless Docker when the Docker host itself needs a stronger isolation stance.
+
+Now we move from access to capacity. The same host kernel that checks permissions also decides how much memory and CPU the process can use.
 
 ## Memory Limits
-<!-- section-summary: Memory limits use cgroups to cap container memory and make runaway processes fail inside a defined boundary. -->
+<!-- section-summary: Memory limits set a cgroup ceiling so a runaway container fails inside a known capacity boundary. -->
 
-A **memory limit** is a cgroup setting that caps how much memory the container's process tree can allocate. Docker's resource constraints documentation states that containers have no resource constraints by default and can use as much of a resource as the host kernel scheduler allows. A limit turns that open-ended behavior into a defined ceiling.
+A **memory limit** is a cgroup setting that caps how much memory the container process tree can allocate. Docker's resource constraints documentation explains that containers can use host resources freely by default, subject to what the kernel scheduler and host capacity allow. A memory limit gives the service a ceiling.
 
-The catalog team notices the CSV import worker sometimes grows until the laptop becomes unusable. A memory limit keeps that worker inside a predictable range:
+The catalog worker imports a large supplier CSV. During one test, it loads too much data into memory and makes the laptop nearly unusable. The team can run that worker with a 512 MB ceiling, which gives the failure a clear container boundary instead of letting it consume the whole host:
 
 ```bash
 docker run --rm \
   --memory 512m \
   --memory-swap 512m \
   catalog-worker:dev \
-  node import-catalog.js data/huge.csv
+  node import-catalog.js data/supplier-feed.csv
 ```
 
-`--memory 512m` sets the memory ceiling. Setting `--memory-swap` to the same value keeps swap from extending the total memory available to the container on hosts where swap is configured. If the process grows beyond the limit, the kernel can kill it, and Docker records that the container exited after an out-of-memory event.
+`--memory 512m` sets the memory limit. `--memory-swap 512m` sets the combined memory and swap allowance to the same value on hosts where swap accounting applies, so swap cannot silently extend the total available memory for this container. If the worker grows past the limit, the kernel may kill it, and Docker records the out-of-memory state.
 
-Compose can make the local expectation repeatable:
+Compose can keep the local expectation repeatable. The limit then travels with the service definition rather than living only in one person's shell history.
 
 ```yaml
 services:
   worker:
     build: ./worker
+    command: node import-catalog.js data/supplier-feed.csv
     mem_limit: 512m
 ```
 
-Memory limits help in two ways. They protect the host and neighboring containers from a runaway process. They also expose sizing problems early, because the worker fails in development or CI instead of silently using every available byte on a large laptop.
-
-The limit should match the workload's expected shape. A database, a compiler, and a small HTTP API have different memory needs. If a service hits the limit during ordinary traffic, the right response is to investigate the workload, tune the application, or size the container differently.
-
-CPU uses the same cgroup family, but it affects scheduling time rather than stored bytes.
+The limit protects the host and neighboring services. It also gives developers earlier evidence that the worker needs streaming, batching, backpressure, or a larger runtime size. The fix should come from the workload and capacity decision, not from quietly removing every limit after the first failure. Memory is about stored bytes. CPU limits shape scheduler time.
 
 ## CPU Limits
-<!-- section-summary: CPU limits control scheduler time, so busy containers stay inside defined host CPU limits under load. -->
+<!-- section-summary: CPU limits control host scheduler time so one busy container cannot consume all available CPU during load. -->
 
-A **CPU limit** controls how much CPU time the container can receive from the host scheduler. The most readable Docker flag is `--cpus`, which accepts fractional CPU values. `--cpus "1.5"` means the container can use roughly one and a half CPUs worth of time under contention.
+A **CPU limit** controls how much CPU time a container can receive from the host scheduler. Docker's `--cpus` flag is the readable starting point because it accepts values such as `0.5`, `1.0`, or `1.5`. A value of `"1.5"` gives the container roughly one and a half CPUs worth of time under CPU contention.
 
-The catalog import worker can get a CPU ceiling during local testing:
+The catalog import worker can run with a CPU ceiling during local testing. The command keeps the workload realistic while making host scheduling pressure visible.
 
 ```bash
 docker run --rm \
   --cpus "1.5" \
   catalog-worker:dev \
-  node import-catalog.js data/huge.csv
+  node import-catalog.js data/supplier-feed.csv
 ```
 
-This limit leaves the code path the same. It changes how much scheduler time the process receives when the host has CPU pressure. A worker may run longer, timeouts may appear, and concurrency bugs may become easier to reproduce because the workload now runs under a defined resource shape.
-
-Compose can carry the same expectation:
+The code path stays the same, while the scheduler budget changes. Under load, the worker may take longer, timeouts may show up, and noisy-neighbor behavior shows up during testing. That is useful because the local stack often includes the API, worker, database, and maybe a search service on one laptop. Compose can carry the same resource shape:
 
 ```yaml
 services:
@@ -243,82 +315,104 @@ services:
     mem_limit: 512m
 ```
 
-CPU limits are useful when a local stack has several busy services. The API, worker, database, and search service can all run on one laptop without letting one import job consume the whole machine. In shared environments, CPU settings also make capacity conversations more concrete.
+Docker also exposes deeper controls such as CPU shares, quotas, periods, and CPU sets. Beginners usually get the most value from `--cpus` and `mem_limit` because those settings read like capacity decisions. After the team has metrics, the deeper knobs can support more specialized scheduling requirements.
 
-CPU shares, quotas, periods, and CPU sets give deeper control for specialized cases. Beginners usually get the most value from `--cpus`, because it reads like the capacity decision the team meant to make. A small API might get `0.5`, a worker might get `1.5`, and a database might get a separate setting after measurement.
-
-With users, capabilities, memory, and CPU in place, the last practical skill is inspection. The runtime boundary should be visible from Docker commands rather than guessed from symptoms.
+At this point, the catalog team has user, privilege, memory, and CPU controls. The last skill is inspection, because runtime boundaries should show up in commands rather than guesses.
 
 ## Inspecting Runtime State
-<!-- section-summary: Runtime inspection checks the actual user, capabilities, memory state, CPU settings, and mount ownership from the container's viewpoint. -->
+<!-- section-summary: Runtime inspection checks identity, mounts, capabilities, security options, memory state, and CPU settings from the actual container. -->
 
-The runtime checks start with identity. `id` shows the UID and GID inside the container. `whoami` can be useful, but the numbers matter most because file ownership and bind mounts use numeric IDs.
+The first check is identity. `id` shows the UID and GID inside the container. `ls -ln` shows numeric file ownership, which is more useful than usernames when the host and container have different name databases.
 
 ```bash
 docker compose exec api id
 docker compose exec api sh -lc 'touch /reports/probe && ls -ln /reports/probe'
 ```
 
-The `ls -ln` output shows numeric ownership for the probe file. If the host developer fails to edit generated files, this check usually reveals which UID and GID wrote them. The team can then adjust `USER`, `--user`, directory ownership, or the mount strategy.
+If the host developer cannot delete generated reports, this check usually shows the writer. The fix might be a Dockerfile `USER`, a `--user "$(id -u):$(id -g)"` override for the tool command, or a change to which path is bind-mounted.
 
-Container configuration lives in `docker inspect`. The `HostConfig` section shows runtime choices such as user overrides, memory limits, CPU quota settings, privileged mode, and capability additions or drops.
-
-```bash
-docker inspect catalog-api --format '{{json .HostConfig}}'
-```
-
-Live resource usage comes from `docker stats`:
+`docker inspect` shows the runtime settings Docker applied. These commands pull out the specific fields a reviewer usually needs during a permissions or limits investigation.
 
 ```bash
-docker stats catalog-api catalog-worker catalog-db
+docker inspect catalog-api --format '{{json .Config.User}}'
+docker inspect catalog-api --format '{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}}'
+docker inspect catalog-api --format 'Privileged={{.HostConfig.Privileged}} Memory={{.HostConfig.Memory}} NanoCpus={{.HostConfig.NanoCpus}}'
+docker inspect catalog-api --format '{{json .HostConfig.SecurityOpt}}'
 ```
 
-An out-of-memory event also appears in container state:
-
-```bash
-docker inspect catalog-worker --format 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}'
-```
-
-For Compose, the final rendered configuration can prevent a lot of confusion:
+For Compose projects, the rendered configuration often gives the cleanest review view. It shows the service settings after environment variables, profiles, and override files have been applied.
 
 ```bash
 docker compose config
 ```
 
-That output shows the final `user`, `cap_add`, `cap_drop`, `privileged`, `cpus`, and `mem_limit` values after Compose applies environment variables and override files. It is especially helpful when one developer has a local override that changes runtime behavior.
+That output shows the final `user`, `cap_add`, `cap_drop`, `security_opt`, `privileged`, `cpus`, and `mem_limit` values after Compose applies environment variables and override files. It helps when one developer has a local override or a profile changes the debug services. Live resource usage comes from `docker stats`:
 
-These checks connect symptoms to runtime controls. A permission error points to UID, GID, mount mode, or file ownership. An operation error points to capabilities or security settings. A sudden container exit under load points to memory limits, CPU pressure, or application failure evidence.
+```bash
+docker stats catalog-api catalog-worker catalog-db
+```
+
+An out-of-memory kill appears in container state. This check is useful when a worker exits suddenly and the application logs stop before they can explain the failure.
+
+```bash
+docker inspect catalog-worker --format 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}'
+```
+
+These checks match symptoms to controls. A host-file cleanup problem points at UID, GID, mount mode, or host ownership. An `Operation not permitted` error points at capabilities, seccomp, AppArmor, or privileged mode. A sudden worker exit under load points at memory limits, CPU pressure, or application failure evidence.
+
+## Common Failure Patterns
+<!-- section-summary: Runtime-boundary failures usually come from the wrong user, too much privilege, too little capacity, or hidden host-level assumptions. -->
+
+The first failure is a root-running test container writing into the host repository. The test result is correct, and the host files are painful to clean. A one-off `--user "$(id -u):$(id -g)"` command or a dedicated output directory fixes the writer instead of blaming the test framework.
+
+The second failure is an image that switches to a non-root user before making writable directories. The API starts as UID `10001`, then fails to write `/app/tmp` or `/app/logs`. The Dockerfile should create and `chown` those paths before the `USER` instruction.
+
+The third failure is adding `--privileged` to solve a specific error. The error might need one capability, one device mount, or one debug helper. A broad privilege flag hides the exact requirement and gives the application service far more host access than the job asks for.
+
+The fourth failure is treating rootless Docker or user namespace remapping as a per-container magic switch. These are host or daemon-level design choices with file ownership and networking effects. A team should test them against real bind mounts, Compose projects, and CI jobs before rolling them across shared hosts.
+
+The fifth failure is setting memory too low and then removing the limit after the worker fails. The failure is useful evidence. The team should check whether the worker needs streaming, batching, a larger limit, or different input sizing.
+
+The sixth failure is forgetting that CPU limits affect timing. A worker capped at `0.5` CPU may hit application timeouts that never appeared on an uncapped laptop. That can reveal a real production risk because shared hosts and orchestrators often run services under resource pressure.
+
+The final failure is inspecting the image instead of the running container. The image may set `USER app`, while Compose overrides it. The image may need no capabilities, while a debug profile adds them. Runtime boundaries belong to the running container, so `docker inspect`, `docker compose config`, and checks from inside the container matter.
 
 ## Putting It All Together
-<!-- section-summary: Users, permissions, capabilities, and limits make the container runtime boundary explicit enough to operate safely. -->
+<!-- section-summary: Users, permissions, capabilities, namespaces, and limits make the Docker runtime boundary visible and reviewable. -->
 
-The catalog stack now has a complete runtime-boundary story. Networking defines how requests move between host ports, Docker DNS, container ports, and listeners. Storage defines which paths come from image layers, writable layers, named volumes, and bind mounts. Users and limits define who the process runs as, which privileged operations it may attempt, and how much host capacity it can consume.
-
-The practical choices line up like this:
+The catalog stack now has a complete runtime-boundary story. Networking names how requests move from host ports to Docker DNS and container listeners. Storage names which paths come from images, writable layers, volumes, bind mounts, and tmpfs mounts. Users and limits name who the process runs as, which privileged operations it can attempt, and how much host capacity it can consume. The practical choices line up like this:
 
 | Control | Plain English meaning | Catalog example |
 | --- | --- | --- |
 | **UID/GID** | Numeric identity used for file permissions | API runs as `10001:10001` |
-| **Dockerfile USER** | Default user for image commands and runtime | `USER app` before `CMD` |
+| **Dockerfile USER** | Default runtime user baked into the image | `USER 10001:10001` before `CMD` |
 | **Runtime --user** | Per-run identity override | Test reports written as `$(id -u):$(id -g)` |
-| **Bind mount permissions** | Host path checks the writer's numeric identity | `./reports:/reports` uses host ownership rules |
-| **Capabilities** | Small kernel privilege flags | Debug container gets `NET_ADMIN` |
-| **Privileged mode** | Broad privilege bundle for special tooling | Kept away from normal API containers |
+| **Bind mount permissions** | Host path checks the writer's numeric identity | `./reports` receives host-owned output |
+| **Capabilities** | Small kernel privilege flags | Debug helper gets `NET_ADMIN` |
+| **Security options** | Kernel and runtime guardrails around privilege changes and syscalls | `no-new-privileges:true` with Docker's seccomp profile |
+| **Privileged mode** | Broad host-facing privilege bundle | Kept out of normal API services |
+| **User namespace remapping** | Maps container UIDs to less privileged host UIDs | Shared Docker host reduces container-root impact |
+| **Rootless Docker** | Runs Docker daemon and containers under an unprivileged user | Developer or build host uses rootless mode after testing limitations |
 | **Memory limit** | Cgroup memory ceiling | Worker gets `mem_limit: 512m` |
 | **CPU limit** | Cgroup scheduler ceiling | Worker gets `cpus: "1.5"` |
 
-The senior habit is to make each runtime choice boring and visible. The image should name its runtime user. Development commands should line up bind-mount writers with host ownership. Extra capabilities should match a specific operation. Memory and CPU limits should describe the capacity the service expects.
+The senior habit is steady and practical. The image should name its runtime user. Host-writing tools should line up with host ownership. Extra capabilities should match a named operation. Privileged mode should stay out of normal application services. Memory and CPU limits should describe the workload's expected shape.
 
-Those explicit choices turn Docker into a set of boundaries you can inspect, explain, and adjust without guessing.
+That finishes the Docker runtime and boundaries module. The main takeaway is visibility. A teammate should be able to read the Dockerfile, run command, or Compose file and explain how traffic moves, where files live, who writes them, and how much privilege and capacity the process receives.
+
+![Runtime boundary checklist infographic showing non-root user, host writes matching UID, dropped capabilities, no privileged mode, memory limit, CPU limit, and inspect actual state](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/runtime-boundary-checklist.png)
+
+_This summary image turns the final article into a review checklist for ordinary application containers: keep the user explicit, host writes predictable, privileges narrow, limits visible, and runtime state inspectable._
 
 ---
 
 **References**
 
-- [Docker Docs: Running containers](https://docs.docker.com/engine/containers/run/) - Official guide covering container runtime options, including the default user, `USER`, and `--user`.
 - [Docker Docs: Dockerfile reference - USER](https://docs.docker.com/reference/dockerfile/#user) - Defines the Dockerfile `USER` instruction, UID/GID syntax, and how it affects later build and runtime commands.
 - [Docker Docs: docker container run](https://docs.docker.com/reference/cli/docker/container/run/) - CLI reference for `--user`, `--cap-add`, `--cap-drop`, `--privileged`, memory flags, CPU flags, and other runtime options.
 - [Docker Docs: Resource constraints](https://docs.docker.com/engine/containers/resource_constraints/) - Official details on memory constraints, swap behavior, OOM behavior, CPU constraints, and scheduler controls.
-- [Docker Docs: Define services in Docker Compose](https://docs.docker.com/reference/compose-file/services/) - Compose service reference for `user`, `cap_add`, `cap_drop`, `privileged`, `cpus`, `mem_limit`, and related runtime attributes.
+- [Docker Docs: Define services in Docker Compose](https://docs.docker.com/reference/compose-file/services/) - Compose service reference for `user`, `cap_add`, `cap_drop`, `security_opt`, `privileged`, `cpus`, `mem_limit`, and related runtime attributes.
 - [Docker Docs: Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) - Documents bind mount host coupling, default write access, read-only mounts, and Docker Desktop filesystem behavior.
 - [Docker Docs: Isolate containers with a user namespace](https://docs.docker.com/engine/security/userns-remap/) - Official guide to user namespace remapping and host UID/GID isolation considerations.
+- [Docker Docs: Rootless mode](https://docs.docker.com/engine/security/rootless/) - Explains running the Docker daemon and containers as a non-root user, plus setup details and limitations.
+- [Docker Docs: Seccomp security profiles](https://docs.docker.com/engine/security/seccomp/) - Explains Docker's default seccomp profile and how seccomp restricts system calls.

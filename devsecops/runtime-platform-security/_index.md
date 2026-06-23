@@ -1,5 +1,6 @@
 ---
 title: "Runtime Platform Security"
-description: "Secure the cloud infrastructure, container registries, host operating systems, and Kubernetes clusters running your applications."
+description: "Secure the cloud infrastructure, container images, registries, Kubernetes clusters, and runtime controls that run applications."
+tags: ["runtime", "cloud", "containers", "kubernetes"]
 order: 2
 ---

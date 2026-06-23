@@ -44,6 +44,10 @@ Processors are where production discipline usually shows up. The **memory limite
 
 Exporters are the exits. A debug exporter is useful while proving the pipeline because it writes readable output to the collector logs. A production exporter usually sends data to a backend over OTLP, Prometheus remote write, or another backend-specific protocol. The important habit is to keep backend tokens and TLS configuration in the collector deployment, not copied into every application.
 
+![Telemetry pipeline flow showing app signals entering a receiver, passing through processors for sampling and attributes, then leaving through exporters to a backend](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/telemetry-pipeline-flow.png)
+
+*The pipeline flow shows the collector as a controlled route for traces, metrics, and logs, with processing steps where teams can batch data, remove unsafe attributes, and control export behavior.*
+
 One detail trips up many teams: defining a component does not run it. The collector only uses components listed under `service.pipelines`. If you configure `attributes/drop_sensitive` but forget to add it to the traces pipeline, the sensitive attributes still flow through unchanged.
 
 Now we can choose where this collector should run in the cluster.
@@ -58,6 +62,10 @@ For `devpolaris-orders-api`, start with a gateway collector in an `observability
 A gateway is also a good teaching shape because it keeps ownership clear. The application team owns the application instrumentation and important attributes, such as `service.name` and route names. The platform team owns collector capacity, export credentials, pipeline processors, and dashboards. Both teams can test the same route during an incident.
 
 A node agent or agent-to-gateway layout is useful when the cluster has high telemetry volume, host-level collection, local log scraping, or a hard requirement to keep first-hop telemetry traffic on the node. That design adds more moving pieces, so it should come with dashboards for both agents and gateways. The pipeline idea stays the same; only the number and placement of collectors changes.
+
+![Collector deployment shapes comparing sidecar, DaemonSet agent, and gateway collectors with per-pod control, node coverage, and central routing](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/collector-deployment-shapes.png)
+
+*The collector shape visual compares where telemetry first lands. A small gateway is easier to start with, while agents and sidecars add local control when volume or ownership needs it.*
 
 With the shape chosen, we can write a collector configuration that is small enough to read and close enough to production to be useful.
 
@@ -431,6 +439,10 @@ Use this checklist when reviewing the telemetry pipeline for `devpolaris-orders-
 | Collector health | Accepted, refused, failed-export, queue, memory, and restart metrics are dashboarded |
 | Backend proof | A synthetic orders request can be found in the tracing backend |
 | Ownership | App teams own instrumentation; platform teams own collector export and capacity |
+
+![Telemetry operations checklist with trace proof, safe attributes, batching, dropped data, cardinality, and backend verification](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/telemetry-operations-checklist.png)
+
+*The checklist keeps telemetry operations practical: prove one request end to end, clean unsafe fields, watch dropped data, and verify that the backend can answer incident questions.*
 
 The pipeline is healthy when it is boring during a normal release and useful during an incident. The orders team should know where to send telemetry, the platform team should know how the collector is behaving, and responders should be able to prove which hop is working without guessing from screenshots.
 

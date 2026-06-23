@@ -1,178 +1,588 @@
 ---
-title: "Runtime Hardening and Registries"
-description: "Secure container storage pipelines and isolate running containers using kernel-level privileges and sandbox environments."
-overview: "Artifact security does not stop at compilation. This article explains OCI registry access controls, tag immutability, Linux capabilities, seccomp filters, and hypervisor-level runtime isolation."
-tags: ["runtime", "registry", "namespaces", "capabilities", "sandbox"]
-order: 3
+title: "Container Runtime Isolation"
+description: "Limit what running containers can do with Linux capabilities, seccomp, AppArmor, sandboxing, and runtime limits."
+overview: "A trusted container image still needs runtime guardrails after Kubernetes starts it. This article follows the payments-api release into the cluster and shows how non-root users, dropped capabilities, seccomp, AppArmor or SELinux, read-only filesystems, resource limits, network policy, Pod Security Standards, and sandbox runtimes limit what a compromised container can do."
+tags: ["devsecops", "runtime-isolation", "seccomp", "apparmor"]
+order: 4
 id: article-devsecops-container-image-security-registry-security
-aliases:
-  - registry-security
-  - article-devsecops-container-image-security-registry-security
-  - devsecops/container-image-security/registry-security.md
-  - runtime-container-hardening
-  - article-devsecops-container-image-security-runtime-container-hardening
-  - devsecops/container-image-security/runtime-container-hardening.md
-  - devsecops/container-image-security/03-runtime-hardening.md
-  - devsecops/container-image-security/03-runtime-hardening
-  - container-image-security/03-runtime-hardening
 ---
 
 ## Table of Contents
 
-1. [The Storage and Runtime Blast Radius](#the-storage-and-runtime-blast-radius)
-2. [Securing the Gatekeeper: Registry Access Controls](#securing-the-gatekeeper-registry-access-controls)
-3. [Tag Mutability vs. Content-Addressed Descriptors](#tag-mutability-vs-content-addressed-descriptors)
-4. [Linux Namespaces: Partitioning the Operating System](#linux-namespaces-partitioning-the-operating-system)
-5. [Narrowing Authority: Dropping Linux Capabilities](#narrowing-authority-dropping-linux-capabilities)
-6. [Filtering the Kernel: Seccomp and Privilege Escalation](#filtering-the-kernel-seccomp-and-privilege-escalation)
-7. [Hypervisor-Level Workload Isolation](#hypervisor-level-workload-isolation)
-8. [Putting It All Together](#putting-it-all-together)
+1. [After the Image Starts](#after-the-image-starts)
+2. [Containers Share the Host Kernel](#containers-share-the-host-kernel)
+3. [A Runtime Baseline for payments-api](#a-runtime-baseline-for-payments-api)
+4. [Linux Capabilities](#linux-capabilities)
+5. [Seccomp](#seccomp)
+6. [AppArmor and SELinux](#apparmor-and-selinux)
+7. [Non-Root, Read-Only Filesystems, and Privilege Escalation](#non-root-read-only-filesystems-and-privilege-escalation)
+8. [CPU, Memory, Storage, and Process Limits](#cpu-memory-storage-and-process-limits)
+9. [Network Exposure](#network-exposure)
+10. [Kubernetes Guardrails](#kubernetes-guardrails)
+11. [Sandbox Runtimes](#sandbox-runtimes)
+12. [Verification and Debugging Workflow](#verification-and-debugging-workflow)
+13. [Putting It All Together](#putting-it-all-together)
 
-## The Storage and Runtime Blast Radius
+## After the Image Starts
+<!-- section-summary: A signed image from a private registry still needs runtime guardrails because the container runs as a process on a Kubernetes node. -->
 
-A secure software delivery pipeline is a continuous chain of trust. Thus far, we have focused on building hardened, minimal filesystems, auditing their dependencies, and cryptographically signing their digests. However, this chain of trust remains vulnerable if we do not secure the registry that stores these images, or if we fail to isolate the container process when it executes in our production clusters.
+Let's continue the same story from the previous articles. The small team has a `payments-api` container. The CI pipeline builds it, scans it, signs it, and pushes it to a private registry. The release manifest uses an image digest, so Kubernetes pulls the exact artifact the team approved. That is a strong supply-chain path.
 
-Consider two severe exploits that target these boundaries. First, suppose an attacker compromises a private container registry or acquires weak administrative credentials. If the registry allows tag overwriting, the attacker can push a compromised image manifest using an existing release tag (such as `:2026.05.20.1`). When production servers restart or auto-scale, they pull the malicious image silently, deploying backdoor code directly into your cluster.
+Now the pod starts. The kubelet asks the container runtime to pull the image and launch a process on a worker node. At that point, the security question moves from image trust to runtime behavior. The team already knows where the image came from. The next question is what the running process can do if a bug, bad dependency, or exposed endpoint gives an attacker a foothold inside the container.
 
-Second, suppose an application runs with default container engine privileges. If an attacker exploits a code vulnerability, they gain control of the running container process. By default, the container process runs with a significant set of administrative capabilities, allowing the process to communicate directly with the host operating system's kernel. Using kernel-level vulnerabilities (such as a dirty COW exploit or a runc namespace escape), the attacker can break out of the container's isolation boundary, gaining full root administrative access to the underlying physical server host.
+**Container runtime isolation** means the limits around a running container: which Linux privileges it has, which system calls it can make, which files it can write, which network paths it can reach, how much CPU and memory it can consume, and which kernel-level policies apply to it. For `payments-api`, runtime isolation is the difference between "an attacker found one application bug" and "an attacker can now change the node, scan the cluster, read service account tokens, and affect nearby workloads."
 
-To defend our systems against these exploits, we must implement strict security controls across two distinct boundaries: **Registry Security** to control push/pull privileges and tag immutability, and **Runtime Container Hardening** to restrict kernel access and isolate running processes.
+This article walks through the controls in the order a real team usually applies them. First, we look at why containers share the host kernel. Then we build a Kubernetes baseline. After that, we tighten Linux capabilities, seccomp, AppArmor or SELinux, user identity, filesystem writes, resource usage, network exposure, namespace guardrails, and sandbox runtimes. The final section shows a short verification workflow a platform team can run before this deployment goes to production.
 
-## Securing the Gatekeeper: Registry Access Controls
+![Runtime isolation layers infographic showing a payments-api pod constrained by non-root UID, dropped capabilities, seccomp, AppArmor or SELinux, NetworkPolicy, resource limits, and the node kernel boundary](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-layers.png)
 
-A container registry is the central holding area for your compiled software. It is the gatekeeper between your build pipeline and your live production environments. Whoever has the authority to push images, pull layers, or delete package versions can control what code executes in production. To secure this boundary, we must implement a highly restricted, role-based access model following the principle of least privilege.
+*Runtime isolation works in layers around the running process, so one application bug has fewer paths to become node or cluster access.*
 
-The first rule of registry security is that push access must be strictly restricted to automated CI/CD release pipelines. No human developer, engineer, or system administrator should have permanent write access to production package repositories. We utilize federated OpenID Connect (OIDC) identities or single-use, repository-scoped tokens to authenticate our build runners, ensuring that images can only be published after passing automated review stages and cryptographic sign-off.
+## Containers Share the Host Kernel
+<!-- section-summary: Containers isolate process views with Linux features, but every container on a node still asks the same host kernel to do privileged work. -->
 
-The second rule is that pull access should be highly restricted and read-only. Production clusters, staging environments, and vulnerability scanners must utilize unique, read-only pull secrets that are locked to specific namespaces and repositories. This prevents a compromise in one environment (such as a development cluster) from being used to inspect or pull images from sensitive production repositories.
+A **container** is a normal Linux process with a packaged filesystem and a restricted view of the machine. Linux namespaces give the process its own view of things like process IDs, network interfaces, mounts, and hostnames. Cgroups give the process resource limits for CPU, memory, and other resources. The image supplies the files. The runtime connects those pieces and starts the process.
 
-Finally, we must implement detailed package-level metadata bindings in our registry configuration. We ensure our packages are strictly private, bind them directly to their parent source repositories, and restrict image deletion rights to platform administrators. This guarantees that release history cannot be quietly deleted or modified, maintaining a reliable audit trail for compliance and rollback operations.
+The important beginner-friendly detail is this: containers on the same worker node share the host kernel. The **kernel** is the part of the operating system that controls memory, filesystems, networking, processes, and hardware. An application cannot directly mount a disk or change network routes by itself. It asks the kernel through a **system call**, often called a syscall. `open`, `connect`, `clone`, `mount`, and `chmod` are examples of requests a process can make to the kernel.
 
-## Tag Mutability vs. Content-Addressed Descriptors
+For `payments-api`, that matters because the application handles real payment requests. Maybe a deserialization bug lets someone run a command inside the container. Maybe a dependency vulnerability lets them write a file. Maybe an SSRF bug lets them make network calls from inside the pod. Image scanning and signing helped before the pod started, but runtime isolation controls what that compromised process can do after it starts.
 
-To identify container images, humans rely on readable tags, such as `ghcr.io/devpolaris/orders-api:2026.05.20.1` or `:latest`. However, in the Open Container Initiative (OCI) image specification, a tag is merely a mutable pointer. It is a text file pointing to a specific cryptographic manifest, and it can be moved to point to a completely different manifest at any time.
+A weak runtime setup gives too much power to the process. A container running as root with broad Linux capabilities, a writable root filesystem, no syscall filtering, no network policy, and a mounted service account token gives an attacker many paths to explore. A hardened runtime setup gives the same application only the privileges it actually needs: listen on port `8080`, read its config, write temporary files in `/tmp`, call the database and payment provider, and exit cleanly.
 
-To guarantee artifact integrity, we must adopt content-addressed references, deploying our workloads exclusively by their immutable **cryptographic digests**:
+Now that the risk is clear, the team needs a concrete Kubernetes baseline. The baseline gives reviewers one place to see the user, filesystem, syscall, network, and resource decisions for the workload.
+
+## A Runtime Baseline for payments-api
+<!-- section-summary: A secure runtime baseline combines pod-level defaults, container-level restrictions, temporary writable volumes, and resource budgets. -->
+
+A good starting point is a manifest that makes runtime security visible. Kubernetes has defaults, and many defaults are safe for ordinary cases, but production teams usually write the important settings into YAML so reviewers and admission policies can check them. The `payments-api` team wants the deployment to show exactly which privileges the application receives.
+
+Here is a practical baseline for a normal HTTP API that listens on port `8080`, reads secrets from Kubernetes, writes only temporary files, and has no reason to call the Kubernetes API from inside the app. We will unpack the important fields section by section after the YAML:
 
 ```yaml
-# Secure deployment reference using immutable digest
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: payments
 spec:
-  containers:
-  - name: orders-api
-    image: ghcr.io/devpolaris/orders-api@sha256:91c8b6bb0e6ad134dd19a7e1cf402a23c7c9876543210fedcba9876543210fed
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payments-api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+    spec:
+      serviceAccountName: payments-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+        appArmorProfile:
+          type: RuntimeDefault
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments/payments-api@sha256:9b6d2f4e...
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: payments-api-runtime
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: app-cache
+              mountPath: /app/.cache
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: app-cache
+          emptyDir:
+            sizeLimit: 64Mi
 ```
 
-The long hexadecimal string after the `@` symbol is the SHA-256 hash of the OCI image manifest. The manifest is a structured JSON document that records the exact hashes of every filesystem layer and configuration blob that makes up the container image:
+This manifest has several layers. The pod-level `securityContext` sets the Linux user, group, seccomp profile, and AppArmor profile for containers in the pod. The container-level `securityContext` drops Linux capabilities, blocks privilege escalation, and makes the image filesystem read-only. The `emptyDir` volumes give the application a small place to write temporary files without making the whole image filesystem writable. The resource section gives the scheduler and the kubelet a clear budget.
 
-```json
-{
-  "mediaType": "application/vnd.oci.image.manifest.v1+json",
-  "digest": "sha256:91c8b6bb0e6ad134dd19a7e1cf402a23c7c9876543210fedcba9876543210fed",
-  "size": 2417
-}
-```
+`automountServiceAccountToken: false` deserves a quick note. Kubernetes can mount a token into a pod so the workload can call the Kubernetes API. Many application pods do not need that. If `payments-api` only serves HTTP requests and talks to a database, mounting the Kubernetes API token adds an unnecessary secret to the runtime. If a later feature needs Kubernetes API access, the team can turn it on deliberately and bind a narrow Role to that service account.
 
-Because the OCI manifest is content-addressed, if an attacker alters a single file in a filesystem layer or tries to replace a binary in the OCI bundle, the layer's hash changes. This breaks the manifest's integrity checksum, causing the container engine to reject the download. By configuring our deployment files and admission controllers to reference images strictly by digest, we make our releases completely immune to tag-hijacking and tag-drift exploits.
+The rest of this article breaks down why each part exists. We will start with Linux capabilities because they are one of the easiest ways to accidentally give a container more power than it needs, especially when an image still starts as root.
 
-## Linux Namespaces: Partitioning the Operating System
+![Security context baseline infographic showing runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation false, drop ALL, RuntimeDefault seccomp, and tmp emptyDir settings applied to payments-api](/content-assets/articles/article-devsecops-container-image-security-registry-security/security-context-baseline.png)
 
-Once a secure, signed image is pulled by digest, the container engine initializes the process on a physical host. It is critical to remember that containers are not virtual machines. They do not run a separate guest operating system, nor do they run on top of a hypervisor. Instead, a container is simply an ordinary Linux process running directly on the host's shared operating system kernel.
+*A security context makes the runtime contract visible: the manifest says which privileges the container receives and which write paths it can use.*
 
-To isolate these processes, the Linux kernel relies on a core partitioning feature called **Namespaces**. Namespaces act as virtual blinders, limiting what a process can see:
-* **PID Namespace**: Isolates process IDs. A process inside a container might see itself as PID 1 (the init process), but on the physical host, it runs as an ordinary PID (like PID 14820). The container process cannot see or contact processes running on the host or in other containers.
-* **Network (Net) Namespace**: Isolates network resources. The container process receives its own virtual network interfaces, routing tables, and port allocations. It cannot bind to host ports or sniff raw host network traffic.
-* **Mount (Mnt) Namespace**: Isolates filesystem mount points. The container process can only see the directory tree mounted from its own container image layers, preventing it from inspecting or modifying host files.
+## Linux Capabilities
+<!-- section-summary: Linux capabilities split root-like power into smaller privileges, so containers can drop broad powers and add only rare exceptions. -->
 
-If an application process is compromised, the attacker is trapped inside these virtual namespaces. However, namespaces are not physical walls; they are logical boundaries managed by the host kernel. If the container process is granted administrative privileges, it can interact with host interfaces and attempt to break out of these namespaces. Therefore, we must actively strip away the process's authority to communicate with the kernel.
+**Linux capabilities** split powerful root privileges into smaller named pieces. Older Unix-style systems treated user ID `0`, usually called root, as the identity that could do almost everything. Linux capabilities made that more granular. A process might have permission to bind to a low network port, change file ownership, load kernel modules, or change system time, depending on which capabilities it holds.
 
-## Narrowing Authority: Dropping Linux Capabilities
+For a container, capabilities matter because a root process inside the container may still receive a set of kernel privileges. A web API usually needs very few of them. `payments-api` needs to listen on a TCP port, read configuration, make outbound network calls, write to a small temporary directory, and log to standard output. It does not need to change kernel networking, mount filesystems, load kernel modules, trace other processes, or change the host clock.
 
-Historically, the Linux operating system split process privileges into two simple states: root (UID 0) with absolute power, and normal users with restricted power. To make security controls more granular, the Linux kernel introduced **Capabilities**. Capabilities split absolute root power into several dozen individual, highly specific privileges.
-
-Examples of capabilities include `CAP_NET_BIND_SERVICE` (allowing a process to bind to network ports below 1024), `CAP_CHOWN` (allowing a process to modify file owners), and `CAP_SYS_ADMIN` (allowing broad system administration tasks). By default, when a container engine launches a container, it grants the process a generous subset of these capabilities, including the power to change process priorities, modify network namespaces, or bind privileged ports.
-
-However, a standard web API needs none of these administrative privileges. The orders API simply reads database configurations, processes requests, and writes logs. To secure the runtime, we must explicitly drop all capabilities inside our deployment configuration, adding back only the bare minimum if required:
+Kubernetes lets the team drop capabilities at the container level. The setting belongs on the container because each container in a pod can need a different privilege set:
 
 ```yaml
-# Drop all default capabilities from the container
 securityContext:
-  allowPrivilegeEscalation: false
-  privileged: false
   capabilities:
     drop:
       - ALL
 ```
 
-Setting `capabilities.drop: ["ALL"]` tells the container runtime to strip away all administrative powers from the process. Even if the process runs as the root user inside its namespace, it possesses no effective capabilities. If an attacker exploits the application code, they cannot load kernel modules, manipulate raw network packets, or change file system permissions. By enforcing this strict restriction, we ensure the process operates as a zero-capability workload, minimizing its blast radius.
+This says the container starts with no extra Linux capabilities. That is a strong default for `payments-api`. The app listens on port `8080`, so it does not need the `NET_BIND_SERVICE` capability that processes traditionally needed for ports below `1024`.
 
-## Filtering the Kernel: Seccomp and Privilege Escalation
-
-Every Linux process interacts with the host kernel by executing system calls (syscalls), which are low-level requests to perform hardware or filesystem tasks (such as `sys_write` to output data or `ptrace` to debug processes). The standard Linux kernel supports several hundred system calls. While a typical web application only utilizes a small subset of these calls, a standard container process is permitted to execute almost any system call by default.
-
-To restrict this system-call exposure, we implement **Seccomp** (Secure Computing Mode) filtering. Seccomp acts as a firewall between your application process and the host kernel, intercepting system calls and rejecting any call that is not explicitly permitted by the active profile.
-
-In production Kubernetes environments, we configure our pods to use the container runtime's default seccomp profile:
+Some older applications still listen on port `80` or `443` inside the container. In that case, the team can add only the one needed capability:
 
 ```yaml
-# Enforce seccomp filters at the pod level
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE
+```
+
+That exception should stay rare. Most teams avoid it by having the application listen on an unprivileged port such as `8080`, then letting a Kubernetes Service, Ingress, Gateway, or load balancer expose port `80` or `443` outside the pod. The container stays simple, and the platform owns the public entry point.
+
+Here are common capabilities reviewers watch closely. These are the names that should trigger a real conversation during review:
+
+| Capability | What it can allow | How it applies to `payments-api` |
+|---|---|---|
+| **SYS_ADMIN** | A very broad set of admin operations, including many mount and namespace operations | A normal API should not receive it because it gives too much kernel-level power. |
+| **NET_ADMIN** | Network interface, route, firewall, and traffic-control changes | The API should not change node or pod networking. |
+| **SYS_PTRACE** | Inspect or trace other processes | The API should not debug or inspect neighboring processes in production. |
+| **SYS_TIME** | Change the system clock | The API should read time from the OS, not set it. |
+| **NET_BIND_SERVICE** | Bind to ports below `1024` | Usually avoided by listening on `8080` inside the container. |
+
+Dropping capabilities reduces what a compromised process can ask the kernel to do. The next layer narrows the syscall surface even further, because some risky kernel operations can still appear through system calls.
+
+## Seccomp
+<!-- section-summary: Seccomp filters system calls, which lets the runtime block whole classes of kernel requests before the kernel performs them. -->
+
+**Seccomp** is a Linux feature that filters system calls. A system call is the way a process asks the kernel to do work. Seccomp lets the runtime say, "this container can use these syscalls, and these other syscalls should fail." Docker ships a default seccomp profile, and Kubernetes can ask the container runtime to apply its default profile through `RuntimeDefault`.
+
+For `payments-api`, seccomp is useful because an HTTP service needs a predictable set of kernel operations. It opens files, creates threads, accepts connections, writes logs, and reads environment variables. It should not need dangerous syscalls related to kernel module loading, unusual namespace creation, or low-level host changes.
+
+The baseline uses seccomp at the pod level. That gives every container in the pod the same default syscall filter unless a container overrides it:
+
+```yaml
 securityContext:
   seccompProfile:
     type: RuntimeDefault
 ```
 
-Applying the `RuntimeDefault` seccomp profile activates a highly vetted, industry-standard filter. This filter automatically blocks unusual, dangerous system calls (such as those used to bypass file access controls or modify kernel modules) while allowing standard application operations to run without disruption.
+`RuntimeDefault` tells Kubernetes to use the default seccomp profile from the container runtime. That gives the team a maintained baseline without writing a custom syscall policy on day one. Production teams usually start here because custom seccomp profiles require testing across language runtimes, observability agents, TLS libraries, and startup hooks.
 
-Alongside seccomp, we block privilege escalation:
-* **AllowPrivilegeEscalation**: Set to `false` to prevent the process or its children from gaining more privileges than their parent process, neutralizing setuid binaries.
-* **Privileged Container**: Always set to `false`. A privileged container completely disables all namespace and capability sandboxing, giving the container process raw, administrative root access to the physical host node.
-
-## Hypervisor-Level Workload Isolation
-
-Applying namespaces, dropping capabilities, and filtering system calls with seccomp creates a highly secure runtime sandbox. However, because all containers on a host continue to share the exact same physical Linux kernel, they are still exposed to kernel exploits. If an attacker exploits a zero-day vulnerability in the host kernel, they can bypass seccomp and escape the container.
-
-To eliminate this shared-kernel risk for high-security or multi-tenant workloads, we implement hypervisor-level workload isolation. Instead of running directly on the host's shared kernel, we isolate the container using specialized runtimes:
-* **gVisor**: A user-space kernel wrapper developed by Google. gVisor implements a kernel runtime (called Sentry) that intercepts and emulates all container system calls in userspace. The application's system calls never reach the host kernel directly, neutralizing kernel exploits.
-* **Kata Containers**: A micro-VM runtime. Kata Packages each container pod inside its own isolated, highly optimized virtual machine running on top of a hypervisor. Each pod receives its own private guest Linux kernel, creating a physical hardware isolation boundary.
+A custom profile can still make sense for high-risk workloads. Suppose the same platform also runs a partner-provided fraud scoring plugin beside `payments-api`. The platform team might create a local seccomp profile after observing normal behavior in staging, then mount it on nodes and reference it from the pod:
 
 ```yaml
-# Example Kubernetes Pod runtime class selection
-spec:
-  runtimeClassName: gvisor
-  containers:
-  - name: orders-api
-    image: ghcr.io/devpolaris/orders-api@sha256:91c8...
+securityContext:
+  seccompProfile:
+    type: Localhost
+    localhostProfile: profiles/payments-api.json
 ```
 
-By declaring `runtimeClassName: gvisor` or `runtimeClassName: kata` in our deployment manifest, we instruct the container orchestrator to isolate the container process inside a hypervisor sandbox. If an attacker compromises the container and exploits the kernel, their access is completely isolated to the virtual sandbox kernel, preventing them from accessing host resources or other containers in the cluster.
+This means the profile file already exists on the node under the kubelet's configured seccomp profile path. Kubernetes references the profile; it does not create the profile file for the team. That detail matters in real clusters because a missing local profile can keep the pod from starting.
+
+Seccomp failures often appear as `Operation not permitted`, startup crashes, or application logs that point at a syscall-dependent feature. The normal rollout path is staging first, one workload at a time, with logs and node events open. If the app breaks after a custom profile change, the team compares the new profile to the syscall the app needed and decides whether the syscall is part of normal application behavior or a risky feature that should stay blocked.
+
+Seccomp limits kernel requests. AppArmor and SELinux add another layer by controlling what the process can access.
+
+## AppArmor and SELinux
+<!-- section-summary: AppArmor and SELinux add operating-system access rules around containers, usually through platform-managed profiles or labels. -->
+
+**AppArmor** and **SELinux** are Linux security modules. They give the operating system another policy layer for processes. A simple way to think about them is this: even if a process has a Linux user ID and a set of capabilities, the OS can still check an additional profile or label before allowing file, process, or network access.
+
+AppArmor is profile-based and commonly seen on Ubuntu and Debian-style systems. A profile can say which paths and operations a process may use. SELinux is label-based and commonly seen on Red Hat-style systems. It attaches labels to processes and files, then uses policy rules to decide which labeled process can access which labeled object. Both approaches can protect the host and neighboring workloads from a process that tries to step outside its expected runtime shape.
+
+Kubernetes now supports AppArmor through `securityContext` fields. The baseline uses the runtime default profile:
+
+```yaml
+securityContext:
+  appArmorProfile:
+    type: RuntimeDefault
+```
+
+A cluster that has a custom AppArmor profile loaded on the node can reference it like this. The pod will only start on nodes where the named profile exists and the runtime supports it:
+
+```yaml
+securityContext:
+  appArmorProfile:
+    type: Localhost
+    localhostProfile: payments-api-deny-runtime-writes
+```
+
+The platform team owns the profile file and node rollout. The application team owns the workload expectation. For `payments-api`, a useful custom profile might prevent writes outside known temporary paths and restrict access to sensitive host paths. That kind of profile needs careful staging because some language runtimes write cache files, TLS libraries read certificate bundles, and observability agents may need predictable paths.
+
+SELinux usually appears through node images and container runtime defaults. On SELinux-enabled clusters, the runtime labels the container process and filesystem content so the kernel can apply SELinux policy. Kubernetes also has `seLinuxOptions` for clusters that intentionally manage these labels:
+
+```yaml
+securityContext:
+  seLinuxOptions:
+    type: container_t
+```
+
+Most application teams do not invent SELinux labels for each deployment. They use the platform's supported container type, then escalate to the platform team when a workload needs a special label or volume access pattern. That keeps application YAML readable and keeps operating-system policy in the hands of the team that manages nodes.
+
+So far, the container has fewer kernel privileges and stronger OS policy. The next step is the identity and filesystem shape inside the container, because a process running as root with a writable image filesystem still has too much room to move.
+
+## Non-Root, Read-Only Filesystems, and Privilege Escalation
+<!-- section-summary: Running as a non-root user, blocking privilege escalation, and making the image filesystem read-only reduce damage from application compromise. -->
+
+**Running as non-root** means the main process inside the container starts with a normal numeric user ID instead of user ID `0`. In Kubernetes, `runAsNonRoot: true` asks the kubelet to reject the container if it would run as root. `runAsUser: 10001` makes the intended user explicit. This matters because many files and behaviors inside Linux still treat root differently, and some container escape or misconfiguration paths grow more dangerous when the process starts as root.
+
+The runtime setting should match the image. A typical Dockerfile for `payments-api` might create or choose a non-root user during the build, then make that user the default process identity:
+
+```dockerfile
+FROM node:22-bookworm-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+RUN groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --home-dir /app app
+USER 10001:10001
+CMD ["node", "server.js"]
+```
+
+The Kubernetes deployment then enforces the same identity. That way the cluster rejects a bad image or manifest change that would run the process as root:
+
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+```
+
+**Privilege escalation** means a process gains more privileges after it starts. The classic Linux examples are setuid binaries and file capabilities. Kubernetes exposes a control called `allowPrivilegeEscalation`. For `payments-api`, the team should set it to `false` so the process cannot gain more privileges through those paths:
+
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+```
+
+**A read-only root filesystem** means the files from the container image cannot be changed at runtime. The application can still write to mounted volumes, but it cannot rewrite `/app/server.js`, drop a new binary into `/usr/local/bin`, or leave a modified file in the image layer. That helps incident response because the running image stays closer to the artifact that CI approved.
+
+The tradeoff is practical. Many apps write to `/tmp`, cache directories, PID files, or framework-specific paths. The `payments-api` team handles that by mounting small `emptyDir` volumes for the exact writable paths:
+
+```yaml
+securityContext:
+  readOnlyRootFilesystem: true
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+  - name: app-cache
+    mountPath: /app/.cache
+volumes:
+  - name: tmp
+    emptyDir:
+      sizeLimit: 64Mi
+  - name: app-cache
+    emptyDir:
+      sizeLimit: 64Mi
+```
+
+If the application crashes with messages like `read-only file system`, the team should find the write path and decide whether it is a legitimate runtime write. Logs should go to standard output. Temporary files should go to `/tmp` or another mounted scratch path. Application state should go to a database, queue, object storage, or a proper persistent volume, depending on the workload.
+
+These controls reduce privilege and file-system movement. The next problem is resource movement: a compromised or buggy process can still consume CPU, memory, storage, or process IDs.
+
+## CPU, Memory, Storage, and Process Limits
+<!-- section-summary: Resource controls use cgroups and Kubernetes policy so one pod cannot consume an unlimited share of a node. -->
+
+**Resource limits** define how much of a node a container can use. Kubernetes uses requests for scheduling and limits for enforcement. A CPU request tells the scheduler the amount of CPU the pod normally needs. A memory request does the same for memory. A CPU limit can throttle the container. A memory limit can cause the container to be killed if it exceeds the limit. Ephemeral storage limits control local writable storage such as logs, writable layers, and `emptyDir` volumes.
+
+This is a security topic because denial of service often starts as resource exhaustion. Imagine a bug in `payments-api` that creates too many worker threads for one request, or an attacker sends requests that generate huge temporary files. Without resource controls, one pod can pressure the node and harm other workloads. With controls, the failure stays closer to the pod that caused it, and Kubernetes can restart or reschedule it according to the deployment policy.
+
+The deployment-level setting looks like this. The exact values should come from load testing and observed production behavior, not from copying another service blindly:
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+    ephemeral-storage: 64Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 256Mi
+```
+
+Teams usually choose these values from real measurements. A first version might come from load testing and production-like traffic in staging. After deployment, metrics can show whether the pod gets throttled, hits memory limits, or grows local storage. The goal is a budget that gives the service room to handle normal spikes while still limiting runaway behavior.
+
+Namespace-level policy helps keep one deployment from skipping resource budgets. A platform team might set a `LimitRange` so containers in the `payments` namespace get defaults and bounds even when a developer forgets to add them:
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: payments-container-limits
+  namespace: payments
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 500m
+        memory: 512Mi
+      max:
+        cpu: "1"
+        memory: 1Gi
+```
+
+A `ResourceQuota` can cap the whole namespace so the team cannot accidentally schedule unlimited pods. This is useful when CI deploys preview environments or horizontal autoscaling creates more replicas than expected:
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: payments-quota
+  namespace: payments
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "30"
+```
+
+Process ID limits deserve a quick mention because fork bombs are still real. Kubernetes supports PID limiting at the node and pod level through kubelet configuration, commonly through `podPidsLimit` in cluster-managed settings. Application teams usually cannot set that field in an ordinary Deployment manifest. Platform teams configure it on nodes so one pod cannot create enough processes to starve the node.
+
+Resource controls keep the workload from consuming the whole node. Network controls keep the workload from talking to everything it can route to.
+
+## Network Exposure
+<!-- section-summary: Network isolation narrows which pods and services can reach payments-api and which destinations payments-api can call. -->
+
+**Network exposure** means the paths where traffic can enter or leave the pod. Kubernetes gives every pod an IP address, and many clusters allow broad pod-to-pod traffic unless a NetworkPolicy-capable CNI plugin enforces restrictions. A Service gives the pod a stable name and virtual IP. Ingress, Gateway API, or a load balancer can expose the service outside the cluster.
+
+For `payments-api`, the expected network shape is narrow. Public traffic should arrive through the platform's gateway. The API should talk to the payment database, a payment processor egress path, metrics, and DNS. It should not accept direct traffic from every namespace, and it should not freely scan internal services after compromise.
+
+A Service can stay internal. This keeps `payments-api` reachable inside the cluster while the public gateway remains the only outside entry point:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-api
+  namespace: payments
+spec:
+  type: ClusterIP
+  selector:
+    app: payments-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+```
+
+That Service maps cluster-internal port `80` to container port `8080`. The pod still avoids privileged low ports. The gateway, not the application container, owns the public edge.
+
+A NetworkPolicy can then limit ingress and egress. The exact labels vary by cluster, but the shape usually looks like this:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: payments-api-expected-traffic
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app: payments-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+          podSelector:
+            matchLabels:
+              app: public-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+          podSelector:
+            matchLabels:
+              app: payments-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+```
+
+This policy says the gateway can reach `payments-api` on port `8080`, `payments-api` can reach the database on `5432`, and DNS still works. Real teams often start with ingress policy first, then add egress policy after mapping normal dependencies. Egress policy can break hidden dependencies, so staging and telemetry matter.
+
+There are a few high-risk networking settings reviewers should challenge. `hostNetwork: true` puts the pod in the node's network namespace. `hostPort` opens a port directly on the node. `NodePort` exposes a service through every node. These settings have valid infrastructure uses, such as ingress controllers or network agents, but a normal `payments-api` deployment should reach users through the platform gateway instead.
+
+Now the deployment has workload-level controls. The next step is making sure every workload in the namespace follows the same baseline.
+
+## Kubernetes Guardrails
+<!-- section-summary: Pod Security Standards and admission policy turn per-deployment runtime settings into namespace-wide expectations. -->
+
+Kubernetes has **Pod Security Standards**, usually shortened to PSS. They define three policy levels for pod security: **Privileged**, **Baseline**, and **Restricted**. Privileged allows broad host access for trusted infrastructure workloads. Baseline blocks many known privilege-escalation paths while allowing common application patterns. Restricted applies the strongest built-in profile for ordinary application pods.
+
+For the `payments` namespace, the team wants Restricted. That lines up with the controls already shown: no privileged containers, no privilege escalation, dropped capabilities, non-root execution, seccomp, and tight volume choices.
+
+Kubernetes can enforce these standards with namespace labels through Pod Security Admission. The labels below tell the API server to reject pods that violate the Restricted profile and also record warnings and audit events:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payments
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.36
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.36
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.36
+```
+
+The version labels should match the Kubernetes minor version the platform team has chosen for policy evaluation. Pinning the version makes upgrades deliberate. During an upgrade, the platform team can compare the new PSS rules, update manifests if needed, then move the label version forward.
+
+PSS gives a strong built-in floor for pod security fields. Organization-specific rules still need their own checks: private-registry allowlists, image digest requirements, resource request requirements, NetworkPolicy expectations, and service account token rules for app pods. Teams usually combine PSS with CI checks, admission policies, or policy-as-code tooling for those organization-specific rules. The important part is that the app team and platform team share one baseline instead of debating every deployment from scratch.
+
+Even with strong pod security, some workloads deserve a stronger boundary because the threat model is different. That is where sandbox runtimes come in.
+
+## Sandbox Runtimes
+<!-- section-summary: Sandbox runtimes add a stronger boundary for high-risk workloads, usually through Kubernetes RuntimeClass. -->
+
+A **sandbox runtime** adds another isolation layer around containers. The normal Linux container model still shares the host kernel. Sandbox runtimes reduce that sharing in different ways. They usually cost more in startup time, performance, compatibility, or operational complexity, so teams use them for workloads where the extra boundary is worth it.
+
+**gVisor** runs containers with an application kernel implemented in user space. The container's syscalls go to gVisor's `runsc` runtime first, and gVisor handles or mediates them before the host kernel sees the request. This can reduce direct exposure to the host kernel for many application workloads.
+
+**Kata Containers** runs containers inside lightweight virtual machines. That gives each sandbox its own guest kernel and a VM boundary. This can be useful for stronger tenant isolation, especially where teams want the container workflow with a boundary closer to a virtual machine.
+
+For the normal `payments-api`, a hardened standard runtime may be enough. The service is built by the team, deployed from a trusted pipeline, and runs ordinary HTTP code. A sandbox runtime starts to matter if the platform also runs less trusted code: customer-defined transformations, third-party payment plugins, CI jobs for external pull requests, browser automation, code execution challenges, or multi-tenant workloads where different customers share nodes.
+
+Kubernetes uses **RuntimeClass** to select an alternate runtime. The platform team installs and configures the runtime on a node pool, then creates a RuntimeClass:
+
+```yaml
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+```
+
+The workload can then request that runtime. This example uses a plugin runner because sandbox runtimes usually make the most sense for code that is less trusted than the core `payments-api` service:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: partner-fraud-plugin-runner
+  namespace: payments
+spec:
+  template:
+    spec:
+      runtimeClassName: gvisor
+      containers:
+        - name: plugin-runner
+          image: registry.example.com/payments/plugin-runner@sha256:71d3c9...
+```
+
+A Kata-backed cluster might expose a RuntimeClass with a handler such as `kata`, depending on how the platform installed it. The exact handler name is a cluster contract. Application teams should treat `runtimeClassName` as a platform-provided option, not a field they can invent in app YAML.
+
+Sandbox runtimes still need the earlier controls. A gVisor or Kata pod should still run as non-root, drop capabilities, use seccomp where supported, avoid broad network access, set resource budgets, and follow Pod Security Standards. The sandbox adds a stronger boundary while the earlier workload hygiene still carries the daily controls.
+
+Before the article closes, the team needs a way to verify these settings without turning the checklist into guesswork. That verification work should happen in staging and CI, before the same manifest reaches production.
+
+## Verification and Debugging Workflow
+<!-- section-summary: A short staging workflow checks admission, runtime settings, filesystem writes, resource behavior, and network policy before production rollout. -->
+
+Runtime isolation works best when the team checks it during normal delivery, not only during an incident. For `payments-api`, the CI pipeline can lint the manifests, the cluster can reject unsafe pods through admission, and a staging rollout can confirm that the app still runs under the tighter settings.
+
+A practical staging session might look like this. These commands check admission first, then inspect the running pod only after the manifest passes server-side validation:
+
+```bash
+kubectl apply --server-side --dry-run=server -f k8s/payments-api.yaml
+kubectl get events -n payments --sort-by=.lastTimestamp
+kubectl describe pod -n payments -l app=payments-api
+kubectl exec -n payments deploy/payments-api -- id
+kubectl exec -n payments deploy/payments-api -- sh -c 'grep -E "CapEff|NoNewPrivs|Seccomp" /proc/1/status'
+kubectl exec -n payments deploy/payments-api -- sh -c 'cat /proc/1/attr/current || true'
+kubectl exec -n payments deploy/payments-api -- sh -c 'touch /tmp/probe && (touch /app/probe || true)'
+kubectl top pod -n payments
+```
+
+The server-side dry run checks the manifest against API validation and admission without creating the workload. Events and `describe pod` show Pod Security Admission failures, missing AppArmor profiles, image pull problems, scheduling failures, OOM kills, and other runtime clues. The `id` command confirms the process user. `/proc/1/status` shows capability and seccomp details for PID 1. `/proc/1/attr/current` can show the active AppArmor or SELinux context on many Linux nodes. The write test confirms that `/tmp` is writable and `/app` stays read-only. `kubectl top` gives a quick view of CPU and memory behavior after traffic starts.
+
+Some production images use distroless or minimal bases and have no shell. That is a good supply-chain choice. In that case, the team can run these checks in a staging variant, a temporary debug pod with the same security context, or through application health checks and node-level observability. The team should avoid adding a shell to the production image only for convenience because that increases the runtime tools available to an attacker.
+
+Debugging usually follows the symptom. `CreateContainerError` with AppArmor text often points to a missing or unsupported profile. `CrashLoopBackOff` after enabling `readOnlyRootFilesystem` often points to a write path that needs an `emptyDir`, a config change, or an application fix. `OOMKilled` points to memory limits or a leak. Repeated `Operation not permitted` after a seccomp change can point to a blocked syscall. Connection timeouts after applying NetworkPolicy usually mean an expected ingress, egress, or DNS path was missing.
+
+This workflow gives the team a way to test runtime isolation as part of delivery. The final piece is connecting all the controls back to the story.
 
 ## Putting It All Together
+<!-- section-summary: Runtime isolation turns a trusted image into a constrained workload that can run in Kubernetes with a smaller blast radius. -->
 
-Securing our container registries and hardening our runtime environments completes the pipeline protection chain, ensuring that our workloads remain isolated and highly restricted throughout their execution lifecycle. By combining automated registry access roles, immutable digest references, Linux namespaces, capability dropping, seccomp filters, privilege escalation blocks, and hypervisor workload sandboxes, we establish a robust defense-in-depth architecture.
+The `payments-api` image now has two kinds of protection around it. The earlier articles handled what happens before the pod starts: build hygiene, scanning, signing, private registry release, and digest-based deployment. This article handled what happens after the pod starts: the process receives a narrow Linux identity, a read-only image filesystem, a small writable scratch area, dropped capabilities, default seccomp, AppArmor or SELinux policy, resource budgets, narrow network paths, namespace guardrails, and optional sandbox runtime support for higher-risk workloads.
 
-When securing your registries and container deployments, ensure you maintain these six core practices:
+The key idea is **blast radius**. A runtime bug may still happen. A vulnerable library may still reach production. A bad request may still trigger an unexpected code path. Runtime isolation makes the compromised process less powerful. It can serve traffic, write to `/tmp`, use the dependencies it was designed to use, and exit. It has fewer paths to change the node, inspect neighbors, exhaust shared resources, or move through the cluster.
 
-First, restrict registry push access exclusively to verified, automated CI/CD release pipelines. Deny human developer accounts permanent push privileges to production package repositories.
+For a small team, the most useful starting point is straightforward. Use a private-registry image by digest. Run as a non-root UID. Drop all capabilities. Set `allowPrivilegeEscalation: false`. Use `RuntimeDefault` seccomp. Use AppArmor or SELinux defaults from the platform. Make the root filesystem read-only and mount only the writable paths the app actually needs. Add CPU, memory, and storage budgets. Keep the service internal behind the gateway. Add NetworkPolicy for expected paths. Enforce the Restricted Pod Security Standard in the namespace. Reach for gVisor or Kata when the workload runs less trusted code or needs a stronger tenant boundary.
 
-Second, pull all container images strictly by their immutable cryptographic digests rather than mutable tags. Deploying by digest ensures absolute content integrity and protects your clusters against tag-hijacking and tag-drift exploits.
+That is the complete container and image security path for `payments-api`: build a trustworthy artifact, store and release it through a trusted registry path, then run it with limits that match what the service actually needs. The last step matters because production risk continues after the image starts.
 
-Third, execute container processes under low-privilege, non-root user accounts. Declare an explicit, high-number UID and drop all default capabilities using `capabilities.drop: ["ALL"]`, ensuring the container process operates with zero administrative capabilities.
+![Runtime isolation summary infographic showing trusted image, constrained process, small write area, narrow network, resource budget, and sandbox when needed around payments-api](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-summary.png)
 
-Fourth, enforce read-only root filesystems and seccomp filters across all deployments. Mount your container layers as read-only at runtime, utilizing ephemeral tmpfs volumes exclusively for specific write paths, and apply the default seccomp profile to block dangerous system calls.
-
-Fifth, completely disable privileged containers and block privilege escalation. Set `allowPrivilegeEscalation: false` and `privileged: false` across all pods to guarantee that processes cannot acquire elevated administrative powers.
-
-Sixth, adopt hypervisor-level workload isolation for sensitive or multi-tenant applications. Utilize runtimes like gVisor or Kata Containers to wrap processes in isolated guest kernels, completely removing the shared-kernel attack surface.
-
-![Container runtime isolation summary map](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-summary.png)
-
-*This summary highlights namespaces, capabilities, seccomp filters, privilege controls, sandboxing, and kernel boundaries.*
+*The runtime summary is the final handoff: a trusted image still runs as a constrained process with limited files, network paths, resources, and sandbox options.*
 
 ---
 
 **References**
 
-- [Kubernetes Security Context Configuration](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Official guide on configuring UIDs, capabilities, seccomp, and privilege escalation blocks.
-- [OCI Image Index and Descriptor Specification](https://specs.opencontainers.org/image-spec/) - OCI documentation on content-addressed digests, media types, and manifest trees.
-- [Google Container Tools - gVisor Architecture](https://gvisor.dev/docs/architecture/) - gVisor documentation explaining userspace system-call interception and kernel sandboxing.
-- [Kata Containers Architecture Overview](https://katacontainers.io/) - Official reference on micro-VM container runtime isolation.
-- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html) - Technical guidance on runtime hardening, seccomp filters, and capability dropping.
+- [Kubernetes Security Context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Documents pod and container `securityContext` fields such as users, groups, capabilities, seccomp, AppArmor, privilege escalation, and read-only root filesystems.
+- [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Defines the Privileged, Baseline, and Restricted policy levels for pods.
+- [Enforce Pod Security Standards with namespace labels](https://kubernetes.io/docs/tasks/configure-pod-container/enforce-standards-namespace-labels/) - Shows how Pod Security Admission uses `pod-security.kubernetes.io/*` labels.
+- [Linux kernel security constraints for Pods and containers](https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/) - Explains seccomp, AppArmor, SELinux, privilege escalation, privileged containers, and kernel-level isolation.
+- [Docker seccomp security profiles](https://docs.docker.com/engine/security/seccomp/) - Explains Docker's default seccomp profile and how seccomp limits Linux syscalls.
+- [Linux capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) - Defines Linux capability names and the privileged operations they control.
+- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Documents pod ingress and egress isolation with NetworkPolicy.
+- [Kubernetes Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/) - Documents CPU, memory, and ephemeral storage requests and limits.
+- [Kubernetes PID limiting](https://kubernetes.io/docs/concepts/policy/pid-limiting/) - Explains pod and node process ID limits.
+- [Kubernetes RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/) - Documents selecting different container runtime configurations for pods.
+- [gVisor documentation](https://gvisor.dev/docs/) - Describes gVisor's container sandboxing model and runtime.
+- [Kata Containers documentation](https://katacontainers.io/docs/) - Documents Kata Containers and its lightweight virtual machine isolation model.

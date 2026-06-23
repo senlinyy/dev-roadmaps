@@ -57,6 +57,10 @@ This small layout gives a junior engineer a fair chance at review. They can open
 
 Some generated charts include many optional templates, notes, tests, and helper patterns. Those can teach useful Helm features, yet they can also distract from the application the team actually runs. For the orders API, the first review should care about the Deployment, Service, ConfigMap, and route. Everything else can wait until a production need appears.
 
+![Small Helm chart directory showing Chart.yaml, values.yaml, templates, helpers, Deployment, and Service output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/small-helm-chart.png)
+
+*A beginner-friendly chart keeps the source layout close to the Kubernetes objects the team already understands and reviews.*
+
 ## Chart.yaml, Values, And Release Inputs
 <!-- section-summary: Chart metadata identifies the package, while values files carry the release choices that change between environments. -->
 
@@ -174,6 +178,10 @@ spec:
 The template source tells reviewers how the chart works. The rendered manifest tells reviewers what Kubernetes receives. A healthy review uses both views because a neat template can still render surprising YAML when values change.
 
 Selectors deserve extra attention. A Deployment selector links the Deployment to its Pods, and Kubernetes treats selector changes carefully after creation. A Service selector controls which Pods receive traffic. Chart helpers should keep those labels stable unless the team plans a deliberate migration.
+
+![Template to objects flow showing Helm templates and values rendering Deployment, Service, and ConfigMap objects with selector and label checks](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/template-to-objects.png)
+
+*The template source explains how the chart works, while the rendered objects prove which Kubernetes fields will actually change.*
 
 ## Helpers For Names And Labels
 <!-- section-summary: Helper templates keep repeated names and labels consistent across objects, especially where selectors and metadata must line up. -->
@@ -429,6 +437,10 @@ Validation:
 ```
 
 This review style catches chart surprises before the release. If a template change meant to add resources also changes selectors, names, namespaces, or route hosts, the rendered output will show it. The team can split the pull request, adjust the template, or add a migration plan before production traffic depends on the change.
+
+![Chart review loop showing metadata, values, templates, rendered YAML, lint, and rollback evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/chart-review-loop.png)
+
+*A practical chart review moves through source intent, rendered evidence, validation, and rollback context instead of trusting the package layer by itself.*
 
 ## What's Next
 

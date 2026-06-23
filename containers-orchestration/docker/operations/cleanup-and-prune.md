@@ -9,53 +9,41 @@ id: article-containers-orchestration-docker-cleanup-and-prune
 
 ## Table of Contents
 
-1. [What You Are Cleaning Up](#what-you-are-cleaning-up)
-2. [Read Docker Disk Usage](#read-docker-disk-usage)
-3. [Stopped Containers](#stopped-containers)
-4. [Unused Images](#unused-images)
-5. [Build Cache](#build-cache)
-6. [Volumes and Real Data](#volumes-and-real-data)
-7. [Compose Project Cleanup](#compose-project-cleanup)
-8. [Filters, Labels, and Team Safety](#filters-labels-and-team-safety)
+1. [What Docker Cleanup Means](#what-docker-cleanup-means)
+2. [Start With Disk Usage](#start-with-disk-usage)
+3. [Clean Stopped Containers](#clean-stopped-containers)
+4. [Clean Images Without Losing Your Build Path](#clean-images-without-losing-your-build-path)
+5. [Clean Build Cache](#clean-build-cache)
+6. [Treat Volumes Like Data](#treat-volumes-like-data)
+7. [Clean a Compose Project](#clean-a-compose-project)
+8. [Use Labels and Filters for Team Safety](#use-labels-and-filters-for-team-safety)
 9. [A Safe Cleanup Routine](#a-safe-cleanup-routine)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+10. [Production Habits for Shared Machines](#production-habits-for-shared-machines)
+11. [Putting It Together](#putting-it-together)
+12. [What's Next](#whats-next)
+13. [Official References](#official-references)
 
-## What You Are Cleaning Up
-<!-- section-summary: Docker cleanup works best when every byte has an owner: container history, image layers, build cache, networks, or volumes. -->
+## What Docker Cleanup Means
+<!-- section-summary: Docker cleanup removes local Docker objects, and each object type has a different risk level. -->
 
-Docker cleanup means removing local Docker objects that your machine no longer needs. The first surprise is that Docker stores several kinds of objects, and each one tells a different story. A stopped container can hold logs from a failed run. An image can hold the exact files you used to start a service yesterday. Build cache can save minutes on the next build. A volume can hold a database.
+Docker cleanup means removing Docker objects from one machine so the Docker daemon stops using disk space for them. A **Docker object** can be a container, image, build cache record, network, or volume. The important beginner idea is that these objects carry different kinds of value, so a cleanup command should match the thing you are trying to remove.
 
-Imagine a small team building a support-ticket app. The local stack has a Node API, a background worker, Postgres, and Redis. After a few weeks of rebuilding images, running migrations, testing branches, and switching Compose files, Docker Desktop reports that its disk image is almost full. The app still matters, the test data may still matter, and the failed containers may still have useful logs.
+Let's use one steady example all the way through. A small team runs a support-ticket app with four services: `api`, `worker`, `postgres`, and `redis`. The API and worker are built from local Dockerfiles, Postgres stores tickets in a named volume, and Redis stores temporary queues in another volume during development.
 
-The cleanup job connects five ideas in order. **Disk usage** tells you where the space lives. **Stopped containers** hold old process evidence. **Images** hold reusable packaged files. **Build cache** holds saved build work. **Volumes** hold persistent service data. Once those pieces make sense, commands such as `docker system prune` become targeted tools instead of a risky panic button.
+After a few weeks, someone opens Docker Desktop and sees a huge disk number. The team has rebuilt the API many times, run migration containers, switched branches, pulled new base images, and restarted the database during testing. At this moment, "clean Docker" sounds like one action, but it is really a set of small decisions.
 
-Here is the simple shape to keep in your head while we go:
+The safe order is simple. First, measure space with **Docker disk usage**. Then clean **stopped containers** because they hold old runtime history. Then clean **unused images** and **build cache** because those can usually be rebuilt or pulled again. Finally, review **volumes** because volumes often contain the only local copy of database data.
 
-```mermaid
-flowchart TD
-    Docker["Docker local storage"]
-    Containers["Stopped containers<br/>old process evidence"]
-    Images["Images<br/>packaged files and layers"]
-    Cache["Build cache<br/>saved build work"]
-    Networks["Networks<br/>routes and names"]
-    Volumes["Volumes<br/>persistent data"]
+![Docker cleanup map infographic showing Docker disk usage split across stopped containers, images, build cache, networks, and volumes with volumes at the higher-risk end](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/docker-cleanup-map.png)
 
-    Docker --> Containers
-    Docker --> Images
-    Docker --> Cache
-    Docker --> Networks
-    Docker --> Volumes
-```
+*The cleanup map separates Docker object types by risk so image and cache cleanup do not get mixed up with database volume deletion.*
 
-That diagram matters because each object has a different cleanup risk. Removing a failed API container may only remove logs and the container writable layer. Removing an old image may only force Docker to rebuild or pull it later. Removing the Postgres volume may delete the database files your team used all week.
+## Start With Disk Usage
+<!-- section-summary: `docker system df -v` shows which Docker object type owns the space before you delete anything. -->
 
-## Read Docker Disk Usage
-<!-- section-summary: `docker system df` gives the first ownership report so cleanup choices target the right Docker object type. -->
+The command `docker system df` asks Docker for a disk report. The `df` name means disk free, and Docker uses it to summarize how much space images, containers, volumes, and build cache use. The verbose form, `docker system df -v`, adds names and relationships so you can point to the exact objects involved.
 
-The first useful command here is `docker system df`. It asks the Docker daemon how much local disk space Docker uses across images, containers, local volumes, and build cache. It gives you the map for the conversation, while your team still decides which data can disappear.
-
-For the support-ticket app laptop, the first report might look like this:
+For our support-ticket app, the first short report might look like this. We are looking for the largest owner before we pick any cleanup command:
 
 ```bash
 docker system df
@@ -63,76 +51,113 @@ docker system df
 
 ```
 TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
-Images          24        7         12.3GB    8.4GB (68%)
-Containers      19        4         2.1GB     1.7GB (80%)
-Local Volumes   9         4         18.6GB    6.2GB (33%)
-Build Cache     72        0         7.9GB     7.9GB
+Images          28        8         14.6GB    9.2GB (63%)
+Containers      21        4         2.4GB     2.0GB (83%)
+Local Volumes   7         3         18.8GB    5.6GB (29%)
+Build Cache     91        0         8.7GB     8.7GB
 ```
 
-The **TYPE** column gives the owner. The **SIZE** column tells you how large that owner is. The **RECLAIMABLE** column tells you how much Docker believes it can remove because current Docker objects do not actively reference it. Reclaimable space still needs human judgment, especially for volumes.
+The **TYPE** column tells you the owner of the space. The **ACTIVE** column tells you whether Docker sees a current relationship, such as a container using an image or a volume. The **RECLAIMABLE** column gives Docker's estimate of space it can remove, but the human still decides whether the data matters.
 
-The **ACTIVE** column can surprise beginners. Active means Docker sees a current relationship, such as a container using an image or a container referencing a volume. Treat active as relationship metadata, separate from importance. A named database volume from last week's branch can show up as inactive after the containers disappear, even though a developer still cares about that data.
-
-The verbose form gives names and relationships:
+The verbose report gives more useful evidence. It shows names, sizes, and relationships that the short summary hides:
 
 ```bash
 docker system df -v
 ```
 
-That output can show which images have containers, which volumes have links, and how much shared image layer data Docker counts. Shared image layers explain why deleting one image may free less space than its displayed size. Docker images reuse layers, so one layer can belong to several tags.
+```
+Images space usage:
 
-After this report, the cleanup path has a first branch. Large stopped containers point to container cleanup. Large image numbers point to old images. Large build cache points to builder cleanup. Large volume numbers ask for care because data may live there.
+REPOSITORY        TAG       IMAGE ID       CREATED        SIZE      SHARED SIZE   UNIQUE SIZE   CONTAINERS
+support-api       dev       9f3a1c72d88f   3 hours ago    1.12GB    726MB         401MB         1
+support-api       qa        71d0b62730aa   8 days ago     1.06GB    726MB         339MB         0
+<none>            <none>    c3b921e1e456   9 days ago     988MB     726MB         262MB         0
+postgres          18        19cfce768f4b   3 weeks ago    448MB     0B            448MB         1
 
-## Stopped Containers
-<!-- section-summary: Stopped containers hold old runtime evidence, and pruning them removes their writable layers and logs. -->
+Containers space usage:
 
-A **container** is the runtime object Docker creates from an image plus settings such as command, environment, ports, mounts, and network. A stopped container has finished running its process, and Docker can still keep its exit code, logs, name, configuration, and writable layer.
+CONTAINER ID   IMAGE                LOCAL VOLUMES   SIZE      CREATED       STATUS                      NAMES
+9b4df0b24ff9   support-api:dev      0               84MB      3 hours ago   Up 3 hours                  support-api-1
+482e1c72aa10   support-api:qa       0               612MB     8 days ago    Exited (1) 8 days ago       support-api-migration-qa
+fc81a92210cd   support-worker:dev   0               391MB     5 days ago    Exited (0) 5 days ago       support-worker-replay
 
-That writable layer needs a clear definition. Every container gets a thin writeable filesystem layer on top of the read-only image layers. If your API writes `/tmp/report.json` inside the container and that path is not a mounted volume or bind mount, the file lives in the container writable layer. Removing the container removes that file.
+Local Volumes space usage:
 
-For the support-ticket app, stopped containers might come from failed API starts, one-off migration runs, and old branch experiments:
+VOLUME NAME          LINKS     SIZE
+support_pgdata       1         13.2GB
+support_redisdata    1         1.1GB
+support_pgdata_old   0         4.5GB
+
+Build cache usage:
+
+CACHE ID       CACHE TYPE     SIZE      CREATED       LAST USED
+vf9rjgw3y041   regular        1.4GB     9 days ago    9 days ago
+p7u1w2qf3b0e   regular        712MB     2 days ago    2 days ago
+```
+
+This report already tells a useful story. Stopped containers have a couple of gigabytes. Images have old support API tags and dangling records. Build cache is large and currently unused. Volumes need a separate conversation because `support_pgdata_old` may hold an old database copy from a bug investigation.
+
+## Clean Stopped Containers
+<!-- section-summary: Stopped containers preserve old process state, logs, and writable-layer files until you remove them. -->
+
+A **container** is a runtime object created from an image plus settings such as environment variables, ports, mounts, and command. A stopped container has already finished or failed, but Docker still keeps its name, exit code, logs, configuration, and writable layer. The writable layer is the small filesystem layer where a container writes files that are outside mounted volumes.
+
+In the support-ticket app, stopped containers usually come from one-off migrations, failed API starts, queue replay tests, and old Compose service names. The first check is a full container list, because it shows both running and stopped containers:
 
 ```bash
-docker ps -a --filter "status=exited"
+docker ps -a
 ```
 
 ```
-CONTAINER ID   IMAGE                         STATUS                      NAMES
-a85f212a3b42   support-api:dev               Exited (1) 2 hours ago      support-api-migration
-cb820c407d91   support-worker:dev            Exited (0) 3 days ago       support-worker-test
-71e26c3b9b12   postgres:18                   Exited (0) 9 days ago       support-db-old
+CONTAINER ID   IMAGE                COMMAND                  STATUS                      NAMES
+9b4df0b24ff9   support-api:dev      "node dist/server.js"    Up 3 hours                  support-api-1
+844e4c9d1c71   postgres:18          "docker-entrypoint.s..." Up 3 hours                  support-db-1
+482e1c72aa10   support-api:qa       "npm run migrate"        Exited (1) 8 days ago       support-api-migration-qa
+fc81a92210cd   support-worker:dev   "node dist/replay.js"    Exited (0) 5 days ago       support-worker-replay
 ```
 
-Those rows answer a useful question: "Does anyone still need this process history?" If the migration container failed and the logs still matter, keep it until the team reads them. If the worker test finished successfully three days ago and the result already lives in CI, that container can go.
-
-A direct removal keeps the action small:
+Now the question is plain: do you still need the stopped container's logs or local files? If `support-api-migration-qa` failed during a customer-ticket migration test, someone may want its logs. Save them first:
 
 ```bash
-docker rm support-worker-test
+docker logs support-api-migration-qa > support-api-migration-qa.log
+docker inspect support-api-migration-qa > support-api-migration-qa.inspect.json
 ```
 
-For a wider cleanup, Docker has a targeted prune command:
+After the useful evidence is saved, you can remove one container directly. This keeps the cleanup narrow while the rest of the project stays untouched:
+
+```bash
+docker rm support-worker-replay
+```
+
+For a broader cleanup, use the targeted prune command. Docker asks for confirmation before it removes stopped containers:
 
 ```bash
 docker container prune
 ```
 
-`docker container prune` removes all stopped containers. Filters can make that safer for daily work. For example, a team can remove stopped containers created more than twenty-four hours ago and leave recent failures in place for debugging:
+```
+WARNING! This will remove all stopped containers.
+Are you sure you want to continue? [y/N] y
+Deleted Containers:
+fc81a92210cda820a91b3fbcf4f9cbf9c4410b847a820a6de6b0b1676a21b35c
+
+Total reclaimed space: 391MB
+```
+
+A filter gives you a better daily habit. This command removes stopped containers older than twenty-four hours and leaves today's failures for debugging:
 
 ```bash
 docker container prune --filter "until=24h"
 ```
 
-This section connects to images because containers can keep images alive. If an old stopped container still references an image, Docker may treat that image as used. Removing the stopped container can make old images eligible for image cleanup.
+Container cleanup connects to image cleanup because stopped containers keep image relationships alive. After old containers disappear, Docker may treat old image tags as unused.
 
-## Unused Images
-<!-- section-summary: Image cleanup removes packaged files and layers, which saves space but may require a future pull or rebuild. -->
+## Clean Images Without Losing Your Build Path
+<!-- section-summary: Image cleanup removes packaged files and layers, so protect one-off images that only exist locally. -->
 
-An **image** is the packaged filesystem and default startup configuration for containers. It contains layers, metadata, and usually a tag such as `support-api:dev` or `postgres:18`. Docker can start many containers from the same image, and those containers can keep using their existing files even if you later remove another tag.
+An **image** is the packaged filesystem and metadata Docker uses to start containers. For the support-ticket app, `support-api:dev` may contain Node, installed dependencies, and the compiled server files. Docker stores images as layers, and several images can share the same base layers.
 
-Images grow during normal work. Every rebuild of `support-api:dev` can create new layers. Every branch can produce a slightly different image. Some images lose their tag and become **dangling images**, which usually appear as `<none>`. Other images still have tags but have no containers using them.
-
-The basic image list shows what your laptop has:
+The image list is the first check. It shows which tags exist locally and which entries have already lost their tag:
 
 ```bash
 docker image ls
@@ -140,73 +165,89 @@ docker image ls
 
 ```
 REPOSITORY        TAG       IMAGE ID       CREATED        SIZE
-support-api       dev       1a2b3c4d5e6f   2 hours ago    840MB
-support-api       old       8f7e6d5c4b3a   6 days ago     810MB
-<none>            <none>    22cafe990011   7 days ago     790MB
-postgres          18        963a7b245f11   3 weeks ago    451MB
+support-api       dev       9f3a1c72d88f   3 hours ago    1.12GB
+support-api       qa        71d0b62730aa   8 days ago     1.06GB
+support-worker    dev       b15adcc6e487   3 hours ago    1.03GB
+<none>            <none>    c3b921e1e456   9 days ago     988MB
+postgres          18        19cfce768f4b   3 weeks ago    448MB
+redis             8         2f66aad5324a   3 weeks ago    137MB
 ```
 
-Docker gives you two main image cleanup levels. The smaller one removes dangling images:
+A **dangling image** is an image with no tag, often shown as `<none>`. Docker commonly creates these during rebuilds because the old image loses its tag when the new build receives the same tag. A normal image can also be unused if no container references it.
+
+The small image prune removes dangling images. This is the gentler image cleanup because it targets images that already lost their tag:
 
 ```bash
 docker image prune
 ```
 
-The broader one removes unused images, which means images without at least one container associated with them:
+The wider image prune includes all images without a container reference. Use it after you know important local images can come back from a Dockerfile or registry:
 
 ```bash
 docker image prune -a
 ```
 
-The `-a` flag deserves respect. If your team removes an unused `support-api:old` image, Docker can rebuild it from the Dockerfile or pull it from a registry later, as long as the source still exists. If the image came from an old experiment with no Dockerfile, no registry tag, and no backup, that image may have been the only copy.
+That `-a` flag needs a quick source check. If `support-api:qa` came from a Dockerfile in your repository, you can build it again. If it came from an old emergency image that nobody pushed to a registry and nobody can rebuild, keep it until the team exports it or publishes it somewhere durable.
 
-Time filters help reduce risk during active development. A branch you built ten minutes ago can stay. Old images from last week can go:
+Time filters make image cleanup friendlier on busy developer machines:
 
 ```bash
 docker image prune -a --filter "until=168h"
 ```
 
-Images connect to build cache because a build can leave behind intermediate work that no tag shows. After image cleanup, the next report may still show a large build cache number. That cache has its own cleanup tool.
+That command targets unused images created more than 168 hours ago, which is seven days. A team can use this on local laptops to avoid deleting a branch image someone built earlier the same afternoon.
 
-## Build Cache
-<!-- section-summary: Build cache is saved build work, so pruning it usually costs time on the next build rather than deleting application data. -->
+## Clean Build Cache
+<!-- section-summary: Build cache saves previous build work, so pruning it usually trades disk space for slower future builds. -->
 
-**Build cache** is Docker's saved work from previous builds. When a Dockerfile installs packages, copies dependency files, or compiles code, Docker can reuse previous layers if the inputs did not change. This reuse is why a second build can finish much faster than the first.
+**Build cache** is saved work from Docker builds. If your Dockerfile installs packages, copies dependency manifests, compiles TypeScript, or downloads OS packages, Docker can reuse previous layers when the inputs match. This cache is why the second build of `support-api` often runs much faster than the first build.
 
-For the support-ticket API, the Dockerfile may copy `package.json`, run `npm ci`, copy the source, and run `npm run build`. If only one source file changes, Docker can often reuse the dependency install layer. If your machine deletes that cache, the next build can still succeed, but it may download packages and rebuild more work.
+Build cache is usually a good cleanup target on a full laptop or CI runner because the source code and package registries can recreate it. The practical cost is time and network usage during the next build. For our support-ticket app, pruning cache may make the next `docker compose build api worker` download dependencies again.
 
-Build cache has a different risk profile from volumes. It usually represents time, bandwidth, and convenience rather than unique business data. That makes it a good cleanup target on developer machines and CI runners, especially after a project changes base images or dependency installation steps.
-
-The targeted cache command is:
+The targeted command is `docker builder prune`. Docker shows a warning because it is about to remove saved build work:
 
 ```bash
 docker builder prune
 ```
 
-The broader form removes all unused build cache, not just dangling cache records:
+```
+WARNING! This will remove all dangling build cache.
+Are you sure you want to continue? [y/N] y
+Deleted build cache objects:
+vf9rjgw3y041
+p7u1w2qf3b0e
+
+Total reclaimed space: 2.1GB
+```
+
+The wider form includes all unused build cache:
 
 ```bash
 docker builder prune -a
 ```
 
-For routine cleanup, the `--keep-storage` flag gives the builder a budget. This asks Docker to prune cache while trying to keep a chosen amount of cache storage:
+For routine cleanup, a storage budget is safer than a full wipe. This asks Docker to keep about five gigabytes of cache where it can:
 
 ```bash
 docker builder prune --keep-storage 5GB
 ```
 
-Build cache connects to volumes through a simple production habit. Teams often treat cache as replaceable and data as protected. A CI runner can prune builder cache aggressively after jobs. A developer laptop with a local Postgres volume needs a separate decision before any volume cleanup.
+CI machines often run cache cleanup on a schedule because each job creates build records. Developer machines usually do better with a budget and an age filter:
 
-## Volumes and Real Data
-<!-- section-summary: Volumes exist to outlive containers, so volume cleanup needs a data decision before any prune command runs. -->
+```bash
+docker builder prune --filter "until=72h" --keep-storage 8GB
+```
 
-A **Docker volume** is persistent storage managed by Docker. Containers mount it at a path, and Docker stores the contents on the Docker host. Volumes exist outside the lifecycle of a single container, so removing a container does not remove a named volume by default.
+Build cache cleanup connects to volume cleanup through one important habit. Cache is replaceable work. Volumes often contain data. That difference is the reason the next section slows down.
 
-This is exactly why volumes are useful. In the support-ticket app, Postgres stores its database files in a volume named `support_pgdata`. The API container can disappear, the database container can restart, and the data can remain. That is the feature.
+## Treat Volumes Like Data
+<!-- section-summary: Volumes are designed to outlive containers, so review and back up important volumes before removal. -->
 
-The same feature creates cleanup risk. A volume with no running container can still hold useful data. Maybe a developer stopped the stack before a weekend. Maybe a Compose project changed names and left the old volume behind. Maybe a migration test created a copy of production-like data for investigation.
+A **Docker volume** is persistent storage managed by Docker. A container mounts the volume at a path, and Docker keeps the contents on the host. Volumes are useful because they survive container replacement, image rebuilds, and normal `docker compose down` runs.
 
-The volume list is the first check:
+In the support-ticket app, `support_pgdata` holds the Postgres data directory. If the API container disappears, the tickets remain because the database files live in the volume. That is exactly what you want during normal development and testing.
+
+The volume list is the first check. It gives you names before you make any data decision:
 
 ```bash
 docker volume ls
@@ -216,199 +257,298 @@ docker volume ls
 DRIVER    VOLUME NAME
 local     support_pgdata
 local     support_redisdata
+local     support_pgdata_old
 local     7c1bdcc7a5b2f8b2cbe1a114a986a2b1f2a7
 ```
 
-Named volumes usually reveal intent. Anonymous volumes use generated names and often come from container options that did not specify a stable volume name. Anonymous volumes still need review, and named volumes usually deserve more caution.
-
-Inspection gives labels and mount metadata:
+Inspection adds labels, driver, and mount information. Those details help you find the owner before deleting a volume:
 
 ```bash
-docker volume inspect support_pgdata
+docker volume inspect support_pgdata_old
 ```
 
-Before a risky cleanup, a small backup command can copy the volume contents into the current directory:
+```
+[
+  {
+    "CreatedAt": "2026-06-02T09:14:11Z",
+    "Driver": "local",
+    "Labels": {
+      "com.docker.compose.project": "support",
+      "devpolaris.cleanup": "review"
+    },
+    "Mountpoint": "/var/lib/docker/volumes/support_pgdata_old/_data",
+    "Name": "support_pgdata_old",
+    "Scope": "local"
+  }
+]
+```
+
+Before deleting a database-style volume, make a backup. A file-level archive is useful for a development volume, and it is quick enough for a local safety copy:
 
 ```bash
+mkdir -p ./docker-volume-backups
+
 docker run --rm \
-  -v support_pgdata:/from:ro \
-  -v "$PWD":/backup \
+  -v support_pgdata_old:/from:ro \
+  -v "$PWD/docker-volume-backups":/backup \
   alpine \
-  sh -c "tar -czf /backup/support_pgdata.tgz -C /from ."
+  sh -c "tar -czf /backup/support_pgdata_old-$(date +%Y%m%d).tgz -C /from ."
 ```
 
-That command mounts the database volume read-only at `/from`, mounts the current host directory at `/backup`, and creates a compressed archive. Database-specific backup tools still matter for clean database backups. This file archive gives you a last local copy before deleting a development volume.
+That command mounts the volume read-only at `/from`, mounts a host backup directory at `/backup`, and writes a tar archive. For a real Postgres environment, teams usually prefer a database-aware backup such as `pg_dump` or a managed snapshot because it captures database state cleanly. The archive still gives a local safety copy before a development cleanup.
 
-The default volume prune command removes unused local anonymous volumes:
+![Volume deletion path infographic showing inspect, label, back up, remove by name, and verify app steps around protected database data](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/volume-deletion-path.png)
+
+*The volume path makes the database decision visible: inspect ownership, back up useful data, remove a named target, then prove the app still works.*
+
+The default volume prune removes unused anonymous local volumes. That default is more cautious than removing every unused named volume:
 
 ```bash
 docker volume prune
 ```
 
-Docker also supports a broader volume prune with `--all`, which can remove unused named volumes as well:
+The broader volume prune can include unused named volumes. This is the command shape for an intentional data reset after review:
 
 ```bash
 docker volume prune --all
 ```
 
-That broader command belongs in a deliberate reset during a planned data wipe. Volumes lead naturally into Compose because Compose creates the containers, networks, and named volumes for a project. The cleanup decision often belongs to the whole project, not one object at a time.
+Use the broader volume prune during an intentional reset, after checking names, labels, and backups. A named database volume can be inactive because the containers are down, while the data still matters to the person who was debugging a ticket import.
 
-## Compose Project Cleanup
-<!-- section-summary: Compose cleanup removes project containers and networks by default, while image and volume removal require explicit flags. -->
+## Clean a Compose Project
+<!-- section-summary: Compose cleanup removes project containers and networks by default, while images and volumes require explicit options. -->
 
-**Docker Compose** manages a multi-container application from a Compose file. For the support-ticket app, Compose describes the API, worker, Postgres, Redis, project network, ports, environment variables, and volumes. Cleanup through Compose can remove the project objects together.
+**Docker Compose** runs a multi-container application from a Compose file. Our support-ticket Compose project creates the API container, worker container, Postgres container, Redis container, project network, and named volumes. Compose cleanup helps because it understands which objects belong to the project.
 
-The everyday project cleanup command is:
+The everyday shutdown command is `docker compose down`. It gives you a clean project stop while keeping declared named volumes:
 
 ```bash
 docker compose down
 ```
 
-Docker documents that `docker compose down` stops containers and removes the service containers and project networks by default. It can also remove volumes and images created by `up` when you add flags. This default matters because it lets a developer reset containers and networks without deleting named database volumes.
+By default, Compose removes the service containers and project networks it created. Named volumes declared in the Compose file stay in place, which means `support_pgdata` survives and the next `docker compose up` can reuse the same database files.
 
-A project reset for containers and networks can use:
+When the Compose file changed and old service containers remain, add orphan cleanup. This fits branch switches and service renames:
 
 ```bash
 docker compose down --remove-orphans
 ```
 
-`--remove-orphans` helps after the Compose file changed. If the old file had a `mailhog` service and the new file removed it, the old container can remain as an orphan. Removing orphans keeps the project directory from collecting containers for services that no longer exist in the current file.
+That helps after renaming `worker` to `ticket-worker`, or after deleting a temporary `mailhog` service from the Compose file. The old service container can keep using names, networks, or images, so removing orphans keeps the project tidy.
 
-Image cleanup through Compose has a separate flag:
+To clean images created by Compose builds, use an image option. This is useful when local service images are easy to rebuild:
 
 ```bash
 docker compose down --rmi local
 ```
 
-That removes images used by services when those images do not have a custom tag. Teams use this when a local Compose project builds throwaway images and the next `up --build` can recreate them.
-
-Volume cleanup through Compose uses `-v` or `--volumes`:
+`--rmi local` removes service images that use Compose's local image naming. For a stronger reset, `--rmi all` removes all images used by services:
 
 ```bash
-docker compose down -v
+docker compose down --rmi all
 ```
 
-That flag removes named volumes declared in the Compose file and anonymous volumes attached to containers. In the support-ticket app, that can delete `support_pgdata` if the Compose file declares it. This command is perfect for an intentional "fresh database from zero" reset. It is a bad surprise if someone wanted to keep local tickets, users, or migration test data.
-
-Compose gives you a good habit: use project-level cleanup for project-level objects, and save the `-v` flag for the moments when the data reset is the point of the work.
-
-## Filters, Labels, and Team Safety
-<!-- section-summary: Filters and labels turn prune commands from broad cleanup into scoped maintenance that fits team workflows. -->
-
-Prune commands can accept filters. A **filter** narrows which objects Docker considers for removal. The common shape is `key=value`, such as `until=24h` or `label=cleanup=true`. Docker's exact filter support differs by command, so the command reference matters before you automate anything.
-
-Time filters fit developer laptops well. A team can keep recent failures available for debugging and remove older stopped containers:
+Volume removal is the sharpest Compose cleanup option. This is the Compose command for a planned local data wipe:
 
 ```bash
-docker container prune --filter "until=48h"
+docker compose down --volumes
 ```
 
-Labels fit shared workflows. A **label** is metadata attached to a Docker object, written as a key and optional value. Compose and Docker both use labels heavily for ownership metadata. Your team can also add labels to make cleanup intent explicit.
+For our support-ticket app, that can remove named volumes declared in the Compose file and anonymous volumes attached to containers. Use it for a planned local reset, such as "start with an empty Postgres database," after the team agrees that the old development data can go.
 
-For one-off containers, a label can mark disposable work:
+## Use Labels and Filters for Team Safety
+<!-- section-summary: Labels and filters turn cleanup from a broad local command into a team policy. -->
+
+A **label** is a key-value tag attached to a Docker object. Teams use labels to mark ownership, environment, cleanup policy, and retention needs. A **filter** narrows a Docker command to objects that match a condition such as age or label.
+
+For our support-ticket stack, a Compose file can label project objects:
+
+```yaml
+services:
+  api:
+    build:
+      context: ./api
+      labels:
+        devpolaris.app: support-ticket
+        devpolaris.cleanup: weekly
+    labels:
+      devpolaris.app: support-ticket
+      devpolaris.owner: platform
+
+volumes:
+  pgdata:
+    labels:
+      devpolaris.app: support-ticket
+      devpolaris.cleanup: keep
+  redisdata:
+    labels:
+      devpolaris.app: support-ticket
+      devpolaris.cleanup: weekly
+      devpolaris.cleanup.scope: support-ticket-weekly
+```
+
+A developer can list volumes that need human review. The command uses the label value from the Compose file:
 
 ```bash
-docker run --label cleanup=dev --name api-smoke-test support-api:dev npm test
+docker volume ls \
+  --filter "label=devpolaris.app=support-ticket" \
+  --filter "label!=devpolaris.cleanup=weekly"
 ```
 
-Then the cleanup command can target that label:
+One detail matters for volume prune filters. A single scoped cleanup label is safer for the prune target than stacked positive project and policy labels. That keeps the automated cleanup narrow even when other support-ticket volumes use different policies.
+
+A team can list volumes that carry that scoped cleanup label:
 
 ```bash
-docker container prune --filter "label=cleanup=dev"
+docker volume ls --filter "label=devpolaris.cleanup.scope=support-ticket-weekly"
 ```
 
-Volumes deserve stronger habits. A team can name important volumes clearly, back them up before deletion, and label generated scratch volumes. Those habits make deletion deliberate and reviewable.
+After the list looks right, the team can prune only unused volumes with that scoped cleanup label. The `--all` flag matters because default volume prune only removes unused anonymous volumes, while this reviewed reset may include unused named volumes such as `support_redisdata`:
 
-Automation should keep the narrowest useful scope. A CI runner can clean build cache after every job because the runner can recreate it. A shared staging host should use a written cleanup rule, backups, and owner labels. A developer laptop can keep a short routine that checks `docker system df`, prunes stopped containers, prunes old unused images, and leaves named volumes alone unless the developer chooses a data reset.
+```bash
+docker volume prune --all \
+  --filter "label=devpolaris.cleanup.scope=support-ticket-weekly"
+```
+
+This command shape uses a positive label for one reviewed cleanup group. The protected Postgres volume and unrelated volumes stay outside this support-ticket cleanup.
+
+Image filters are useful for old branch images. This example combines age and cleanup policy:
+
+```bash
+docker image prune -a \
+  --filter "until=240h" \
+  --filter "label=devpolaris.cleanup=weekly"
+```
+
+The same idea works for stopped containers. The app label keeps the cleanup scoped to this project:
+
+```bash
+docker container prune \
+  --filter "until=48h" \
+  --filter "label=devpolaris.app=support-ticket"
+```
+
+These filters make cleanup repeatable. They also make cleanup reviewable, because a teammate can read the label policy and understand why one object is protected while another one is disposable.
 
 ## A Safe Cleanup Routine
-<!-- section-summary: A practical cleanup routine starts with evidence, removes low-risk objects first, and treats volume deletion as a separate reset. -->
+<!-- section-summary: A safe routine measures first, saves evidence, prunes low-risk objects, and handles volumes only after backup or approval. -->
 
-Here is the routine I teach juniors on Docker-heavy projects. It works because it moves from low-risk cleanup to higher-risk cleanup, and it pauses before data deletion.
+A good cleanup routine uses a short checklist that works on a laptop, a shared development VM, or a CI runner. The details may change, but the order keeps the risky choices near the end.
 
-Step 1 captures the report before anything disappears:
+The first check is your Docker context. This prevents cleaning the wrong Docker daemon:
 
 ```bash
-docker system df
-docker system df -v
+docker context show
 ```
 
-Step 2 removes old stopped containers after recent debugging windows have passed:
+Then capture the disk report. Keep the verbose report as a small audit trail before anything disappears:
+
+```bash
+docker system df -v > docker-disk-before.txt
+docker system df
+```
+
+Save logs for failed containers you still care about. The inspect output keeps the runtime configuration beside the logs:
+
+```bash
+docker ps -a --filter "status=exited"
+docker logs support-api-migration-qa > support-api-migration-qa.log
+docker inspect support-api-migration-qa > support-api-migration-qa.inspect.json
+```
+
+Clean stopped containers with an age filter. The recent debugging window stays available:
 
 ```bash
 docker container prune --filter "until=24h"
 ```
 
-Step 3 removes old unused images that your team can rebuild or pull again:
+Clean old unused images. The seven-day window gives active branch work some breathing room:
 
 ```bash
 docker image prune -a --filter "until=168h"
 ```
 
-Step 4 trims build cache with a budget:
+Trim build cache with a budget. This saves disk while keeping some recent build speed:
 
 ```bash
-docker builder prune --keep-storage 5GB
+docker builder prune --filter "until=72h" --keep-storage 8GB
 ```
 
-Step 5 cleans the current Compose project without deleting volumes:
+Review volumes separately. Volume review stays outside the quick prune path:
 
 ```bash
-docker compose down --remove-orphans
+docker volume ls
+docker volume inspect support_pgdata_old
 ```
 
-Then, and only when the team wants a real data reset, use the volume path:
-
-```bash
-docker compose down -v
-```
-
-For a more careful local database reset, the team can back up first:
+Back up important volumes before deletion. The archive goes into the local backup directory:
 
 ```bash
 docker run --rm \
-  -v support_pgdata:/from:ro \
-  -v "$PWD":/backup \
+  -v support_pgdata_old:/from:ro \
+  -v "$PWD/docker-volume-backups":/backup \
   alpine \
-  sh -c "tar -czf /backup/support_pgdata-before-reset.tgz -C /from ."
-
-docker compose down -v
+  sh -c "tar -czf /backup/support_pgdata_old-$(date +%Y%m%d).tgz -C /from ."
 ```
 
-This routine also gives you a good incident response habit. If Docker reports a full disk during a production-like staging exercise, the team can check where the space lives before deleting. If build cache owns the bytes, prune cache. If stopped containers own the bytes, keep the last few failures and prune older ones. If volumes own the bytes, stop and name the data owner.
+Then remove a known volume by name if the team agreed. Direct removal is clearer than a broad volume prune for one reviewed volume:
 
-## Putting It All Together
-<!-- section-summary: Safe Docker cleanup means matching each prune command to the object lifetime it removes. -->
+```bash
+docker volume rm support_pgdata_old
+```
 
-The support-ticket app started with a full Docker disk image and a scary broad command. After reading Docker's object types, the cleanup decision is more precise.
+Finish by measuring again and starting the app. The cleanup should end with proof that the support-ticket stack still runs:
 
-| Object type | What it usually means | First command to inspect | Targeted cleanup |
-|---|---|---|---|
-| **Stopped containers** | Old process evidence, logs, exit codes, writable layers | `docker ps -a` | `docker container prune --filter "until=24h"` |
-| **Images** | Packaged files and reusable layers | `docker image ls` | `docker image prune` or `docker image prune -a` |
-| **Build cache** | Saved build work for future speed | `docker system df -v` | `docker builder prune --keep-storage 5GB` |
-| **Networks** | Local routes and service names | `docker network ls` | `docker system prune` or `docker compose down` |
-| **Volumes** | Persistent data, often databases or uploads | `docker volume ls` and `docker volume inspect` | `docker volume prune` or `docker compose down -v` after a data decision |
+```bash
+docker system df
+docker compose up -d
+docker compose ps
+```
 
-The safest rule is simple enough for daily work: **cleanup follows ownership**. Container history, image layers, build cache, networks, and volumes have different meanings. Docker gives prune commands for all of them, but the human job is choosing the right owner first.
+This routine gives you proof before and after cleanup. It also gives the next person a trail: what was measured, what evidence was saved, what was pruned, and which volume decisions were deliberate.
 
-Broad cleanup has a place. `docker system prune` removes unused containers, networks, dangling images, and build cache. `docker system prune -a` expands image cleanup to all unused images. `docker system prune --volumes` adds anonymous volumes. Those commands are useful after you know the stack can recreate what they remove.
+## Production Habits for Shared Machines
+<!-- section-summary: Shared Docker hosts need ownership, schedules, and protected data paths so cleanup stays predictable for other teams. -->
 
-The higher the chance that an object contains unique data, the slower the cleanup should be. Build cache can usually disappear. Old images can usually come back from a Dockerfile or registry. Stopped containers can hold useful failure evidence. Volumes can hold the thing your app was built to protect.
+Many teams use Docker on more than personal laptops. They may have CI runners, shared QA machines, build hosts, or demo environments. Cleanup on those machines should follow a team rule because one person's unused object may be another person's debugging evidence.
+
+For CI runners, aggressive cleanup is common because builds recreate containers, images, and cache constantly. A scheduled job might run `docker container prune --force --filter "until=24h"` and `docker builder prune --force --filter "until=24h" --keep-storage 20GB`. The `--force` flag removes the confirmation prompt, so it belongs in reviewed scripts with narrow filters.
+
+For shared QA machines, protect volumes and known images with labels. Keep a short runbook that says which projects own which volumes, where backups go, and who approves volume deletion. Use project names and labels so `support_pgdata` sits beside clear ownership metadata instead of anonymous hashes with no owner.
+
+For production workloads, teams usually rely on orchestration platforms, managed databases, image registries, and host monitoring rather than hand-running prune during an incident. Docker prune commands still matter on build hosts and standalone servers, but production data should live in planned storage with backup and restore procedures.
+
+## Putting It Together
+<!-- section-summary: The full cleanup path follows the evidence from disk report to targeted commands and a final smoke test. -->
+
+Let's walk through the support-ticket app as a real cleanup. Docker reports 43GB used, and the laptop has almost no free space. The team starts with `docker system df -v` and sees old API images, old migration containers, a large build cache, and one unused named Postgres volume.
+
+The stopped migration container failed eight days ago, so the developer saves logs and inspect output. Then they run `docker container prune --filter "until=24h"` and reclaim about 1GB. The current API and worker keep running because container prune only targets stopped containers.
+
+Next, they run `docker image prune -a --filter "until=168h"`. Docker removes old branch images and dangling rebuild leftovers. The latest `support-api:dev`, `support-worker:dev`, `postgres:18`, and `redis:8` remain because current containers still reference them.
+
+Build cache is the largest easy win, so they run `docker builder prune --filter "until=72h" --keep-storage 8GB`. The next build may take longer, but the source still exists, the Dockerfiles still exist, and the package registries still exist. That is an acceptable trade for the team.
+
+The volume `support_pgdata_old` gets a different treatment. The developer inspects it, sees the support-ticket project label, asks the teammate who ran the old migration test, and creates an archive before deletion. After that, `docker volume rm support_pgdata_old` removes the old local copy.
+
+The final check is `docker system df`, followed by `docker compose up -d` and `docker compose ps`. Cleanup is finished only after the support-ticket app starts cleanly and the database still contains the expected local test tickets.
+
+![Safe cleanup routine infographic showing measure, save evidence, prune containers, prune images, trim cache, review volumes, and smoke test steps for the support-ticket stack](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/safe-cleanup-routine.png)
+
+*The summary routine keeps the cleanup order practical: collect evidence first, clean replaceable objects, review volumes separately, and finish with a smoke test.*
 
 ## What's Next
 
-Cleanup teaches a useful Docker habit: find the owner before you act. The next article uses the same habit for failures. Instead of asking which object owns disk space, we will ask which Docker boundary owns a symptom: state, logs, image files, command, environment, network, storage, health, or Compose configuration.
+Cleanup teaches you where Docker keeps containers, images, cache, networks, and volumes. The next Docker Operations article uses the same support-ticket app to debug failures, starting with container state, logs, exit codes, image metadata, runtime configuration, networks, mounts, health checks, and Compose output.
 
----
+## Official References
 
-**References**
-
-- [docker system df](https://docs.docker.com/reference/cli/docker/system/df/) - Official Docker CLI reference for showing disk usage by Docker object type.
-- [docker system prune](https://docs.docker.com/reference/cli/docker/system/prune/) - Official Docker CLI reference for removing unused containers, networks, images, build cache, and optional volumes.
-- [docker container prune](https://docs.docker.com/reference/cli/docker/container/prune/) - Official Docker CLI reference for removing stopped containers and using prune filters.
-- [docker image prune](https://docs.docker.com/reference/cli/docker/image/prune/) - Official Docker CLI reference for dangling image cleanup and broader unused image cleanup with `--all`.
-- [docker builder prune](https://docs.docker.com/reference/cli/docker/builder/prune/) - Official Docker CLI reference for removing build cache and using `--keep-storage`.
-- [Docker volumes](https://docs.docker.com/engine/storage/volumes/) - Official Docker storage guide covering volume lifecycle, named and anonymous volumes, persistence, and backup patterns.
-- [docker volume prune](https://docs.docker.com/reference/cli/docker/volume/prune/) - Official Docker CLI reference for unused local volume cleanup and `--all`.
-- [docker compose down](https://docs.docker.com/reference/cli/docker/compose/down/) - Official Docker Compose reference for removing project containers, networks, optional images, and optional volumes.
+- [Docker: Prune unused Docker objects](https://docs.docker.com/engine/manage-resources/pruning/)
+- [Docker CLI reference: `docker system df`](https://docs.docker.com/reference/cli/docker/system/df/)
+- [Docker CLI reference: `docker container prune`](https://docs.docker.com/reference/cli/docker/container/prune/)
+- [Docker CLI reference: `docker image prune`](https://docs.docker.com/reference/cli/docker/image/prune/)
+- [Docker CLI reference: `docker builder prune`](https://docs.docker.com/reference/cli/docker/builder/prune/)
+- [Docker CLI reference: `docker volume ls`](https://docs.docker.com/reference/cli/docker/volume/ls/)
+- [Docker CLI reference: `docker volume inspect`](https://docs.docker.com/reference/cli/docker/volume/inspect/)
+- [Docker CLI reference: `docker volume prune`](https://docs.docker.com/reference/cli/docker/volume/prune/)
+- [Docker CLI reference: `docker compose down`](https://docs.docker.com/reference/cli/docker/compose/down/)

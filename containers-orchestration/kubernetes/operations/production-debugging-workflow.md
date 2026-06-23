@@ -56,6 +56,10 @@ For the orders incident, write the timeline as soon as you have two or three fac
 | 10:09 | Rollback decision made | Incident lead note |
 | 10:11 | Orders Deployment returned to `3/3` available | Rollout status and health check |
 
+![Alert to timeline infographic showing alert, symptom, recent change, events, logs, metrics, and first known bad time](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/alert-to-timeline.png)
+
+*The timeline visual keeps the incident grounded in timestamped facts. Alert, symptom, recent change, events, logs, and metrics become one shared trail before the first production change.*
+
 Use Kubernetes rollout history when the team records change cause or deployment metadata. If this output is empty or vague, add better deployment annotations to the release process after the incident.
 
 ```bash
@@ -116,15 +120,9 @@ At this point, the team has a strong clue without changing the system. The new P
 
 **Outside-in debugging** follows the user request path from the edge toward the container. This keeps the team from fixating on the first suspicious Pod while the actual problem sits in routing or dependencies. For the orders API, the path is external route, ingress or gateway, Service, EndpointSlice, ready Pods, then application code and dependencies.
 
-```mermaid
-flowchart TD
-    A["User checkout request"] --> B["Ingress or Gateway"]
-    B --> C["Service"]
-    C --> D["EndpointSlice"]
-    D --> E["Ready orders Pods"]
-    E --> F["Application handler"]
-    F --> G["Database and queue"]
-```
+![Outside-in request path showing user, DNS and TLS, Ingress or Gateway, Service, EndpointSlice, Pod, and dependency checks](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/outside-in-request-path.png)
+
+*The outside-in map turns a vague 503 into layer-by-layer proof. Each hop has a check, so the team can separate edge routing, Service selection, Pod readiness, and dependency health.*
 
 Check whether the Service has ready endpoints. EndpointSlices are a better modern view than the older Endpoints object because they scale better and show endpoint conditions.
 
@@ -343,6 +341,10 @@ For daily operations, keep this checklist close to the on-call runbook:
 8. Record the mitigation decision before running the command.
 9. Validate recovery from Kubernetes state, internal health, and external health.
 10. Convert the incident evidence into one or more preventive checks.
+
+![Incident fix loop showing evidence first, mitigation, proving the fix, safe rollback, preserved evidence, and prevention work](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/incident-fix-loop.png)
+
+*The fix loop shows that recovery and learning are connected. Evidence guides mitigation, validation proves recovery, and the incident note becomes prevention work after service returns.*
 
 That workflow gives junior responders a way to help without guessing. It also gives senior responders a shared structure for decisions under pressure. The real skill is moving from one small proof to the next until the team knows what changed, what failed, what restored service, and what will stop the same failure from returning.
 

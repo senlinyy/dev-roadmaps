@@ -1,168 +1,412 @@
 ---
 title: "Infrastructure as Code Security"
-description: "Scan Terraform and other infrastructure code for risky configuration before cloud APIs apply it."
-overview: "Infrastructure-as-code scanning reads files and plans before resources change. This article explains what scanners can see, how to review findings, and how to keep suppressions accountable."
-tags: ["iac", "terraform", "scanning", "security-groups"]
+description: "Scan Terraform, OpenTofu, and other infrastructure code for risky configuration before cloud APIs apply it."
+overview: "Infrastructure as Code security reviews Terraform, OpenTofu, modules, secrets, plans, and policy checks before cloud APIs create risky storage, networking, and IAM resources."
+tags: ["devsecops", "iac", "terraform", "scanning"]
 order: 1
 id: article-devsecops-cloud-infrastructure-security-iac-security-scanning
-aliases:
-  - iac-security-scanning
-  - article-devsecops-cloud-infrastructure-security-iac-security-scanning
-  - devsecops/cloud-infrastructure-security/iac-security-scanning.md
-  - devsecops/cloud-infrastructure-security/01-iac-security-scanning.md
-  - devsecops/cloud-infrastructure-security/01-iac-security-scanning
-  - cloud-infrastructure-security/01-iac-security-scanning
 ---
 
 ## Table of Contents
 
-1. [The Shift-Left Paradigm for Infrastructure](#the-shift-left-paradigm-for-infrastructure)
-2. [What Infrastructure as Code Scanners Can See](#what-infrastructure-as-code-scanners-can-see)
-3. [File-Based Static Scanning vs. Plan-Based Scanning](#file-based-static-scanning-vs-plan-based-scanning)
-4. [Evaluating the Abstract Syntax Tree (AST) in HCL](#evaluating-the-abstract-syntax-tree-ast-in-hcl)
-5. [Integrating Plan Scans into CI/CD Pipelines](#integrating-plan-scans-into-cicd-pipelines)
-6. [Accountability and Suppression Lifecycles](#accountability-and-suppression-lifecycles)
-7. [Putting It All Together](#putting-it-all-together)
+1. [What Infrastructure as Code Security Protects](#what-infrastructure-as-code-security-protects)
+2. [The Production Scenario](#the-production-scenario)
+3. [Plan Review Before Apply](#plan-review-before-apply)
+4. [Scanning Terraform and OpenTofu](#scanning-terraform-and-opentofu)
+5. [Secrets, Modules, and Versions](#secrets-modules-and-versions)
+6. [Provider Policy Checks](#provider-policy-checks)
+7. [Pull Request Feedback That Engineers Can Use](#pull-request-feedback-that-engineers-can-use)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## The Shift-Left Paradigm for Infrastructure
+## What Infrastructure as Code Security Protects
+<!-- section-summary: Infrastructure as Code security catches risky cloud resources while they are still pull request changes. -->
 
-Historically, cloud infrastructure was provisioned and modified manually by system administrators clicking through web consoles or running ad-hoc scripts. This manual model made security extremely difficult to enforce. Security teams were forced to perform reactive audits on live environments, finding misconfigurations (like open databases or unencrypted storage) only *after* they were already exposed to the public network.
+**Infrastructure as Code**, usually shortened to **IaC**, means cloud infrastructure lives in files. Instead of clicking through a console to create a bucket, subnet, firewall rule, database, or IAM role, the team describes those resources in Terraform, OpenTofu, CloudFormation, Bicep, Pulumi, or another tool. The IaC tool reads the files, compares them with the real cloud account, and calls cloud APIs to create, update, or delete resources.
 
-The rise of Infrastructure as Code (IaC) revolutionized this process. By defining cloud resources—such as network topologies, databases, load balancers, and identity roles—in declarative code files (using tools like Terraform, CloudFormation, or OpenTofu), we treat infrastructure exactly like software. This transition enables a highly powerful security practice: the **Shift-Left Paradigm for Infrastructure**.
+That API part matters for security. A Terraform file can create an internet-facing database. It can attach `AdministratorAccess` to a workload role. It can turn off S3 public access blocking. It can open a storage account to anonymous reads. The cloud provider will happily create those resources if the caller has permission, so the best review moment comes **before apply**, while the change is still code.
 
-Shifting left means we audit the security posture of our infrastructure *before* the resources are ever provisioned in our active cloud environments. By integrating automated scanners directly into our repository workflows, we intercept security flaws in code during peer review, blocking vulnerable blueprints from ever reaching the cloud APIs.
+The first security habit is treating infrastructure changes like application changes. A pull request should answer a few plain questions: what resources will be created, who can reach them, who can use them, what data can they hold, what secrets are involved, and which guardrails will stop the dangerous cases. The answer should come from the code, the plan output, scanners, provider policy tools, and human review together.
 
-## What Infrastructure as Code Scanners Can See
+This article follows one team through that process. The team uses Terraform or OpenTofu, and the same ideas apply to other IaC tools. The exact syntax changes, while the security questions stay very similar.
 
-An Infrastructure as Code (IaC) scanner (like Checkov, Trivy, or KICS) is a static analysis tool that inspects your repository's infrastructure templates. Instead of compiling or executing the code, the scanner parses the file structure and matches the declared resource properties against a database of known security misconfigurations and compliance rules.
+![IaC Review Funnel](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-review-funnel.png)
 
-Specifically, the scanner is designed to catch five common categories of infrastructure risk:
-* **Over-Scoped Firewall Rules**: Security groups or network access control lists that allow unrestricted public ingress (e.g., source `0.0.0.0/0`) on administrative ports (like SSH port 22 or RDP port 3389).
-* **Unencrypted Data Storage**: Storage buckets (S3), database instances (RDS), and block storage volumes (EBS) that are configured without default server-side cryptographic encryption.
-* **Public Resource Exposures**: Databases, object stores, or key-value caches that have public accessibility flags enabled, exposing them directly to the internet.
-* **Orphaned Logging and Auditing**: Log groups that lack retention policies or storage buckets that have access logs disabled, breaking forensic audit trails.
-* **Over-Privileged Identity Policies**: IAM roles and access control policies that rely on wildcards (like `s3:*` on `Resource: "*"`) instead of scoped actions.
+*The funnel shows how a pull request turns into plan data, automated checks, and a controlled apply instead of a direct jump from code to cloud APIs.*
 
-The speed and consistency of static scanners are highly valuable. By scanning every code modification automatically, the tool provides immediate, programmatic evidence directly to developers and reviewers, ensuring that basic compliance mistakes never reach production.
+## The Production Scenario
+<!-- section-summary: A small payments portal gives us a concrete path through storage, networking, IAM, scanners, secrets, and CI feedback. -->
 
-## File-Based Static Scanning vs. Plan-Based Scanning
+Picture a small team building the **Northstar customer portal**. Customers sign in, pay invoices, and download receipts. The next release adds three pieces of infrastructure: an object storage bucket for PDF receipts, a private database subnet and security group, and an IAM role for a background worker that writes receipt files after payments settle.
 
-When implementing IaC scanning inside an engineering team, we must understand the difference between scanning raw source files and scanning compiled execution plans. Both methods serve distinct purposes in a robust pipeline.
+The team wants to ship quickly, so they put the infrastructure in a Terraform module and open a pull request. The files create storage, networking, and IAM in one change. That is normal in production work because one feature often needs several cloud resources at once. It also means one mistake can cross several security boundaries at once.
 
-The first method is **File-Based Static Scanning**. The scanner reads your raw, static `.tf` or `.yaml` files directly on your laptop or in a pull request. This method is incredibly fast, providing instant feedback while the developer is writing code. However, file-based scanning has a major limitation: it cannot see values hidden behind variables, module inputs, or environment-specific configurations. If a resource depends on a variable that is resolved dynamically at runtime, the static scanner must either make a guess or skip the check entirely.
-
-The second method is **Plan-Based Scanning**. To overcome the limitations of static files, we configure our validation pipeline to compile a machine-readable **Terraform Plan JSON** file. The plan file is compiled by the Terraform engine, which resolves all variables, expands all module calls, and incorporates environment-specific parameters before outputting the exact, proposed state change:
-
-```bash
-$ terraform plan -out=tfplan
-$ terraform show -json tfplan > tfplan.json
-```
-
-Plan-based scanning is highly precise. The scanner audits the resolved JSON document, inspecting the properties of the resources after all dynamic values have been compiled. While plan scanning is slower because it requires active provider credentials to compile the plan, it provides the most accurate and auditable evidence of what will actually change in your cloud environment.
-
-## Evaluating the Abstract Syntax Tree (AST) in HCL
-
-Under the hood, IaC scanners do not merely read your Terraform files as raw text. They compile HashiCorp Configuration Language (HCL) into an Abstract Syntax Tree (AST). The AST is a tree-like grammatical representation of your code, mapping resource blocks, arguments, modules, and attributes into logical nodes.
-
-Using this tree, the scanner evaluates rules against the structure of your resources. Consider this standard Terraform security group rule:
+Here is a risky first draft. The snippet is intentionally small, but it shows three problems that appear in real pull requests: public storage posture, public database reachability, and broad IAM permissions.
 
 ```hcl
-resource "aws_security_group_rule" "orders_admin_ingress" {
-  type              = "ingress"
-  security_group_id = aws_security_group.orders_admin.id
-  from_port         = 9000
-  to_port           = 9000
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  description       = "temporary admin access"
+resource "aws_s3_bucket" "receipts" {
+  bucket = "northstar-payment-receipts-prod"
+}
+
+resource "aws_s3_bucket_public_access_block" "receipts" {
+  bucket = aws_s3_bucket.receipts.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_security_group" "database" {
+  name   = "portal-database"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_iam_role_policy" "worker_receipts" {
+  name = "worker-receipts"
+  role = aws_iam_role.worker.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "s3:*"
+        Resource = "*"
+      }
+    ]
+  })
 }
 ```
 
-When evaluating this resource block, the scanner traverses the AST nodes:
-* It matches the resource type node: `aws_security_group_rule`.
-* It verifies that the `type` attribute node matches `ingress`.
-* It reads the `from_port` and `to_port` nodes, mapping the port range to 9000.
-* It inspects the `cidr_blocks` array node. Because the array contains the string `"0.0.0.0/0"`, the scanner flags the resource as a high-severity finding because it opens an administrative port to the public internet.
+The storage bucket may hold payment receipts, which can contain customer names, invoice numbers, addresses, or tax details. The database security group allows PostgreSQL from the whole internet. The worker role can perform every S3 action on every bucket in the account. A reviewer can spot these issues by reading the code, but production teams need automation because reviewers get tired and pull requests get large.
 
-By utilizing the AST representation, the scanner can evaluate deep structural logic, such as tracing whether a resource block references a secure module or checking if a storage bucket resource has an associated encryption rule block defined elsewhere in the file.
+The first automated review comes from the IaC plan.
 
-## Integrating Plan Scans into CI/CD Pipelines
+## Plan Review Before Apply
+<!-- section-summary: A plan shows the real resource changes the IaC tool intends to send to cloud APIs. -->
 
-To make IaC scanning a reliable gate, we must integrate plan-based scanning directly into our automated CI/CD pipelines. This ensures that every proposed change is scanned automatically, and that pull requests cannot be merged if they violate security policies.
+A **plan** is the IaC tool's preview of the changes it intends to make. Terraform and OpenTofu compare the current state with the configuration files, then show which resources they will create, update, replace, or delete. The plan is important because variables, modules, defaults, provider behavior, and existing state can turn a small code change into a larger cloud change.
 
-When a developer opens a pull request, the CI pipeline executes an automated script. It checks out the source code, initializes the Terraform providers, compiles the plan JSON, and runs the scanner (such as Checkov) against that plan:
+For the Northstar team, the pull request includes a Terraform module. A reviewer should not read only `main.tf` and guess the result. The CI job can produce a saved plan and a machine-readable JSON version for scanners and review tooling.
 
 ```bash
-$ checkov -f tfplan.json
+terraform init -backend=false
+terraform fmt -check
+terraform validate
+terraform plan -out=tfplan
+terraform show -json tfplan > tfplan.json
 ```
 
-If the scanner finds a policy violation, the CI job exits with a non-zero status code, flagging the pull request as failed and blocking the merge button. A highly readable CI scan output provides the developer with all necessary context:
+OpenTofu uses the same workflow shape with `tofu`:
 
-```text
-FAILED DPOL-NET-001: "Ensure no security groups allow ingress from 0.0.0.0/0 to admin ports"
-  Resource: module.orders_admin_access.aws_security_group_rule.this
-  File: infra/prod/admin.tf:12-20
-  Evidence: type=ingress, from_port=9000, cidr_blocks=["0.0.0.0/0"]
-  Fix: restrict source to corporate VPN range 10.40.20.0/24 or remove listener
+```bash
+tofu init -backend=false
+tofu fmt -check
+tofu validate
+tofu plan -out=tfplan
+tofu show -json tfplan > tfplan.json
 ```
 
-This output is self-contained and actionable. It names the specific rule breached, identifies the exact file and resource address inside the code, presents the incriminating evidence, and provides a clear fix direction. By presenting this detail directly in the pull request interface, reviewers can make informed decisions without running manual checks locally.
+`fmt` checks that the files use the standard format, which keeps reviews focused on behavior instead of whitespace. `validate` checks syntax and internal references. `plan` shows the intended changes. `show -json` turns the saved plan into structured data so a scanner can inspect the actual planned resources, including values that come from variables and modules.
 
-## Accountability and Suppression Lifecycles
+Plan review should focus on security-sensitive changes first. Storage resources need public access, encryption, retention, and logging review. Networking resources need inbound sources, outbound paths, public IPs, load balancer exposure, and route table changes review. IAM resources need actions, resources, trust policies, permission boundaries, and wildcard use review. Databases need network placement, encryption, backups, deletion protection, and authentication review.
 
-In practical enterprise development, static scanners will occasionally flag resources that represent deliberate and necessary security exceptions. For example, a publicApplication Load Balancer (ALB) must naturally allow unrestricted ingress on port 443 to receive public customer traffic. If the scanner flags this public rule as a high vulnerability, you cannot resolve it by closing the port. Instead, you must configure a formal **Suppression**.
+The plan also catches accidental deletes. A pull request that says "add receipt storage" should not replace the production database subnet or destroy a key. A reviewer who sees `-/+` replacement or `- destroy` in the plan can ask why the change needs that blast radius before the cloud provider receives the API call.
 
-A suppression is a deliberate instruction to the scanner to ignore a specific finding. To maintain strict security audit trails, we must never ignore scanner alerts silently. Instead, we must declare the suppression explicitly inside the code, documenting the compensating controls and pointing to a formal review record:
+Plan review gives the team the intended cloud diff. The next layer asks whether that diff violates known security rules.
+
+## Scanning Terraform and OpenTofu
+<!-- section-summary: IaC scanners inspect configuration and plan output for risky patterns that reviewers often miss. -->
+
+An **IaC scanner** is a tool that reads infrastructure files or plan JSON and compares them against security rules. The rule might say "storage buckets should block public access," "security groups should not expose databases to the internet," "KMS encryption should be enabled," or "IAM policies should avoid wildcard actions." Scanners make common risky patterns visible every time, and human review still handles intent, exceptions, and design tradeoffs.
+
+Checkov, tfsec, and Terrascan are common examples in Terraform and OpenTofu workflows. A team usually picks one scanner first, tunes its output, and adds exceptions only when the reason is specific and documented. Running three scanners forever can create noisy duplicate findings, so the better practice is choosing a main scanner and adding focused checks where another tool gives useful coverage.
+
+The Northstar CI job can scan both the source directory and the plan JSON:
+
+```bash
+checkov -d .
+checkov -f tfplan.json
+```
+
+Some teams prefer tfsec for fast Terraform-focused feedback:
+
+```bash
+tfsec .
+```
+
+Terrascan can fit teams that want policy packs across multiple IaC formats:
+
+```bash
+terrascan scan -t terraform -i terraform
+```
+
+The source scan finds risky code patterns before variables resolve. The plan scan sees the final planned values after modules and variable files are applied. That distinction helps in real work. A module might hide a permissive default, while the plan shows the resource that will actually be created.
+
+For the risky Northstar snippet, useful scanner feedback should say something close to this:
+
+```bash
+Infrastructure security checks failed
+
+HIGH  aws_security_group.database
+      PostgreSQL ingress allows 0.0.0.0/0.
+      Expected: allow port 5432 only from the application security group or a private CIDR.
+
+HIGH  aws_s3_bucket_public_access_block.receipts
+      Public access block settings are disabled for a bucket that stores receipts.
+      Expected: block public ACLs and public bucket policies.
+
+HIGH  aws_iam_role_policy.worker_receipts
+      IAM policy allows s3:* on *.
+      Expected: grant only the bucket and object actions the worker needs.
+```
+
+That output is useful because it names the resource, the risk, and the expected direction. A scanner report that only says "failed rule 123" sends engineers into a search tab. A good PR gate should help the author fix the change while the code is fresh in their head.
+
+![Risky vs Safer Terraform](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/risky-vs-safer-terraform.png)
+
+*This comparison turns the scanner findings into the concrete design shift: public paths and wildcard permissions move toward private paths and scoped roles.*
+
+Here is a safer version of the same intent. The database accepts traffic from the application security group, the bucket blocks public access and enables encryption, and the worker policy scopes access to the receipt bucket.
 
 ```hcl
-# checkov:skip=CKV_AWS_260: public HTTPS listener is the intended customer entry point, reviewed in NET-2026-05-19-01
-resource "aws_security_group_rule" "public_https" {
-  type              = "ingress"
-  security_group_id = aws_security_group.public_alb.id
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
+resource "aws_s3_bucket" "receipts" {
+  bucket = "northstar-payment-receipts-prod"
+}
+
+resource "aws_s3_bucket_public_access_block" "receipts" {
+  bucket = aws_s3_bucket.receipts.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "receipts" {
+  bucket = aws_s3_bucket.receipts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "aws:kms"
+    }
+  }
+}
+
+resource "aws_security_group" "database" {
+  name   = "portal-database"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+data "aws_iam_policy_document" "worker_receipts" {
+  statement {
+    sid     = "ListReceiptBucket"
+    effect  = "Allow"
+    actions = ["s3:ListBucket"]
+
+    resources = [
+      aws_s3_bucket.receipts.arn
+    ]
+  }
+
+  statement {
+    sid    = "ReadAndWriteReceipts"
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
+
+    resources = [
+      "${aws_s3_bucket.receipts.arn}/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "worker_receipts" {
+  name   = "worker-receipts"
+  role   = aws_iam_role.worker.id
+  policy = data.aws_iam_policy_document.worker_receipts.json
 }
 ```
 
-Adding this comment inline tells the scanner to bypass this specific resource block while keeping all other port checks active.
+This version still needs review. For example, the team may require a customer-managed KMS key, bucket versioning, object retention, access logging, or VPC endpoints for private S3 access. The important shift is that the most obvious public exposure and wildcard permissions disappear before the pull request merges.
 
-To keep these suppressions accountable, the security team must enforce a strict **Suppression Lifecycle**:
-* **Compensating Controls**: Every suppression must document the active safeguards that mitigate the risk (e.g., a Web Application Firewall, access logs, or isolated network routing).
-* **Decaying Exceptions**: Exceptions must be assigned an owner and an explicit expiry date (e.g., 90 days). If the exception is not reviewed and renewed, the scanner will flag the resource again at expiry, forcing the team to re-evaluate whether the risk is still necessary.
-* **Audit Trails**: Maintain a centralized, searchable registry of all suppressed rules, ensuring that external compliance auditors can easily trace the authorization history of every security exception.
+Security scanning catches many cloud misconfigurations. The next problems hide around the IaC files: secrets, modules, and dependency versions.
+
+## Secrets, Modules, and Versions
+<!-- section-summary: IaC review includes the values and dependencies around the resources, not only the resource blocks themselves. -->
+
+A **secret** is a value that grants access or proves identity. Cloud access keys, database passwords, API tokens, private keys, webhook secrets, and OAuth client secrets all belong in this category. IaC files often sit close to secret values because infrastructure needs credentials for databases, providers, integrations, and bootstrap jobs. That closeness creates a simple mistake: someone pastes a real secret into `terraform.tfvars`, commits it, and now the secret lives in Git history.
+
+The Northstar team should keep secret values in a secret manager or CI secret store, then pass them into Terraform or OpenTofu at runtime. The repository can hold variable names, types, validation rules, and examples with fake values. Production secrets belong outside the repository.
+
+```hcl
+variable "database_password" {
+  type      = string
+  sensitive = true
+}
+```
+
+The `sensitive = true` flag helps Terraform hide the value in CLI output. Git still stores any secret that appears in the file itself. A secrets scan should run on every pull request, and the scanner should redact the value in logs.
+
+```bash
+gitleaks detect --source . --redact
+```
+
+When a secret scan finds a real credential, the fix has two parts. First, remove the value from the code path and replace it with a runtime secret reference. Second, rotate the exposed credential because the old value may already exist in clones, caches, build logs, or forks. The latest commit can look clean while older copies still contain the exposed value.
+
+IaC also uses **modules**. A module is a reusable package of infrastructure code. A storage module might create a bucket, encryption settings, logging, lifecycle rules, and policies together. Modules help teams reuse good patterns. They also move security decisions into someone else's code.
+
+Version review matters here. A module source that follows a branch like `main` can change under the team without a pull request in the application repo. A module with no version pin can pull in a new default that opens access, removes logging, changes encryption, or replaces a resource. Production modules should use explicit versions or immutable Git references.
+
+```hcl
+module "receipt_storage" {
+  source  = "terraform-aws-modules/s3-bucket/aws"
+  version = "4.1.2"
+
+  bucket = "northstar-payment-receipts-prod"
+}
+```
+
+A good module review asks practical questions. Who maintains the module? Does the module expose security settings as variables with safe defaults? Are public access settings, encryption, logging, and deletion protection visible to the caller? Does the module version include breaking changes? Does the lock file show provider upgrades that deserve extra review?
+
+The `.terraform.lock.hcl` file records provider versions and checksums. Reviewers should treat provider changes as meaningful infrastructure changes because providers decide how Terraform talks to cloud APIs. A provider upgrade can introduce new defaults, deprecate fields, or change replacement behavior. CI should fail when the lock file changes without a clear reason in the pull request.
+
+Now the repository is cleaner: no committed secrets, pinned modules, reviewed providers, and scanners checking common mistakes. The next layer comes from the cloud providers themselves.
+
+## Provider Policy Checks
+<!-- section-summary: Provider-native policy tools add rules based on the cloud platform's own access and governance systems. -->
+
+**Provider policy checks** are rules enforced or evaluated by the cloud platform. IaC scanners read code before deployment. Provider policy systems understand the cloud provider's own resource model, organization rules, IAM language, and sometimes the live account context. Both layers help because they see different things.
+
+In AWS, the Northstar team can validate IAM policy documents with IAM Access Analyzer before attaching them to roles. This catches policy language issues and security warnings that a generic Terraform scanner may not explain as well.
+
+```bash
+aws accessanalyzer validate-policy \
+  --policy-document file://worker-receipts-policy.json \
+  --policy-type IDENTITY_POLICY
+```
+
+The result can warn about missing resources, overly broad access, unsupported actions, or policy structure problems. That feedback belongs next to the Terraform scanner output because IAM bugs often create the largest blast radius.
+
+Azure teams usually pair IaC review with **Azure Policy**. Azure Policy can define rules such as allowed regions, required tags, required private endpoints, or denied public network access. Teams often keep policy definitions and assignments in a repository too, so policy changes receive the same review as infrastructure changes.
+
+Google Cloud teams use **Organization Policy** constraints to control behavior across projects and folders. For example, a platform team can restrict public IP usage, control allowed regions, or limit external sharing patterns. Terraform can describe resources, and organization policy can still deny a resource that violates the central rule.
+
+These provider checks are especially useful for guardrails that must hold across many repositories. A scanner in one repo can be skipped by a broken CI job. A cloud organization policy or account-level deny still protects the environment when a request reaches the provider. That is why mature teams usually combine repository checks with cloud-side guardrails instead of choosing only one.
+
+The final step is packaging all this feedback so engineers can actually act on it in a pull request.
+
+## Pull Request Feedback That Engineers Can Use
+<!-- section-summary: A useful PR gate is strict on high-risk changes and clear enough for the author to fix the problem quickly. -->
+
+A **PR gate** is a CI check that must pass before a pull request can merge. For IaC security, the gate should be strict about high-risk findings and readable enough that engineers understand the next edit. If the gate produces hundreds of low-value warnings, people learn to ignore it. If the gate silently passes broad access, it gives false confidence.
+
+The Northstar PR gate can run in layers. The first layer checks formatting and validation. The second layer produces the plan. The third layer scans source and plan output. The fourth layer checks secrets. The fifth layer runs focused provider-native checks for IAM policies or cloud governance rules. The pull request comment then summarizes only the findings that need action.
+
+```bash
+terraform fmt -check
+terraform validate
+terraform plan -out=tfplan
+terraform show -json tfplan > tfplan.json
+
+checkov -d .
+checkov -f tfplan.json
+gitleaks detect --source . --redact
+```
+
+A helpful PR comment for the risky version could look like this:
+
+```markdown
+### Infrastructure security gate failed
+
+This pull request creates or changes 7 resources.
+
+Blocking findings:
+
+- `aws_security_group.database`: PostgreSQL is open to `0.0.0.0/0`. Limit ingress to the application security group or a private CIDR.
+- `aws_s3_bucket_public_access_block.receipts`: Public access protections are disabled for the receipts bucket. Enable all four public access block settings.
+- `aws_iam_role_policy.worker_receipts`: Worker role grants `s3:*` on `*`. Scope actions to `s3:GetObject`, `s3:PutObject`, and required bucket-level actions on the receipt bucket only.
+
+Review warnings:
+
+- `module.receipt_storage`: Module version changed from `4.0.1` to `4.1.2`. Confirm the changelog and replacement behavior.
+- `terraform plan`: No deletes detected.
+```
+
+Notice how the gate separates blocking findings from review warnings. A public database path should block the merge. A module version update often needs human review, and the team can decide whether that warning blocks based on the environment and blast radius. This distinction matters because teams keep security checks healthy when the gate feels accurate.
+
+Exceptions need the same care. Sometimes a public resource is intentional, such as a public static website bucket or an internet-facing load balancer. The exception should live near the resource, include a reason, name an owner, and expire when possible. A permanent, unexplained skip comment turns the scanner into decoration.
+
+CI also needs permissions discipline. The workflow that runs `terraform plan` should use a read-limited or plan-limited role where possible. The workflow that runs `terraform apply` should require stronger approval, protected branches, and separate credentials. A pull request from an untrusted fork should never receive production cloud credentials just to calculate a plan.
+
+Now we can put the full workflow together for the Northstar release.
 
 ## Putting It All Together
+<!-- section-summary: The secure workflow checks code, plan, secrets, modules, provider rules, and merge feedback before apply. -->
 
-Auditing our infrastructure blueprints before provisioning represents a core pillar of modern DevSecOps. By shifting security left, analyzing abstract syntax trees inside HCL templates, compiling fully resolved plan-based JSON scans, and enforcing strict, auditable suppression lifecycles, we intercept misconfigurations before they can ever reach active cloud environments.
+The Northstar release adds a feature: customers need downloadable payment receipts. The first Terraform draft creates a bucket, network rule, and worker role. Without IaC security, the pull request could merge and the apply step could create public storage posture, internet-facing database access, and broad S3 permissions in the production account.
 
-When securing your infrastructure pipelines, ensure you maintain these five core practices:
+With IaC security, the same change moves through a review path before cloud APIs create anything important. The author opens a pull request. CI formats and validates the code. Terraform or OpenTofu creates a plan and JSON plan output. Checkov, tfsec, or Terrascan scans the configuration and plan. A secrets scanner checks for committed credentials. Module and provider version changes show up in the diff. AWS IAM Access Analyzer validates the worker policy. Cloud-side guardrails still stand behind the repository checks.
 
-First, automate IaC scanning across all repositories. Integrate static checkers into your Git workflows, running file-based scans locally during development and plan-based scans inside your CI pipelines to capture dynamic configurations.
+The safer Terraform version then replaces the risky draft. The bucket blocks public access and uses server-side encryption. The database security group accepts traffic from the application tier instead of the whole internet. The worker role receives only the S3 actions it needs on the receipt bucket. The pull request records the reason for the module version, and the CI comment gives reviewers a short list of what changed.
 
-Second, block pull request merges automatically on policy failures. Treat IaC scan results as mandatory status checks, requiring developers to resolve or formally suppress findings before code is merged.
+This is the practical value of IaC security. The team does not wait for a security incident, a cloud audit, or a production ticket to find the problem. The code review catches the risky design while the author can still change a few lines.
 
-Third, parse fully resolved plan JSON files inside your pipelines. Ensure that module calls, variables, and environment parameters are fully compiled before the scanner evaluates the configuration, minimizing false-negative escapes.
+![IaC Security Summary](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-security-summary.png)
 
-Fourth, enforce strict accountability for all security suppressions. Declare all skips explicitly in the code using inline comments, document active compensating controls, and assign explicit expiration dates to prevent exceptions from aging silently.
-
-Fifth, verify your suppressions regularly during security audits. Keep a central index of all active exceptions, ensuring that stale, temporary workarounds are continuously audited and removed when the underlying architectural patterns change.
+*The summary shows the full Northstar PR review path: plan, scan, secrets, modules, provider policy, and a safer apply at the end.*
 
 ## What's Next
 
-Static IaC scanning secures the blueprints that describe our infrastructure. However, organizations also need custom, shareable rules that enforce specific, complex corporate compliance standards programmatically. In the next chapter, **Policy as Code**, we will explore how to write declarative, custom validation policies using the Open Policy Agent (OPA) engine and the Rego language.
+This article focused on security checks around infrastructure code: plans, scanners, secrets, modules, provider validation, and pull request gates. The next article goes one layer deeper into **Policy as Code**.
 
-![Infrastructure as Code security summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-security-summary.png)
-
-*This summary shows how HCL, AST scanning, plan review, policy checks, suppressions, and CI gates fit together.*
+Policy as Code means the organization writes security and compliance rules as versioned code too. Instead of relying only on scanner defaults, the platform team can express rules like "production databases must stay private," "storage with customer data must use approved encryption," or "IAM policies cannot grant wildcard admin access." That gives teams a shared rulebook they can test, review, and improve over time.
 
 ---
 
 **References**
 
-- [Checkov Static Code Analysis](https://www.checkov.io/7.Scan%20Examples/Terraform.html) - Checkov guide on scanning HCL templates and resolving plan JSONs.
-- [HashiCorp Terraform Plan Internal JSON Format](https://developer.hashicorp.com/terraform/internals/json-format) - Official specification of the machine-readable plan format.
-- [Aqua Security Trivy Misconfiguration Scanning](https://aquasecurity.github.io/trivy/latest/docs/scanner/misconfiguration/) - Trivy documentation on static IaC scans, KICS rules, and template evaluation.
-- [OWASP Infrastructure as Code Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Infrastructure_as_Code_Security_Cheat_Sheet.html) - OWASP guidelines on shifting left, pipeline integration, and secure IaC patterns.
-- [NIST SP 800-160 Systems Security Engineering](https://csrc.nist.gov/pubs/sp/800/160/v1/r1/final) - NIST recommendations on automated verification, design audits, and secure pipeline gates.
+- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Official Terraform documentation for creating an execution plan before applying infrastructure changes.
+- [Terraform show command](https://developer.hashicorp.com/terraform/cli/commands/show) - Official Terraform documentation for inspecting saved plans and producing JSON output.
+- [OpenTofu plan command](https://opentofu.org/docs/cli/commands/plan/) - Official OpenTofu documentation for previewing infrastructure changes.
+- [OpenTofu show command](https://opentofu.org/docs/cli/commands/show/) - Official OpenTofu documentation for viewing state or plan files, including JSON output.
+- [Checkov CLI command reference](https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html) - Official Checkov CLI documentation for scanning IaC files and plan output.
+- [tfsec documentation](https://aquasecurity.github.io/tfsec/) - Official tfsec documentation for Terraform security scanning.
+- [Terrascan documentation](https://runterrascan.io/docs/) - Official Terrascan documentation for scanning infrastructure as code.
+- [Gitleaks documentation](https://github.com/gitleaks/gitleaks) - Official Gitleaks project documentation for detecting hardcoded secrets in repositories.
+- [AWS IAM Access Analyzer policy validation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-validation.html) - Official AWS documentation for validating IAM policies before or during review.
+- [Azure Policy as Code](https://learn.microsoft.com/en-us/azure/governance/policy/concepts/policy-as-code) - Official Microsoft guidance for managing Azure Policy definitions and assignments through code workflows.
+- [Google Cloud Organization Policy Service](https://cloud.google.com/resource-manager/docs/organization-policy/overview) - Official Google Cloud documentation for organization-wide resource constraints.
+- [NIST Secure Software Development Framework SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST guidance for secure software development practices, including automated security checks and protecting development workflows.

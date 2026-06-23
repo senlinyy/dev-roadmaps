@@ -37,6 +37,10 @@ Kubernetes gives you two resource controls for each container:
 
 A **CPU request** and **memory request** influence placement. A **CPU limit** and **memory limit** influence what happens after the container starts. They sit in the same YAML block, but they answer different operational questions.
 
+![Requests plan limits enforce infographic showing the scheduler using a request to place an orders-api Pod and the runtime enforcing limits through CPU throttling and OOMKilled outcomes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/requests-plan-limits-enforce.png)
+
+_This infographic separates the two decisions: requests help the scheduler place the Pod, while limits define the runtime boundary after the container starts._
+
 Here is the baseline Deployment shape we will use:
 
 ```yaml
@@ -142,6 +146,10 @@ That output shows several important ideas at once. The node has 4 cores of raw c
 This difference explains a common beginner surprise. `kubectl top node` might show low live usage, while a new Pod still stays Pending with `Insufficient cpu`. The scheduler places Pods from requests rather than live usage because it needs a stable promise from every workload.
 
 For the orders API, this matters during rollouts. If the cluster has exactly enough requested capacity for three replicas and no extra room, `maxSurge: 1` creates a fourth Pod that may sit Pending. The release stalls before the new code even starts. The fix may involve lowering an unrealistic request, adding node capacity, reducing surge, moving other workloads, or letting a cluster autoscaler add nodes.
+
+![Node allocatable fit infographic showing existing requests filling allocatable CPU, a surge Pod blocked with Insufficient cpu, and live usage that can still look low](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/node-allocatable-fit.png)
+
+_This infographic shows the scheduling surprise: a node can look quiet in live usage while the scheduler still rejects a surge Pod because requested capacity is already committed._
 
 ## CPU and Memory Behave Differently
 <!-- section-summary: CPU pressure usually creates throttling and latency, while memory pressure commonly creates OOMKilled restarts. -->
@@ -415,6 +423,10 @@ $ kubectl top pod -l app=devpolaris-orders-api --containers
 The likely decision points are different. A memory leak goes to code investigation. A legitimate new memory need goes to a request and limit change. A traffic pattern that loads too much data into memory may need streaming, pagination, or a background Job. Raising a memory limit can stop the immediate restart, but the team should still understand why the process crossed the old boundary.
 
 Good resource settings make Kubernetes behavior easier to explain during releases. The scheduler can place Pods predictably, the kubelet enforces clear boundaries, autoscaling has meaningful inputs, and rollback decisions are based on evidence instead of guesswork.
+
+![Resource sizing loop infographic showing orders-api moving through measure, set values, release, watch metrics, tune, and incident signals such as Pending and OOMKilled](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/resource-sizing-loop.png)
+
+_This infographic summarizes resource tuning as a loop, because the right request and limit values come from measurement, release evidence, metrics, and incident feedback._
 
 ---
 

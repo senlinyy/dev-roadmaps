@@ -1,240 +1,306 @@
 ---
 title: "Scanning Code and Secrets"
-description: "Audit source files for vulnerabilities and exposed credentials before code runs."
-overview: "Static scanners inspect code syntax and configuration history. This article explains static application security testing (SAST), data flow paths, pre-push secret blocking, and alert triage."
-tags: ["sast", "codeql", "secret-scanning", "pre-commit"]
-order: 2
+description: "Use SAST and secret scanning to catch risky code and exposed credentials before code reaches production."
+overview: "Static code scanning and secret scanning give a delivery team an early security feedback loop. This article follows a small checkout API team as they add CodeQL, secret scanning, push protection, pull request annotations, and a simple response path for leaked credentials."
+tags: ["devsecops", "sast", "secret-scanning", "code-scanning"]
+order: 1
 id: article-devsecops-pipeline-security-sast-and-codeql
-aliases:
-  - sast-and-codeql
-  - article-devsecops-pipeline-security-sast-and-codeql
-  - devsecops/pipeline-security/sast-and-codeql.md
-  - secret-scanning
-  - article-devsecops-pipeline-security-secret-scanning
-  - devsecops/pipeline-security/secret-scanning.md
-  - devsecops/pipeline-security/02-code-and-secret-scanning.md
-  - devsecops/pipeline-security/02-code-and-secret-scanning
-  - pipeline-security/02-code-and-secret-scanning
 ---
 
 ## Table of Contents
 
-1. [The Danger of Exposed Secrets and Vulnerabilities](#the-danger-of-exposed-secrets-and-vulnerabilities)
-2. [What Is Static Analysis (SAST)?](#what-is-static-analysis-sast)
-3. [Understanding Sources and Sinks](#understanding-sources-and-sinks)
-4. [Tracing the Data Flow Path](#tracing-the-data-flow-path)
-5. [Configuring a CodeQL Workflow](#configuring-a-codeql-workflow)
-6. [Triage and Dismissal Evidence](#triage-and-dismissal-evidence)
-7. [Secrets Scanning and Push Protection](#secrets-scanning-and-push-protection)
-8. [Writing a Local Git Pre-Push Hook](#writing-a-local-git-pre-push-hook)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Shape of Early Security Testing](#the-shape-of-early-security-testing)
+2. [Static Application Security Testing](#static-application-security-testing)
+3. [CodeQL in a Pull Request](#codeql-in-a-pull-request)
+4. [Secret Scanning and Push Protection](#secret-scanning-and-push-protection)
+5. [What the Developer Does With an Alert](#what-the-developer-does-with-an-alert)
+6. [Tuning Scans Without Hiding Real Risk](#tuning-scans-without-hiding-real-risk)
+7. [A Small Team Workflow](#a-small-team-workflow)
+8. [What's Next](#whats-next)
 
-## The Danger of Exposed Secrets and Vulnerabilities
+## The Shape of Early Security Testing
+<!-- section-summary: Early security testing gives developers feedback while the change is still small enough to fix in the pull request. -->
 
-A Git repository is more than just a folder of files; it is an append-only archive of a software product's entire historical development. Every commit, every line of code, and every configuration tweak is stored permanently inside the `.git` database. Even if a developer deletes a line of code in a subsequent commit, that line remains perfectly preserved in the repository's history, fully accessible to anyone who clones or inspects the project. This persistent, immutable design creates extreme security risks when we accidentally commit sensitive credentials or write insecure code. Consider these three common engineering failures:
+Imagine a small SaaS team building a checkout API. The app is a Node and TypeScript service. It accepts payment-related requests, stores order records, calls a payment provider, and deploys through GitHub Actions into staging and then production. The team is moving quickly, and most changes start as a pull request from an engineer's branch.
 
-First, consider the accidental exposure of cloud credentials. A developer, trying to debug an active database connection locally, temporarily pastes an active cloud API access key directly into a configuration file. Intending to clean it up before merging, they accidentally stage the file, create a commit, and push it to a public repository. Within seconds, automated crawling bots—which constantly monitor public Git feeds looking for credential patterns—scrape the key. Before the developer can even load their browser to delete the commit, the bots have already assumed the cloud identity, spun up thousands of unauthorized compute instances, and generated massive financial liabilities.
+That pull request is the first useful place to run **application security testing**. Application security testing means checking the application for weaknesses that could let someone steal data, bypass access rules, abuse business flows, or get secrets that grant access to other systems. The earlier the team sees the problem, the smaller the fix usually is.
 
-Second, consider the unvetted path of dynamic code execution. A developer adds a simple search input to a web application, constructing the SQL query by directly appending the client's search string. During local testing, the search works perfectly. Because the team has not established automated code analysis, the change is merged directly to the main branch after a brief review of the interface layout. Shortly after deployment, an attacker notices that the search endpoint is unprotected. By sending a custom SQL command in the query string, they manipulate the database into bypassing authentication checks, dumping private user tables, or purging database schemas.
+This article focuses on two early checks: **static application security testing**, usually shortened to **SAST**, and **secret scanning**. SAST reads source code and looks for patterns that often lead to vulnerabilities. Secret scanning reads code and commit history for credentials such as API keys, cloud tokens, private keys, and database passwords.
 
-Third, consider the silent leak of high-privilege credentials on private branches. A security team sets up automated static scanning on their main branch, believing they have secured the perimeter. However, because they have no active push gates, developers continue committing active keys, database passwords, and OAuth tokens to remote feature branches. Although the main branch appears clean, these secrets lie fully exposed inside the repository's history. When a contractor is onboarded or the repository is shared, the credentials are leaked, forcing the operations team to execute emergency, high-stress rotations of all database passwords and API tokens.
+These checks answer different questions. SAST asks, "Could this code create a security weakness?" Secret scanning asks, "Did a credential get exposed in the repository?" For the checkout team, both questions matter. A SQL injection bug can expose order data. A leaked payment-provider token can let someone call the provider API outside the app.
 
-To shield our source code repositories from these exposures, we must implement two distinct automated scanning disciplines: **Static Application Security Testing (SAST)** to audit our application logic, and **Secret Scanning** to intercept hardcoded credentials.
+Good security testing in a delivery path works like a friendly reviewer. It points to a line, explains the risk, gives the developer enough context to fix it, and leaves a record for the team. It should catch common mistakes without turning every pull request into a security meeting.
 
-## What Is Static Analysis (SAST)?
+The first check in that path is SAST.
 
-Static Application Security Testing (SAST) is the practice of reading and analyzing application source files before the application is compiled or executed. 
+## Static Application Security Testing
+<!-- section-summary: SAST reads source code before the application runs, so it can catch risky patterns while the change is still in review. -->
 
-Unlike dynamic testing (which runs the server and sends mock exploit requests), a SAST scanner parses the code structure, converts the text into an abstract syntax tree (AST), and matches code patterns against a database of known security vulnerabilities (like SQL injection, cross-site scripting, and path traversal).
+**Static application security testing** means analyzing code without running the application. The scanner reads files, parses functions, follows data through variables when it can, and compares what it sees with security rules. In a TypeScript API, it might inspect route handlers, request parameters, database calls, template rendering, file paths, and authentication checks.
 
-SAST is incredibly valuable because it audits every single code path automatically, catching edge cases that human reviewers might miss in a large pull request. However, because static scanners only read the code text, they do not understand operational reality. An alert represents a *potential* vulnerability that requires a human reviewer to verify.
+A simple SAST finding might look like this. The checkout API adds an internal order search endpoint:
 
-## Understanding Sources and Sinks
+```ts
+app.get("/orders/search", async (req, res) => {
+  const term = String(req.query.term ?? "");
+  const rows = await db.query(
+    `select id, email, total from orders where email like '%${term}%'`
+  );
 
-To investigate and resolve SAST alerts quickly, we must understand the core architecture of data-flow analysis. Static scanners do not merely read your code as raw text; they compile it into an Abstract Syntax Tree (AST), which represents the grammatical structure of your program. Using this tree, the scanner performs a technique called **Taint Tracking**. Taint tracking treats untrusted user inputs as a "tainted" fluid that enters the system. The scanner maps the paths this fluid can take as it flows through variables, operations, and functions, ensuring it never reaches a critical system operation without being disinfected. This analysis relies on three fundamental concepts:
-
-The first concept is the **Source**. A source is any entry point in the application where external, unverified data can enter the program's memory. This includes HTTP query parameters, request bodies, header strings, command-line arguments, or environment variables. Because this data is completely controlled by the user, we must assume it is hostile.
-
-The second concept is the **Sink**. A sink is a sensitive system function that performs a critical execution or system operation. Examples of sinks include database query engines, system command shells, filesystem read-and-write APIs, and HTML rendering engines. Sinks are highly powerful; if they receive raw, untrusted data, they can be manipulated into executing malicious commands, leaking sensitive files, or running arbitrary scripts.
-
-The third concept is the **Path**. The path represents the complete, chronological journey that tainted data takes as it moves through your codebase. It documents how a variable is passed from one function to another, converted to a string, concatenated with other values, and eventually passed into a sink.
-
-Consider this vulnerable Node.js endpoint:
-
-```typescript
-// src/routes/orders.ts
-app.get('/orders/search', async (req, res) => {
-  const status = String(req.query.status ?? '');
-  
-  // Vulnerable SQL concatenation
-  const rows = await db.query(`select * from orders where status = '${status}'`);
   res.json(rows);
 });
 ```
 
-By analyzing this endpoint, the static scanner constructs a clear data-flow graph. The input `req.query.status` is identified as the **Source** because it is a client-controlled URL parameter. The function `db.query(...)` is flagged as the **Sink** because it accepts an SQL query string and executes it directly against the active database. The **Path** is the string interpolation that places the raw, unverified `status` variable directly inside the executable query string. 
+The developer wants a quick search box for support staff. The scanner sees user input from `req.query.term` flowing into a SQL string. That pattern can create **SQL injection**, where an attacker changes the meaning of a database query by placing SQL syntax inside input. In real production, this could mean a search endpoint returns other customers' orders or runs an unexpected database operation.
 
-If a client sends the string `shipped' OR '1'='1`, the database engine parses the string as active SQL commands rather than a literal value. It executes `select * from orders where status = 'shipped' OR '1'='1'`. Because `1=1` is always true, the database bypasses all filters and returns every single order in the system, leaking private transaction history.
+The safer version uses a parameterized query:
 
-## Tracing the Data Flow Path
+```ts
+app.get("/orders/search", async (req, res) => {
+  const term = String(req.query.term ?? "");
+  const rows = await db.query(
+    "select id, email, total from orders where email like $1",
+    [`%${term}%`]
+  );
 
-In modern enterprise applications, data is rarely processed in a single, simple router function. It is passed through middleware, routed to utility libraries, validated in helper classes, and executed in separate database abstraction layers. Modern SAST engines, such as CodeQL, are designed to perform inter-procedural data-flow analysis, tracing taint propagation across multiple functions, files, and dependency boundaries.
-
-For example, if your application processes a search parameter through an external utility function in a different directory before querying the database, CodeQL compiles a step-by-step path detailing exactly how the untrusted input travelled through the application graph:
-
-First, the data enters the application at the input source, where `req.query.status` is captured in the router file `src/routes/orders.ts`. The scanner labels this exact memory allocation as tainted.
-
-Second, the code passes the tainted variable to a utility helper, calling a conversion function in `src/utils/sanitize.ts`. The scanner follows this call, updating the AST path to show that the return value of `String(req.query.status)` remains tainted because no sanitization occurred.
-
-Third, the tainted string is passed into a query generation class in `src/lib/order-search.ts`. The code concatenates the tainted input with an SQL template string. The scanner notes that the resulting query string inherits the taint.
-
-Fourth, the fully constructed query string is returned to the main database execution layer and passed directly into the SQL execution sink `db.query(sql)` back in `src/routes/orders.ts`. 
-
-This step-by-step trace explains exactly *why* the scanner flagged the code. The human reviewer does not have to guess or manually search the codebase to understand the vulnerability. They can inspect the path, verify that no parameter validation or sanitization occurred along the way, and implement the standard mitigation: **parameterized queries**.
-
-```typescript
-// Secure parameterized query
-app.get('/orders/search', async (req, res) => {
-  const status = String(req.query.status ?? '');
-  
-  // Value passes as separate parameter ($1), not SQL syntax
-  const rows = await db.query('select * from orders where status = $1', [status]);
   res.json(rows);
 });
 ```
 
-Using a parameterized query completely secures the sink. The database engine treats the parameter `$1` strictly as a literal data value, never executing it as SQL commands. Even if the attacker passes the same `shipped' OR '1'='1` string, the query safely searches for orders where the status literally matches that exact text, returning zero results and keeping the system secure.
+The SQL text and the user value travel separately. The database treats `term` as data instead of part of the SQL language. This is the kind of fix a SAST alert should lead the developer toward.
 
-## Configuring a CodeQL Workflow
+SAST can also catch hardcoded credentials, unsafe path handling, weak cryptography, risky deserialization, missing output encoding, command injection, and insecure framework calls. Some of those categories map to the OWASP Top 10, which is OWASP's awareness list of common application security risks. In the 2025 OWASP Top 10, **Broken Access Control**, **Security Misconfiguration**, **Software Supply Chain Failures**, **Injection**, and **Authentication Failures** are all areas that automated code checks can help surface, even though scanners will never understand every business rule by themselves.
 
-CodeQL is GitHub's native semantic analysis engine. It compiles your codebase into a queryable database and executes security rules against it. We integrate CodeQL into our pipelines using a simple workflow file:
+That last detail matters. SAST sees code. It usually has limited context about your product, your users, your data sensitivity, and your real deployment. It can point to risky paths, but a human still decides whether the finding is real, reachable, and urgent. Later in this module, we will spend a full article on that triage work.
+
+For now, the checkout team needs to wire SAST into GitHub.
+
+![SAST data flow from request input to risky and safe database paths](/content-assets/articles/article-devsecops-pipeline-security-sast-and-codeql/sast-data-flow.png)
+
+*This visual shows why a SAST alert is more useful than a generic warning: it traces user input from the source, through the risky SQL string path, and toward the database sink.*
+
+## CodeQL in a Pull Request
+<!-- section-summary: CodeQL turns security queries into pull request feedback, repository alerts, and reviewable evidence. -->
+
+GitHub's built-in code scanning commonly uses **CodeQL**. CodeQL treats code like data. It builds a database from the repository and runs security queries against that database. A query can ask, for example, whether request input reaches a SQL execution sink without passing through a safe parameterization step.
+
+GitHub gives teams two setup paths. **Default setup** lets GitHub choose the supported languages, query suite, and common trigger behavior for the repository. **Advanced setup** creates a workflow file that the team can customize. A small team usually starts with default setup because it gives coverage quickly. A team with monorepos, unusual build steps, custom query packs, or stricter schedules usually moves to advanced setup.
+
+An advanced CodeQL workflow for a TypeScript API often looks like this:
 
 ```yaml
-name: codeql-analysis
+name: CodeQL
 
 on:
   pull_request:
     branches: ["main"]
   push:
     branches: ["main"]
+  schedule:
+    - cron: "23 3 * * 1"
 
 permissions:
-  contents: read
   security-events: write
+  packages: read
+  actions: read
+  contents: read
 
 jobs:
   analyze:
+    name: Analyze TypeScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      # Initialize CodeQL database
-      - uses: github/codeql-action/init@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
-          queries: security-extended
-          
-      # Run queries and upload results to GitHub
-      - uses: github/codeql-action/analyze@v4
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
 ```
 
-Notice the security choices in this configuration:
-* **Scoped Write Permissions**: The runner is granted `security-events: write` so it can upload the scanning results to GitHub's code security panel. It is denied generic repository write permissions.
-* **Extended Queries**: We configure `queries: security-extended` to ensure CodeQL scans for deep logic flaws and OWASP Top 10 vulnerabilities rather than only basic syntax errors.
+The workflow runs on pull requests, on pushes to `main`, and on a weekly schedule. The pull request run gives fast feedback before merge. The push and schedule runs keep the default branch visible because some findings appear only after dependencies, generated files, or analysis behavior changes.
 
-## Triage and Dismissal Evidence
+When CodeQL finds a problem in a pull request, GitHub can annotate the changed line and show a code scanning alert. The developer sees the file, the line, the rule, the data flow when available, and a security explanation. This is much better than a separate PDF report because the feedback appears where the developer is already working.
 
-When a SAST scanner runs across a large, complex codebase, it will occasionally flag data-flow paths that appear to be vulnerabilities but are actually secure. These are called **False Positives**. For example, the scanner might flag a potential SQL injection path because it cannot trace that a robust, custom validation middleware has already sanitized the input before it reached the query. When this happens, we must never simply ignore the alert, delete the scanner rule, or bypass the build gate. Instead, we must perform a formal security triage, recording explicit **dismissal evidence** directly in the repository's security dashboard.
+The checkout team should choose the gate carefully. A practical first gate is: block merge on new high-confidence, high-severity alerts in changed code, while sending lower-severity alerts to the repository security queue. This keeps the pull request useful. If the team blocks every warning on day one, people will start looking for ways around the scanner instead of fixing the risk.
 
-To document a secure bypass, the triaging engineer must build a complete, auditable record. This starts by identifying the exact rule flagged, such as `js/sql-injection`, and declaring the formal triage decision, which in this case is "Dismissed as a False Positive." 
+Code scanning can also ingest results from other tools through **SARIF**, the Static Analysis Results Interchange Format. SARIF is a standard JSON format for static analysis output. If the team later adds Semgrep, a commercial SAST scanner, or a language-specific analyzer, they can upload SARIF so developers still review findings in one place.
 
-Next, the engineer must document the active **Compensating Control**. A compensating control is the specific operational safeguard that makes the path safe. For instance, you would document that the client-controlled status parameter is validated against a strict, hardcoded allowlist—such as `['created', 'paid', 'shipped']`—in the router's validation middleware. Because the middleware throws an immediate HTTP 400 error for any value not in that list, malicious SQL syntax can never reach the database query.
+SAST handles risky code. The next problem is more direct: a secret appears in a commit.
 
-Finally, the engineer must provide an active evidence link, referencing the exact file and line number of the validation logic (for example, `src/middleware/validate.ts`, line 12), and secure a formal sign-off from a peer or platform security lead.
+## Secret Scanning and Push Protection
+<!-- section-summary: Secret scanning finds exposed credentials, and push protection can stop many supported secrets before they enter the repository. -->
 
-These structured triage records are essential for team alignment and compliance. Without documented evidence, other developers cannot know why a security warning was bypassed, leading to confusion and potential regressions where someone accidentally removes the validator. Furthermore, security auditors will immediately flag open, undocumented alerts during regulatory compliance reviews. By recording clear, verifiable triage evidence, we maintain a secure, auditable codebase without blocking development velocity.
+A **secret** is a value that proves access to another system. API tokens, cloud access keys, private keys, database passwords, webhook signing secrets, and OAuth client secrets all count. If a secret reaches a Git repository, treat it as exposed. Even a private repository has clones on laptops, CI runners, backups, forks, and integration systems.
 
-## Secrets Scanning and Push Protection
+Here is a realistic mistake from the checkout team:
 
-Secret scanning is the practice of scanning committed files to detect hardcoded credentials (like passwords, OAuth tokens, and private keys) before or after they reach the remote repository.
-
-Traditional scanners operate *after* a push has landed on the remote server. While this flags the leak, the secret is already recorded in the Git history. Rotating the secret is the only secure resolution.
-
-To solve this, modern platforms use **Push Protection**. When a developer attempts to execute a `git push`, the remote server scans the incoming commits *before* accepting them. If a secret pattern is detected, the push is rejected instantly:
-
-```text
-git push origin main
-[remote rejected] main -> main (pre-receive hook declined)
-error: Push rejected due to exposed secrets.
-- Secret Type: AWS Access Key
-- File: src/config/aws.js
-- Line: 42
-- Resolution: Remove the secret, squash commits, and push again.
+```ts
+export const paymentClient = new PaymentClient({
+  apiKey: "sk_live_51NwExampleDoNotUseThisValue",
+  timeoutMs: 3000
+});
 ```
 
-Push protection blocks the leak before the secret ever enters the remote Git history, preventing exposure and saving hours of rotation cleanup.
+The developer was testing a payment-provider integration and planned to move the key into the secret manager later. The line gets committed. If the key reaches the remote repository, the team now has an incident response task, not just a code cleanup task.
 
-## Writing a Local Git Pre-Push Hook
+The safer application pattern is to keep the value out of source code and read a named secret at runtime:
 
-We can implement local push protection on our own machines using a Git pre-push hook. This script executes locally on your laptop whenever you run `git push`, blocking the operation if it detects potential keys:
+```ts
+const paymentApiKey = process.env.PAYMENT_API_KEY;
+
+if (!paymentApiKey) {
+  throw new Error("PAYMENT_API_KEY is required");
+}
+
+export const paymentClient = new PaymentClient({
+  apiKey: paymentApiKey,
+  timeoutMs: 3000
+});
+```
+
+In production, the deployment system injects `PAYMENT_API_KEY` from a controlled secret store, such as a GitHub Actions environment secret, a cloud secret manager, or a Kubernetes Secret. The repository stores the secret name and the wiring, not the secret value.
+
+**Secret scanning** looks for known credential patterns in repositories. GitHub secret scanning can detect many provider token formats, and some providers participate in partner alerting so exposed tokens can be reported back to the provider. Detection usually depends on the token format. A random string named `TOKEN` may require custom patterns, while a well-structured provider token is easier to detect with confidence.
+
+**Push protection** moves the check earlier. Instead of waiting until the secret lands in the repository, it scans the pushed commits and blocks supported high-confidence secrets before GitHub accepts the push. The developer sees a message in the terminal or IDE and can remove the secret before it enters shared history.
+
+For the checkout team, the first setup should include three layers:
+
+1. Enable secret scanning for the repository or organization.
+2. Enable push protection so supported secrets are blocked before they land.
+3. Add custom patterns for internal token formats that GitHub cannot know by default.
+
+A custom internal token might use a prefix like `dp_live_` followed by a long random value. The prefix helps humans and tools recognize the token. Many real teams design internal tokens with recognizable prefixes for exactly this reason. A token that looks like plain random text is harder to scan for without false positives.
+
+When push protection blocks a secret, the developer should remove the secret from the commit, move the value into the approved secret store, and create a new credential if the original value may have been exposed. The exact command depends on the Git state, but the common flow is:
 
 ```bash
-#!/bin/bash
-# .git/hooks/pre-push
-
-# Patterns matching sensitive keys (e.g., private keys, slack tokens)
-SECRET_PATTERNS="(xoxb-|BEGIN PRIVATE KEY|aws_access_key_id)"
-
-# Scan commits being pushed for sensitive patterns
-if git diff --cached | grep -E -q "$SECRET_PATTERNS"; then
-  echo "=================================================================="
-  echo "ERROR: Potential credential leak detected in your local commit!"
-  echo "The push has been blocked locally to prevent exposure."
-  echo "Please remove the credential from your code and try again."
-  echo "=================================================================="
-  exit 1
-fi
-
-exit 0
+git restore --source=HEAD~1 -- path/to/file.ts
+git add path/to/file.ts
+git commit --amend
+git push
 ```
 
-To activate this hook locally:
-* Save the script as `.git/hooks/pre-push`.
-* Make the file executable by running `chmod +x .git/hooks/pre-push` in your terminal.
+That example restores the file from the previous commit, amends the current commit, and pushes again. If several commits contain the secret, the developer may need an interactive rebase or a history rewrite. The important part is the security step: **rotate the credential**. Removing the line from code reduces future exposure, but a credential that already left the laptop may still be compromised.
 
-Once active, the hook scans your staged changes locally, sandboxing your credentials on your laptop before they can ever reach the remote server.
+Now the scanner has done its job. A developer still needs to act on the alert.
 
-## Putting It All Together
+![Secret push protection blocks an exposed key before safe rotation and deployment](/content-assets/articles/article-devsecops-pipeline-security-sast-and-codeql/secret-push-protection.png)
 
-Auditing our first-party codebase and intercepting credential leaks are the primary repository guardrails of DevSecOps. By combining CodeQL's automated inter-procedural data-flow analysis with Git remote push-protection gates, we catch both structural code flaws and hardcoded secrets before they can ever reach our active build runners or land in our active commits.
+*This flow shows the practical response to a leaked key: block the push when possible, move the value into a secret store, rotate the provider key, and verify the safe deployment path.*
 
-When securing and auditing your code repositories, ensure you maintain these five core practices:
+## What the Developer Does With an Alert
+<!-- section-summary: A useful alert workflow gives the developer a clear fix path, a way to verify the fix, and an escalation path for real leaks. -->
 
-First, implement source-sink analysis as a standard part of your threat modeling. Map all entry points where untrusted user input enters your application, trace their variables across helper functions, and ensure they are thoroughly sanitized or validated before they reach any database, shell command, or filesystem execution sink.
+Security alerts work best when the developer knows the next move. The checkout team should write a small runbook before turning on strict gates. A runbook is a short operating guide that says who does what when a tool reports a problem.
 
-Second, mandate parameterized queries across all database operations. Never construct SQL statements, command line parameters, or filesystem arguments by interpolating raw strings. By passing variables as separate, literal parameters, you ensure the database engine never parses user inputs as executable commands.
+For a CodeQL alert in a pull request, the developer should start by reading the data flow and the rule explanation. The question is practical: can input controlled by a user reach a dangerous operation without the expected protection? In the SQL example, the answer is yes. The fix is to use a parameterized query and add a regression test that sends a suspicious search term.
 
-Third, run automated static analysis on every pull request. Integrate tools like CodeQL into your validation pipelines, granting them minimal `security-events: write` permissions so they can publish scan results to your security dashboard while keeping your source code write-protected.
+A useful test might look like this:
 
-Fourth, enable platform-level push protection. Configure your Git hosting platform to scan incoming commits before they are merged into the remote repository. By rejecting pushes that contain active API keys, Slack tokens, or private certificates, you block credential leaks before they become permanent parts of your Git history.
+```ts
+it("searches orders without treating the term as SQL", async () => {
+  const response = await request(app)
+    .get("/orders/search")
+    .query({ term: "' OR '1'='1" })
+    .expect(200);
 
-Fifth, distribute local git pre-push hooks within your engineering team. Share standard pre-push scripts that automatically scan staged changes on a developer's laptop. By running these checks locally before the commit is sent to the remote host, you create an immediate, desktop-level sandbox that prevents secrets from ever leaving the machine.
+  expect(response.body).toEqual([]);
+});
+```
+
+That test checks the behavior the team cares about: the input should stay data. The CodeQL re-run then checks the code pattern. Together they give the reviewer confidence.
+
+For a secret scanning alert, the developer and the service owner should move faster. The safe path is:
+
+1. Identify what system the secret opens.
+2. Revoke or rotate the credential in that system.
+3. Replace the application configuration with a reference to the approved secret store.
+4. Remove the secret from the code path and, when needed, from Git history.
+5. Check logs for unexpected use of the exposed credential.
+6. Close the alert with a note that names the rotation and verification evidence.
+
+For the checkout API, a good closure note might say: "Rotated Stripe restricted key `rk_live_...` at 2026-06-21 14:10 UTC, replaced GitHub Actions secret `PAYMENT_API_KEY`, redeployed staging, searched provider logs from first exposed commit to rotation time, no unknown source IPs found."
+
+That note gives the future reviewer something concrete. It says what changed, when it changed, where the new secret lives, and what evidence was checked.
+
+Once the team knows how to respond, the next task is tuning the tools so alerts stay useful.
+
+## Tuning Scans Without Hiding Real Risk
+<!-- section-summary: Tuning should reduce noise through scoped rules, better code patterns, and clear dismissals instead of broad silencing. -->
+
+Every scanner produces some noise. Noise means alerts that do not matter for the application, duplicate alerts from the same root cause, alerts in generated files, or findings that need product context to understand. The answer is tuning, but tuning needs discipline.
+
+Start with scope. Generated files, build output, vendored libraries, and test fixtures often create findings that the application team cannot fix directly. Excluding those paths can make sense. A path exclusion should be specific, like `dist/**` or `fixtures/vulnerable-examples/**`, with a short reason in the workflow or tool configuration.
+
+Then look at code patterns. If CodeQL reports repeated unsafe SQL construction, the strongest fix may be a shared database helper that only accepts parameterized calls. If secret scanning finds test keys in fixtures, the team can replace them with clearly fake values that match no provider token format, such as `example_test_key_for_docs_only`.
+
+Use dismissals carefully. A **false positive** means the scanner reported a problem that the code does not actually have. For example, a CodeQL query might miss a custom sanitizer and report a path that is safe. A **won't fix** or accepted-risk decision means the finding is real, but the team has chosen not to fix it right now. Those are different decisions and should have different evidence.
+
+A good dismissal comment includes four things:
+
+| Evidence | Example |
+|---|---|
+| Why the alert does not require a code change | `Input passes through validateCheckoutSearchTerm before db.query` |
+| What proof was checked | `Unit test covers quote characters and wildcard input` |
+| Who owns the decision | `Approved by appsec and checkout service owner` |
+| When to revisit | `Review if search parser changes or before external API release` |
+
+This is where industrial practice matters. Mature teams measure scanner health. They watch alert age, reopen rate, number of ignored alerts, and how many repositories have coverage. They also avoid using a single tool as the whole security program. SAST and secret scanning are early signals. They sit beside dependency scanning, software composition analysis, code review, threat modeling, dynamic testing, penetration testing, and incident response.
+
+The checkout team can now put the pieces together.
+
+## A Small Team Workflow
+<!-- section-summary: A practical workflow combines early code checks, secret controls, clear gates, and a response path developers can follow. -->
+
+Here is a clean starting workflow for the checkout API.
+
+First, the repository enables CodeQL default setup. The team lets it run for a week, reviews the initial alert list, fixes the obvious high-risk findings, and records the few dismissals with evidence. After that, they decide whether default setup is enough or whether the repository needs an advanced workflow.
+
+Second, the team enables secret scanning and push protection at the organization level for all eligible repositories. They add custom patterns for internal `dp_live_` and `dp_test_` tokens. They also update developer docs so local `.env` files stay local and production secrets live in the deployment secret store.
+
+Third, the pull request rules become clear. New critical or high code scanning alerts in changed application code block the merge. Secret scanning push protection blocks supported secrets before they land. A bypass needs a reason, and a bypass alert goes to the security queue.
+
+Fourth, the team keeps a weekly security review. The meeting stays small: 30 minutes where the service owner and one security-minded engineer check open alerts, old dismissals, and noisy rules. Anything real gets an owner and a due date. Anything unclear gets a short investigation task.
+
+Finally, every fix gets verified in the same place the alert appeared. The SQL injection fix gets a test and a clean CodeQL rerun. The leaked payment key gets rotation evidence and log review. The custom token pattern gets a test token in a private scanner test repository so the team knows the pattern works.
+
+This gives the team an early warning system. Code scanning catches risky code before it merges. Secret scanning catches exposed credentials before or shortly after they appear. Pull request annotations keep the feedback close to the developer. Triage notes keep the history understandable.
+
+![Code and secret scanning loop from pull request through evidence notes](/content-assets/articles/article-devsecops-pipeline-security-sast-and-codeql/code-secret-scanning-loop.png)
+
+*This summary connects the whole article: pull request checks, code scanning, secret scanning, fix or rotation work, merge gates, and evidence notes all support the same delivery loop.*
+
+Early scans still inspect code and commits. The next layer needs to inspect a running application.
 
 ## What's Next
+<!-- section-summary: The next article runs the application and API, then checks behavior that source scanning cannot fully prove. -->
 
-Auditing our first-party codebase secures the code we write. In the next chapter, we will cover **Dependency and Artifact Security**, learning how to analyze third-party packages, verify Software Bills of Materials (SBOMs), and cryptographically sign completed build artifacts before deployment.
+The checkout team now has code scanning and secret scanning in the delivery path. That is a strong start, but some security bugs only show up when the application is running. Authentication flows, cookies, redirects, CORS behavior, rate limits, object-level authorization, and API response shapes all depend on runtime behavior.
 
-![Code and secret scanning summary map](/content-assets/articles/article-devsecops-pipeline-security-sast-and-codeql/scan-code-secrets-summary.png)
-
-*This summary connects static analysis, source-to-sink tracing, data flow, secret scanning, and dismissal evidence.*
+The next article adds **dynamic application security testing** and **API testing**. We will point a scanner at the running checkout API in staging, feed it an OpenAPI definition, use a test user token, and see how runtime testing catches behavior that static scans may miss.
 
 ---
 
 **References**
 
-- [GitHub Security Guides - About CodeQL Code Scanning](https://docs.github.com/en/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning-with-codeql) - Reference on database compilation, scanning runs, and query packs.
-- [GitHub Security Guides - Secret Scanning and Push Protection](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning-with-push-protection) - Official documentation on intercepting exposed credentials before remote commits.
-- [OWASP SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) - Technical guidance on parameterized queries, input validation, and stored procedures.
-- [Git Hook Reference - Pre-Push Hooks](https://git-scm.com/docs/githooks#_pre_push) - Documentation on Git hooks syntax, execution triggers, and exit codes.
-- [NIST SP 800-218 Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST recommendations on automated static code analysis, vulnerability remediation, and secret detection.
+- [GitHub Docs: Code scanning](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/about-code-scanning) - Defines GitHub code scanning and how alerts appear in a repository.
+- [GitHub Docs: Code scanning with CodeQL](https://docs.github.com/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning-with-codeql) - Explains CodeQL default setup, advanced setup, and external CI usage.
+- [GitHub Docs: Configuring default setup for code scanning](https://docs.github.com/code-security/code-scanning/enabling-code-scanning/configuring-default-setup-for-code-scanning) - Documents the default setup path for CodeQL analysis.
+- [GitHub Docs: SARIF files for code scanning](https://docs.github.com/en/code-security/concepts/code-scanning/sarif-files) - Describes SARIF version support and upload methods for third-party scanning tools.
+- [GitHub Docs: Secret scanning](https://docs.github.com/code-security/secret-scanning/about-secret-scanning) - Describes GitHub secret scanning for exposed credentials.
+- [GitHub Docs: Push protection](https://docs.github.com/en/code-security/concepts/secret-security/push-protection) - Explains how push protection blocks supported secrets before they reach a repository.
+- [GitHub Docs: Enabling push protection](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/prevent-future-leaks/enable-push-protection) - Documents enabling push protection and bypass alert behavior.
+- [GitHub Docs: Using secrets in GitHub Actions](https://docs.github.com/actions/security-guides/using-secrets-in-github-actions) - Documents repository, environment, and organization secrets for workflow use.
+- [Kubernetes Docs: Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Explains how Kubernetes Secrets can provide credentials to Pods, including environment variables and volume mounts.
+- [OWASP Top 10:2025](https://owasp.org/Top10/2025/) - Lists the 2025 OWASP Top 10 application security risk categories.
+- [OWASP Application Security Verification Standard](https://owasp.org/www-project-application-security-verification-standard/) - Provides a basis for testing application security controls.
+- [NIST SP 800-218 Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - Recommends secure software development practices that can be integrated into SDLC workflows.

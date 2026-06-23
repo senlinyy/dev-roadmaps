@@ -30,6 +30,10 @@ For `devpolaris-orders-api`, the package has a simple job. It should help the te
 
 The risk is that Helm or Kustomize starts hiding those fields. If a reviewer must open `values.yaml`, `_helpers.tpl`, `deployment.yaml`, `profile.yaml`, `prod-patch.yaml`, and a generated artifact just to find the production image, the package is slowing down the release instead of helping it.
 
+![Template sprawl warning showing too many values, hidden helpers, long patches, review pain, and rendered YAML evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/template-sprawl-warning.png)
+
+*Template sprawl starts with helpful options, then grows until rendered YAML becomes the only shared evidence everyone can trust.*
+
 ## Rendered YAML as the Shared Evidence
 <!-- section-summary: The rendered manifest gives reviewers the same object view Kubernetes will receive. -->
 
@@ -169,6 +173,10 @@ $ grep -n "readinessProbe:\\|resources:\\|app.kubernetes.io/name" rendered/prod.
 ```
 
 Patch chains also need naming discipline. File names such as `temporary.yaml`, `fix.yaml`, and `new-prod.yaml` lose meaning quickly. Names such as `deployment-resources-patch.yaml` and `ingress-host-patch.yaml` tell reviewers which behavior the file owns.
+
+![Readable package rules showing real choices, small helpers, short patches, clear routes, and CI render](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/readable-package-rules.png)
+
+*Readable packages expose real service decisions, keep helpers and patches modest, make routes explicit, and render output in CI.*
 
 ## CI Render Checks
 <!-- section-summary: CI should render packages and validate them before the cluster receives a change. -->
@@ -317,6 +325,10 @@ A reviewer can use these questions before approving a packaging change. They tur
 | Can the team roll back from this package shape? | Helm history, Git revert path, or previous artifact |
 
 Template sprawl loses power when every review returns to rendered evidence. Helm and Kustomize can both stay small enough for production work when the team exposes real decisions, keeps helpers and patches modest, renders every environment, and writes down the evidence a new teammate would need during an incident.
+
+![Package cleanup review showing unused values removed, helpers simplified, patches trimmed, render, and approve](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/package-cleanup-review.png)
+
+*A cleanup review should preserve runtime behavior first, then remove confusing inputs and indirection after the rendered output proves the package still does the same job.*
 
 ---
 

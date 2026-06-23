@@ -64,6 +64,10 @@ rules:
 
 This sentence style makes review much calmer. Instead of asking whether a role name sounds safe, you can ask what exact API requests it allows.
 
+![RBAC request path showing a user or ServiceAccount request reaching the API server with verb, resource, namespace, RoleBinding, and allow or deny decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rbac-request-path.png)
+
+*The request path turns RBAC review into concrete fields. A permission is not just a role name; it is a subject asking for a verb on a resource inside a scope.*
+
 Now we need to name the callers that receive those permissions.
 
 ## Subjects: Users, Groups, and Service Accounts
@@ -203,6 +207,10 @@ roleRef:
 ```
 
 This is cluster-wide, but it is still narrow. The collector can read metadata needed for enrichment. It cannot patch Deployments, read Secrets, exec into Pods, or create RBAC objects. That difference matters during review. Cluster-wide does not have to mean cluster-admin.
+
+![Scope binding map comparing Role and RoleBinding for namespace access with ClusterRole and ClusterRoleBinding for cluster access](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/scope-binding-map.png)
+
+*The scope map separates reusable permissions from broad grants. A ClusterRole can be safe inside one namespace, while a ClusterRoleBinding changes the blast radius across the cluster.*
 
 Now return to the orders application itself. The runtime identity and release identity should be separate.
 
@@ -444,6 +452,10 @@ Use this checklist for `devpolaris-orders-api`:
 | Human access | Groups receive namespace-scoped read or admin access |
 | Tests | `kubectl auth can-i` includes allowed and denied checks |
 | Review notes | PR explains the operational task behind each permission |
+
+![RBAC operations review checklist with separate identities, least privilege, can-i tests, forbidden evidence, binding review, and audit changes](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rbac-operations-review.png)
+
+*The review checklist keeps RBAC tied to operations: each identity has a job, positive and negative tests prove the job, and audit evidence explains later changes.*
 
 RBAC is healthy when every identity has a plain reason to exist. The runtime identity serves traffic. The release identity deploys. The developer group investigates. The telemetry identity reads metadata. When those jobs stay separate, the cluster is much easier to operate and much safer to debug.
 

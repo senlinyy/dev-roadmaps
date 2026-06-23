@@ -54,28 +54,9 @@ An **ordinal** is the number Kubernetes adds to each StatefulSet Pod name. For a
 
 That stable identity shows up in several places. The Pod name includes the ordinal. Kubernetes adds labels that identify the owning StatefulSet and, in current Kubernetes versions, the Pod index. A volume claim created from a StatefulSet template also includes the ordinal, so the storage object and the Pod identity line up.
 
-```mermaid
-flowchart LR
-    STS["StatefulSet<br/>orders-postgres"]:::controller
-    P0["Pod<br/>orders-postgres-0"]:::pod
-    P1["Pod<br/>orders-postgres-1"]:::pod
-    DNS0["DNS<br/>orders-postgres-0.orders-postgres"]:::network
-    DNS1["DNS<br/>orders-postgres-1.orders-postgres"]:::network
-    PVC0["PVC<br/>data-orders-postgres-0"]:::storage
-    PVC1["PVC<br/>data-orders-postgres-1"]:::storage
+![StatefulSet identity map infographic showing the orders-postgres StatefulSet connecting orders-postgres-0 and orders-postgres-1 to matching DNS identities and PVC data volumes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-identity-map.png)
 
-    STS --> P0
-    STS --> P1
-    P0 --> DNS0
-    P1 --> DNS1
-    P0 --> PVC0
-    P1 --> PVC1
-
-    classDef controller fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef pod fill:#1f3c34,stroke:#00c2a8,stroke-width:2px,color:#fff
-    classDef network fill:#21364a,stroke:#4aa3ff,stroke-width:2px,color:#fff
-    classDef storage fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-```
+_This infographic replaces the identity diagram with a generated map of the StatefulSet contract: each ordinal Pod keeps a matching DNS identity and PVC identity._
 
 Think about a database failover page in the middle of the night. A runbook that says "check `orders-postgres-0` first" works because that name keeps meaning the same member identity. A graph that shows disk pressure on `data-orders-postgres-0` also points back to the matching Pod. The name gives operators a stable handle during a stressful incident.
 
@@ -179,6 +160,10 @@ A `Bound` claim means Kubernetes found or provisioned a matching PV. A `Pending`
 There is one more storage detail that changes production behavior: the reclaim policy. A dynamically created PV usually follows the reclaim policy on its StorageClass. With `Delete`, deleting the PVC can also delete the backing disk. With `Retain`, deleting the PVC leaves the underlying storage asset for manual cleanup or recovery. Stateful service runbooks should name the reclaim policy because it controls what a cleanup command can destroy.
 
 Now we have the three core pieces: Pod identity, DNS identity, and storage identity. The next section puts them together into a small `orders-postgres` StatefulSet that supports the orders API in a Kubernetes environment.
+
+![Stable DNS and storage contract infographic showing a headless Service with clusterIP None, Pod DNS, volumeClaimTemplate, PVC, StorageClass, and PV binding](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/stable-dns-storage-contract.png)
+
+_This infographic connects the network and storage halves of the StatefulSet design, so the headless Service answers where a member lives and the PVC path answers where its data lives._
 
 ## A Small Orders PostgreSQL StatefulSet
 <!-- section-summary: A working StatefulSet combines a headless Service, serviceName, a Pod template, probes, and volumeClaimTemplates. -->
@@ -602,6 +587,10 @@ kubectl get pv pvc-28cc0f84-1d33-4e12-8f58-4f1e66d10a20 -o jsonpath='{.spec.pers
 ```
 
 The core habit is simple and very practical: treat the StatefulSet, the headless Service, the PVCs, the StorageClass, and the application data plan as one system. Kubernetes gives you stable building blocks. Production safety comes from the runbooks and recovery tests around those blocks.
+
+![StatefulSet operations runbook infographic showing backups, PVCs, DNS, Pod health, rollout order, and force delete last as the safe operations sequence](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-operations-runbook.png)
+
+_This infographic summarizes the StatefulSet operating order: verify recovery first, inspect identity and storage, then handle rollout or deletion only after the data path is clear._
 
 ## References
 

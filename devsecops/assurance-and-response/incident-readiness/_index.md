@@ -1,5 +1,6 @@
 ---
 title: "Incident Readiness"
-description: "Establish proactive detection frameworks, script actionable incident runbooks, and drive post-incident architectural hardening."
+description: "Prepare detection signals, alert triage, response runbooks, containment steps, recovery paths, and post-incident hardening."
+tags: ["incident-response", "runbooks", "detection", "hardening"]
 order: 2
 ---

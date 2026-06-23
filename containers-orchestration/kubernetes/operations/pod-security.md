@@ -78,6 +78,10 @@ spec:
             sizeLimit: 256Mi
 ```
 
+![Restricted Pod shape infographic showing runAsNonRoot, readOnlyRootFilesystem, dropped capabilities, seccomp, no privilege escalation, and a non-root image](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/restricted-pod-shape.png)
+
+*The restricted shape visual groups the settings that make an ordinary API Pod boring in production: non-root execution, explicit writes, fewer Linux powers, and no easy privilege jump.*
+
 This manifest says the Pod should run as UID `10001`, use the runtime's default seccomp profile, avoid a mounted Kubernetes API token, block privilege escalation, drop all Linux capabilities, and keep the root filesystem read-only. It still gives the application `/tmp` as explicit scratch space.
 
 That YAML is easier to understand once we separate Pod-level and container-level security settings.
@@ -237,6 +241,10 @@ securityContext:
   seccompProfile:
     type: RuntimeDefault
 ```
+
+![Runtime hardening boundary showing writable volume, read-only image, dropped capabilities, seccomp profile, app user, and evidence checks](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/runtime-hardening-boundary.png)
+
+*The boundary image separates what the app may do from what the runtime blocks. That distinction helps reviewers avoid weakening the whole Pod just to fix one writable path.*
 
 You can inspect the running Pod spec:
 
@@ -404,6 +412,10 @@ Use this checklist for `devpolaris-orders-api`:
 | Namespace policy | `orders` uses restricted warn/audit and planned enforcement |
 | Runtime proof | `kubectl exec` and `jsonpath` checks are included in the review |
 | Exceptions | Any deviation has an owner, reason, and expiration |
+
+![Pod Security operations checklist with restricted start, non-root user, explicit writes, dropped Linux powers, PSA enforcement, and live Pod verification](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/pod-security-operations-checklist.png)
+
+*The checklist connects manifest review with runtime proof, so the team verifies the Pod that actually started rather than trusting YAML alone.*
 
 Pod security works best as a normal review habit, not a once-a-year hardening project. The orders API should carry clear runtime boundaries every time it ships. When those boundaries are visible in the manifest, enforced at the namespace, and proven after rollout, a compromised container has fewer useful places to go.
 

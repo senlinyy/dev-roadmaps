@@ -32,15 +32,9 @@ We will use one production scenario across this module. The service is `devpolar
 
 The upgrade question is practical: can customers keep placing orders while the cluster moves from one supported Kubernetes version to the next? That question touches API compatibility, node drains, PodDisruptionBudgets, add-ons, observability, and rollback choices. A runbook keeps those checks in order so the maintenance window does not turn into random command execution.
 
-```mermaid
-flowchart TD
-    A["Inventory current cluster"] --> B["Check API compatibility"]
-    B --> C["Verify add-ons and clients"]
-    C --> D["Rehearse drain behavior"]
-    D --> E["Upgrade control plane"]
-    E --> F["Upgrade node pools"]
-    F --> G["Validate orders API evidence"]
-```
+![Upgrade inventory board showing control plane, node pools, add-ons, kubectl clients, deprecated APIs, and rollback notes before a Kubernetes upgrade](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/upgrade-inventory-board.png)
+
+*The inventory board shows why a cluster upgrade starts with facts, not motion. The team needs platform versions, add-on support, client compatibility, API risks, and rollback notes before the window opens.*
 
 The important idea is **evidence before motion**. Before the upgrade, gather facts about the current cluster. During the upgrade, validate after each phase. After the upgrade, prove the application path, not only the Kubernetes version number.
 
@@ -251,6 +245,10 @@ node/worker-2 uncordoned
 
 Write down any surprise from the rehearsal. A PDB block, FailedScheduling event, slow image pull, missing secret mount, or readiness failure is a production upgrade issue waiting for a quiet time to appear.
 
+![Phased node roll infographic showing staging rehearsal, control plane upgrade, cordon, drain, validate, and next batch during Kubernetes node upgrades](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/phased-node-roll.png)
+
+*The phased roll visual keeps the node-pool upgrade from feeling like one giant change. Each batch has a cordon, drain, replacement, validation, and pause point before the next batch begins.*
+
 ## Upgrade in Phases
 <!-- section-summary: Separate control plane, node pool, and add-on phases give the team clear pause points and smaller validation loops. -->
 
@@ -381,6 +379,10 @@ Use this shape for `devpolaris-orders-api` and adapt it to the cluster you opera
 | Control plane | API readyz, dry-run apply, controller reconciliation | API readiness failure or controller errors |
 | Node pool | One node at a time, Deployment availability, namespace events | Orders API below two available replicas or repeated warning events |
 | Validation | Internal health, external health, metrics, alerts, logs | 5xx, latency, dependency errors, or missing metrics |
+
+![Cluster upgrade runbook checklist with inventory first, API checks, add-on proof, drain-ready apps, phased rollout, and evidence bundle](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/cluster-upgrade-runbook.png)
+
+*The runbook summary ties every upgrade phase to proof. It keeps the team focused on inventory, compatibility, drain behavior, phased rollout, and the evidence bundle that closes the maintenance window.*
 
 The final upgrade note should record what changed and what evidence proved success. It should also record any follow-up, such as "add one node of surge capacity before the next upgrade" or "move image pre-pull into the node pool workflow." That note is what makes the next upgrade less stressful.
 

@@ -1,7 +1,7 @@
 ---
 title: "Kubernetes RBAC and Secrets"
-description: "Configure namespaced API permissions and deliver application database secrets using read-only mounted volumes."
-overview: "Kubernetes control plane security depends on granular identity access and secure credential storage. This article explains how to audit dynamic RBAC bindings, avoid cluster-wide exposures, and mount base64 Secrets securely without exposing them in repositories."
+description: "Control Kubernetes API access and deliver application secrets without giving workloads unnecessary power."
+overview: "Kubernetes RBAC decides what people and workloads can do through the API server, while Secrets deliver sensitive values to pods. This article follows a checkout API team as they scope service account permissions, test access with kubectl, protect tokens, and handle database credentials safely."
 tags: ["rbac", "secrets", "kubernetes", "service-accounts", "etcd"]
 order: 1
 id: article-devsecops-kubernetes-security-rbac-and-secrets
@@ -19,73 +19,124 @@ aliases:
 
 ## Table of Contents
 
-1. [Control Plane Authentication and Authorization](#control-plane-authentication-and-authorization)
-2. [Anatomy of a Cluster-Wide RBAC Compromise](#anatomy-of-a-cluster-wide-rbac-compromise)
-3. [The Request Sentence: Subjects, Verbs, and Resources](#the-request-sentence-subjects-verbs-and-resources)
-4. [Scoping API Permissions: Roles vs. ClusterRoles](#scoping-api-permissions-roles-vs-clusterroles)
-5. [Binding Identities: RoleBindings vs. ClusterRoleBindings](#binding-identities-rolebindings-vs-clusterrolebindings)
-6. [Testing effective Permissions with kubectl auth can-i](#testing-effective-permissions-with-kubectl-auth-can-i)
-7. [Secrets in Kubernetes: Base64 is Not Encryption](#secrets-in-kubernetes-base64-is-not-encryption)
-8. [Delivering Secrets to Pods: Mounted Volumes vs. Environment Variables](#delivering-secrets-to-pods-mounted-volumes-vs-environment-variables)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Checkout API Scenario](#the-checkout-api-scenario)
+2. [Every Important Action Goes Through the API Server](#every-important-action-goes-through-the-api-server)
+3. [Service Accounts Give Pods a Kubernetes Identity](#service-accounts-give-pods-a-kubernetes-identity)
+4. [RBAC Rules Say Which API Calls Are Allowed](#rbac-rules-say-which-api-calls-are-allowed)
+5. [Roles and ClusterRoles Define Permission Scope](#roles-and-clusterroles-define-permission-scope)
+6. [RoleBindings and ClusterRoleBindings Attach Permissions](#rolebindings-and-clusterrolebindings-attach-permissions)
+7. [What a Compromised Pod Can Do With an Overpowered Token](#what-a-compromised-pod-can-do-with-an-overpowered-token)
+8. [Check Effective Access With kubectl](#check-effective-access-with-kubectl)
+9. [Secrets Hold Sensitive Application Data](#secrets-hold-sensitive-application-data)
+10. [Mount Secrets Carefully Inside Pods](#mount-secrets-carefully-inside-pods)
+11. [Encrypt Secrets at Rest](#encrypt-secrets-at-rest)
+12. [Use External Secret Managers for Production Workflows](#use-external-secret-managers-for-production-workflows)
+13. [Least-Privilege Review Checklist](#least-privilege-review-checklist)
+14. [Putting It All Together](#putting-it-all-together)
+15. [What's Next](#whats-next)
 
-## Control Plane Authentication and Authorization
+## The Checkout API Scenario
+<!-- section-summary: We will follow one small production service so RBAC and Secret choices stay tied to real operational decisions. -->
 
-In a Kubernetes cluster, every internal and external operational request routes through a single centralized gateway: the API Server. A developer executing commands on their laptop, a continuous delivery pipeline deploying a new container version, an internal operator managing cluster state, and a microservice workload running inside a pod all interact with the system by sending HTTP requests to the API Server.
+Imagine a small SaaS team running an online checkout system in Kubernetes. The team has a `checkout-prod` namespace with a `checkout-api` Deployment, a PostgreSQL database, a payment provider token, and a deployment pipeline that updates the API during releases. The service is important because every customer purchase passes through it, so the team wants enough automation to deploy safely without giving every pod and pipeline a master key to the cluster.
 
-Securing the control plane requires authenticating and authorizing these requests at the cluster boundary. This process occurs in three systematic stages:
+Two kinds of access matter right away. The first kind is **Kubernetes API access**. The deployment pipeline needs to patch the `checkout-api` Deployment, read rollout status, and inspect pod logs when a release fails. The running `checkout-api` pods usually need very little Kubernetes API access. Most web applications serve HTTP traffic and talk to databases; they do not need to list every Secret or create workloads.
 
-First, **Authentication** identifies the caller. Kubernetes authenticates requests using client certificates, external identity providers (via OpenID Connect federations), or short-lived ServiceAccount tokens injected into running containers. This stage verifies *who* is making the request, mapping the connection to a specific username, group, or ServiceAccount principal.
+The second kind is **application secret access**. The checkout service needs a database password and a payment API token. Those values need to reach the application at runtime, but they should stay out of Git history, container images, logs, and broad Kubernetes permissions.
 
-Second, **Authorization** decides whether the authenticated principal has permission to perform the requested operation. Kubernetes uses Role-Based Access Control (RBAC) to evaluate this step. The authorization engine inspects the request details to verify if the principal is permitted to execute the target action on the specific resource within the requested scope.
+This article connects those two areas because they meet in a real incident. If an attacker gets code execution inside one pod, they can often read files and environment variables inside that pod. If the pod has a powerful service account token, the attacker may also call the Kubernetes API. If that token can read Secrets across the namespace or cluster, a single vulnerable container can turn into a much larger compromise.
 
-Third, **Admission Control** reviews the structure of the submitted object itself, validating or mutating the configuration before it is written to the persistent etcd storage database.
+## Every Important Action Goes Through the API Server
+<!-- section-summary: Kubernetes protects cluster state by checking each API request before it reaches stored objects or running workloads. -->
 
-By decoupling identity authentication from permission authorization, Kubernetes provides a highly granular access control framework. However, because the API Server represents the ultimate control point, a single over-privileged access policy or exposed token can grant an attacker unrestricted control over the entire cluster fabric.
+Kubernetes has one central front door for cluster changes: the **API server**. When a developer runs `kubectl get pods`, a CI job patches a Deployment, a controller creates a ReplicaSet, or a pod asks for its own service account token, the request goes through the API server.
 
-## Anatomy of a Cluster-Wide RBAC Compromise
+That request usually passes through three checks. **Authentication** identifies the caller. The caller might be a human user from an identity provider, a CI credential, or a service account used by a pod. **Authorization** decides whether that caller can perform the requested action. **Admission control** can inspect or change the submitted object before Kubernetes stores it.
 
-To understand why granular control plane security is critical, we must trace how an attacker exploits broad RBAC policies to compromise a live production cluster. Consider a common automated workflow designed with convenience in mind.
+RBAC sits in the authorization step. RBAC means **Role-Based Access Control**. In Kubernetes, it answers a practical question: can this subject perform this verb on this resource in this scope? For the checkout team, that question sounds like this: can the `checkout-deployer` service account patch Deployments in the `checkout-prod` namespace?
 
-A platform engineering team configures an automated deployment runner tasked with rolling out microservice updates. To make configuration straightforward, the engineer binds the runner's ServiceAccount to a cluster-wide administrative role. This binding permits the runner to modify any resource in any namespace across the cluster.
+The API server stores Kubernetes objects in etcd, the cluster's backing data store. Secrets, Deployments, RoleBindings, service accounts, and many other objects all travel through the same API path. That is why RBAC and Secrets belong together in the first Kubernetes security lesson. If access to the API server is too broad, sensitive data and workload control both become exposed.
 
-During a routine application release, the team includes a debugging library inside a public-facing developer tool container. An attacker discovers a remote code execution vulnerability in this tool, executes an exploit payload, and acquires a shell session inside the container. 
+![Kubernetes API request path showing a checkout pod using a ServiceAccount, reaching the API server, passing through an RBAC decision, and reaching or being denied Secret access](/content-assets/articles/article-devsecops-kubernetes-security-rbac-and-secrets/rbac-api-request-path.png)
 
-The attacker navigates to the container's default token path under the local runtime directory. Because the pod was deployed without restricting ServiceAccount token projection, the attacker extracts the runner's ServiceAccount token from the mounted filesystem.
+*This view ties the pod identity, the API server, the RBAC decision, and Secret access into one request path, so the security boundary is visible before we write any YAML.*
 
-Because the ServiceAccount was granted cluster-wide administrative permissions, the attacker uses the stolen token to log into the cluster API Server from their command line. Bypassing all namespace isolation boundaries, they immediately download every database credential Secret, delete running production workloads, provision privileged daemon sets to hijack the cluster's physical host nodes, and deploy persistent cryptocurrency miners across the entire infrastructure.
+## Service Accounts Give Pods a Kubernetes Identity
+<!-- section-summary: A service account is the identity a workload uses when it talks to the Kubernetes API. -->
 
-This security compromise demonstrates that the primary architectural failure was not the software vulnerability in the developer tool, but the over-privileged cluster-wide RBAC role binding. Had the runner's ServiceAccount been strictly scoped using a namespaced Role bound exclusively to its target application namespace, the stolen token would have granted the attacker no path to reach other namespaces, inspect database secrets, or deploy cluster-wide daemons, halting the exploit at the namespace boundary.
+A **ServiceAccount** is a Kubernetes identity for an application, controller, job, or other non-human workload. Human users usually come from outside Kubernetes, such as a company identity provider. Pods use service accounts because the API server needs a name for the workload making a request.
 
-## The Request Sentence: Subjects, Verbs, and Resources
+Every namespace has a service account named `default`. If a pod spec does not choose a service account, Kubernetes assigns that default service account. That convenience helps new workloads start quickly, but it can hide an important security decision. A production pod should usually name the service account it expects to use, even if that service account has no special permissions.
 
-Every authorization check inside Kubernetes RBAC can be expressed as a simple grammatical sentence. The RBAC engine parses each API request to answer a single question: can a specific Subject perform a specific Verb on a specific Resource inside a specific Scope?
+For the checkout API, create a dedicated service account:
 
-To write least-privilege security policies, we must understand the three distinct components that construct this request sentence:
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: checkout-api
+  namespace: checkout-prod
+automountServiceAccountToken: false
+```
 
-* **Subjects**: The identity performing the action. Kubernetes supports three kinds of subjects: Users, Groups, and ServiceAccounts. Users represent real human operators authenticated by external identity systems. Groups represent collections of users mapped from corporate registries. ServiceAccounts are namespaced identities designed specifically for applications and automated workloads running inside the cluster.
-* **Verbs**: The specific action being executed. Standard API verbs include read-only operations (`get`, `list`, `watch`) and modifying operations (`create`, `update`, `patch`, `delete`). The difference between these verbs is highly significant. For example, an identity with `get` access can read a single resource, while `list` access permits reading an entire collection of resources, and `patch` access permits modifying properties of a running configuration.
-* **Resources**: The Kubernetes API objects being targeted. Resources include core cluster components (such as `pods`, `services`, and `secrets`) and API group objects (such as `deployments.apps` or `ingresses.networking.k8s.io`). Many resources also support specialized subresources, such as `pods/log` for reading container logs, or `pods/exec` for launching interactive shells.
+The `automountServiceAccountToken: false` setting tells Kubernetes not to automatically mount an API token into pods that use this service account. That is a good default for a web API that only needs database and payment credentials. If the application never calls the Kubernetes API, it should not receive a Kubernetes API token as a free extra credential.
 
-By structuring rules around these precise terms, security reviewers can translate abstract business requirements into explicit, granular configurations. For example, a developer's feature request to "view application logs in staging" translates to allowing their User identity to execute the `get` verb on the `pods/log` subresource exclusively inside the staging namespace.
+The deployment pipeline is different. It needs to talk to the API server during releases, so it gets a separate service account:
 
-## Scoping API Permissions: Roles vs. ClusterRoles
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: checkout-deployer
+  namespace: checkout-prod
+automountServiceAccountToken: true
+```
 
-To define permissions inside a cluster, we utilize two distinct policy objects: Roles and ClusterRoles. Understanding the structural boundaries between these two resources is critical to preventing accidental privilege escalation.
+This split matters. The checkout runtime identity and the deployment identity have different jobs. The runtime service account should run the app. The deployer service account should update Kubernetes objects. Giving both identities the same permissions makes reviews confusing and increases the blast radius of a stolen token.
 
-A **Role** is a namespaced policy object. It defines a list of permitted API operations that apply exclusively within a single namespace boundary. Consider a namespaced Role designed to permit an automated deployer to manage deployments inside a production orders namespace:
+You can check which service account a running pod uses:
+
+```bash
+kubectl get pod -n checkout-prod -l app=checkout-api \
+  -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.spec.serviceAccountName}{"\n"}{end}'
+```
+
+You can also inspect whether Kubernetes mounted the service account token into a pod:
+
+```bash
+kubectl exec -n checkout-prod deploy/checkout-api -- \
+  sh -c 'ls -l /var/run/secrets/kubernetes.io/serviceaccount 2>/dev/null || echo "no service account token mounted"'
+```
+
+If the application does not need Kubernetes API access, the safer result is `no service account token mounted`. If a token exists, treat it like a live credential. Anyone with shell access inside the container may be able to copy it and use it against the API server until the token expires or access is removed.
+
+## RBAC Rules Say Which API Calls Are Allowed
+<!-- section-summary: RBAC rules combine subjects, verbs, resources, and scope into explicit Kubernetes API permissions. -->
+
+RBAC uses a few simple pieces. A **subject** is the identity receiving access. Kubernetes RBAC subjects can be users, groups, or service accounts. A **verb** is the action, such as `get`, `list`, `watch`, `create`, `update`, `patch`, or `delete`. A **resource** is the API object, such as `pods`, `deployments`, `secrets`, or the `pods/log` subresource. A **scope** says whether the permission applies inside one namespace or across the cluster.
+
+The checkout deployer needs a small set of permissions. It needs to read and patch the `checkout-api` Deployment. It needs to watch pods during rollout. It needs to read logs for troubleshooting failed releases. It does not need to read Secrets. It does not need to create ClusterRoles. It does not need to change RoleBindings.
+
+That last sentence is where real security reviews often start. A request like "the deployer needs Kubernetes access" is too broad. A better request names the exact workflow: "the deployer needs to patch one Deployment in `checkout-prod`, read rollout state, and fetch logs for pods in that namespace." That version can become RBAC YAML.
+
+RBAC has an important default shape: access must be explicitly granted. If no rule allows a request, Kubernetes denies it. RBAC can grant permissions, and other authorization layers or admission policies may still block risky requests later in the request path.
+
+## Roles and ClusterRoles Define Permission Scope
+<!-- section-summary: Roles define namespace permissions, while ClusterRoles define reusable or cluster-wide permission sets. -->
+
+A **Role** is a namespaced permission object. It can grant access to resources inside one namespace. For the checkout deployer, a Role is the right first choice because the release job only works in `checkout-prod`.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: orders-deployer
-  namespace: orders-prod
+  name: checkout-deployer
+  namespace: checkout-prod
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    resourceNames: ["checkout-api"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
@@ -94,211 +145,421 @@ rules:
     verbs: ["get"]
 ```
 
-This Role is securely isolated. The `metadata.namespace` field guarantees that the permissions declared inside the `rules` block—allowing the identity to patch Deployments and read Pod logs—only apply within the `orders-prod` namespace. The deployer has no authority to read or modify resources in any other namespace.
+The first rule uses `apiGroups: ["apps"]` because Deployments live in the `apps` API group. It uses `resourceNames: ["checkout-api"]` so the deployer can patch that named Deployment rather than every Deployment in the namespace. The second rule lets the deployer observe pods during rollout. The third rule allows log reads through the `pods/log` subresource.
 
-A **ClusterRole** is a non-namespaced policy object. It is designed to define permissions that apply cluster-wide. ClusterRoles are required for cluster-scoped resources (such as `nodes`, `namespaces`, or `persistentvolumes`) and are commonly used by shared system controllers. However, because ClusterRoles are not bound to a namespace, assigning them to human operators or application workloads represents a significant security risk.
+A **ClusterRole** is a cluster-scoped permission object. It can describe permissions for cluster-scoped resources such as `nodes`, `namespaces`, and `persistentvolumes`. It can also define a reusable permission set that a RoleBinding grants inside one namespace. Kubernetes ships default ClusterRoles such as `view`, `edit`, and `admin`, and many cluster add-ons create ClusterRoles for controllers that genuinely need cluster-wide access.
 
-When auditing your cluster, always prefer namespaced Roles for application workloads. A namespaced Role ensures that even if an application's ServiceAccount is compromised, the blast radius remains strictly confined to the host namespace boundary.
+ClusterRoles deserve extra review because their scope can grow through binding choices. A ClusterRole that allows `get`, `list`, and `watch` on Secrets may expose sensitive data if a ClusterRoleBinding attaches it broadly. A ClusterRole that can create pods may let a compromised identity launch new workloads. A ClusterRole that can update RBAC objects may let an identity grant itself more power.
 
-## Binding Identities: RoleBindings vs. ClusterRoleBindings
+For application teams, start with a namespaced Role. Reach for a ClusterRole when the workload truly needs cluster-scoped resources, or when the platform team intentionally maintains a reusable permission set. The checkout deployer works inside one namespace, so the Role keeps the access boundary clear.
 
-Permissions defined inside a Role or ClusterRole have no effect until they are attached to a subject using a Binding. Kubernetes supports two types of binding objects: RoleBindings and ClusterRoleBindings.
+## RoleBindings and ClusterRoleBindings Attach Permissions
+<!-- section-summary: Permission rules do nothing until a binding attaches them to a user, group, or service account. -->
 
-A **RoleBinding** grants the permissions defined in a Role to a subject within a specific namespace. RoleBindings can also bind a ClusterRole to a subject, but the resulting permissions are strictly limited to the namespace of the RoleBinding. Consider a manifest that defines a ServiceAccount and binds our deployer Role to it:
+A Role or ClusterRole only defines permissions. A **RoleBinding** or **ClusterRoleBinding** grants those permissions to subjects.
+
+A **RoleBinding** grants permissions inside one namespace. It can point to a Role in the same namespace, or it can point to a ClusterRole and limit that ClusterRole's permissions to the RoleBinding namespace. For the checkout deployer, bind the namespaced Role to the dedicated service account:
 
 ```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: orders-deployer-sa
-  namespace: orders-prod
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: orders-deployer-binding
-  namespace: orders-prod
+  name: checkout-deployer
+  namespace: checkout-prod
 subjects:
   - kind: ServiceAccount
-    name: orders-deployer-sa
-    namespace: orders-prod
+    name: checkout-deployer
+    namespace: checkout-prod
 roleRef:
-  kind: Role
-  name: orders-deployer
   apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: checkout-deployer
 ```
 
-This configuration securely couples the `orders-deployer-sa` ServiceAccount to the namespaced `orders-deployer` Role. The binding occurs exclusively inside `orders-prod`.
+This grants the `checkout-deployer` Role to one service account in one namespace. It does not give the runtime `checkout-api` service account deployment permissions. It does not grant access in `kube-system`, `payments-prod`, or another team namespace.
 
-A **ClusterRoleBinding** grants permissions cluster-wide, across every namespace in the cluster. If a ClusterRole containing permission to read Secrets is attached to a subject via a ClusterRoleBinding, that subject can read every Secret in the entire cluster, including administrative credentials and system database keys.
+A **ClusterRoleBinding** grants the referenced ClusterRole across the whole cluster. That is right for some platform components, such as a cluster monitoring agent that needs to watch nodes or a controller that manages resources in many namespaces. It is dangerous for ordinary application service accounts because one compromised namespace can turn into cluster-wide access.
 
-When reviewing bindings, apply three strict audit controls:
+Review bindings with the subject in mind. A binding to `system:serviceaccounts` can affect all service accounts. A binding to `system:serviceaccounts:checkout-prod` can affect every service account in one namespace. A binding to `system:authenticated` can affect every authenticated user and service account. Those broad subjects need strong justification.
 
-First, never use ClusterRoleBindings for application-level service accounts. Limit their use exclusively to cluster-wide system operators (such as CNI network controllers or cluster monitoring agents).
+![RBAC scope comparison showing Role and RoleBinding granting pod and Secret access inside one namespace, while ClusterRole and ClusterRoleBinding can reach cluster-level resources such as Nodes](/content-assets/articles/article-devsecops-kubernetes-security-rbac-and-secrets/rbac-scope-bindings.png)
 
-Second, audit the subjects of every RoleBinding. Ensure that broad groups (like `system:authenticated` or `system:unauthenticated`) are never bound to modifying roles, as this grants anonymous connections immediate permission to alter cluster state.
+*The left side shows the safer default for application teams: permissions stay inside one namespace. The right side shows why cluster-scope bindings deserve a slower review.*
 
-Third, ensure that no ServiceAccount is granted the permission to modify `roles` or `rolebindings` in its own namespace unless it is a dedicated security administrator, as this permission allows the workload to escalate its own privileges at will.
+## What a Compromised Pod Can Do With an Overpowered Token
+<!-- section-summary: A stolen service account token gives the attacker whatever API permissions RBAC granted to that service account. -->
 
-## Testing effective Permissions with kubectl auth can-i
-
-To verify that our RBAC policies are enforced correctly and that no unintended permissions exist, we must test the effective permission state of our subjects. Rather than manually parsing nested YAML files, we use the built-in `kubectl auth can-i` utility.
-
-This command asks the API Server to evaluate our request sentences dynamically, returning a simple `yes` or `no` response based on the active authorization state.
-
-We can run validation checks from the perspective of our deployer ServiceAccount:
+Now connect the pieces to an incident. The checkout API has a dependency vulnerability that gives an attacker command execution inside one application container. The attacker runs a shell command and finds a mounted service account token:
 
 ```bash
-$ kubectl auth can-i patch deployments.apps \
-  --as=system:serviceaccount:orders-prod:orders-deployer-sa \
-  -n orders-prod
-yes
+TOKEN_PATH=/var/run/secrets/kubernetes.io/serviceaccount/token
+CA_PATH=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+NS_PATH=/var/run/secrets/kubernetes.io/serviceaccount/namespace
 
-$ kubectl auth can-i get pods/log \
-  --as=system:serviceaccount:orders-prod:orders-deployer-sa \
-  -n orders-prod
-yes
-
-$ kubectl auth can-i get secrets \
-  --as=system:serviceaccount:orders-prod:orders-deployer-sa \
-  -n orders-prod
-no
-
-$ kubectl auth can-i update roles.rbac.authorization.k8s.io \
-  --as=system:serviceaccount:orders-prod:orders-deployer-sa \
-  -n orders-prod
-no
+test -f "$TOKEN_PATH" && echo "token is mounted"
+cat "$NS_PATH"
 ```
 
-These checks confirm that our deployer ServiceAccount possesses the correct, scoped-down permissions. It can patch Deployments and read logs, but is securely blocked from reading Secrets or modifying access controls.
-
-We can also test cluster-wide boundaries to ensure our namespace isolation holds:
+Inside a pod, Kubernetes also exposes the API server host through environment variables in many clusters:
 
 ```bash
-$ kubectl auth can-i get pods \
-  --as=system:serviceaccount:orders-prod:orders-deployer-sa \
+env | grep KUBERNETES_SERVICE
+```
+
+With the token, the attacker can try API calls from inside the pod:
+
+```bash
+APISERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+NAMESPACE="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+
+curl --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+  -H "Authorization: Bearer ${TOKEN}" \
+  "${APISERVER}/api/v1/namespaces/${NAMESPACE}/secrets"
+```
+
+If RBAC grants that service account `list secrets`, the attacker can read every Secret in the namespace from that one API call. If RBAC grants cluster-wide Secret access through a ClusterRoleBinding, the attacker can read Secrets across namespaces. If RBAC grants `create pods`, the attacker may start a new pod with a different image. If RBAC grants `update rolebindings` or `escalate` style access through RBAC resources, the attacker may change permissions and grow their access.
+
+The vulnerable library started the incident, but the service account decides the blast radius. A runtime service account with no token and no useful API permissions gives the attacker much less Kubernetes control. A deployer token mounted into the web API pod gives the attacker a release bot identity. A cluster-admin token turns a container bug into a cluster incident.
+
+## Check Effective Access With kubectl
+<!-- section-summary: Effective permission checks prove what a service account can actually do after all bindings are applied. -->
+
+RBAC YAML can look reasonable while a second binding grants extra access somewhere else. Use `kubectl auth can-i` to ask the API server about the effective authorization result.
+
+Check the checkout deployer permissions:
+
+```bash
+kubectl auth can-i patch deployments.apps/checkout-api \
+  --as=system:serviceaccount:checkout-prod:checkout-deployer \
+  -n checkout-prod
+
+kubectl auth can-i get pods/log \
+  --as=system:serviceaccount:checkout-prod:checkout-deployer \
+  -n checkout-prod
+
+kubectl auth can-i list secrets \
+  --as=system:serviceaccount:checkout-prod:checkout-deployer \
+  -n checkout-prod
+
+kubectl auth can-i update rolebindings.rbac.authorization.k8s.io \
+  --as=system:serviceaccount:checkout-prod:checkout-deployer \
+  -n checkout-prod
+```
+
+For the Role shown earlier, the first two checks should return `yes`, and the last two should return `no`. That gives the deployer the release actions it needs while blocking Secret reads and RBAC changes.
+
+Check the runtime checkout API identity too:
+
+```bash
+kubectl auth can-i list secrets \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+
+kubectl auth can-i create pods \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+
+kubectl auth can-i get pods \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
   -n kube-system
-no
 ```
 
-This negative test proves that the namespaced binding is operating correctly, preventing the ServiceAccount from inspecting resources in administrative namespaces. Incorporate these commands into your deployment verification scripts to guarantee your security boundaries remain active after cluster upgrades.
+For a normal web API, these should usually return `no`. That outcome is healthy. The application can still read its mounted database credential from the filesystem, but it cannot use the Kubernetes API to browse other objects.
 
-## Secrets in Kubernetes: Base64 is Not Encryption
+To find existing RBAC grants for a service account, inspect RoleBindings in the namespace and ClusterRoleBindings across the cluster:
 
-Once we have secured our API control plane using RBAC, we must address how the cluster stores and manages sensitive configuration parameters, such as database credentials, API tokens, and cryptographic keys. In Kubernetes, these parameters are represented as Secret objects.
+```bash
+kubectl get rolebinding -n checkout-prod -o wide
+kubectl describe rolebinding -n checkout-prod checkout-deployer
 
-A common and highly dangerous beginner mistake is to treat Kubernetes Secrets as inherently encrypted storage. Consider a standard Secret manifest designed to store a database URL:
+kubectl get clusterrolebinding -o wide | grep checkout-prod || true
+```
+
+Some teams also use this review during incident response. If a pod was compromised, list the pod's service account, run `kubectl auth can-i --list` as that service account, then check whether the account could read Secrets, create pods, exec into pods, or modify RBAC. Those answers guide the rest of the investigation.
+
+## Secrets Hold Sensitive Application Data
+<!-- section-summary: Kubernetes Secrets store sensitive values as API objects, so RBAC and storage protection both matter. -->
+
+A Kubernetes **Secret** stores sensitive data such as passwords, tokens, TLS keys, SSH keys, and database connection strings. Secrets are API objects, so the same API server and RBAC path controls access to them.
+
+Here is a simple Secret for the checkout database:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: orders-db-secret
-  namespace: orders-prod
+  name: checkout-db
+  namespace: checkout-prod
 type: Opaque
-data:
-  database-url: cG9zdGdyZXM6Ly9vcmRlcnNfYXBpOmV4YW1wbGUtcGFzc3dvcmRAZGIub3JkZXJzLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvb3JkZXJz
+stringData:
+  username: checkout_api
+  password: replace-with-a-real-generated-password
 ```
 
-The `database-url` value appears as an alphanumeric string. However, this value is not encrypted. It is merely **Base64 encoded**—a reversible formatting mechanism designed to transport binary data safely over JSON and YAML text streams.
+The `stringData` field lets you write clear text in the manifest you send to the API server. Kubernetes stores the value in the Secret's `data` field as Base64-encoded content. Base64 is reversible text formatting. It helps binary data fit into YAML and JSON, while cryptographic protection requires encryption with keys.
 
-Anyone who has access to the manifest file, or who possesses RBAC permission to get the Secret from the API Server, can decode the value instantly using standard shell commands:
+You can see the stored shape with `kubectl`:
 
 ```bash
-$ echo 'cG9zdGdyZXM6Ly9vcmRlcnNfYXBpOmV4YW1wbGUtcGFzc3dvcmRAZGIub3JkZXJzLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvb3JkZXJz' | base64 --decode
-postgres://orders_api:example-password@db.orders.svc.cluster.local:5432/orders
+kubectl get secret checkout-db -n checkout-prod -o jsonpath='{.data.password}{"\n"}'
 ```
 
-Because Base64 is completely reversible, we must establish three strict architectural controls to secure our Secret storage:
+You can decode a value if you have API access to read the Secret:
 
-First, never commit Secret manifest files containing raw Base64 data to your version control repositories. If an attacker gains access to your repository history, they compromise all historical secrets. Instead, use external Secrets operators (such as HashiCorp Vault or AWS Secrets Manager) to dynamically inject secret values into the cluster at runtime.
+```bash
+kubectl get secret checkout-db -n checkout-prod \
+  -o jsonpath='{.data.password}' | base64 --decode
+echo
+```
 
-Second, encrypt your secrets at rest in etcd. By default, etcd stores cluster data in plaintext. Configure the API Server's **EncryptionConfiguration** resources to encrypt Secret data using a cryptographic Key Management Service (KMS) provider before it is written to the physical database disk.
+That command is useful for understanding the risk. Anyone who can `get` a Secret can recover the secret value. Anyone who can `list` Secrets can often recover many values at once because the list response includes the objects. Treat `get`, `list`, and `watch` on Secrets as powerful permissions.
 
-Third, restrict API access to Secrets strictly. Treat `get secrets` and `list secrets` as highly privileged permissions, limiting them exclusively to the workloads that require the specific credential at runtime.
+Production teams also avoid committing raw Secret manifests with real values. Git history lasts a long time, pull requests copy content into review systems, and local clones spread to many machines. The safer pattern is to keep secret values in a controlled secret manager, then deliver them to Kubernetes through automation.
 
-## Delivering Secrets to Pods: Mounted Volumes vs. Environment Variables
+## Mount Secrets Carefully Inside Pods
+<!-- section-summary: Mounted Secret files usually expose less accidental data than environment variables and can receive kubelet updates. -->
 
-Once a Secret is stored securely in the cluster control plane, it must be delivered to the running application container. Kubernetes supports two primary delivery mechanisms: injecting secrets as environment variables, or mounting secrets as files inside a virtual volume.
+After the checkout database password exists as a Kubernetes Secret, the application needs to read it. Kubernetes supports two common delivery patterns: environment variables and mounted files.
 
-The first mechanism is **Environment Variable Injection**. The Secret key is mapped directly to an environment variable in the container specification. While this model is simple for application code to read, it introduces significant security and operational tradeoffs. 
-
-Environment variables are easily exposed in diagnostic logs, process dumps, or debugging interfaces (such as running `env` inside the container). Furthermore, environment variables are static. If the Secret value is rotated in the control plane, the running process continues to hold the old value indefinitely until the container is manually restarted.
-
-The second, highly secure mechanism is **Mounted Volume Delivery**. The Secret is projected as a read-only file system volume, mapping each key to a virtual file under a secure directory path. Consider a Deployment template configured to mount our database secret:
+Environment variables are simple:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: orders-api-deployment
-  namespace: orders-prod
+  name: checkout-api
+  namespace: checkout-prod
 spec:
-  replicas: 2
+  template:
+    spec:
+      serviceAccountName: checkout-api
+      automountServiceAccountToken: false
+      containers:
+        - name: checkout-api
+          image: ghcr.io/example/checkout-api:1.8.0
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: checkout-db
+                  key: password
+```
+
+This works, and many applications support it. The tradeoff is exposure. Environment variables often appear in crash dumps, debug output, support bundles, process inspection, and accidental logging. They also stay fixed for the life of the process. If the Secret changes, the running process still has the old environment value until the pod restarts.
+
+Mounted files are often a better default for sensitive values:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: checkout-prod
+spec:
   selector:
     matchLabels:
-      app: orders-api
+      app: checkout-api
   template:
     metadata:
       labels:
-        app: orders-api
+        app: checkout-api
     spec:
+      serviceAccountName: checkout-api
+      automountServiceAccountToken: false
       containers:
-        - name: orders-api-container
-          image: ghcr.io/devpolaris/orders-api:v1.2.0
+        - name: checkout-api
+          image: ghcr.io/example/checkout-api:1.8.0
           volumeMounts:
-            - name: db-secret-vol
-              mountPath: /var/run/secrets/devpolaris-orders-api
+            - name: checkout-db-secret
+              mountPath: /var/run/secrets/checkout-db
               readOnly: true
       volumes:
-        - name: db-secret-vol
+        - name: checkout-db-secret
           secret:
-            secretName: orders-db-secret
+            secretName: checkout-db
             items:
-              - key: database-url
-                path: database-url
+              - key: username
+                path: username
+              - key: password
+                path: password
 ```
 
-This configuration securely projects the database credential as a file located at `/var/run/secrets/devpolaris-orders-api/database-url`. The `readOnly: true` setting ensures the application container cannot modify the file.
+The application reads `/var/run/secrets/checkout-db/username` and `/var/run/secrets/checkout-db/password`. The volume is read-only from the container's point of view. Kubernetes can update mounted Secret content after the Secret changes, although the application must reopen or reread the file to use the new value. Some apps need a restart after rotation, and some apps support live reload.
 
-Mounted volume delivery provides three critical security advantages:
+You can verify the pod sees only the mounted files:
 
-First, it eliminates log exposure. Because the secret lives inside a file, it does not appear in process environment listings or standard shell dumps.
+```bash
+kubectl exec -n checkout-prod deploy/checkout-api -- \
+  sh -c 'find /var/run/secrets -maxdepth 3 -type f -print'
+```
 
-Second, it supports automatic, dynamic updates. When a Secret value is rotated in the control plane, the kubelet agent on the node automatically updates the mounted virtual file within minutes.
+Do not use broad Secret mounts. Mount the specific Secret keys the application needs, under an application-specific path, as read-only files. Avoid mounting the Kubernetes service account token beside application credentials unless the workload actually calls the Kubernetes API.
 
-Third, it simplifies rotation verification. The application can be designed to monitor the file for changes, dynamically closing old connections and establishing new database channels without requiring a complete container restart, minimizing release friction during credential rotation cycles.
+## Encrypt Secrets at Rest
+<!-- section-summary: RBAC controls API access, while encryption at rest protects Secret data in the backing store. -->
+
+RBAC controls who can read a Secret through the API server. Encryption at rest controls how Secret data is protected in the Kubernetes backing store. Kubernetes can encrypt Secret data before writing it to etcd by using an API server encryption configuration.
+
+This matters because etcd snapshots and disks may move through backup systems, restore workflows, and administrator machines. If Secret data sits there in clear form, anyone with access to those files may recover application credentials. Encryption at rest adds a separate cryptographic protection layer for stored Secret data.
+
+A simplified encryption configuration can look like this:
+
+```yaml
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+    providers:
+      - kms:
+          apiVersion: v2
+          name: platform-kms
+          endpoint: unix:///var/run/kms-provider/socket.sock
+      - identity: {}
+```
+
+The provider order matters. The API server uses the first provider to write new data. The `identity` provider at the end can still read older unencrypted data during migration. Managed Kubernetes platforms often expose this through a cloud KMS integration rather than a hand-written API server file, but the idea stays the same: Secret values should be encrypted before they land in the backing store.
+
+After enabling encryption, existing Secrets may need to be rewritten so Kubernetes stores them with the new provider. A common administrative pattern is to read and replace the Secret object without changing its data:
+
+```bash
+kubectl get secrets -A
+
+kubectl get secret checkout-db -n checkout-prod -o yaml | kubectl replace -f -
+```
+
+Run this kind of migration through your platform team's normal change process. Test restore workflows, record which KMS key protects the data, and keep access to that key limited. Encryption at rest helps storage risk, while RBAC still controls API risk.
+
+## Use External Secret Managers for Production Workflows
+<!-- section-summary: External secret managers keep source values outside the cluster and let Kubernetes receive only the runtime copy it needs. -->
+
+Many production teams keep source secret values in an external secret manager such as a cloud secret service or HashiCorp Vault. Kubernetes then receives a short operational copy for the workload, often through a controller.
+
+The pattern has three parts. The **external secret manager** stores the real value and handles rotation, audit, and access policy. A **Kubernetes controller** reads the approved external value and writes or refreshes a Kubernetes Secret. The **pod** consumes the Kubernetes Secret through a mounted file or environment variable.
+
+External Secrets Operator is one common implementation of this pattern. It uses resources such as `SecretStore` or `ClusterSecretStore` to describe the provider connection, and `ExternalSecret` to describe which external value should sync into a Kubernetes Secret.
+
+Here is a shortened example:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: checkout-db
+  namespace: checkout-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: platform-secrets
+    kind: SecretStore
+  target:
+    name: checkout-db
+  data:
+    - secretKey: password
+      remoteRef:
+        key: prod/checkout/db
+        property: password
+```
+
+This example tells the controller to sync the external `prod/checkout/db` password into a Kubernetes Secret named `checkout-db`. The application still mounts the Kubernetes Secret. The source value stays in the external manager, where the security team can apply provider IAM, audit access, and rotate credentials.
+
+This pattern still needs RBAC review. The external secrets controller needs permission to write Secrets in target namespaces. Application service accounts usually do not need permission to read Secret objects through the API. They only need the Secret mounted into their own pod. Keep those permissions separate.
+
+## Least-Privilege Review Checklist
+<!-- section-summary: A practical RBAC and Secret review checks identity, tokens, bindings, Secret access, and operational proof. -->
+
+Least privilege means each identity gets the smallest useful set of permissions for its job. In Kubernetes, review the service account, the bindings, the verbs, the resources, and the way Secrets reach the pod.
+
+Start with identity inventory:
+
+```bash
+kubectl get serviceaccount -n checkout-prod
+
+kubectl get deploy checkout-api -n checkout-prod \
+  -o jsonpath='{.spec.template.spec.serviceAccountName}{"\n"}'
+
+kubectl get deploy checkout-api -n checkout-prod \
+  -o jsonpath='{.spec.template.spec.automountServiceAccountToken}{"\n"}'
+```
+
+Then review RBAC grants:
+
+```bash
+kubectl get role,rolebinding -n checkout-prod
+kubectl get clusterrolebinding -o wide | grep checkout || true
+```
+
+Look for risky verbs and resources:
+
+```bash
+kubectl auth can-i list secrets \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+
+kubectl auth can-i create pods \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+
+kubectl auth can-i update rolebindings.rbac.authorization.k8s.io \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+
+kubectl auth can-i '*' '*' \
+  --as=system:serviceaccount:checkout-prod:checkout-api \
+  -n checkout-prod
+```
+
+The last command checks for very broad access in the namespace. A normal application runtime identity should return `no`.
+
+Next, review Secret usage:
+
+```bash
+kubectl get secret -n checkout-prod
+
+kubectl get deploy checkout-api -n checkout-prod -o yaml | \
+  grep -E 'secretName|secretKeyRef|automountServiceAccountToken|serviceAccountName'
+```
+
+For each Secret, ask who can read it through the API, which pods mount it, whether the value comes from a controlled source, and how rotation works. Check that real secret values stay out of Git. Confirm the cluster or managed service has Secret encryption at rest enabled. Review etcd snapshot access with the same seriousness as database backup access.
+
+Finally, record the intended access in a short review note. For the checkout API, the note might say: runtime service account has no API token and no RBAC grants; deployer service account can patch only the `checkout-api` Deployment, read pods, and read pod logs in `checkout-prod`; no checkout service account can read Secrets through the API; database password reaches the app through a read-only mounted Secret file; source secret lives in the external secret manager.
 
 ## Putting It All Together
+<!-- section-summary: Safe Kubernetes access keeps runtime identity, deployment identity, Secret delivery, and storage protection separate. -->
 
-Securing the control plane and data configuration layers represents the primary security boundary in a Kubernetes cluster. By restricting API access usingnamespaced RBAC, eliminating permanent static secrets from Git repositories, encrypting data at rest in etcd, and delivering credentials using read-only mounted volumes, we protect our orchestrator from administrative compromises.
+The checkout team now has a safer access shape.
 
-When configuring and auditing your cluster's access and secret controls, ensure you enforce these five core practices:
+The `checkout-api` runtime service account exists so pods have an explicit identity, but it does not automatically mount a Kubernetes API token. The application receives its database password through a read-only Secret volume, scoped to the exact keys it needs. The service account has no RBAC grants to list Secrets, create pods, or change bindings.
 
-First, restrict application permissions to namespaced Roles. Completely avoid ClusterRoles and ClusterRoleBindings for ordinary workloads, ensuring that a compromised container cannot escalate access beyond its namespace boundary.
+The `checkout-deployer` service account handles releases. A namespaced Role lets it patch the `checkout-api` Deployment, watch pods, and read logs in `checkout-prod`. A RoleBinding attaches that Role to the deployer identity. No ClusterRoleBinding grants this application identity cluster-wide power.
 
-Second, test your active RBAC policies regularly using `kubectl auth can-i`. Run programmatic verification checks from the perspective of your ServiceAccounts to prove that unauthorized access is successfully blocked.
+The team tests those claims with `kubectl auth can-i`, not by trusting YAML at a glance. They check both the intended `yes` permissions and the important `no` permissions. They also check which service account a pod uses and whether a token is mounted.
 
-Third, treat Base64 as transport formatting, never as encryption. Implement KMS-backed etcd encryption at rest to protect physical cluster storage disks from credential extraction.
+Secrets receive separate protection. RBAC limits API reads. Mounted files reduce accidental process-level exposure compared with environment variables. Encryption at rest protects stored Secret data in etcd and backups. An external secret manager pattern keeps the source value in a system built for audit, rotation, and provider-level access control.
 
-Fourth, project secrets to containers exclusively as read-only volumes. Avoid environment variable injection to prevent secret leaks in diagnostic logs and process dumps.
+![Least-privilege review loop showing separate identity, can-i tests, a small Role, Secret mounting, and audit evidence around a checkout service](/content-assets/articles/article-devsecops-kubernetes-security-rbac-and-secrets/rbac-secrets-review-loop.png)
 
-Fifth, design your applications to support dynamic credential rotation. Monitor mounted secret files for modifications, allowing workloads to dynamically update connection strings without incurring container restart downtime.
+*The summary loop shows the operational habit behind the article: give each workload its own identity, prove access with `can-i`, keep Roles small, mount only needed Secrets, and leave audit evidence for the next review.*
+
+This is the baseline for Kubernetes security work. A vulnerable pod may still happen. A failed rollout may still happen. The goal is to make sure one application bug does not grant cluster-wide control, and one deployment identity does not become a Secret-reading superuser.
 
 ## What's Next
 
-Securing API Server access and secret configurations establishes a secure control plane baseline. However, once an authorized pod is scheduled, we must still isolate the process execution on the physical nodes and prevent host-level breakouts. In the next chapter, **Pod Security and Runtime Hardening**, we will cover configuring pod securityContexts, dropping Linux capabilities, running shell-less containers, and auditing active containers using runtime syscall sensors.
+RBAC and Secrets control what a workload can ask Kubernetes to do and which sensitive values it can receive. The next layer is the pod runtime itself.
 
-![Kubernetes RBAC and secrets summary map](/content-assets/articles/article-devsecops-kubernetes-security-rbac-and-secrets/kubernetes-access-summary.png)
-
-*This summary turns Kubernetes access into subjects, verbs, resources, bindings, secrets, and effective-permission checks.*
+In the next article, **Pod Security and Runtime Hardening**, we will look at security contexts, running as non-root, dropping Linux capabilities, read-only root filesystems, seccomp, AppArmor, and image choices. Those controls reduce what code can do inside the container and on the node after the pod starts.
 
 ---
 
-**References**
+## References
 
-- [Kubernetes RBAC Authorization Guide](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) - Official documentation on configuring Roles, RoleBindings, and cluster access controls.
-- [Kubernetes Secrets Concept Overview](https://kubernetes.io/docs/concepts/configuration/secret/) - Comprehensive guide on managing, mounting, and rotating Secret objects.
-- [Kubernetes Etcd Encryption at Rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) - Best practices for securing sensitive database storage using KMS providers.
-- [OWASP Kubernetes Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Kubernetes_Security_Cheat_Sheet.html) - OWASP recommendations on least-privilege service accounts and secret delivery mechanisms.
-- [NIST SP 800-190 Application Container Security Guide](https://csrc.nist.gov/pubs/sp/800/190/final) - NIST guidelines on cluster access policies, secrets isolation, and orchestrator boundaries.
+- [Kubernetes RBAC authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) - Official guide for Roles, ClusterRoles, RoleBindings, ClusterRoleBindings, subjects, verbs, and default roles.
+- [Kubernetes authorization overview](https://kubernetes.io/docs/reference/access-authn-authz/authorization/) - Official explanation of how Kubernetes authorizes API requests.
+- [Kubernetes service accounts](https://kubernetes.io/docs/concepts/security/service-accounts/) - Official documentation for workload identities, service account tokens, and pod assignment.
+- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official documentation for Secret objects, Secret types, mounted volumes, and environment variable usage.
+- [Good practices for Kubernetes Secrets](https://kubernetes.io/docs/concepts/security/secrets-good-practices/) - Kubernetes guidance for least-privilege Secret access, encryption, and safer consumption.
+- [Encrypting confidential data at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) - Official task guide for Kubernetes API server encryption configuration.
+- [RBAC good practices](https://kubernetes.io/docs/concepts/security/rbac-good-practices/) - Kubernetes guidance for least privilege, token handling, and risky permissions.
+- [External Secrets Operator documentation](https://external-secrets.io/latest/) - Official documentation for syncing values from external secret managers into Kubernetes Secrets.
+- [NSA and CISA Kubernetes hardening guidance](https://www.nsa.gov/Press-Room/News-Highlights/Article/Article/2716980/nsa-cisa-release-kubernetes-hardening-guidance/) - Primary government guidance for Kubernetes hardening themes such as least privilege, secrets, and workload isolation.

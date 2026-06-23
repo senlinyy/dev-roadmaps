@@ -55,14 +55,9 @@ For `devpolaris-orders-api`, the reusable shape includes the Deployment, Service
 
 Helm and Kustomize take different routes. **Helm** packages templates, default values, metadata, release commands, chart dependencies, and versioned application packages. **Kustomize** starts from valid Kubernetes YAML and layers patches, generated ConfigMaps, generated Secrets, names, labels, and other customizations through a `kustomization.yaml` file. Kubernetes receives rendered API objects at the end of both flows.
 
-```mermaid
-flowchart TD
-    Source["Package source<br/>chart or kustomization"] --> Render["Render command<br/>helm template or kubectl kustomize"]
-    Render --> Output["Rendered Kubernetes YAML<br/>Deployment, Service, ConfigMap, Ingress"]
-    Output --> Review["Human review and CI checks"]
-    Review --> Apply["kubectl apply, Helm upgrade, or GitOps sync"]
-    Apply --> Cluster["Live cluster objects"]
-```
+![Manifest packaging path showing source files and environment inputs producing rendered YAML and cluster objects for review](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/manifest-packaging-path.png)
+
+*The package source and environment inputs matter, but reviewers still need to inspect the rendered Kubernetes objects before anything reaches the cluster.*
 
 This flow gives the team a clean debugging path. A release problem can live in the package source, the rendered YAML, the apply step, the live cluster state, or the application itself. The render step separates those layers, so the team can ask a concrete question during review: which Kubernetes objects will this package create or change?
 
@@ -181,6 +176,10 @@ diff -u -N /tmp/LIVE/apps.v1.Deployment.devpolaris-orders-api /tmp/MERGED/apps.v
 ```
 
 This habit changes the tone of a packaging review. The author no longer asks reviewers to trust a chart, an overlay, or a values file. The author shows the Kubernetes objects that the cluster will receive.
+
+![Render before apply pipeline showing package, values, render, diff, validate, and apply checkpoints](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/render-before-apply.png)
+
+*Rendering turns the package into plain YAML, and the diff plus validation steps give the team a concrete artifact to review before apply time.*
 
 ## How Environment Differences Stay Reviewable
 <!-- section-summary: A package works well when shared application shape and environment choices stay separate and easy to trace. -->
@@ -422,6 +421,10 @@ The migration can move in small steps, and each step should leave the rendered o
 | 5 | Remove copied manifests | One source path remains for future releases |
 
 The old raw manifests can stay in the repository until the packaged output succeeds in a lower environment. After that, a separate cleanup pull request can remove the copied files. That pacing keeps rollback understandable while the team learns the new review habit.
+
+![Packaging release review board showing source, rendered output, live diff, rollback plan, CI checks, and approval](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/packaging-release-review.png)
+
+*A production packaging review works best when source changes, rendered output, live diffs, rollback evidence, and CI checks are visible in one release conversation.*
 
 ## What's Next
 

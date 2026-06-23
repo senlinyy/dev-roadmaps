@@ -36,6 +36,10 @@ This article adds the next question: **who should be able to reach that Service?
 | **NodePort** | Clients that can reach Kubernetes node IPs | A static port on every node, plus the ClusterIP behavior |
 | **LoadBalancer** | Clients that enter through cloud or platform infrastructure | An external load balancer address, plus Service behavior behind it |
 
+![ClusterIP, NodePort, and LoadBalancer audience map showing inside-cluster callers, node-network callers, external callers, and shared ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-type-audience-map.png)
+
+*The Service type changes the audience. The backend contract still depends on the same selector, target port, EndpointSlices, and ready Pods.*
+
 The useful path starts small. If `checkout-web` calls `orders-api` inside the cluster, `orders-api` usually needs `ClusterIP`. If a lab or bare-metal platform needs to enter through node IPs, `NodePort` can play that role. If a cloud or platform load balancer needs to publish an address, `LoadBalancer` asks that infrastructure to create one.
 
 The examples below keep returning to the same `orders-api` Service. That makes the difference clear: the application can stay the same, while the Service type changes the audience.
@@ -239,14 +243,9 @@ LoadBalancer fits best when the Service itself represents a network entry point.
 
 For `orders-api`, direct public LoadBalancer exposure would usually skip too much of the platform's edge design. A more common production path looks like this:
 
-```mermaid
-flowchart LR
-    Client[Browser or partner client] --> LB[LoadBalancer Service for Gateway]
-    LB --> Gateway[Gateway or Ingress controller Pods]
-    Gateway --> Checkout[checkout-web ClusterIP Service]
-    Checkout --> Orders[orders-api ClusterIP Service]
-    Orders --> Inventory[inventory-api ClusterIP Service]
-```
+![LoadBalancer edge pattern showing public traffic entering a Gateway or Ingress and routing to private ClusterIP backend Services](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/loadbalancer-edge-pattern.png)
+
+*A common production shape publishes the platform edge with LoadBalancer while application backends stay private behind ClusterIP Services.*
 
 In that design, the LoadBalancer publishes the platform edge, and the application backends remain ClusterIP. The Gateway or Ingress layer owns hostnames, TLS certificates, HTTP paths, request headers, web timeouts, and route attachment rules. The orders backend can focus on being an internal API.
 
@@ -410,6 +409,10 @@ ClusterIP, NodePort, and LoadBalancer all start from the same Service idea: a st
 The checkout platform gives the practical pattern. `checkout-web` calls `orders-api` through a ClusterIP Service. A lab may use NodePort because the node-level path is intentional and visible. A production public entry usually uses a LoadBalancer Service for the Gateway or Ingress controller, then routes to ClusterIP backends.
 
 The Service type is small YAML, and it controls audience, infrastructure, cost, and security review. A good team names the caller first, proves the backend with EndpointSlices and smoke tests, and only widens exposure for a clear reason.
+
+![Kubernetes Service type review board centered on who the caller is, with checks for port, targetPort, EndpointSlices, firewall, DNS, TLS, rollback, and cost](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-type-review-summary.png)
+
+*The safest Service type choice starts with the caller, then checks the backend evidence and the exposure controls before the YAML reaches production.*
 
 ## What's Next
 

@@ -45,6 +45,10 @@ Here is the article map before we write any YAML:
 
 This chain explains why Kubernetes has more than one workload object. Pods run containers. ReplicaSets maintain a count of Pods. Deployments manage ReplicaSets so teams can update a stateless service with history and controlled replacement.
 
+![Deployment ownership chain infographic showing a Deployment with replicas, a ReplicaSet with desired count, ready and unready Pods, and a Service routing only to ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-ownership-chain.png)
+
+_This infographic shows the ownership chain from Deployment to ReplicaSet to Pod, while the Service only sends traffic to Pods that are ready._
+
 ## What a Deployment Is
 <!-- section-summary: A Deployment declares the desired state for a stateless workload and lets the Deployment controller move the cluster toward that state. -->
 
@@ -283,6 +287,10 @@ deployment "devpolaris-orders-api" successfully rolled out
 
 Rollback is strongest when every release has a clear image tag, the Deployment keeps enough revision history, and database changes stay backward-compatible with the previous application version. A rollback command can move Pods back to an older template, but it cannot automatically undo a destructive database migration.
 
+![Rolling update with two ReplicaSets infographic showing an old ReplicaSet serving v1 Pods while a new ReplicaSet brings up v2 Pods through readiness and maxSurge one](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/rolling-update-two-replicasets.png)
+
+_This infographic makes the rollout handoff visible: the new ReplicaSet grows only as new Pods become ready, while the old ReplicaSet shrinks after capacity is safe._
+
 ## Scaling and Self-Healing
 <!-- section-summary: Scaling changes the desired replica count, and self-healing is the controller loop replacing Pods that no longer match that desired count. -->
 
@@ -480,6 +488,10 @@ pod/devpolaris-orders-api-85d6ccf8d8-xq6nm 1/1     Running   0          4m
 ```
 
 Those commands prove that the Deployment finished, the ReplicaSet has the requested count, and the Pods are ready. After that, application-level checks such as smoke tests, synthetic requests, dashboards, and alert silence confirm that the orders API is serving the real user path.
+
+![Deployment production review infographic showing selectors, image, probes, resources, rollout, verify, rollout status, ReplicaSets, and ready Pods around a Deployment manifest](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-production-review.png)
+
+_This infographic summarizes the Deployment review habit: check ownership, artifact identity, readiness, capacity, rollout behavior, and verification evidence together._
 
 ## References
 

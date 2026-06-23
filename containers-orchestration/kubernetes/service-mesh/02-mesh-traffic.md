@@ -168,6 +168,10 @@ A small sample might include mostly `v1` responses with an occasional `v2` respo
 
 Small samples rarely land at exactly 57 `v1` responses and 3 `v2` responses from 60 calls. Weighted routing is probabilistic over request flow, and small samples bounce around. In production, teams check request counters, error rates, latency percentiles, and customer-impact metrics over enough traffic to make the decision meaningful.
 
+![Checkout canary split infographic showing web calling the checkout Service, a VirtualService sending 95 percent to v1 and 5 percent to v2, and a DestinationRule defining version subsets](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-traffic/checkout-canary-split.png)
+
+*The caller still uses the stable `checkout` Service name, while the proxy applies the weighted route to versioned subsets behind that Service.*
+
 When `v2` behaves well, move gradually. A common production path is 5 percent, 10 percent, 25 percent, 50 percent, and then 100 percent. Each move should have a short observation window and a clear rollback threshold, such as "roll back if checkout 5xx rate doubles for five minutes" or "roll back if p95 checkout latency stays above 800 ms."
 
 ## Verify What The Proxies Received
@@ -287,6 +291,10 @@ A **circuit breaker** is a protection rule that limits calls to an upstream host
 The **connection pool** is the set of open or waiting connections and requests Envoy manages for a destination. Limits such as `maxConnections`, `http1MaxPendingRequests`, and `http2MaxRequests` put a ceiling on how much pressure checkout can send toward inventory at one time. That ceiling matters during warehouse sync spikes because bounded waiting gives checkout a chance to return a controlled error or fallback instead of filling every worker with stuck inventory calls.
 
 **Outlier detection** is the part of circuit breaking that watches individual upstream hosts and temporarily ejects unhealthy ones from the load-balancing pool. For HTTP services, repeated 5xx responses can mark a host as an outlier. For TCP-like failures, connection failures and timeouts can count too. The ejection is temporary, so a host can return to the pool after the configured time. In the online store, that means one bad inventory Pod can be avoided for a short window while the other inventory Pods keep serving checkout traffic.
+
+![Timeout retry and circuit breaker infographic showing checkout Envoy using timeout and retry limits while inventory is protected by connection pool limits and outlier detection](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-traffic/timeout-retry-circuit-breaker.png)
+
+*Timeouts and retries limit how long checkout waits, while circuit breaking limits how much pressure checkout can send toward unhealthy inventory Pods.*
 
 For inventory, create a DestinationRule that keeps connection pressure bounded and ejects a host that keeps returning 5xx errors:
 
@@ -434,6 +442,10 @@ Fifth, the team adds a **timeout** and **retry** policy in the VirtualService. T
 Sixth, the team protects `inventory` with a DestinationRule that uses connection pool limits and **outlier detection**. That is the **circuit breaker** part. When inventory has trouble, the proxies can fail faster and temporarily avoid unhealthy hosts instead of sending every checkout request into the same slow path.
 
 Finally, the team keeps rollback ready. A 100/0 route back to `v1` is simple, fast, and easy to verify. In production, the rollback file belongs in version control next to the rollout file, and dashboards should make it obvious whether the rollback worked.
+
+![Mesh traffic rollout runbook infographic showing labels, subsets, canary route, proxy sync verification, metrics, protections, and rollback to 100 percent v1](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-traffic/traffic-rollout-runbook.png)
+
+*Traffic work stays safe when routing, verification, protection, and rollback move together instead of becoming separate one-off changes.*
 
 That is the shape of mesh traffic work: **route intentionally, verify what the proxies loaded, limit waiting, limit retries, protect weak dependencies, and keep rollback ready**.
 

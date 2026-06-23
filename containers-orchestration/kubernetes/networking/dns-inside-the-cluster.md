@@ -30,15 +30,9 @@ That path has several pieces, and each piece answers a different question. **Clu
 
 Here is the full chain we will follow. Each arrow is a place where a real incident can leave evidence.
 
-```mermaid
-flowchart LR
-    app[devpolaris-web process] --> resolver[Pod resolver]
-    resolver --> dns[kube-dns Service]
-    dns --> coredns[CoreDNS Pods]
-    coredns --> svc[orders Service record]
-    svc --> eps[EndpointSlices]
-    eps --> pod[orders API Pods]
-```
+![Kubernetes cluster DNS request path from devpolaris-web through Pod resolver, kube-dns Service, CoreDNS Pods, Service record, ClusterIP answer, EndpointSlices, and orders API Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/cluster-dns-request-path.png)
+
+*DNS proves the name lookup first. The Service, EndpointSlices, policy, and application response still need their own proof after the address comes back.*
 
 The useful habit is to keep those pieces separate during a real incident. If the name fails, DNS needs attention. If the name resolves and the Service has no endpoints, the selector, Pod labels, or readiness need attention. If the name resolves and endpoints exist, the next checks move toward policy, ports, and application behavior.
 
@@ -154,6 +148,10 @@ Address:   10.96.42.18
 ```
 
 That output proves the Service name resolves from the same namespace as the caller. The next question is the server that returned this answer.
+
+![Pod resolver search path showing a short name failing in the web namespace and a namespace-qualified Service name resolving in the orders namespace](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/resolver-search-path.png)
+
+*A cross-namespace caller should include the destination namespace so the resolver does not stop in the caller's namespace first.*
 
 ## CoreDNS Answers From Cluster State
 <!-- section-summary: Pods usually query the kube-dns Service, which routes DNS traffic to ready CoreDNS Pods. -->
@@ -407,6 +405,10 @@ kubectl -n web exec deploy/devpolaris-web -- curl -sS -m 3 http://devpolaris-ord
 ```
 
 That sequence gives a plain incident story. The app used the intended name, the cluster resolved it to the intended Service, the Service had ready backends, and the application answered.
+
+![Kubernetes DNS production habits summary separating DNS proof from traffic proof and showing headless Services returning Pod addresses](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/dns-production-summary.png)
+
+*A successful lookup proves only the name. Production evidence stays stronger when DNS proof and traffic proof stay separate.*
 
 ## What's Next
 

@@ -45,6 +45,10 @@ Here is the practical map for `devpolaris-orders-api`. Keep your eye on the acti
 | **readinessProbe** | Can this Pod receive normal Service traffic right now? | Remove the Pod from Service endpoints |
 | **livenessProbe** | Is this container stuck in a way restart can repair? | Restart the container |
 
+![Probe decision map showing startup, readiness, and liveness checks leading to boot waiting, Service traffic gating, and restart decisions](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/probe-decision-map.png)
+
+*The three probes ask different operational questions, so the visual separates the boot window, the traffic gate, and the restart signal before those actions get mixed together in YAML.*
+
 The safest order is usually startup first for slow applications, readiness for traffic protection, and liveness only for process failures. Readiness is gentle because it gives the process time to recover. Liveness is stronger because kubelet kills and restarts the container.
 
 For the orders API, a readiness failure during a short PostgreSQL outage is acceptable. The Pod leaves traffic and can rejoin after the database recovers. A liveness failure for that same PostgreSQL outage is risky because every replica might restart and reconnect at once, which adds load at the worst moment.
@@ -198,6 +202,10 @@ These fields show up often. Read them as a schedule for how kubelet turns repeat
 
 For readiness, `periodSeconds: 10` and `failureThreshold: 3` usually means about thirty seconds of failed checks before the Pod leaves endpoints. For liveness, the same math means about thirty seconds before restart, plus any initial delay or startup window. Kubernetes works from repeated observations, not from one failed HTTP response.
 
+![Probe timing window showing initial delay, period, timeout, failure threshold, and the action after repeated probe failures](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/probe-timing-window.png)
+
+*Probe timing is a small schedule. The image shows how delay, repeated checks, timeout, and threshold combine before Kubernetes changes traffic or restarts a container.*
+
 The orders API should pick timing from real behavior. If normal startup takes 35 seconds and p95 startup takes 70 seconds after a cold node pull, a 120-second startup window is reasonable. If the readiness endpoint sometimes waits two seconds on a database connection, a one-second timeout may create false failures.
 
 It helps to write down the expected operational behavior beside the YAML during review. This makes the review about real failures rather than taste in timeout numbers:
@@ -288,6 +296,10 @@ Before merging probe changes for `devpolaris-orders-api`, review the probes as t
 | Are checks cheap? | They avoid heavy queries and optional external calls |
 | Are probe failures diagnosable? | App logs name the failing health component |
 | Did staging prove the expected action? | EndpointSlices, logs, and restart counts match the design |
+
+![Health probe operations checklist with cheap endpoints, startup protection, readiness traffic control, liveness restart scope, events, and dashboards](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/health-probe-operations-checklist.png)
+
+*The checklist turns probe review into production behavior: prove the endpoint cost, the traffic effect, the restart effect, and the evidence responders will use later.*
 
 A strong probe evidence note is short and specific. It should show both the healthy path and one expected failure path:
 

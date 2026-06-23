@@ -31,6 +31,10 @@ Kubernetes changes that address during normal operations. A Deployment rollout c
 
 A **Service** is the Kubernetes object that gives a group of Pods a stable network identity. A Service has a name, a namespace, a virtual IP for normal in-cluster Services, one or more ports, and a rule for finding backend Pods. The caller talks to the Service. Kubernetes tracks the current Pods behind that Service.
 
+![Kubernetes Service stable contract showing checkout-web calling a payments-api Service while EndpointSlices track replaceable ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-stable-contract.png)
+
+*The Service is the caller-facing contract. Pod IPs can churn during rollouts or repairs while the name, port, selector, and EndpointSlices keep the backend path stable.*
+
 For the shop platform, `checkout-web` should call a Service name like this:
 
 ```bash
@@ -161,6 +165,10 @@ payments-api-p8mq9    IPv4          8080    10.244.1.32,10.244.2.18,10.244.3.44
 ```
 
 That output tells a very concrete story. The Service named `payments-api` has backend endpoints on port `8080`, and Kubernetes currently sees three Pod IPs behind it. If the `ENDPOINTS` column is empty, the selector did not find ready backends, or every selected backend is currently excluded from traffic.
+
+![Service selector and EndpointSlice flow showing Pod labels, readiness, selected endpoints, and unready Pods left out of traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/selector-endpointslice-flow.png)
+
+*Selectors decide which Pods belong behind the Service, and readiness decides which selected Pods should actually receive traffic.*
 
 EndpointSlices also matter as Services grow. Kubernetes can create multiple EndpointSlice objects for one Service instead of forcing every backend into one giant object. The lookup label `kubernetes.io/service-name=payments-api` is the normal way to gather all the slices that belong to the Service.
 
@@ -383,6 +391,10 @@ Teams usually avoid renaming Services during routine changes. A safer migration 
 The payments Service gives `checkout-web` one stable way to reach the payments API. The caller uses the Service name and port. The selector finds matching Pods. EndpointSlices show the current backend addresses. The Service port stays stable for callers while `targetPort` maps to the container. DNS gives Pods a name to call. Readiness decides which Pods should receive traffic.
 
 This is the practical shape to remember in production. A Service issue has visible objects behind it: the Service, DNS response from the caller namespace, EndpointSlices, Pod labels, readiness state, and application behavior from logs or port-forwarding. Each piece removes guesswork and turns a vague networking problem into a specific Kubernetes object or application behavior.
+
+![Kubernetes Service debugging path with caller, Service, DNS, EndpointSlice, readiness, and app response evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-debugging-summary.png)
+
+*A Service incident becomes easier to debug when the team collects one small proof at each layer instead of changing several objects at once.*
 
 Once Services make one internal backend reachable, the next question is how different Service types expose traffic in different ways.
 

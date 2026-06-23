@@ -50,6 +50,10 @@ Here are the mesh-specific concepts before we start using them:
 
 The order matters. Kubernetes already gives us Services and DNS, so one service can find another. The mesh builds on that base by placing proxies on the path. Once the proxies are on the path, the control plane can teach them how to route, retry, time out, encrypt, and report traffic.
 
+![Service mesh big picture infographic showing web, checkout, and inventory Pods using Envoy sidecars while istiod pushes configuration above the Kubernetes Services and DNS layer](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-service-request-path.png)
+
+*The mesh keeps the familiar Kubernetes Service names, then places Envoy sidecars on the request path so traffic policy, mTLS, and telemetry can be handled consistently.*
+
 ## Kubernetes Communication Before the Mesh
 <!-- section-summary: Kubernetes networking gives applications stable names, while the application still owns most reliability behavior. -->
 
@@ -111,6 +115,10 @@ The extra ready container is usually `istio-proxy`, which runs Envoy. The applic
 An **admission webhook** is a Kubernetes callback that runs while the API server is accepting a new or changed object. A **mutating webhook** is the type of admission webhook that can edit the object before Kubernetes stores it. Istio registers a mutating webhook that says, "for Pods matching the injection policy, add the proxy container, volumes, environment variables, and startup pieces needed for the mesh." In the store, that is how a normal `checkout` Pod spec turns into a running Pod with both the checkout app and `istio-proxy`.
 
 That also explains a common surprise: the namespace label affects Pod creation time. The webhook acts while Kubernetes accepts a new Pod. Existing `web`, `checkout`, and `inventory` Pods need a rollout restart or replacement before they receive sidecars.
+
+![Istio sidecar injection flow infographic showing a namespace label, Pod creation, mutating webhook, app plus istio-proxy container, and 2/2 ready Pods after restart](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/sidecar-injection-flow.png)
+
+*Injection is a Pod creation-time change. The namespace label prepares the rule, the webhook adds the proxy, and a rollout creates the new two-container Pods.*
 
 ## Installing Istio for a First Look
 <!-- section-summary: A small Istio install gives you the control plane first, then application Pods join the mesh when injection is enabled. -->
@@ -290,6 +298,10 @@ Istio adds the mesh layer. The control plane, `istiod`, watches Kubernetes and I
 Automatic injection uses a Kubernetes mutating admission webhook. You label the `store` namespace, create or restart Pods, and the webhook adds the proxy pieces to new Pods. `kubectl get pods -n store` showing `2/2` tells you each application Pod has both the app container and the proxy container ready.
 
 Traffic interception puts the proxy on the path. A call from `checkout` to `inventory` moves through the local proxy, across the network, through the destination proxy, and then to the inventory application. The application code still uses ordinary HTTP clients and Kubernetes DNS names, but the platform now has a place to apply shared behavior.
+
+![Service mesh foundation summary infographic showing Service name, sidecar injection, proxy on path, istiod config, and shared traffic, security, and observability behavior](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-foundation-summary.png)
+
+*The foundation is a sequence: keep the Service contract, add sidecars, put proxies on the path, and let the control plane distribute shared behavior.*
 
 That is the reason service meshes matter. They turn service-to-service networking from scattered application behavior into a managed platform layer. The next step is to use that layer for traffic control.
 

@@ -34,6 +34,10 @@ That extra layer gives the team useful control. They can shift traffic between v
 
 We will use one connected incident pattern through the rest of the article. The store starts seeing intermittent checkout failures during a busy sale. Some customers get a `503` after clicking "Pay now." At the same time, the `checkout` rollout takes longer than expected because a few Pods restart during startup. The team needs to answer four practical questions: whether the sidecars have enough resources, why Envoy returned `503`, whether the proxies received the latest control-plane configuration, and how to change the mesh without making the sale worse.
 
+![Mesh incident map infographic showing a checkout request through checkout Envoy and payments Envoy with app logs, access logs, response flags, proxy resources, and xDS sync as evidence sources](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-operating-a-mesh/mesh-incident-map.png)
+
+*A meshed incident has application evidence and proxy evidence. Response flags, resources, and xDS sync help narrow the next check before the team changes code or mesh policy.*
+
 ## Proxy Overhead
 <!-- section-summary: Proxy overhead is the real CPU, memory, and latency cost added by each sidecar, so capacity planning must include it. -->
 
@@ -466,6 +470,10 @@ istioctl uninstall --revision=1-30-1 -y
 
 When the canary succeeds, repeat the same pattern service by service. Existing Pods keep their injected sidecar until they are recreated, so a label update prepares future injection and the rollout step changes the live data plane.
 
+![Safe mesh operations infographic showing proxy readiness before app start, Sidecar scope for store and shared services, and old and new Istio revisions with a web canary](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-operating-a-mesh/safe-mesh-operations.png)
+
+*Safe mesh changes usually come down to timing, visibility, and rollout size: wait for the proxy, scope config carefully, and canary the new revision before broad rollout.*
+
 ## A Small Operating Runbook
 <!-- section-summary: A runbook turns mesh operations into repeatable checks for capacity, failed requests, startup reliability, and safe change rollout. -->
 
@@ -504,6 +512,10 @@ The online store scenario gives you the operating pattern. Budget the sidecars w
 For startup reliability, make the proxy readiness path explicit with `holdApplicationUntilProxyStarts` where the workload needs immediate network access, and keep application boot code resilient to temporary dependency failures. For scale and safety, scope configuration carefully, analyze changes before applying them, and canary mesh upgrades through one workload or namespace before touching the whole store.
 
 The main production habit is to treat every meshed service as the application plus its proxy. Debug `checkout` as `checkout` plus `istio-proxy`, debug routing as application intent plus Envoy config, and roll mesh changes like infrastructure changes that can affect every customer request.
+
+![Mesh operations runbook infographic showing proxy pressure, 503 response flags, stale config xDS checks, startup crash readiness checks, mesh upgrade canary first, and application plus proxy](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-operating-a-mesh/mesh-operations-runbook.png)
+
+*The runbook keeps the first move practical: check the right container, decode the proxy clue, verify xDS, fix startup timing, and canary mesh changes before expanding them.*
 
 ---
 

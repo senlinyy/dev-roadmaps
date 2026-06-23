@@ -52,6 +52,10 @@ An **overlay** is the environment layer. It points at the base, then adds the pi
 
 That separation matters in production review. If the pull request changes only `k8s/overlays/prod/kustomization.yaml`, the reviewer can ask a narrow question: what exactly does production change on top of the shared app? If the pull request changes the base, the reviewer knows staging and production may both receive the change.
 
+![Kustomize package shape showing a shared base, staging overlay, production overlay, kustomize build, and rendered YAML](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/kustomize-package-shape.png)
+
+*The base and overlay shape keeps shared application YAML separate from the environment decisions that production reviewers need to inspect.*
+
 ## The Base Directory
 <!-- section-summary: The base holds the shared Deployment and Service as real Kubernetes objects. -->
 
@@ -205,6 +209,10 @@ A route patch can stay small too. If the base contains a generic Ingress with th
 
 Small patches make review practical. A reviewer should be able to read `deployment-prod-patch.yaml` and explain the production-only change without opening five more files. If a patch rewrites most of the Deployment, the overlay has started to hide a copied manifest behind a nicer name.
 
+![Overlay patch flow showing base YAML, small patches for image tag, replicas, and host, and environment output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/overlay-patch-flow.png)
+
+*A useful overlay patch changes a few named fields for a clear environment reason instead of becoming a second hidden copy of the workload.*
+
 ## ConfigMap Generators and Rollouts
 <!-- section-summary: ConfigMap generators create config objects and can change names when config content changes. -->
 
@@ -357,6 +365,10 @@ The reviewer then checks the fields that carry production risk. The image tag sh
 A good review also checks what did not change. If a simple image release changes namespace, selector labels, Service ports, or the Ingress class, the pull request needs more explanation before apply. The rendered diff gives the team a shared object to discuss instead of asking everyone to mentally combine the base and overlay.
 
 The final review step is the rollout plan. The pull request should name the apply command, the rollout status command, and the rollback path. With Kustomize, rollback often means reverting the Git commit or applying the previous rendered artifact through the delivery system, so the team should know where that previous artifact lives.
+
+![Overlay review loop showing source diff, build, rendered diff, kubectl diff, and rollout check](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/overlay-review-loop.png)
+
+*A Kustomize review should connect the overlay source change to rendered YAML, live diff evidence, and the rollout check the team will use after apply.*
 
 ## What's Next
 

@@ -31,15 +31,9 @@ aliases:
 
 Use `devpolaris-orders-api` in the `orders` namespace as the running example. The service deploys checkout code, so a bad manifest can affect real customers quickly. Admission policies can stop unsafe changes such as running privileged containers, missing owner labels, using images from unknown registries, or deploying by a mutable tag like `latest`.
 
-```mermaid
-flowchart TD
-    A["kubectl apply or controller request"] --> B["Authentication"]
-    B --> C["Authorization"]
-    C --> D["Admission control"]
-    D --> E{"Object accepted?"}
-    E -->|"Yes"| F["Stored in etcd"]
-    E -->|"No"| G["Error returned to caller"]
-```
+![API server checkpoint showing authentication, authorization, mutating admission, validating admission, storing in etcd, and rejection with a reason](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/api-server-checkpoint.png)
+
+*The checkpoint visual shows admission in the exact place it matters: after the caller is known and allowed, but before the requested object becomes stored cluster state.*
 
 This checkpoint is powerful because it acts before the workload runs. Cleaning up a privileged Pod after it starts is incident response. Rejecting that Pod during admission is prevention. Good admission policy gives teams a clear error message and a clear fix while the release is still in the delivery path.
 
@@ -241,6 +235,10 @@ Roll out deny mode in phases. Audit existing objects first, warn on new changes 
 | Warn | New requests receive warnings but still apply | Pipelines and developers see the message |
 | Deny | Invalid requests are rejected | Critical workloads have fixes or reviewed exceptions |
 
+![Policy rollout lane showing audit, warn, dry run, namespace pilot, enforce, and exemptions for safer admission policy rollout](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/policy-rollout-lane.png)
+
+*The rollout lane shows why deny mode should come after evidence. Audit, warn, dry run, and namespace pilots help teams fix real manifests before enforcement blocks releases.*
+
 Exceptions need the same discipline as the main policy. Scope them by namespace, service account, object name, or label, then review them on a schedule. A permanent exception for an entire namespace quietly turns the policy off for the place that may need it most.
 
 ## When a Policy Blocks the Release
@@ -317,6 +315,10 @@ Use these questions before moving a policy into deny mode:
 | Are passing and failing examples tested? | Tests catch policy mistakes before deploys |
 | Are exceptions narrow and reviewed? | Hidden bypasses weaken trust |
 | Does the policy engine have health checks and owners? | The admission path is production infrastructure |
+
+![Admission policy review checklist with request shape, CEL rule, policy engine, testing before deny, failure message, and release evidence](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/admission-policy-review.png)
+
+*The review board keeps a policy change grounded in operations: scope the request shape, test the rule, make the failure message useful, and keep release evidence for denied changes.*
 
 For `devpolaris-orders-api`, the first useful policies are boring on purpose: approved registry, immutable digest, restricted Pod settings, resource requests, and owner labels. Those rules stop common mistakes before Pods run, and each one has a fix the service team can understand.
 

@@ -1,8 +1,8 @@
 ---
 title: "Drift and Perimeter Security"
-description: "Detect cloud configuration drift, audit network exposure boundaries, and revert unauthorized console changes."
-overview: "Blueprints only secure the desired state. This article explains actual vs. desired cloud state, drift detection commands, VPC network perimeters, and CloudTrail audit logs."
-tags: ["drift", "perimeter", "vpc", "firewalls", "auditing"]
+description: "Detect cloud configuration drift, exposed network paths, and unauthorized console changes."
+overview: "Drift and perimeter security compares reviewed infrastructure code with the live cloud environment, then closes exposed paths, investigates unauthorized changes, and brings the account back under code."
+tags: ["devsecops", "drift", "network-exposure", "cloud-security"]
 order: 3
 id: article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection
 aliases:
@@ -19,213 +19,296 @@ aliases:
 
 ## Table of Contents
 
-1. [The Mirage of the Clean Repository](#the-mirage-of-the-clean-repository)
-2. [Understanding Desired State vs. Actual State](#understanding-desired-state-vs-actual-state)
-3. [Detecting Drift: The Refresh-Only Planning Loop](#detecting-drift-the-refresh-only-planning-loop)
-4. [Revert, Import, or Codify: Handling Discovered Drift](#revert-import-or-codify-handling-discovered-drift)
-5. [VPC Network Perimeters: Routing and Gateway Isolation](#vpc-network-perimeters-routing-and-gateway-isolation)
-6. [Security Group References vs. Raw CIDR Ranges](#security-group-references-vs-raw-cidr-ranges)
-7. [Incident Forensic Auditing: Tracing CloudTrail Logs](#incident-forensic-auditing-tracing-cloudtrail-logs)
+1. [After the Gate, the Cloud Keeps Moving](#after-the-gate-the-cloud-keeps-moving)
+2. [Desired State, State Files, and Live Cloud](#desired-state-state-files-and-live-cloud)
+3. [The Incident That Opens a Door](#the-incident-that-opens-a-door)
+4. [Finding Drift With Plans](#finding-drift-with-plans)
+5. [Reviewing the Perimeter](#reviewing-the-perimeter)
+6. [Audit Logs Explain Who Changed What](#audit-logs-explain-who-changed-what)
+7. [Revert, Codify, or Import](#revert-codify-or-import)
 8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## The Mirage of the Clean Repository
+## After the Gate, the Cloud Keeps Moving
+<!-- section-summary: Passing IaC and policy checks proves the planned change was reviewed, while drift checks prove the live account still matches that review. -->
 
-When an engineering team adopts Infrastructure as Code (IaC) and Policy as Code, they establish powerful gates. Every pull request is statically scanned, every Rego policy is executed, and every configuration is peer-reviewed before it merges. The team is confident; their Git repository is clean, encrypted, and compliant.
+The previous article focused on Policy as Code. The team wrote rules, ran them against the plan, and blocked risky infrastructure before apply. That is a strong gate, and it solves a real problem. A pull request can prove that a planned database subnet, storage bucket, IAM role, or firewall rule passed review before the cloud provider created it.
 
-However, a clean repository can create a dangerous security mirage. The repository represents the **Desired State**—what *should* exist. It does not represent the **Actual State**—what *currently* exists in the live cloud environment. If an engineer logs directly into the cloud provider's web console and manually adds a public firewall rule to resolve a temporary incident, the Git repository remains completely clean. The manual change bypasses all static scans, reviews, and Rego policies.
+The live cloud account still needs attention after the merge. Engineers can click in the console during an incident. Old scripts can call cloud APIs directly. A vendor tool can create resources outside Terraform. A provider default can change. An attacker with stolen credentials can add a network path. Those changes may never pass through the pull request gate.
 
-This difference between code definitions and the active cloud configuration is called **Configuration Drift**. Drift creates silent, undocumented security holes. If manual modifications go unnoticed, your security posture degrades, future deployments inherit stale assumptions, and auditors work from inaccurate records. To secure our cloud perimeters, we must continuously audit the actual environment to detect and reconcile this drift.
+**Drift** means the live environment no longer matches the reviewed infrastructure code or the recorded IaC state. **Perimeter security** means checking the paths that decide who can reach a resource: public IPs, load balancers, route tables, firewall rules, storage public access, private endpoints, and metadata service settings. Together, drift and perimeter checks answer a practical question: does production still look like the safe design the team approved?
 
-## Understanding Desired State vs. Actual State
+This article follows the Northstar customer portal again. The team already added IaC scanning and Policy as Code. Now an incident creates a manual console change, and the team needs to detect it, understand it, and bring the account back under code.
 
-To operationalize drift detection, we must define the three distinct records that represent our infrastructure:
-* **The Code (Desired State)**: The declarative HCL or YAML files committed to your Git repository. This is the peer-reviewed blueprint of your architecture.
-* **The State File (Terraform State)**: The machine-readable record that Terraform uses to map resources in your code to real objects in the cloud. It acts as Terraform's historical memory, recording what it last knew about the resources it manages.
-* **The Active Cloud (Actual State)**: The running resources currently configured inside your cloud provider's datacenters, queried dynamically via the provider's APIs.
+## Desired State, State Files, and Live Cloud
+<!-- section-summary: Drift detection compares the code, the IaC state record, and the actual resources returned by cloud APIs. -->
 
-```mermaid
-flowchart LR
-    Code["Git Code<br/>(Desired State)"] --> State["State File<br/>(Terraform memory)"]
-    State --> Compare["State Comparison"]
-    Cloud["Cloud APIs<br/>(Actual State)"] --> Compare
-    Compare --> Result["Drift or Baseline Match"]
-```
+Before we investigate the incident, we need a clear definition of the three records involved in IaC operations.
 
-Drift occurs when a resource's actual state disagrees with the desired state or state file. This typically happens for one of four reasons:
-* **Manual Console Interventions**: An engineer bypasses pipelines to make urgent, console-based changes during a live operational incident.
-* **Ad-Hoc Scripts**: Out-of-band automation or legacy deployment scripts modify resources directly.
-* **Provider Default Upgrades**: A cloud provider changes a default attribute setting (like encryption or audit logging) on an existing resource during an API upgrade.
-* **Unauthorized Intrusions**: An attacker compromises credentials and manually modifies network rules or creates new, unmanaged compute resources.
+**Desired state** is the infrastructure written in the repository. For Terraform or OpenTofu, this is the HCL code that says what the team intends to run. Desired state includes resources, variables, modules, providers, and policy choices that reviewers approved.
 
-Drift detection is the process of continuously comparing these three records, highlighting discrepancies so they can be immediately reconciled.
+**State** is the IaC tool's record of the real resources it manages. Terraform and OpenTofu use state to map a resource address such as `aws_security_group.database` to the real cloud object ID such as `sg-08abc123`. State also stores many resource attributes from the last read or apply.
 
-## Detecting Drift: The Refresh-Only Planning Loop
+**Live cloud** is the current configuration returned by cloud provider APIs. It includes the actual security group rules, bucket settings, route tables, IAM policies, public IPs, database flags, and audit logs at this moment.
 
-We detect configuration drift programmatically by running automated, scheduled audits inside our pipelines. The standard method for this is the **Refresh-Only Planning Loop**.
+Drift shows up when these records disagree. The code may say the database accepts traffic only from the application security group. The live cloud may say port 5432 accepts traffic from `0.0.0.0/0`. The state file may still remember the older safe rule until the next refresh. That gap is exactly where security risk hides.
 
-A refresh-only plan asks the cloud provider's APIs for the exact, current state of all managed resources. It updates Terraform's state memory to match the live cloud objects, and compares those values against your repository's code, showing you exactly what changed outside of the standard CI/CD apply path without actually taking any action to modify remote resources:
+![Drift Triangle](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-triangle.png)
 
-```bash
-$ terraform plan -refresh-only
-```
+*The triangle shows why drift review compares Git code, IaC state, and the live cloud, then uses audit logs to explain the change.*
 
-If the actual environment has drifted, the command outputs a detailed diff of the out-of-band modifications:
+The Northstar team can use the same production scenario from earlier articles. The customer portal has a web front door, private application tasks, a private database, and a receipt storage bucket. The safe design is clear: internet traffic reaches the load balancer, the load balancer reaches the app, the app reaches the database, and customer data storage blocks public access.
 
-```text
-Note: Objects have changed outside of Terraform
+Now the incident changes that clean picture.
 
-Terraform detected the following changes made outside of Terraform since the last "terraform apply":
+## The Incident That Opens a Door
+<!-- section-summary: Manual emergency changes often solve a short-term outage and leave a long-term exposure if nobody closes the loop. -->
 
-  # aws_security_group_rule.orders_admin_ingress has changed
-  ~ resource "aws_security_group_rule" "orders_admin_ingress" {
-      ~ cidr_blocks = [
-          - "10.40.20.0/24",
-          + "0.0.0.0/0",
-        ]
-        from_port   = 9000
-        protocol    = "tcp"
-        to_port     = 9000
-        type        = "ingress"
-    }
-```
+At 02:15, the on-call engineer receives an alert: the customer portal cannot write payment records. The application logs show database connection timeouts. The deployment pipeline is already busy with a locked state file, and the support queue is growing. Under pressure, the engineer opens the cloud console and edits the database security group to allow PostgreSQL from a broad IP range while they debug.
 
-This diff documents the exact security drift: the source `cidr_blocks` was widened from the private corporate VPN range (`10.40.20.0/24`) to the public internet (`0.0.0.0/0`).
-
-It is critical to remember that applying a refresh-only plan merely updates your state file to match the remote objects; it does *not* repair the remote resource. If the console modification is unsafe, applying a refresh-only plan silently records that unsafe configuration in your state file, effectively hiding the vulnerability from standard state audits. To resolve the security hole, we must take deliberate action to reconcile the drift.
-
-## Revert, Import, or Codify: Handling Discovered Drift
-
-Once drift is detected, the platform engineering and security teams must collaborate to investigate *why* the change occurred. After the context is understood, the team takes one of three structured reconciliation actions:
-
-The first action is **Revert**. If the manual change was a mistake, an unapproved test, or a temporary incident workaround that is no longer required, we must restore our secure baseline. We execute a standard pipeline apply, which instructs Terraform to override the cloud API values and force the remote resources back to the reviewed, desired state declared in Git.
-
-The second action is **Codify**. If the manual change was a valid, permanent improvement (such as a network range migration), we must bring the desired state into alignment. We write a pull request updating our repository's Terraform files to match the new cloud values, run it through our standard review and scanning pipeline, and apply it, establishing the new secure baseline.
-
-The third action is **Import**. If an emergency intervention resulted in the creation of an entirely new, unmanaged resource (such as a diagnostic log group or temporary backup bucket), we must bring the object under code management. We use the import command to map the untracked resource's physical ID directly into our Terraform state:
-
-```bash
-$ terraform import aws_cloudwatch_log_group.orders_emergency /aws/ecs/orders-api/emergency
-```
-
-Importing teaches Terraform about the existing object. The team must then immediately add the matching resource code to their repository and review it, preventing the new resource from remaining an untracked, unmonitored target in the cloud.
-
-## VPC Network Perimeters: Routing and Gateway Isolation
-
-Detecting configuration drift secures the integrity of our code promises. However, we must also design our physical network perimeters to be inherently resilient, isolating internal workloads even if a firewall rule is accidentally drifted or misconfigured. We achieve this by structuring a highly restricted **Virtual Private Cloud (VPC)** topology.
-
-A VPC partitions your cloud network into isolated subnets with distinct routing tables:
-* **Public Subnets**: Subnets whose routing tables contain a default route (`0.0.0.0/0`) pointing directly to an **Internet Gateway (IGW)**. Resources in these subnets can receive a public IP address and communicate directly with the internet. We restrict public subnets exclusively to front-door Application Load Balancers (ALBs) or NAT gateways.
-* **Private Subnets**: Subnets whose routing tables are completely isolated from the Internet Gateway. To access the public internet (such as downloading patches), processes in these subnets must route traffic through a **NAT Gateway** located in a public subnet. Application containers run exclusively in these private subnets, ensuring they are physically unreachable from direct inbound internet connections.
-* **Data Subnets**: Subnets that have no internet routing tables whatsoever (no IGW, no NAT). We reserve these subnets exclusively for databases, ensuring complete data tier isolation.
-
-```mermaid
-flowchart TD
-    subgraph VPC["Virtual Private Cloud (10.42.0.0/16)"]
-        subgraph PublicSubnet["Public Subnet"]
-            ALB["Application Load Balancer"]
-            NAT["NAT Gateway"]
-        end
-        subgraph PrivateSubnet["Private Subnet"]
-            App["Orders API Task"]
-        end
-        subgraph DataSubnet["Data Subnet"]
-            DB["Database"]
-        end
-    end
-    Internet["Internet"] <-->|Ingress| IGW["Internet Gateway"]
-    IGW <--> ALB
-    ALB <-->|Inbound port 8080| App
-    App --> NAT
-    NAT -->|Egress only| IGW
-    App <-->|Private port 5432| DB
-```
-
-This structural topology is a powerful defense-in-depth boundary. If a developer accidentally drifts a database's security group to allow ingress from `0.0.0.0/0`, the database remains completely unreachable from the public internet. Because the database resides in a private data subnet with no route to an internet gateway, the public network packets cannot find a physical path to the target, neutralizing the firewall misconfiguration at the routing layer.
-
-## Security Group References vs. Raw CIDR Ranges
-
-When configuring firewalls (Security Groups) inside our VPC, a common beginner mistake is to define access rules using raw, static IP address ranges (CIDRs), such as allowing ingress from `10.42.8.0/24`. While private ranges are safer than the public internet, they are highly fragile. Subnets can scale, IP allocations can shift, and anyone who acquires an IP in that range automatically inherits the path.
-
-To build a resilient firewall boundary, we must configure rules that reference other **Security Groups** rather than raw CIDRs. In cloud-native networks, a security group is a dynamic logical resource that can be referenced directly as a source or destination:
+Here is the kind of risky rule that appears during incidents:
 
 ```hcl
-resource "aws_security_group_rule" "orders_from_alb" {
-  type                     = "ingress"
-  security_group_id        = aws_security_group.orders_api.id
-  from_port                = 8443
-  to_port                  = 8443
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.public_alb.id
+resource "aws_security_group_rule" "database_debug" {
+  type              = "ingress"
+  security_group_id = aws_security_group.database.id
+  from_port         = 5432
+  to_port           = 5432
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
 }
 ```
 
-The key argument is `source_security_group_id`. This rule does not bind access to a specific private IP range. Instead, it instructs the cloud hypervisor's virtual firewall to accept traffic on port 8443 *only* if the sending network interface is explicitly associated with the `public_alb` security group. 
+The engineer did not add this exact HCL to the repository. The rule was created in the console, so the pull request gate never saw it. IaC scanners did not run. OPA did not check it. A reviewer did not ask why the production database needs internet exposure. The outage ends, the engineer moves to the next incident, and the database path remains open.
 
-For a security reviewer, this completely simplifies the audit. The rule expresses a clear logical relationship: "the load balancer can reach the application." If application tasks scale, migrate across subnets, or change their private IPs, the firewall automatically maintains the secure boundary without requiring manual IP edits or exposing the system to private subnet IP creep.
+This is a very normal production failure shape. The on-call engineer restored service, and the missing closeout loop created the security risk. Emergency changes need time limits, audit evidence, drift checks, and a decision: revert the change, codify the change, or import a new managed resource. Without that loop, a temporary workaround turns into a quiet production exposure.
 
-## Incident Forensic Auditing: Tracing CloudTrail Logs
+![Incident Exposure Path](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/incident-exposure-path.png)
 
-If a drift sweep reveals an unauthorized or suspicious configuration change in production, the security team must immediately execute a forensic audit to trace *who* made the modification and *how* the boundary was bypassed. We achieve this by analyzing our cloud audit logs, such as AWS CloudTrail.
+*The exposure path makes the incident concrete: a break-glass console change opens a database port, and the safe target is traffic from the application group only.*
 
-CloudTrail records every single API operation executed against your cloud account, documenting the identity, the call parameters, the source IP address, and the timestamp. When investigating a security group drift, the team searches for events like `AuthorizeSecurityGroupIngress`:
+The first step is finding the drift.
+
+## Finding Drift With Plans
+<!-- section-summary: Refresh and plan commands let teams compare live cloud resources with the IaC state and reviewed code. -->
+
+Terraform and OpenTofu read live cloud objects during planning. A normal plan refreshes state, compares it with code, and proposes changes. A **refresh-only plan** focuses on changes made outside the IaC workflow. It asks the provider for live values and reports objects that changed since the last apply.
+
+The Northstar team can run a drift check like this:
+
+```bash
+terraform init
+terraform plan -refresh-only -out=drift.tfplan -detailed-exitcode
+terraform show -json drift.tfplan > drift.tfplan.json
+```
+
+OpenTofu has the same general shape:
+
+```bash
+tofu init
+tofu plan -refresh-only -out=drift.tfplan -detailed-exitcode
+tofu show -json drift.tfplan > drift.tfplan.json
+```
+
+The `-detailed-exitcode` option helps automation. Exit code `0` means no diff, exit code `2` means the plan found changes, and exit code `1` means the command failed. A scheduled job can treat exit code `2` as "someone needs to review drift."
+
+A drift finding for the incident might read like this in the plan output:
+
+```bash
+Objects have changed outside of Terraform
+
+  # aws_security_group.database has changed
+  ~ resource "aws_security_group" "database" {
+      ingress = [
+        {
+          from_port   = 5432
+          to_port     = 5432
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+          description = "temporary debug access"
+        }
+      ]
+    }
+```
+
+This finding gives the team the first fact: the live security group changed outside the reviewed code path. It also gives the exact resource that needs investigation.
+
+There is one important caution. A refresh-only apply can update state to match the live cloud. That is useful for recording legitimate live changes, but it can also record an unsafe console edit as the new state. For security drift, the team should investigate first and decide the safe remediation before recording the live change as accepted state.
+
+Plan-based drift detection works well for resources managed by Terraform or OpenTofu. It does not see every unmanaged resource in the account. The team also needs provider-native tools that inspect the live perimeter directly.
+
+## Reviewing the Perimeter
+<!-- section-summary: Perimeter review checks public paths, private paths, metadata settings, and provider findings that IaC state may miss. -->
+
+A **cloud perimeter** is the set of boundaries that control reachability. In a customer portal, the public edge might be a CDN, load balancer, API gateway, or public IP. The private side might include subnets, route tables, security groups, network ACLs, private endpoints, service endpoints, database firewall rules, and storage public access settings.
+
+The Northstar team reviews the perimeter in layers. The first layer is public exposure. Which resources can receive traffic from the internet? Which storage resources allow public reads? Which databases have public network access? Which load balancers route to sensitive services? These checks catch the obvious doors.
+
+For AWS security groups, a focused query can find rules that allow traffic from the whole internet:
+
+```bash
+aws ec2 describe-security-groups \
+  --filters Name=ip-permission.cidr,Values=0.0.0.0/0 \
+  --query 'SecurityGroups[*].{GroupId:GroupId,GroupName:GroupName,Ingress:IpPermissions}'
+```
+
+The second layer is private reachability. A private IP range can still be too broad. A database rule that allows the whole VPC may give every workload a path to the database. A better rule references the application security group:
+
+```hcl
+resource "aws_security_group_rule" "database_from_app" {
+  type                     = "ingress"
+  security_group_id        = aws_security_group.database.id
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.app.id
+}
+```
+
+This rule says the application tier can reach the database. It avoids a broad private CIDR and follows workload identity at the network layer.
+
+The third layer is cloud provider posture tooling. AWS Config can record resource configuration changes and evaluate managed or custom rules. Azure Policy can evaluate resource compliance and deny or audit deployments. Google Cloud Security Command Center can surface misconfigurations, vulnerabilities, and risky exposure across projects. These tools matter because they inspect the live cloud account, including resources that IaC may not manage yet.
+
+The fourth layer is metadata service protection. In cloud VMs and containers, the metadata service can provide temporary credentials to the running workload. That is useful, but it can increase blast radius when a vulnerable application can reach metadata endpoints. On AWS EC2, IMDSv2 requires session-oriented requests and should be required for instances that use metadata:
+
+```hcl
+resource "aws_instance" "worker" {
+  ami           = var.worker_ami
+  instance_type = "t3.micro"
+
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+}
+```
+
+The perimeter review now has two kinds of evidence: IaC drift from the plan and provider findings from the live account. The next question is who made the change.
+
+## Audit Logs Explain Who Changed What
+<!-- section-summary: Cloud audit logs connect drift findings to an identity, timestamp, API call, source, and incident record. -->
+
+**Audit logs** are the cloud provider's record of control plane API activity. In AWS, CloudTrail records management events such as `AuthorizeSecurityGroupIngress`, `PutBucketPolicy`, `CreateAccessKey`, and `AttachRolePolicy`. Azure Activity Log and Google Cloud Audit Logs provide similar control plane evidence for their platforms.
+
+For the Northstar incident, the security team needs to know whether the database rule came from the on-call engineer, a script, a third-party tool, or an attacker. CloudTrail can show the API event:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress \
+  --start-time 2026-06-20T00:00:00Z \
+  --end-time 2026-06-21T00:00:00Z
+```
+
+A useful event record contains the actor, source IP, user agent, time, and request parameters:
 
 ```json
 {
-  "eventTime": "2026-05-19T08:31:44Z",
+  "eventTime": "2026-06-20T02:21:17Z",
   "eventSource": "ec2.amazonaws.com",
   "eventName": "AuthorizeSecurityGroupIngress",
   "userIdentity": {
     "type": "AssumedRole",
     "arn": "arn:aws:sts::111122223333:assumed-role/break-glass-network-admin/maya-dev"
   },
-  "requestParameters": {
-    "groupId": "sg-0ordersadmin",
-    "ipPermissions": [
-      {
-        "fromPort": 9000,
-        "toPort": 9000,
-        "ipRanges": [{"cidrIp": "0.0.0.0/0"}]
-      }
-    ]
-  },
   "sourceIPAddress": "203.0.113.24",
   "userAgent": "console.amazonaws.com",
-  "responseElements": {
-    "securityGroupRuleSet": {
-      "items": [{"securityGroupRuleId": "sgr-0815"}]
-    }
+  "requestParameters": {
+    "groupId": "sg-0dbportal",
+    "ipPermissions": [
+      {
+        "ipProtocol": "tcp",
+        "fromPort": 5432,
+        "toPort": 5432,
+        "ipRanges": [
+          {
+            "cidrIp": "0.0.0.0/0",
+            "description": "temporary debug access"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
 
-This CloudTrail record provides complete forensic evidence:
-* **The Timestamp**: `eventTime` records the exact second the breach occurred.
-* **The Operation**: `eventName` confirms that a security group rule was added.
-* **The Actor**: `userIdentity.arn` identifies the exact user session (`maya-dev`) that assumed the `break-glass-network-admin` role, connecting the change to a real human account.
-* **The Source IP**: `sourceIPAddress` logs the network origin of the API call, while `userAgent` confirms the modification was executed via the web console interface.
-* **The Parameters**: `requestParameters` details the exact vulnerability introduced: allowing public ingress on port 9000.
+This record gives the team a concrete investigation path. The role name says a break-glass role was used. The session name points to a human identity. The user agent says the console made the change. The parameters show the exact public ingress rule. The team can now compare the event with an incident ticket and an emergency access request.
 
-An audit trail like this changes the security conversation. Instead of guessing whether a change was a mistake or an intrusion, the response team can immediately trace the event back to an active incident ticket, verify the authorization, confirm the session's expiry, and safely execute a revert plan to restore the secure baseline.
+Audit logs should be protected like production evidence. Mature teams send cloud audit logs to a separate security account or project, restrict delete permissions, add retention, and alert on attempts to disable logging. If an attacker can change infrastructure and delete the logs in the same account, the investigation loses its strongest evidence.
+
+Now the team knows what changed and who changed it. The final decision is how to reconcile the environment.
+
+## Revert, Codify, or Import
+<!-- section-summary: Every drift finding needs an explicit remediation decision so the live account and reviewed code line up again. -->
+
+A drift finding should not sit in a dashboard forever. The team needs a triage path. The three common outcomes are **revert**, **codify**, and **import**.
+
+**Revert** means the live change was unsafe, temporary, or unapproved. For the Northstar database rule, revert is the likely answer. The team removes the public ingress rule and applies the reviewed configuration again:
+
+```bash
+terraform plan -out=revert.tfplan
+terraform apply revert.tfplan
+```
+
+The incident record should include the drift finding, the CloudTrail event, the risk, the command or pull request that restored the safe state, and the time the exposure closed.
+
+**Codify** means the live change was valid and should become part of the reviewed design. For example, the company might have moved from one private CIDR to another during a network migration. The engineer made the console edit during a maintenance window, and the change was safe. The team should open a pull request that updates the Terraform code, runs IaC scanning and policy checks, and records the reason.
+
+**Import** means the live account contains a resource that IaC should manage but does not currently know about. During the incident, an engineer might create a temporary log group, security group, or diagnostic storage bucket. The team can import the resource into state, add matching code, and review it:
+
+```bash
+terraform import aws_cloudwatch_log_group.portal_incident /aws/ecs/customer-portal/incident-debug
+terraform plan
+```
+
+Import is only the mapping step. The repository still needs the resource block, tags, retention, encryption, ownership, and policy checks. A resource imported into state without reviewed code remains hard for humans to understand.
+
+A practical remediation checklist looks like this:
+
+```markdown
+### Drift remediation record
+
+- Resource: `aws_security_group.database`
+- Finding: PostgreSQL ingress allowed from `0.0.0.0/0`
+- Detected by: scheduled drift plan and AWS Config rule
+- Actor: `break-glass-network-admin/maya-dev`
+- Incident: `INC-4092`
+- Decision: revert
+- Remediation: Terraform apply restored app security group source
+- Verification: follow-up drift plan returned no changes
+- Follow-up: add break-glass expiry alert and database ingress policy test
+```
+
+This record is short, but it connects the technical fix to the operational story. It tells future reviewers why the change existed, how the team closed it, and what they improved afterward.
 
 ## Putting It All Together
+<!-- section-summary: A healthy drift program combines scheduled checks, provider posture tools, audit evidence, and explicit remediation decisions. -->
 
-Securing our cloud perimeters requires constant vigilance over both the blueprints we write and the live environments we operate. By continuously detecting configuration drift through refresh-only planning loops, implementing a structured revert/codify/import reconciliation workflow, structuring highly restricted VPC subnet routing, and auditing account activity with forensic CloudTrail logs, we eliminate the security mirage and protect our perimeters.
+The Northstar team now has a complete loop. IaC scanners and Policy as Code check the planned change before apply. Scheduled Terraform or OpenTofu drift checks compare managed resources with the live cloud account. Provider tools such as AWS Config, Azure Policy, and Security Command Center inspect the real environment and find unmanaged exposure. Audit logs explain who made each out-of-band change. The remediation process decides whether to revert, codify, or import.
 
-When securing your cloud networks and auditing configuration drift, ensure you maintain these six core practices:
+The database incident also improves the team's operating habits. Emergency console changes need an incident ticket, a role session with a short expiry, and a follow-up drift check. Public ingress findings should page the owning team when they touch production databases or customer data paths. Metadata service settings should be part of VM and container baseline review. Storage public access checks should run in both IaC and provider posture tools.
 
-First, implement scheduled, automated drift detection sweeps. Run refresh-only planning checks in your pipelines daily, alerting security teams immediately if the active cloud configuration disagrees with your repository.
+This is the practical value of drift and perimeter security. The team does not pretend the repository is the whole truth. It treats the repository as the approved design, the state file as the IaC mapping, the cloud account as the current reality, and audit logs as the evidence trail. Security work then follows a steady loop: detect the gap, understand the change, close the exposure, and update the process that allowed it.
 
-Second, establish clear reconciliation workflows for all discovered drift. Investigate the operational context of every console change, immediately reverting unapproved modifications and codifying verified improvements through a pull request.
+![Drift Review Loop](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-review-loop.png)
 
-Third, enforce strict VPC subnet isolation. Deploy application containers in private subnets with no route to internet gateways, and restrict database tiers to private data subnets, protecting resources from raw public routing paths.
+*The loop summarizes the response pattern: detect drift, check logs, choose whether to revert, codify, or import, then verify the account is clean.*
 
-Fourth, reference security groups dynamically rather than using raw IP CIDR ranges. Bind your firewall rules to logical cloud resources, ensuring that service-to-service communication remains secure as workloads scale.
+## What's Next
+<!-- section-summary: The next article focuses on identity because most cloud changes come from a human, workload, or pipeline principal. -->
 
-Fifth, ensure that all cloud API operations are fully recorded in secure, tamper-proof audit logs. Enable CloudTrail across all regions, locking down access permissions to ensure log files cannot be deleted or modified by unauthorized accounts.
+Drift investigation usually leads to identity questions. Who opened the rule? Which role allowed it? How long did the session last? Was it a human break-glass path, a workload role, or a deployment pipeline? Did the permission fit the job?
 
-Sixth, integrate forensic log auditing into your incident response runbooks. Train your response teams to trace CloudTrail records immediately when drift or perimeter anomalies are discovered, mapping every out-of-band modification to a verified human identity and ticket.
+The final article in this module focuses on **Cloud Identity and Access Management** from a DevSecOps angle. It covers human federation, workload access, CI/CD OIDC, least-privilege deployment roles, temporary elevation, break-glass access, access reviews, and the evidence teams need after a change.
 
-![Drift and perimeter security summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-perimeter-summary.png)
+---
 
-*This summary connects desired state, actual state, refresh checks, drift, perimeter controls, and audit logs.*
+**References**
 
+- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Official Terraform documentation for planning, refresh behavior, and `-detailed-exitcode`.
+- [Terraform import command](https://developer.hashicorp.com/terraform/cli/import) - Official Terraform documentation for associating existing infrastructure with Terraform state.
+- [OpenTofu plan command](https://opentofu.org/docs/cli/commands/plan/) - Official OpenTofu documentation for planning and refresh behavior.
+- [AWS Config Developer Guide](https://docs.aws.amazon.com/config/latest/developerguide/WhatIsConfig.html) - Official AWS documentation for recording resource configuration and evaluating compliance.
+- [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Official AWS documentation for control plane audit logging.
+- [AWS EC2 instance metadata options](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html) - Official AWS documentation for IMDSv2 and instance metadata configuration.
+- [Azure Policy overview](https://learn.microsoft.com/en-us/azure/governance/policy/overview) - Official Microsoft documentation for evaluating and enforcing Azure resource rules.
+- [Google Cloud Security Command Center overview](https://cloud.google.com/security-command-center/docs/concepts-security-command-center-overview) - Official Google Cloud documentation for posture findings and security risk visibility.

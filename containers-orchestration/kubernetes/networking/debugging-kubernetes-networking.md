@@ -28,17 +28,9 @@ Picture the production incident. The DevPolaris order history page opens, the pa
 
 The request we care about starts in the `web` namespace. A Pod from the `devpolaris-web` Deployment calls `http://devpolaris-orders-api.orders/healthz`. That name should point to the `devpolaris-orders-api` Service in the `orders` namespace, and that Service should send traffic to ready orders API Pods on the container's HTTP port. If users reach the same application from the public internet, an Ingress or Gateway object may sit in front of the Service too.
 
-```mermaid
-flowchart LR
-    Browser[Browser user] --> Edge[Ingress or Gateway]
-    Edge --> WebSvc[devpolaris-web Service]
-    WebSvc --> WebPod[devpolaris-web Pod<br/>namespace: web]
-    WebPod --> DNS[Cluster DNS]
-    DNS --> OrdersSvc[devpolaris-orders-api Service<br/>namespace: orders]
-    OrdersSvc --> Slice[EndpointSlices]
-    Slice --> Policy[NetworkPolicy checks]
-    Policy --> OrdersPod[orders API Pod<br/>listens on 3000]
-```
+![Kubernetes networking incident path from browser and edge route through devpolaris-web Pod, Cluster DNS, orders Service, EndpointSlices, NetworkPolicy, and the orders API Pod listener](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-incident-path.png)
+
+*The incident path turns one vague networking symptom into a chain of handoffs that can each be proven or ruled out.*
 
 **Kubernetes networking debugging** means proving each handoff on that path. A handoff is the place where one Kubernetes object or process points to the next one. The caller hands a name to DNS. DNS returns a Service address. The Service points to EndpointSlices. EndpointSlices list ready Pod IPs and ports. NetworkPolicy rules allow or deny the packet path. The destination Pod has an application process listening on a real port.
 
@@ -54,6 +46,10 @@ This article uses the same path from start to finish. The useful habit is small 
 | NetworkPolicy | Does policy allow this source to this destination? | Source labels, destination labels, namespace labels, and ports |
 | Edge | Does external HTTP routing point to the healthy internal Service? | Ingress or HTTPRoute backend references and controller logs |
 | Evidence | What changed around the incident time? | Events, rollout history, application logs, and controller logs |
+
+![Kubernetes networking proof by layer board showing caller curl, DNS nslookup, Service describe, EndpointSlice readiness, Pod listener, NetworkPolicy labels, and edge route checks](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-proof-layers.png)
+
+*The first failed proof decides the next check. That keeps the team from jumping between unrelated objects during an incident.*
 
 The first proof starts where the broken request starts: the caller.
 
@@ -531,6 +527,10 @@ Fix: restored app.kubernetes.io/name=devpolaris-orders-api on the Pod template.
 Recovery proof: EndpointSlice listed two ready endpoints and caller curl returned 200.
 Prevention: add CI check that Service selectors match rendered Deployment labels.
 ```
+
+![Kubernetes networking safe fix loop showing original devpolaris-web caller proof, smallest fix, same caller proof passing, and the evidence bundle for review](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-recovery-summary.png)
+
+*Recovery evidence closes the same loop that opened the incident: repeat the caller proof, show the failed layer, record the fix, and add one prevention check.*
 
 The final section turns those incident lessons into daily habits.
 

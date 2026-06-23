@@ -31,6 +31,10 @@ That shared endpoint should calm down the tool debate a little. The practical qu
 
 In this article, the release is the same release from the previous lesson. Production should run `ghcr.io/devpolaris/orders-api:2026.05.07`, use three replicas, serve traffic through `orders.devpolaris.example`, and keep the Service selector matched to the Pod labels. Helm and Kustomize can both express that result, and the team still needs to render the output before trusting it.
 
+![Helm chart and Kustomize overlay both producing rendered YAML, Kubernetes API input, and review evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/one-shared-goal.png)
+
+*The source format differs, but the review target stays the same: rendered Kubernetes YAML that the API server can receive.*
+
 ## How Helm Packages an App
 <!-- section-summary: Helm packages templates, values, metadata, and release commands into a chart. -->
 
@@ -165,6 +169,10 @@ $ kubectl apply -k k8s/overlays/prod
 
 Neither workflow removes the need to understand Kubernetes rollout behavior. A Helm rollback still changes Kubernetes objects and waits on controllers. A Kustomize revert still needs a rollout check. The difference is where the team finds the previous desired state and which command starts the recovery.
 
+![Tool choice map showing ownership, reuse, release history, GitOps, incident evidence, and choosing between Helm and Kustomize](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/tool-choice-map.png)
+
+*The tool choice becomes clearer when the team talks about ownership, reuse, release history, GitOps workflow, and incident evidence instead of tool popularity.*
+
 ## GitOps and Reviewability
 <!-- section-summary: GitOps workflows can use either tool, but every workflow needs rendered output that reviewers can inspect. -->
 
@@ -255,6 +263,10 @@ This checklist turns the tool choice into production questions. It helps the tea
 For the orders API, the answer can change over time. A small team can start with Kustomize while the app shape settles, then move to Helm after the organization standardizes many APIs around the same package contract.
 
 The team should write down the render, diff, apply, and rollback commands in the repository either way. The package choice matters less than the review habit that proves what Kubernetes will receive.
+
+![Selection checklist with ownership, reuse, rollback path, review path, and production fit questions](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/selection-checklist.png)
+
+*A practical checklist keeps the decision tied to the team's production workflow, not the packaging tool's reputation.*
 
 ## What's Next
 

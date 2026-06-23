@@ -14,231 +14,349 @@ aliases:
 
 ## Table of Contents
 
-1. [What You Are Debugging](#what-you-are-debugging)
-2. [State Before Shell Access](#state-before-shell-access)
-3. [Logs and Exit Codes](#logs-and-exit-codes)
-4. [Image Files and Startup Command](#image-files-and-startup-command)
-5. [Environment and Configuration](#environment-and-configuration)
-6. [Network Path](#network-path)
-7. [Storage Path](#storage-path)
-8. [Health and Startup Order](#health-and-startup-order)
-9. [Compose Configuration](#compose-configuration)
-10. [A Full Debugging Walkthrough](#a-full-debugging-walkthrough)
-11. [Putting It All Together](#putting-it-all-together)
+1. [The Incident We Will Debug](#the-incident-we-will-debug)
+2. [Start With Compose State](#start-with-compose-state)
+3. [Use Logs and Exit Codes](#use-logs-and-exit-codes)
+4. [Inspect the Container Docker Created](#inspect-the-container-docker-created)
+5. [Check the Image and Startup Command](#check-the-image-and-startup-command)
+6. [Check Environment Values](#check-environment-values)
+7. [Separate Host Ports From Service Discovery](#separate-host-ports-from-service-discovery)
+8. [Check Bind Mounts and Volumes](#check-bind-mounts-and-volumes)
+9. [Add Health Checks and Startup Order](#add-health-checks-and-startup-order)
+10. [Render the Compose Configuration](#render-the-compose-configuration)
+11. [Full Debugging Walkthrough](#full-debugging-walkthrough)
+12. [Putting It All Together](#putting-it-all-together)
+13. [References](#references)
 
-## What You Are Debugging
-<!-- section-summary: Docker debugging means matching a symptom to the Docker boundary that controls it. -->
+## The Incident We Will Debug
+<!-- section-summary: Docker debugging works best when every command answers one question about state, logs, config, network, storage, or health. -->
 
-Docker debugging is the work of finding which boundary disagrees with what you expected. A **boundary** is a place where Docker changes the view of the process. The image controls which files exist. The command controls what starts. The environment controls configuration values. The network controls names and ports. The mounts control which files appear at a path. Compose connects several containers into one project.
+Imagine we are on a small production support rotation for a support-ticket app. The app has an `api` service that receives tickets, a `worker` service that sends email notifications, a `db` service running Postgres, and a `redis` service for background jobs. The team uses Docker Compose in development and staging because it lets the whole stack run with one `compose.yaml` file.
 
-Let's keep using the support-ticket app from the cleanup article. The stack has a Node API, a worker, Postgres, Redis, one project network, one named Postgres volume, a published API port, and a health check. Someone starts the stack and says, "The app is up, and the browser cannot create tickets."
+The support message says, "The ticket page loads, but creating a ticket fails." That sounds simple, but Docker gives that symptom several possible causes. The API container may be restarting. The API may have the wrong startup command. The image may miss the compiled JavaScript files. The API may use `localhost` for Postgres from inside the container. The browser may hit the wrong host port. A bind mount may cover the files built into the image. Postgres may start before it accepts connections.
 
-That sentence contains several possible failures. The API container may be restarting. The API may be running the wrong command. The image may miss `dist/server.js`. The API may point at `localhost` for Postgres. The host may publish the wrong port. A bind mount may cover the files built into the image. The database may run while the API starts before it can accept connections.
+So we need a calm order of operations. **Container state** tells us whether the process is running. **Logs** tell us what the process said before it failed. **Inspect output** tells us what Docker actually created. **Image metadata** tells us the default working directory, command, and entrypoint. **Environment variables** tell us which database URL, Redis URL, and port the process received. **Networking** separates browser-to-container traffic from container-to-container traffic. **Mounts and volumes** explain which files the process can see and which data survives restarts. **Health checks** explain readiness, and **Compose config** shows the final model after overrides and variable interpolation.
 
-The useful debugging order connects the same pieces Docker uses to run the app:
+![Docker debugging path infographic showing state, logs, inspect, image, config, network, health, and verified fix as the evidence path for a Compose failure](/content-assets/articles/article-containers-orchestration-docker-debugging-docker-containers/docker-debugging-path.png)
 
-```mermaid
-flowchart TD
-    Compose["Compose project"]
-    Image["Image files"]
-    Config["Runtime config<br/>command, env, mounts, ports"]
-    Process["Main process"]
-    Logs["Logs and exit code"]
-    Network["Network path"]
-    Storage["Storage path"]
-    Health["Health status"]
+*The debugging path keeps each command tied to one boundary, so the investigation moves from state to evidence before changing the Compose stack.*
 
-    Compose --> Config
-    Image --> Config
-    Config --> Process
-    Process --> Logs
-    Config --> Network
-    Config --> Storage
-    Process --> Health
+Here is a simplified version of the stack we will keep referring to:
+
+```yaml
+services:
+  api:
+    build: ./api
+    image: support-api:dev
+    command: ["node", "dist/server.js"]
+    working_dir: /app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: postgres://tickets:tickets@localhost:5432/tickets
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8080:3000"
+    volumes:
+      - ./api:/app
+    depends_on:
+      - db
+      - redis
+
+  worker:
+    build: ./worker
+    image: support-worker:dev
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgres://tickets:tickets@db:5432/tickets
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: tickets
+      POSTGRES_PASSWORD: tickets
+      POSTGRES_DB: tickets
+    volumes:
+      - ticket-db:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8
+
+volumes:
+  ticket-db:
 ```
 
-This order keeps the investigation grounded. If the process exits immediately, logs and exit code matter before shell access. If the process runs while the browser fails, ports and host-to-container routing matter. If one container fails to reach another, Compose service names and networks matter. Each symptom points to evidence.
+This file has realistic mistakes on purpose. The article will debug them one by one, because real Docker work usually starts with a stack that almost looks right.
 
-## State Before Shell Access
-<!-- section-summary: Container state tells you whether the process is running, restarting, completed, paused, unhealthy, or missing. -->
+## Start With Compose State
+<!-- section-summary: Compose state tells you whether each service is running, restarting, exited, unhealthy, or missing from the project. -->
 
-**Container state** is Docker's current view of a container's lifecycle. Common states include running, exited, restarting, paused, and dead. Compose adds service names and health information so you can read the whole project quickly.
+**Compose state** is Docker's current report for every service in the project. It answers the first practical question: did Docker create the containers, and are their main processes still alive? This matters because a browser error from the API means something different when the API is restarting every five seconds.
 
-For a Compose app, the first state check usually comes from:
+The first command I usually want is:
 
 ```bash
 docker compose ps
 ```
 
-The support-ticket app might show:
+A broken support-ticket stack might show this:
 
 ```
-NAME                  IMAGE                  COMMAND                  SERVICE   STATUS
-support-api-1         support-api:dev        "node dist/server.js"    api       Restarting (1) 9 seconds ago
-support-db-1          postgres:18            "docker-entrypoint.s..." db        Up 45 seconds (healthy)
-support-redis-1       redis:8                "docker-entrypoint.s..." redis     Up 45 seconds
-support-worker-1      support-worker:dev     "node dist/worker.js"    worker    Up 40 seconds
+NAME                  IMAGE                     COMMAND                  SERVICE   STATUS
+support-api-1         support-api:dev           "node dist/server.js"    api       Restarting (1) 8 seconds ago
+support-db-1          postgres:18               "docker-entrypoint.s..." db        Up 42 seconds
+support-redis-1       redis:8                   "docker-entrypoint.s..." redis     Up 42 seconds
+support-worker-1      support-worker:dev        "node dist/worker.js"    worker    Up 38 seconds
 ```
 
-This table already tells a story. Docker created the API container. Docker tried to start `node dist/server.js`. The process exited with code `1`, and the restart policy keeps trying. The database reports healthy. A shell into the API container may fail because the main process keeps exiting, so logs are the next evidence.
+There is already a useful clue here. Docker created the API container, tried to run `node dist/server.js`, and the process exited with code `1`. The `restart: unless-stopped` policy keeps bringing it back. A shell inside the API container may be annoying because the main process keeps dying, so the next evidence comes from logs and inspect output.
 
-Another state would lead somewhere else. `Exited (0)` often means the command completed successfully. That fits a migration job and fails a long-running API. `Up` with no host access points toward ports or application binding. `Up (unhealthy)` points toward the health check or a dependency the health check uses.
+Different state values point to different branches. `Exited (0)` usually means the command finished successfully, which is fine for a migration job and suspicious for a web API. `Up` with a browser failure points toward port mapping, app binding, or application errors. `Up (unhealthy)` points toward the health check and the dependency it checks. `Restarting (127)` often means Docker could not find the executable or shell command. `Restarting (137)` often means the process received `SIGKILL`, which can happen during memory pressure or a forced stop.
 
-For a single container outside Compose, `docker ps -a` gives the same first branch:
+When stopped containers matter, use the full view:
+
+```bash
+docker compose ps --all
+```
+
+For a single container outside Compose, the same state check comes from Docker directly:
 
 ```bash
 docker ps -a --filter "name=support-api"
 ```
 
-State connects to logs because Docker can only show process output if the process wrote something to standard output or standard error. When a container exits, those logs often contain the first useful reason.
+In team practice, this first state snapshot belongs in the incident notes. It gives everyone the same starting point before people start changing Compose files, rebuilding images, or deleting volumes.
 
-## Logs and Exit Codes
-<!-- section-summary: Logs show the process point of view, while exit codes show how the main process ended. -->
+## Use Logs and Exit Codes
+<!-- section-summary: Logs show what the container process wrote, and exit codes show how the main process ended. -->
 
-**Logs** are the output the containerized process wrote to stdout and stderr. For a Compose service, `docker compose logs` groups that output by service. Logs show what the application knew at runtime, which makes them the best next step after a restart or exit state.
+**Container logs** are the stdout and stderr output from the process running in the container. For our API, that means the Node process can print stack traces, database connection errors, startup messages, and request errors. Logs are usually the fastest way to learn whether the process reached application code.
 
-The API service logs might show a missing build artifact:
+The API is restarting, so we ask Compose for the last part of the API logs:
 
 ```bash
 docker compose logs --tail=80 api
 ```
 
+The output might be:
+
 ```
+api-1  | node:internal/modules/cjs/loader:1228
+api-1  |   throw err;
+api-1  |   ^
+api-1  |
 api-1  | Error: Cannot find module '/app/dist/server.js'
-api-1  |     at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+api-1  |     at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)
+api-1  |     at Module._load (node:internal/modules/cjs/loader:1051:27)
+api-1  | code: 'MODULE_NOT_FOUND'
+api-1  |
 api-1  | Node.js v22.11.0
 ```
 
-That points at the image files, command, or mounted filesystem. The process tried to load `/app/dist/server.js` and failed. Network checks belong later because the application never reached the point where it opened a port or connected to Postgres.
+That message puts us at the file and command boundary. The API has not reached the database, Redis, or the HTTP port yet. The process tried to load `/app/dist/server.js`, and that file was missing from the container filesystem it received at runtime.
 
-Another log points at runtime configuration and networking:
-
-```
-api-1  | Error: connect ECONNREFUSED 127.0.0.1:5432
-api-1  | Database connection failed for postgres://app@localhost:5432/tickets
-```
-
-Inside the API container, `127.0.0.1` points back to the API container. In a Compose project, the Postgres service name might be `db`, so the API should usually connect to `db:5432` from another service on the same project network.
-
-Exit code gives another clue:
+Exit code confirms the process ended as an application failure:
 
 ```bash
-docker inspect --format '{{.State.ExitCode}} {{.State.Error}}' support-api-1
+docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}} oom={{.State.OOMKilled}}' support-api-1
 ```
 
 ```
-1
+status=restarting exit=1 error= oom=false
 ```
 
-A non-zero exit code means the main process reported failure. An empty `.State.Error` means the container runtime itself may not have produced a separate runtime error. If `.State.Error` contains a message about an executable path, permissions, or mount setup, the failure may come before the application code starts.
+An exit code of `1` usually means the application or command reported a general failure. Exit code `126` often points to a permission problem where a command exists but execute permission or runtime policy blocks it. Exit code `127` often points to a missing command. Exit code `137` usually means the process was killed with signal 9. A normal stop commonly sends `SIGTERM`, and Docker reports that as exit code `143`.
 
-Logs connect to image and command because many Docker failures mention a path, module, executable, or argument. The next section checks whether Docker tried to run the command you think it tried to run, and whether the filesystem contains the files that command needs.
+Logs also help when the process runs and then fails during startup. After the missing file problem is fixed, the API might print:
 
-## Image Files and Startup Command
-<!-- section-summary: The image and startup command decide which executable Docker starts and which files the process can read. -->
+```
+api-1  | Listening on http://0.0.0.0:3000
+api-1  | Database connection failed: connect ECONNREFUSED 127.0.0.1:5432
+api-1  | DATABASE_URL=postgres://tickets:*****@localhost:5432/tickets
+```
 
-An **image** provides the container filesystem and default metadata. A **startup command** tells Docker which process to run as PID 1 inside the container. In Docker terms, `ENTRYPOINT` and `CMD` from the image can combine with command overrides from Compose or `docker run`.
+That message moves the investigation from image files to runtime configuration. Inside the API container, `127.0.0.1` means the API container itself. The Postgres service lives in the `db` container, so the service-to-service address should use `db:5432` on the Compose network.
 
-When logs say `Cannot find module '/app/dist/server.js'`, three practical checks help. The current Compose file may override the command. The image may have skipped the build output. A bind mount may cover the built files after the container starts.
+## Inspect the Container Docker Created
+<!-- section-summary: Docker inspect shows the real container settings, including command, working directory, environment, ports, mounts, networks, and health state. -->
 
-Compose can show the final command after file merging and variable interpolation:
+**Inspect output** is Docker's detailed JSON record for a container, image, network, or volume. It helps when the Compose file and the running container disagree in your head. Maybe an override file changed the command. Maybe an environment variable came from the shell. Maybe the mount source is a different path than the one you expected.
+
+For the API container, this command shows the command and working directory Docker used:
 
 ```bash
-docker compose config
+docker inspect support-api-1 --format 'path={{json .Path}} args={{json .Args}} workdir={{json .Config.WorkingDir}}'
 ```
 
-A relevant service block might contain:
+```
+path="node" args=["dist/server.js"] workdir="/app"
+```
+
+Now the log message lines up with the runtime command. Docker started `node` inside `/app` with `dist/server.js` as the argument. If the file is missing under `/app`, the container exits before the application can do anything useful.
+
+Inspect can also show the mount list:
+
+```bash
+docker inspect support-api-1 --format '{{range .Mounts}}{{printf "%s %s -> %s\n" .Type .Source .Destination}}{{end}}'
+```
+
+```
+bind /Users/alex/support-ticket/api -> /app
+```
+
+This is an important discovery. The image may have built `/app/dist/server.js`, but the bind mount places the host `./api` directory over `/app` at container startup. If the host directory has source files but no local `dist` folder, the running container cannot see the built `dist` files from the image.
+
+Inspect can also show published ports from Docker's point of view:
+
+```bash
+docker inspect support-api-1 --format '{{json .NetworkSettings.Ports}}'
+```
+
+```
+{"3000/tcp":[{"HostIp":"0.0.0.0","HostPort":"8080"}]}
+```
+
+The container exposes port `3000/tcp` to the Docker network, and Docker publishes it on host port `8080`. This is the split we will use later: the browser on the host uses `localhost:8080`, while another service in Compose uses `api:3000`.
+
+## Check the Image and Startup Command
+<!-- section-summary: Image metadata and one-off service containers explain which files, working directory, command, and entrypoint the service starts with. -->
+
+An **image** is the packaged filesystem and metadata Docker uses to create containers. The filesystem includes things like `/app/dist/server.js`, `node_modules`, shell tools, certificates, and application code. The metadata includes the default working directory, entrypoint, command, environment values, and health check.
+
+The API log says `/app/dist/server.js` is missing. We can check the image metadata first:
+
+```bash
+docker image inspect support-api:dev --format 'workdir={{json .Config.WorkingDir}} entrypoint={{json .Config.Entrypoint}} cmd={{json .Config.Cmd}}'
+```
+
+```
+workdir="/app" entrypoint=null cmd=["node","dist/server.js"]
+```
+
+That output tells us the image itself expects to run `node dist/server.js` from `/app`. The next question is whether the file exists in the runtime filesystem after Compose applies mounts. A one-off Compose container is useful here because it starts from the same service definition, including mounts and environment, while letting us replace the command with a shell. It creates a temporary container, so it is good for filesystem and configuration checks rather than inspecting the exact live process. Service port publishing only happens when you add `--service-ports` or an explicit `--publish` mapping.
+
+```bash
+docker compose run --rm --entrypoint sh api -lc 'pwd; ls -la; ls -la dist; echo exit=$?'
+```
+
+```
+/app
+total 208
+drwxr-xr-x  14 node node    448 Jun 21 09:12 .
+drwxr-xr-x   1 root root   4096 Jun 21 09:15 ..
+-rw-r--r--   1 node node    214 Jun 21 09:12 package.json
+drwxr-xr-x   8 node node    256 Jun 21 09:12 src
+ls: dist: No such file or directory
+exit=2
+```
+
+Now we know the missing file problem is real in the running service view. The fix depends on the purpose of the service. For a development service with a source bind mount, the command might use a watcher that reads `src` directly. For a production-like service, the bind mount should usually disappear so the image's built `/app/dist` files remain visible.
+
+A development override could look like this:
 
 ```yaml
 services:
   api:
-    build:
-      context: /Users/alex/support-ticket/api
-    command:
-      - node
-      - dist/server.js
-    working_dir: /app
+    command: ["npm", "run", "dev"]
     volumes:
-      - type: bind
-        source: /Users/alex/support-ticket/api
-        target: /app
+      - ./api:/app
+      - api-node-modules:/app/node_modules
+
+volumes:
+  api-node-modules:
 ```
 
-Now you have two facts. The command expects `/app/dist/server.js`. The bind mount puts the host `./api` directory on top of `/app` inside the container. If the image build created `/app/dist/server.js` and the host directory has no `dist` folder, the running container misses the built file at `/app/dist/server.js`.
+A staging or production Compose file would usually keep the built image and remove the source bind mount:
 
-One-off inspection can check the filesystem view without relying on the restarting API process:
-
-```bash
-docker compose run --rm --entrypoint sh api -lc 'pwd; ls -la; ls -la dist'
+```yaml
+services:
+  api:
+    image: registry.example.com/support-api:2026-06-21
+    command: ["node", "dist/server.js"]
 ```
 
-If that command prints `ls: dist: No such file or directory`, the missing file is real in the runtime view. The fix might be running the local build so the bind mount contains `dist`, changing the development command to use a source watcher, or narrowing the bind mount to keep built image output visible.
+Real teams separate those two modes because the debugging story changes. Development wants fast source changes through a bind mount. Staging wants the same image shape that production will run.
 
-For image metadata, `docker image inspect` can show the default working directory and command:
+## Check Environment Values
+<!-- section-summary: Environment inspection confirms the exact URLs, ports, modes, and flags the process received at startup. -->
 
-```bash
-docker image inspect support-api:dev --format '{{json .Config.WorkingDir}} {{json .Config.Cmd}} {{json .Config.Entrypoint}}'
-```
+**Environment variables** are string values Docker passes into the process. Applications commonly use them for database URLs, Redis URLs, listening ports, runtime modes, feature flags, and secrets. A Docker image can be correct while one environment value points it at the wrong place.
 
-Image and command debugging connects to environment because a container can start the right file and still use the wrong settings. The process can run perfectly while pointing at the wrong database host, port, mode, or secret name.
-
-## Environment and Configuration
-<!-- section-summary: Runtime configuration tells the same image which database, port, mode, and credentials to use. -->
-
-**Environment variables** are key-value strings Docker passes into the container process. Many applications use them for database URLs, ports, feature flags, API keys, and runtime mode. The same image can behave differently in development, CI, staging, and production because those values change.
-
-For the support-ticket API, a single value can break the whole stack:
+Our Compose file gave the API this value:
 
 ```yaml
 environment:
-  DATABASE_URL: postgres://app:secret@localhost:5432/tickets
+  DATABASE_URL: postgres://tickets:tickets@localhost:5432/tickets
 ```
 
-That value works for code running directly on the developer's laptop if Postgres publishes port `5432` to the host. It fails inside the API container because `localhost` means the API container itself. Compose service-to-service traffic should use the service name and the container port:
+That value is the bug after the missing `dist` file is fixed. `localhost` inside the API container points back to the API container. The Postgres container is the `db` service on the Compose network, so the API should receive this value:
 
 ```yaml
 environment:
-  DATABASE_URL: postgres://app:secret@db:5432/tickets
+  DATABASE_URL: postgres://tickets:tickets@db:5432/tickets
 ```
 
-`docker compose config` helps because it shows the resolved Compose model. It can reveal values from `.env`, defaults, overrides, and multiple Compose files:
+For a running container, the live environment can be checked from inside the service:
+
+```bash
+docker compose exec api sh -lc 'env | sort | grep -E "DATABASE_URL|REDIS_URL|PORT|NODE_ENV"'
+```
+
+```
+DATABASE_URL=postgres://tickets:tickets@localhost:5432/tickets
+NODE_ENV=development
+PORT=3000
+REDIS_URL=redis://redis:6379
+```
+
+For a restarting container, `docker inspect` can show the configured environment without needing a shell in the process:
+
+```bash
+docker inspect support-api-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | sort | grep -E 'DATABASE_URL|REDIS_URL|PORT|NODE_ENV'
+```
+
+```
+DATABASE_URL=postgres://tickets:tickets@localhost:5432/tickets
+NODE_ENV=development
+PORT=3000
+REDIS_URL=redis://redis:6379
+```
+
+Compose can also show the resolved model after `.env` interpolation and override files:
 
 ```bash
 docker compose config --environment
-docker compose config
+docker compose config api
 ```
 
-For a running container, the live environment can be checked from inside:
+This matters because `.env` has two common roles in Compose projects. It can provide values for interpolation in the Compose file, such as `${API_PORT}`. Container environment variables come from `environment`, `env_file`, image `ENV`, and command-line overrides. Teams often find a bug where `.env` contains `DATABASE_URL=...`, but the service never injects that value into the container.
 
-```bash
-docker compose exec api env | sort
-```
+Configuration debugging should include safe secret handling. In incident notes, record the variable name and the host part, such as `DATABASE_URL uses localhost`, instead of pasting passwords, tokens, or full connection strings into chat.
 
-If the API keeps restarting, inspect the container configuration instead:
+## Separate Host Ports From Service Discovery
+<!-- section-summary: Host ports are for traffic from your laptop or load balancer, while Compose service names are for traffic between containers. -->
 
-```bash
-docker inspect support-api-1 --format '{{json .Config.Env}}'
-```
+**Docker networking** gives containers a private network path to each other. In Compose, the default network lets services reach each other by service name. The `api` service can connect to `db:5432` and `redis:6379` because Compose registers those names in Docker's internal DNS for the project network.
 
-Environment debugging also includes ports. Many web servers read a `PORT` variable and listen on that container port. If the app listens on `3000`, the Compose port mapping should publish host traffic to container port `3000`, such as `"8080:3000"`. If the app listens on `8080` while Compose publishes `"8080:3000"`, the browser may hit a port where the container has no listener.
-
-Configuration connects to networking because the value `db:5432` only works if the API and database share a Docker network and Compose service discovery can resolve `db`.
-
-## Network Path
-<!-- section-summary: Docker networking separates host access from service-to-service access, so host ports and container service names answer different questions. -->
-
-A **Docker network** gives containers a place to reach each other. In Compose, Docker creates a default project network and each service joins it unless the Compose file says otherwise. Containers on that network can discover each other by service name, such as `api`, `db`, or `redis`.
-
-The most common beginner confusion is host port versus container port. A Compose mapping like this has two sides:
+The `ports` mapping answers a different question. It publishes a container port to the host machine:
 
 ```yaml
 ports:
   - "8080:3000"
 ```
 
-The left side, `8080`, is the host port your browser uses on the laptop. The right side, `3000`, is the container port the API process must listen on. Another container in the same Compose network uses `api:3000` for service-to-service traffic, while `localhost:8080` belongs to the host side.
+The left side, `8080`, is the host port used by a browser on the laptop: `http://localhost:8080`. The right side, `3000`, is the container port where the API process must listen. A worker container in the same Compose network would use `http://api:3000`, because it speaks to the API service name and container port.
 
-The host mapping can be checked from Compose:
+![Two traffic paths infographic showing host localhost 8080 to api 3000, service api to db 5432, a bind mount covering app files, and a ticket-db volume persisting data](/content-assets/articles/article-containers-orchestration-docker-debugging-docker-containers/two-traffic-paths.png)
+
+*The traffic and filesystem paths sit side by side because Docker debugging often mixes host access, service discovery, bind mounts, and volumes in the same symptom.*
+
+Compose can print the current host mapping:
 
 ```bash
 docker compose port api 3000
@@ -248,111 +366,127 @@ docker compose port api 3000
 0.0.0.0:8080
 ```
 
-Service discovery can be checked from a running container:
+Service discovery can be checked from another container. The `getent hosts` command asks the container's resolver for the `db` service name:
 
 ```bash
 docker compose exec api getent hosts db
 ```
 
 ```
-172.19.0.3      db
+172.23.0.3      db
 ```
 
-Network membership can be checked from Docker:
+The next check asks whether a TCP connection to Postgres can open from the API container. This example uses Node because the API image already has Node, while minimal images often lack `nc` or `curl`:
 
 ```bash
-docker network ls
-docker network inspect support-ticket_default
+docker compose exec api node -e "const net=require('net'); const s=net.connect(5432,'db',()=>{console.log('db:5432 reachable'); s.end();}); s.on('error',e=>{console.error(e.message); process.exit(1);});"
 ```
 
-If `api` and `db` are absent from the same network, the API container cannot resolve the database name. If the database appears on the network and the API still fails to connect, the next checks include database readiness, credentials, and whether Postgres listens on the expected container port.
+```
+db:5432 reachable
+```
 
-Networking connects to storage because a service can reach its dependency and still fail when files or database state appear differently inside the container than the developer expected.
+Host access has one more container-specific detail. Many web frameworks default to binding on `127.0.0.1`. Inside a container, that address belongs to the container loopback interface. For host-published ports, the application should listen on `0.0.0.0` inside the container so traffic forwarded by Docker can reach it. A useful startup log says both the address and port, such as `Listening on http://0.0.0.0:3000`.
 
-## Storage Path
-<!-- section-summary: Mounts decide which files appear inside the container, and bind mounts can cover files that the image originally contained. -->
+When the browser fails and containers can talk to each other, the next check is the host side. When the API logs show `ECONNREFUSED 127.0.0.1:5432`, the next check is the service-to-service side. Keeping those two paths separate saves a lot of random command running.
 
-**Storage path** means the source of files the container reads and writes. Docker can show files from the image, from the container writable layer, from a Docker volume, or from a bind mount. The same path inside the container can have different contents depending on the mount configuration.
+## Check Bind Mounts and Volumes
+<!-- section-summary: Bind mounts change the container filesystem from the host, while volumes persist container-generated data under Docker management. -->
 
-A **bind mount** maps a host path into the container. Development Compose files often use this for source code:
+**Bind mounts** place a host file or directory into the container. They are great for local development because source edits on the host appear inside the container immediately. They also explain many "the image built correctly but the container cannot find the file" bugs because a mount at `/app` can cover files that existed in the image at `/app`.
+
+The mount list from `docker inspect` showed this:
+
+```bash
+docker inspect support-api-1 --format '{{range .Mounts}}{{printf "%s %s -> %s\n" .Type .Source .Destination}}{{end}}'
+```
+
+```
+bind /Users/alex/support-ticket/api -> /app
+```
+
+The one-off shell confirmed the result:
+
+```bash
+docker compose run --rm --entrypoint sh api -lc 'test -f /app/dist/server.js; echo "dist_exists_exit=$?"'
+```
+
+```
+dist_exists_exit=1
+```
+
+That exit code means the test did not find the file. The fix should match the mode. In a development service, use a dev command that reads source files or builds `dist` inside the mounted directory. In a production-like service, remove the source bind mount and run the image exactly as built.
+
+**Volumes** are different. A Docker volume is managed by Docker and commonly stores data generated by the container, such as a Postgres data directory. The support-ticket database uses a named volume:
 
 ```yaml
 volumes:
-  - ./api:/app
+  - ticket-db:/var/lib/postgresql/data
 ```
 
-That mount lets code changes on the host appear inside the container. It can also cover files that the image placed in `/app` during the build. If the Dockerfile built `dist/server.js` inside the image, and the host `./api` directory has no `dist`, the bind-mounted `/app` hides the image's `/app/dist`.
-
-A **volume** is Docker-managed persistent storage. The database service might use:
-
-```yaml
-volumes:
-  - support_pgdata:/var/lib/postgresql/data
-```
-
-This lets Postgres data survive container removal. It also means a broken migration can leave state behind across restarts. If the app acts strange after a schema change, the running database volume may hold old tables, old users, or half-applied migration data.
-
-Mounts can be inspected from Docker:
+The volume can be inspected:
 
 ```bash
-docker inspect support-api-1 --format '{{json .Mounts}}'
+docker volume ls --filter name=ticket-db
+docker volume inspect support-ticket_ticket-db --format 'name={{.Name}} driver={{.Driver}} mountpoint={{.Mountpoint}}'
 ```
 
-Inside a running container, file checks can confirm what the process sees:
-
-```bash
-docker compose exec api sh -lc 'pwd; ls -la /app; ls -la /app/dist'
+```
+DRIVER    VOLUME NAME
+local     support-ticket_ticket-db
+name=support-ticket_ticket-db driver=local mountpoint=/var/lib/docker/volumes/support-ticket_ticket-db/_data
 ```
 
-For a database volume, inspect the volume name before deleting anything:
+Volumes matter during debugging because database state survives container replacement. If the API says a column is missing after a migration change, recreating the API container will not reset the Postgres volume. A deliberate data reset uses `docker compose down -v`, and that `-v` flag deletes named volumes for the project. In shared development or staging environments, that command deserves extra care because it removes data, not just containers.
 
-```bash
-docker volume ls
-docker volume inspect support_pgdata
-```
+Storage checks connect naturally to health checks. The database container may be running with a valid volume, but the API still needs a readiness signal before it connects.
 
-Storage connects to health because the process may start, see the right files, connect over the network, and still report unhealthy while it waits for a database migration, cache warmup, or readiness endpoint.
+## Add Health Checks and Startup Order
+<!-- section-summary: Health checks describe readiness, and depends_on with service_healthy lets Compose wait for a dependency before starting another service. -->
 
-## Health and Startup Order
-<!-- section-summary: Health checks describe readiness, while Compose startup order controls when dependent containers get created. -->
+A **health check** is a command Docker runs inside a container to decide whether the service is healthy. For Postgres, the process can be running while the database is still starting up. A health check gives Compose a more useful readiness signal than "the process exists."
 
-A **health check** is a command Docker runs to decide whether a running container looks healthy. Dockerfile `HEALTHCHECK` and Compose `healthcheck` can run commands such as `curl`, `pg_isready`, or an application-specific script. Health adds another status beside the normal running state.
-
-For the support-ticket API, the process may run while the app is still unable to handle requests. Maybe it is connecting to the database, applying migrations, or loading configuration. A health check can express the real readiness signal:
-
-```yaml
-services:
-  api:
-    build: ./api
-    ports:
-      - "8080:3000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 20s
-```
-
-For Postgres, the database service can use:
+For the database, a practical health check uses `pg_isready`:
 
 ```yaml
 services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: secret
+      POSTGRES_USER: tickets
+      POSTGRES_PASSWORD: tickets
       POSTGRES_DB: tickets
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d tickets"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      test: ["CMD-SHELL", "pg_isready -U tickets -d tickets"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 ```
 
-Compose can wait for a healthy dependency when `depends_on` uses `condition: service_healthy`:
+The health state appears in Compose:
+
+```bash
+docker compose ps db
+```
+
+```
+NAME            IMAGE         COMMAND                  SERVICE   STATUS
+support-db-1    postgres:18   "docker-entrypoint.s..." db        Up 28 seconds (healthy)
+```
+
+Docker stores recent health check output in inspect data:
+
+```bash
+docker inspect support-db-1 --format 'health={{.State.Health.Status}}{{range .State.Health.Log}}{{printf "\nexit=%d output=%q" .ExitCode .Output}}{{end}}'
+```
+
+```
+health=healthy
+exit=0 output="/var/run/postgresql:5432 - accepting connections\n"
+```
+
+Now the API can use `depends_on` with the `service_healthy` condition:
 
 ```yaml
 services:
@@ -360,80 +494,92 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
 ```
 
-This matters because starting a container and being ready to serve traffic are separate facts. Docker can start Postgres before Postgres accepts SQL connections. The health check gives Compose and humans a better readiness signal.
+This tells Compose to start the API after Postgres reports healthy and after Redis has started. For Redis, teams often add a health check too:
 
-Health details can be inspected from Docker:
-
-```bash
-docker inspect support-api-1 --format '{{json .State.Health}}'
+```yaml
+services:
+  redis:
+    image: redis:8
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 ```
 
-If the health check fails, read the test command and ask what it assumes. Does the image include `curl`? Does the app listen on `localhost:3000` inside the container? Does the endpoint require authentication? Does the start period give the app enough time for migrations?
+Health checks are part of the runtime contract. The application should still retry database and Redis connections because containers can restart, networks can pause, and a dependency can pass one health check and fail later. In production systems, the same idea usually appears in orchestrators, load balancers, readiness probes, and application startup retries.
 
-Health connects to Compose configuration because the visible file may differ from the model Docker actually applies. Multiple Compose files, profiles, environment interpolation, and project names can change what reaches the Docker Engine.
+## Render the Compose Configuration
+<!-- section-summary: docker compose config shows the final service model after Compose merges files, expands short syntax, and interpolates variables. -->
 
-## Compose Configuration
-<!-- section-summary: Compose debugging checks the resolved project model so hidden overrides, profiles, ports, mounts, and service names become visible. -->
+**Compose configuration** often comes from more than one place. A project may have `compose.yaml`, `compose.override.yaml`, a dev override, environment variables from the shell, and a `.env` file for interpolation. The file you are reading may differ from the model Docker actually sends to the engine.
 
-**Compose configuration** is the final service model Docker Compose sends toward the Docker Engine after it merges files, resolves variables, expands short syntax, and applies profiles. The file you are looking at may be only part of the final model.
-
-This matters in real teams. One developer may run:
-
-```bash
-docker compose -f compose.yaml -f compose.dev.yaml up
-```
-
-CI may run:
-
-```bash
-docker compose -f compose.yaml -f compose.ci.yaml up --abort-on-container-exit
-```
-
-Those two commands can produce different commands, environment variables, ports, mounts, health checks, and profiles. If the support-ticket API fails only on one machine, the merged configuration can reveal a local override.
-
-`docker compose config` shows the rendered model:
+The command that removes that guesswork is:
 
 ```bash
 docker compose config
 ```
 
-It can answer practical questions:
+For our API, the rendered output may include the important parts:
 
-| Question | Where to look in resolved config |
-|---|---|
-| Which command runs? | `services.api.command` |
-| Which image or build context applies? | `services.api.image` and `services.api.build` |
-| Which environment values reach the container? | `services.api.environment` |
-| Which host port maps to the app? | `services.api.ports` |
-| Which paths mount over image files? | `services.api.volumes` |
-| Which dependencies affect startup order? | `services.api.depends_on` |
-| Which health check decides readiness? | `services.api.healthcheck` |
+```yaml
+services:
+  api:
+    build:
+      context: /Users/alex/support-ticket/api
+    command:
+      - node
+      - dist/server.js
+    environment:
+      DATABASE_URL: postgres://tickets:tickets@localhost:5432/tickets
+      NODE_ENV: development
+      PORT: "3000"
+      REDIS_URL: redis://redis:6379
+    ports:
+      - mode: ingress
+        target: 3000
+        published: "8080"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /Users/alex/support-ticket/api
+        target: /app
+```
 
-Compose also has project identity. The default project name usually comes from the directory name, and Docker uses it to name networks, containers, and volumes. If two checkouts of the same repo run with different project names, they can create separate networks and volumes. If two projects accidentally share external networks or volumes, one stack can affect another.
+This one view explains three failures: the command expects `dist/server.js`, the bind mount can hide `dist`, and `DATABASE_URL` points at `localhost`. It also confirms that host port `8080` maps to container port `3000`.
 
-This is why the final walkthrough starts with Compose state and config, then follows the symptom through logs, image files, environment, network, storage, and health.
+Compose config also helps with targeted checks. A team can render one service, include multiple files, or fail fast in CI:
 
-## A Full Debugging Walkthrough
-<!-- section-summary: A complete investigation follows the symptom through one boundary at a time and stops when evidence explains the failure. -->
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml config api
+docker compose config --services
+docker compose config --quiet
+```
 
-The support-ticket app starts with this report from a junior developer: the stack starts, the database says healthy, and the browser at `http://localhost:8080` returns nothing useful. We will walk it like a pairing session.
+In real projects, this command belongs near the top of the runbook. It catches indentation mistakes, missing variables, unexpected override files, and short syntax that expands into something different from what the team pictured.
 
-The walkthrough opens with the state check:
+## Full Debugging Walkthrough
+<!-- section-summary: A full Docker debugging pass follows one symptom through state, logs, inspect output, config, network checks, storage checks, and health checks. -->
+
+Now let's walk the whole incident like we are pairing on it. The user reports that the ticket form returns a failure. We start with the whole project, because a request touches the API, Postgres, Redis, and the worker.
 
 ```bash
 docker compose ps
 ```
 
 ```
-NAME                  SERVICE   STATUS
-support-api-1         api       Restarting (1) 6 seconds ago
-support-db-1          db        Up 1 minute (healthy)
-support-redis-1       redis     Up 1 minute
+NAME                  IMAGE                     COMMAND                  SERVICE   STATUS
+support-api-1         support-api:dev           "node dist/server.js"    api       Restarting (1) 6 seconds ago
+support-db-1          postgres:18               "docker-entrypoint.s..." db        Up 51 seconds
+support-redis-1       redis:8                   "docker-entrypoint.s..." redis     Up 51 seconds
+support-worker-1      support-worker:dev        "node dist/worker.js"    worker    Up 47 seconds
 ```
 
-The API restarts. Browser debugging can wait because the service keeps restarting. The next evidence is logs:
+The API is the first failure. The logs explain why:
 
 ```bash
 docker compose logs --tail=50 api
@@ -441,108 +587,188 @@ docker compose logs --tail=50 api
 
 ```
 api-1  | Error: Cannot find module '/app/dist/server.js'
+api-1  | code: 'MODULE_NOT_FOUND'
 ```
 
-That message points at image files, command, or mounts. The resolved Compose config shows both the command and the bind mount:
+We inspect the command and mounts:
 
 ```bash
-docker compose config
+docker inspect support-api-1 --format 'path={{json .Path}} args={{json .Args}} workdir={{json .Config.WorkingDir}}'
+docker inspect support-api-1 --format '{{range .Mounts}}{{printf "%s %s -> %s\n" .Type .Source .Destination}}{{end}}'
 ```
 
-```yaml
-services:
-  api:
-    command:
-      - node
-      - dist/server.js
-    volumes:
-      - type: bind
-        source: /Users/alex/support-ticket/api
-        target: /app
+```
+path="node" args=["dist/server.js"] workdir="/app"
+bind /Users/alex/support-ticket/api -> /app
 ```
 
-The runtime filesystem check confirms the host directory covers `/app` and has no `dist`:
+Then the one-off shell confirms the runtime filesystem:
 
 ```bash
-docker compose run --rm --entrypoint sh api -lc 'ls -la /app; ls -la /app/dist'
+docker compose run --rm --entrypoint sh api -lc 'ls -la /app/dist; echo exit=$?'
 ```
 
 ```
 ls: /app/dist: No such file or directory
+exit=2
 ```
 
-Now the team has a real cause. The image may have built `dist`, and the development bind mount hides it. The team chooses one fix for local development: run the API with a source watcher that reads `src`, or build `dist` on the host before starting, or change the mount layout so `/app/dist` from the image stays visible.
-
-After fixing the command and mount issue, the API starts, and the logs show another problem:
-
-```
-api-1  | Error: connect ECONNREFUSED 127.0.0.1:5432
-```
-
-The environment check shows the database URL:
-
-```bash
-docker compose exec api env | sort | grep DATABASE_URL
-```
-
-```
-DATABASE_URL=postgres://app:secret@localhost:5432/tickets
-```
-
-Inside the API container, `localhost` points at the API container. The Compose network gives the database service the name `db`, so the value changes to:
+We choose the development fix because this is a developer Compose stack. The API should use the dev command with the bind mount:
 
 ```yaml
-DATABASE_URL: postgres://app:secret@db:5432/tickets
+services:
+  api:
+    command: ["npm", "run", "dev"]
+    volumes:
+      - ./api:/app
+      - api-node-modules:/app/node_modules
+
+volumes:
+  api-node-modules:
 ```
 
-The network check verifies service discovery:
+After rebuilding and starting the API, the state improves:
+
+```bash
+docker compose up -d --build api
+docker compose ps api
+```
+
+```
+NAME            IMAGE             COMMAND             SERVICE   STATUS
+support-api-1   support-api:dev   "npm run dev"       api       Up 8 seconds
+```
+
+The browser still returns a ticket creation error, so logs again:
+
+```bash
+docker compose logs --tail=80 api
+```
+
+```
+api-1  | Listening on http://0.0.0.0:3000
+api-1  | Database connection failed: connect ECONNREFUSED 127.0.0.1:5432
+api-1  | DATABASE_URL=postgres://tickets:*****@localhost:5432/tickets
+```
+
+Now we inspect environment:
+
+```bash
+docker compose exec api sh -lc 'env | sort | grep -E "DATABASE_URL|REDIS_URL|PORT"'
+```
+
+```
+DATABASE_URL=postgres://tickets:tickets@localhost:5432/tickets
+PORT=3000
+REDIS_URL=redis://redis:6379
+```
+
+The fix is the Compose service name:
+
+```yaml
+services:
+  api:
+    environment:
+      DATABASE_URL: postgres://tickets:tickets@db:5432/tickets
+      REDIS_URL: redis://redis:6379
+```
+
+Before restarting, we verify that service discovery and the database port work from inside the API container:
 
 ```bash
 docker compose exec api getent hosts db
+docker compose exec api node -e "const net=require('net'); const s=net.connect(5432,'db',()=>{console.log('db:5432 reachable'); s.end();}); s.on('error',e=>{console.error(e.message); process.exit(1);});"
 ```
 
 ```
-172.19.0.3      db
+172.23.0.3      db
+db:5432 reachable
 ```
 
-The app now starts and reaches the database, and the first request still fails for a few seconds after `docker compose up`. The Compose startup check shows that `api` depends on `db` without waiting for database health. The team adds a `db` health check and uses `condition: service_healthy` for the API dependency.
+The next failure appears only on cold starts. Sometimes the API starts before Postgres is ready. We add the database health check and the `service_healthy` dependency:
 
-The final result is a chain of evidence. Each change came from one boundary: state pointed to logs, logs pointed to files and mounts, the next logs pointed to environment and network, and startup timing pointed to health and Compose dependency configuration.
+```yaml
+services:
+  db:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickets -d tickets"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+```
+
+Now we render the final Compose model:
+
+```bash
+docker compose config api
+```
+
+The rendered service should show the dev command, `DATABASE_URL` with `db:5432`, port `8080 -> 3000`, and the expected bind mount. This is the point where the debugging notes can change from investigation to fix summary.
+
+Finally, the host path and service path both work:
+
+```bash
+docker compose port api 3000
+curl -i http://localhost:8080/health
+docker compose exec worker node -e "const net=require('net'); const s=net.connect(6379,'redis',()=>{console.log('redis:6379 reachable'); s.end();}); s.on('error',e=>{console.error(e.message); process.exit(1);});"
+```
+
+```
+0.0.0.0:8080
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"status":"ok","database":"ok","redis":"ok"}
+redis:6379 reachable
+```
+
+The final fix was several small corrections, not one magical command. The API command had to match the mounted filesystem. The database URL had to use the Compose service name. Postgres needed a readiness check. The browser had to use the host port, while containers used service names and container ports.
 
 ## Putting It All Together
-<!-- section-summary: Docker debugging stays practical when each symptom maps to one boundary and one evidence command. -->
+<!-- section-summary: Good Docker debugging turns symptoms into evidence, then changes only the boundary that the evidence points to. -->
 
-Docker gives you many commands. Each command has a clear job: answer one boundary question about state, logs, image, command, environment, network, storage, health, or Compose.
+A useful Docker debugging habit is to keep each command tied to one question. `docker compose ps` asks which services are alive. `docker compose logs` asks what the process said. `docker inspect` asks what Docker created. `docker image inspect` asks what the image declares. `docker compose run --entrypoint` asks what the service filesystem and tools look like under the Compose configuration. `docker compose config` asks what Compose will actually apply.
 
-| Symptom | Boundary to check | Useful evidence |
+Here is the quick field guide for the support-ticket stack:
+
+| Symptom | First evidence | Likely boundary |
 |---|---|---|
-| Container keeps restarting | State, logs, exit code | `docker compose ps`, `docker compose logs SERVICE`, `docker inspect` |
-| App says a file is missing | Image, command, mounts | `docker compose config`, `docker image inspect`, `docker compose run --entrypoint sh` |
-| App connects to `localhost` and fails | Environment, network | `docker compose exec SERVICE env`, `docker compose exec SERVICE getent hosts db` |
-| Browser cannot reach the app | Host port, app bind address, container port | `docker compose port SERVICE PORT`, app logs, service config |
-| One service cannot reach another | Compose network and service name | `docker network inspect`, Compose networking config |
-| Data seems old after restart | Volume lifecycle | `docker volume ls`, `docker inspect .Mounts`, migration logs |
-| Service is running but not ready | Health check and dependency order | `docker inspect .State.Health`, `depends_on.condition`, health check logs |
-| Only one machine fails | Resolved Compose model | `docker compose config --environment`, merged file list, profiles |
+| API says `Restarting (1)` | `docker compose logs api` | Application startup, missing files, bad config |
+| `Cannot find module /app/dist/server.js` | `docker compose run --entrypoint sh api -lc 'ls -la dist'` | Image files, command, bind mount |
+| `ECONNREFUSED 127.0.0.1:5432` | `docker compose exec api env` | Environment value and service discovery |
+| Browser cannot reach API | `docker compose port api 3000` and API startup log | Host port mapping and app bind address |
+| API reaches Redis but worker fails | `docker compose logs worker` and service DNS checks | Worker config, queue URL, network |
+| Database data looks stale | `docker volume inspect ...` | Named volume and migration state |
+| Cold start fails sometimes | `docker inspect db --format ...Health...` | Health check, dependency readiness, app retries |
+| Runtime differs from the Compose file you read | `docker compose config` | Override files, interpolation, expanded syntax |
 
-The support-ticket app gave us a realistic path. The API restarted because a bind mount hid the built `dist` directory. Then it used `localhost` for Postgres from inside a container. Then it started before the database readiness signal matched what the API needed. None of those problems required guessing.
+Industrial teams build these checks into daily work. They keep a short runbook for common incidents, make applications log the address and port they bind to, avoid printing secrets in logs, add health endpoints that check real dependencies, use retries around database and Redis connections, and run `docker compose config --quiet` in CI for Compose projects. They also separate development bind mounts from production image runs, because that one difference explains many confusing file and dependency bugs.
 
-The habit is the important part: **state first, logs next, then the boundary named by the evidence**. Docker has strong boundaries, and good debugging follows them in plain steps. That is the same skill you will use later in Kubernetes, ECS, CI runners, and production container platforms.
+The most important pattern is simple: use the current symptom to choose the next boundary. State leads to logs. Logs lead to command, files, or configuration. Configuration leads to network, storage, and health checks. Once the evidence points to one boundary, change that boundary deliberately and check the state again.
 
----
+![Debugging summary infographic showing symptom, evidence, boundary, fix, and verify as a five-step Docker debugging loop](/content-assets/articles/article-containers-orchestration-docker-debugging-docker-containers/debugging-summary.png)
 
-**References**
+*The final loop is the whole article in one pass: observe the symptom, collect evidence, name the boundary, make one focused fix, and verify the app.*
 
-- [docker container ls](https://docs.docker.com/reference/cli/docker/container/ls/) - Official Docker CLI reference for listing running and stopped containers with status information.
-- [docker container logs](https://docs.docker.com/reference/cli/docker/container/logs/) - Official Docker CLI reference for reading container stdout and stderr logs.
-- [docker container inspect](https://docs.docker.com/reference/cli/docker/container/inspect/) - Official Docker CLI reference for detailed container state, configuration, mounts, and health data.
-- [docker container exec](https://docs.docker.com/reference/cli/docker/container/exec/) - Official Docker CLI reference for running commands inside a running container.
-- [docker compose ps](https://docs.docker.com/reference/cli/docker/compose/ps/) - Official Docker Compose reference for listing project containers and service state.
-- [docker compose logs](https://docs.docker.com/reference/cli/docker/compose/logs/) - Official Docker Compose reference for viewing service logs.
-- [docker compose config](https://docs.docker.com/reference/cli/docker/compose/config/) - Official Docker Compose reference for rendering the resolved Compose model.
-- [Networking in Compose](https://docs.docker.com/compose/how-tos/networking/) - Official Docker guide for default project networks, service discovery, host ports, and network debugging.
-- [Control startup and shutdown order in Compose](https://docs.docker.com/compose/how-tos/startup-order/) - Official Docker guide for `depends_on`, `service_healthy`, and readiness ordering.
-- [Dockerfile HEALTHCHECK](https://docs.docker.com/reference/dockerfile/#healthcheck) - Official Dockerfile reference for container health checks and health status.
-- [Compose service healthcheck](https://docs.docker.com/reference/compose-file/services/#healthcheck) - Official Compose reference for service health check configuration.
-- [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) - Official Docker storage guide covering bind mounts and how mounts can obscure existing container files.
-- [Docker volumes](https://docs.docker.com/engine/storage/volumes/) - Official Docker storage guide covering volume persistence beyond container lifecycle.
+## References
+
+- [docker compose ps](https://docs.docker.com/reference/cli/docker/compose/ps/) - Official Docker CLI reference for listing Compose project containers and statuses.
+- [docker compose logs](https://docs.docker.com/reference/cli/docker/compose/logs/) - Official Docker CLI reference for viewing service logs, tailing logs, and filtering log output.
+- [docker inspect](https://docs.docker.com/reference/cli/docker/inspect/) - Official Docker CLI reference for low-level object inspection and Go template formatting.
+- [docker image inspect](https://docs.docker.com/reference/cli/docker/image/inspect/) - Official Docker CLI reference for inspecting image metadata such as command, entrypoint, and working directory.
+- [docker compose config](https://docs.docker.com/reference/cli/docker/compose/config/) - Official Docker CLI reference for rendering the resolved Compose model.
+- [docker compose run](https://docs.docker.com/reference/cli/docker/compose/run/) - Official Docker CLI reference for running one-off commands against a Compose service.
+- [Networking in Compose](https://docs.docker.com/compose/how-tos/networking/) - Docker guidance on Compose default networks and service-name discovery.
+- [Set environment variables in Compose](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/) - Docker guidance on setting container environment variables in Compose.
+- [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) - Docker documentation for host paths mounted into containers.
+- [Volumes](https://docs.docker.com/engine/storage/volumes/) - Docker documentation for Docker-managed persistent data volumes.
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Docker reference for Dockerfile metadata, including `HEALTHCHECK`.
+- [Control startup and shutdown order in Compose](https://docs.docker.com/compose/how-tos/startup-order/) - Docker guidance for `depends_on`, health checks, and startup order.

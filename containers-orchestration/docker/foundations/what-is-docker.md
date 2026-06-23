@@ -22,56 +22,71 @@ aliases:
 
 ## Table of Contents
 
-1. [The Path We Will Follow](#the-path-we-will-follow)
+1. [The Story We Will Follow](#the-story-we-will-follow)
 2. [The Problem Docker Solves](#the-problem-docker-solves)
 3. [Images](#images)
-4. [Containers](#containers)
-5. [Docker Engine](#docker-engine)
-6. [Registries](#registries)
-7. [Files, Ports, Environment, and Volumes](#files-ports-environment-and-volumes)
-8. [Containers and Virtual Machines](#containers-and-virtual-machines)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+4. [Dockerfiles, Build Context, and Layers](#dockerfiles-build-context-and-layers)
+5. [Containers](#containers)
+6. [Docker Engine](#docker-engine)
+7. [Registries, Tags, and Digests](#registries-tags-and-digests)
+8. [Files, Ports, Environment, and Mounts](#files-ports-environment-and-mounts)
+9. [Containers and Virtual Machines](#containers-and-virtual-machines)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Path We Will Follow
-<!-- section-summary: This section follows one application from source code to image to running container. -->
+## The Story We Will Follow
+<!-- section-summary: We will follow one inventory API from source code to image, container, host port, registry, and storage boundary. -->
 
-Let's follow a small Node service called `inventory-api`. It reads product records from a database and exposes an HTTP endpoint on port `3000`. On a developer laptop, the team can run it with `npm start`, and the exact result depends on the Node version, installed packages, native libraries, environment variables, and database settings on that laptop.
+Let's follow a small service called `inventory-api`. It powers a warehouse dashboard, returns product counts through HTTP, and listens on port `3000`. The service is simple enough for a first Docker article, and it is real enough to show the problems teams hit in daily work.
 
-Docker gives this team a way to package the application and its runtime setup into a reusable **image**, then start that image as a **container** on any machine that runs Docker. The image answers "what files and startup command should this app use?" The container answers "what is running right now?"
+On a developer laptop, the service might start with `npm start`. That command depends on more than the JavaScript files in the repository. It also depends on the Node version, package manager behavior, native libraries, environment variables, network access to a database, and the operating system details around the process.
 
-```mermaid
-flowchart LR
-    Source["Source code"] --> Dockerfile["Dockerfile recipe"]
-    Dockerfile --> Image["Docker image"]
-    Image --> Container["Running container"]
-    Container --> Host["Docker host"]
-    Image --> Registry["Image registry"]
-```
+Docker gives the team a way to package the service runtime into a **Docker image** and run that package as a **container**. The image carries the application files and startup defaults. The container is the live process created from that image.
 
-We will walk through the pieces in that order. First we will name the environment problem Docker solves, then we will look at images, containers, the Docker Engine, registries, runtime settings, and the difference between containers and virtual machines.
+![Docker package path infographic showing inventory-api source code flowing through a Dockerfile into an image, a running container, a registry, and host port 8080](/content-assets/articles/article-containers-orchestration-docker-what-is-docker/docker-package-path.png)
+
+*The Docker path starts with source code, turns the runtime recipe into an image, and then runs that image as a container that can publish a host port or move through a registry.*
+
+That path gives us the structure for the article. We will start with the environment problem, then move through images, Dockerfiles, build context, layers, containers, Docker Engine, registries, runtime settings, and virtual machines. Each part answers one practical question the inventory team has to solve before the service can run reliably.
 
 ## The Problem Docker Solves
-<!-- section-summary: Docker packages the app and its runtime environment so teams avoid depending on accidental laptop setup. -->
+<!-- section-summary: Docker turns a fragile local setup into a repeatable package that can run across developer machines, CI, and production hosts. -->
 
-A **runtime environment** is everything an application needs around the code to start correctly. For `inventory-api`, that means Node, npm packages, compiled files, operating system libraries, a startup command, a port, and settings such as `DATABASE_URL`. If one developer has Node 22 and another has Node 20, the same source code can behave differently before anyone reaches production.
+A **runtime environment** is everything the application needs around the code to start and behave correctly. For `inventory-api`, that means Node, npm dependencies, compiled native packages, Linux libraries, a startup command, a working directory, a port, and settings such as `DATABASE_URL` and `LOG_LEVEL`.
 
-This shows up in ordinary team work. A new engineer clones the repository, installs dependencies, and sees a native package fail because their laptop lacks a Linux library. A CI job uses a clean machine and fails because a local `.env` file is missing there. A production host has the right source code and an older runtime, so the server starts and then crashes on the first request.
+Without Docker, every place that runs the service has to recreate that environment by hand or through separate setup scripts. One developer may have Node 22, another may have Node 20, and CI may use a fresh Linux machine with no cached packages. The same source code then travels through several slightly different worlds before it reaches production.
 
-Docker addresses that by moving more of the environment into a repeatable artifact. The team writes down the operating system base, runtime, package install steps, copied files, exposed port, and startup command. Docker turns that recipe into an image, and every container created from that image receives the same application filesystem and default command.
+This is a common team problem Docker helps with. A new engineer clones the repository and the install fails because a package needs a missing system library. The CI job passes after someone adds a hidden setup step to the build machine. The production server has an older runtime, so the deployment starts successfully and crashes on the first request.
 
-For the inventory team, the practical value is simple. A developer can build `inventory-api:local`, CI can build the same service, and production can pull a reviewed image from a registry. The app still needs real configuration and real dependencies, and the basic runtime now follows the setup captured in the image.
+The team still handles configuration, databases, networks, and operations work. Docker gives the team a stronger boundary for the application package. The team writes the runtime setup once, builds it into an image, and starts containers from that image in local development, CI, staging, and production.
 
-Now that we know the problem, the first Docker object to understand is the image.
+For the inventory team, this changes the daily conversation. Instead of asking "Which Node version did you install on your laptop?" the team can ask "Which image tag did you run?" That more precise question leads us to the first Docker object to define: the image.
 
 ## Images
-<!-- section-summary: An image is the packaged application filesystem and startup metadata that Docker can run many times. -->
+<!-- section-summary: A Docker image is the packaged application filesystem and startup metadata that Docker can use to create containers. -->
 
-A **Docker image** is a read-only package of files and metadata. It usually contains a base operating system filesystem, language runtime, application dependencies, application code, and default startup instructions. You can think of it as the saved application bundle Docker uses to create containers.
+A **Docker image** is a packaged set of files and metadata used to create containers. It commonly includes a base filesystem, a language runtime, application dependencies, application code, and default startup instructions. In the inventory story, the image is the packaged form of `inventory-api`.
 
-The common way to create an image is with a **Dockerfile**. A Dockerfile is a plain file of build instructions. Each instruction adds or configures part of the image, and Docker can reuse previous build results through its build cache when the relevant instruction and input files stay the same.
+An image is read-only from the container's point of view. Docker can create many containers from the same image, and each container starts from the same packaged files. This is why images work well as deployment artifacts: the image that passed tests can be the same image that staging or production pulls later.
 
-Here is a small Dockerfile for `inventory-api`:
+For `inventory-api`, the image needs a few concrete pieces. It needs Node because the service runs JavaScript. It needs the production npm dependencies because the app imports libraries. It needs the `src` directory because that contains the server code. It also needs a default command so Docker knows what process to start.
+
+A local image name often looks like this:
+
+```bash
+inventory-api:local
+```
+
+The part before the colon is the image repository name, and the part after the colon is the **tag**. A tag is a readable label for humans and tools. In local development, `local` is fine. In CI, a team may use a Git SHA, a release number, or a date-based build label.
+
+An image can sit in the local Docker image store on a developer machine. That is useful for testing, and it is only the first half of the story. To create the image in a repeatable way, the team needs a recipe, and Docker calls that recipe a Dockerfile.
+
+## Dockerfiles, Build Context, and Layers
+<!-- section-summary: A Dockerfile describes how to build an image, the build context supplies files to the builder, and layers let Docker reuse repeated work. -->
+
+A **Dockerfile** is a file of build instructions. Each instruction tells Docker how to prepare part of the image. A Dockerfile gives the team a plain, reviewable place to describe the runtime setup for `inventory-api`.
+
+Here is a beginner-friendly Dockerfile for the service:
 
 ```dockerfile
 FROM node:22-alpine
@@ -83,109 +98,131 @@ EXPOSE 3000
 CMD ["node", "src/server.js"]
 ```
 
-The `FROM` line chooses the base image. In this case, the team starts from Node 22 on Alpine Linux because the service needs Node and a small Linux userland. The `WORKDIR` line chooses the default folder for later commands. The `COPY` and `RUN` lines place dependency files in the image and install production packages.
+The `FROM` instruction chooses the base image. `node:22-alpine` gives the service Node 22 on a small Alpine Linux base. The team starts from a maintained Node image so they can focus on the application instead of building Node from scratch.
 
-The final `COPY` brings the source code into the image. `EXPOSE 3000` documents the port the application expects to listen on inside the container. `CMD ["node", "src/server.js"]` gives Docker the default command to run when someone creates a container from this image.
+The `WORKDIR` instruction sets `/app` as the default directory for later instructions and for the container's command. The first `COPY` brings in the package files before the source code. The `RUN npm ci --omit=dev` instruction installs production dependencies in a predictable way.
 
-When the team builds the image, they give it a tag:
+The second `COPY` brings the application source into the image. `EXPOSE 3000` documents that the app expects to listen on port `3000` inside the container. `CMD ["node", "src/server.js"]` sets the default process for containers created from this image.
+
+The build command often looks like this:
 
 ```bash
 docker build -t inventory-api:local .
 ```
 
-The tag `inventory-api:local` gives humans a name for the image. The final `.` sends the current directory as the **build context**, which means the builder can use files from that directory during `COPY` and `ADD` instructions. Large build contexts slow down builds and can accidentally include secrets, so teams usually add a `.dockerignore` file to keep folders such as `node_modules`, `.git`, and local credentials out of the build input.
+The final `.` is the **build context**. The build context is the set of files the builder can read while it processes the Dockerfile. In this command, Docker sends the current directory as the build context, so `COPY package*.json ./` and `COPY src ./src` can read those files.
 
-Images use **layers** under the hood. A layer records the filesystem change from one build step, such as installing packages or copying source code. Docker stores those layers by content and can share them across images, which speeds up rebuilds and downloads across services that share the same base.
+The build context deserves attention because it can accidentally include too much. A repository may contain `node_modules`, `.git`, test reports, local database dumps, and `.env` files. Real teams usually add a `.dockerignore` file so the builder receives only the files it needs.
 
-An image by itself simply sits in Docker's local image store. The next step turns that package into a running process.
+```dockerignore
+node_modules
+.git
+.env
+coverage
+tmp
+```
+
+Docker builds images in **layers**. A layer records a filesystem change from a build step, such as installing dependencies or copying source files. Docker stores layers by content, so repeated builds can reuse unchanged work.
+
+That layer behavior explains the order of the Dockerfile. Package files change less often than application source files, so the Dockerfile copies package files first and installs dependencies before copying `src`. If a developer changes only `src/server.js`, Docker can reuse the dependency layer and rebuild the later source layer.
+
+The image now exists as a package. The next step creates a live process from it.
 
 ## Containers
-<!-- section-summary: A container is a running process created from an image with its own filesystem, network, and process view. -->
+<!-- section-summary: A container is a running instance of an image with its own process, network view, and writable layer. -->
 
-A **container** is a running instance of an image. Docker creates a container record, gives it a writable layer on top of the image, sets up network and process isolation, and starts the image's default command. For `inventory-api`, the main container process is `node src/server.js`.
-
-The first local run might look like this:
+A **container** is a running instance of an image. Docker takes the image, creates a container record, gives it a writable layer, prepares networking, and starts the image's command as a process. For our service, that process is `node src/server.js`, and the first local run might look like this:
 
 ```bash
 docker run --name inventory-api -p 8080:3000 -e PORT=3000 inventory-api:local
 ```
 
-This command creates and starts a container named `inventory-api` from the image tag `inventory-api:local`. The `-e PORT=3000` flag passes an environment variable into the container. The `-p 8080:3000` flag publishes host port `8080` to container port `3000`, so a browser on the host can call `http://localhost:8080` while the application listens on `3000` inside its container.
+This command asks Docker to create a container named `inventory-api` from the `inventory-api:local` image. The `-e PORT=3000` flag passes an environment variable into the process. The `-p 8080:3000` flag publishes container port `3000` on host port `8080`, so a browser on the developer machine can call `http://localhost:8080`.
 
-Inside the container, the application sees a filesystem assembled from the image plus its own writable layer. It also sees a container-specific process tree and network interface. Docker's official run documentation describes this as an isolated process with its own filesystem, networking, and process tree separate from the host.
+Inside the container, the service sees a filesystem built from the image plus its own writable layer. It also sees its own process view and network setup. The host still runs the real operating system, and Docker gives the container enough isolation for the app to behave like a separate runtime area.
 
-That writable layer matters during debugging. If a developer opens a shell in the running container and creates `/tmp/debug.json`, that file belongs to that container's writable layer. A new container from the same image receives the original image files again, while persistent data needs a volume or another storage boundary.
+The phrase **running instance** is important. The image is the package, and the container is one live copy of that package. The team can start one container for local testing, another in CI for integration tests, and several in production for traffic. They can all come from the same image tag.
 
-Containers give the image a live process, and a privileged host component must create that process and manage its lifecycle. That component is the Docker Engine.
+The container's writable layer is useful for temporary runtime changes. If `inventory-api` writes `/tmp/request.log`, that file lands in the container's writable layer. If the team removes the container and starts a fresh one from the same image, the fresh container starts from the original packaged files again.
+
+That lifecycle gives Docker a clean replacement pattern. Instead of repairing a long-running app directory by hand, teams build a new image and start new containers from it. The old container can stop after traffic moves away.
+
+Something on the host has to receive the `docker run` request, prepare all of this, and keep track of the container. Docker Engine is the host system that does that work.
 
 ## Docker Engine
-<!-- section-summary: Docker Engine connects the CLI, API, daemon, image store, networks, volumes, and container runtime work. -->
+<!-- section-summary: Docker Engine is the client-server system that receives Docker commands and manages images, containers, networks, volumes, and runtimes. -->
 
-**Docker Engine** is the client-server system that creates and runs Docker containers. The `docker` command in your terminal is the client. It sends API requests to the Docker daemon, usually called `dockerd`, and the daemon manages Docker objects such as images, containers, networks, and volumes.
+**Docker Engine** is Docker's core client-server system for building and running containers. The `docker` command in the terminal is the client. The Docker daemon, usually called `dockerd`, receives API requests and manages Docker objects on the host.
 
-This split is important because the terminal command itself does very little host-level work. When someone types `docker run`, the client sends a request. The daemon checks the image, prepares storage and networking, coordinates the lower-level runtime, and tracks the container's state.
+This split is important because the daemon handles the host-level work behind each Docker command. The CLI sends a request. The daemon checks local images, pulls missing images if needed, prepares storage and networking, asks the lower-level runtime to start the process, and records the container state.
 
-```mermaid
-flowchart LR
-    CLI["Docker CLI"] --> API["Docker API"]
-    API --> Daemon["Docker daemon"]
-    Daemon --> Images["Images"]
-    Daemon --> Networks["Networks"]
-    Daemon --> Volumes["Volumes"]
-    Daemon --> Runtime["Container runtime"]
-    Runtime --> Process["inventory-api process"]
-```
+![Docker Engine request path infographic showing docker CLI calling the Docker API, dockerd managing images networks and volumes, then the container runtime starting the inventory-api process](/content-assets/articles/article-containers-orchestration-docker-what-is-docker/docker-engine-request-path.png)
 
-On Linux servers, the Docker Engine usually runs directly on the host operating system. On Docker Desktop for macOS and Windows, Docker runs the Engine inside a lightweight Linux virtual machine and routes filesystem and network operations between that VM and the native host. This is why the same `docker run -p 8080:3000` command can still make a container available through `localhost` on a Mac or Windows laptop.
+*The CLI is only the front door. Docker Engine receives the request, manages local Docker objects, and asks the runtime to start the application process.*
 
-The daemon also keeps local state. It stores pulled images, built images, stopped container records, networks, volumes, and build cache. That local state makes Docker fast during development, and it also explains why old containers and images can consume disk space until the team cleans them up.
+On a Linux server, Docker Engine usually runs directly on the host operating system. On Docker Desktop for macOS and Windows, Docker runs a Linux environment behind the scenes so Linux containers have the kernel features they need. The user still types normal Docker commands from the native terminal.
 
-So far, everything lives on one machine. Real teams also need a place to share images between laptops, CI, staging, and production.
+The daemon also owns local Docker state. It stores built images, pulled images, stopped container records, networks, named volumes, and build cache. That state speeds up development because the next build can reuse layers and the next run can reuse a local image.
 
-## Registries
-<!-- section-summary: A registry stores image repositories so teams can pull the same reviewed artifact in different environments. -->
+The same local state can also fill disk space over time. A developer who builds many tags and leaves old containers around may eventually need cleanup commands such as `docker ps -a`, `docker image ls`, and `docker system prune`. The workflow article will spend more time on those daily commands.
 
-A **container registry** stores and distributes images. Docker Hub is Docker's public registry service, and many teams also use private registries such as Amazon ECR, Google Artifact Registry, Azure Container Registry, GitHub Container Registry, or a private Docker Hub organization. The registry gives the team a shared place to publish the exact image that passed review.
+At this point, the image and container work on one machine. A team also needs to move the image between machines without rebuilding it every time, and that sharing problem brings us to registries.
 
-An image name can include a registry host, organization or namespace, repository, and tag:
+## Registries, Tags, and Digests
+<!-- section-summary: A registry stores image repositories, tags give images readable names, and digests identify exact image content. -->
+
+A **container registry** stores and distributes images. Docker Hub is Docker's public registry service, and many production teams use private registries such as Amazon ECR, Google Artifact Registry, Azure Container Registry, GitHub Container Registry, or private Docker Hub repositories. The registry gives laptops, CI, staging, and production a shared place to exchange image artifacts.
+
+An image reference can include a registry host, namespace, repository, and tag. A production-style reference for the inventory service might look like this. The registry host is fake here, and the shape matches what teams use with private registries:
 
 ```bash
-registry.example.com/platform/inventory-api:2026-06-13.1
+registry.example.com/platform/inventory-api:2026-06-21.1
 ```
 
-The repository is `platform/inventory-api`, and the tag is `2026-06-13.1`. A production pipeline can push that image after tests pass. A deployment system can pull that same tag on a server or Kubernetes cluster and create containers from it.
+In that example, `registry.example.com` is the registry host. `platform/inventory-api` is the repository path. `2026-06-21.1` is the tag. The tag gives the release a readable name that humans can discuss in tickets, dashboards, and deployment logs.
+
+The publish flow has three common commands. The team can tag the local image for the registry, push it, and later pull the same reference from another machine. The commands use the same fake registry host from the previous example:
 
 ```bash
-docker tag inventory-api:local registry.example.com/platform/inventory-api:2026-06-13.1
-docker push registry.example.com/platform/inventory-api:2026-06-13.1
-docker pull registry.example.com/platform/inventory-api:2026-06-13.1
+docker tag inventory-api:local registry.example.com/platform/inventory-api:2026-06-21.1
+docker push registry.example.com/platform/inventory-api:2026-06-21.1
+docker pull registry.example.com/platform/inventory-api:2026-06-21.1
 ```
 
-Tags make images readable, and teams should treat important release tags with care. Docker documents that tags can move when publishers update them, so production teams often use clear version tags, immutable registry policies, or image digests for release tracking. A digest points to image content by hash, which gives deployment records a stronger link to the exact bytes that ran.
+The inventory team can build once in CI, run tests against that image, then push the approved image to the registry. Staging and production can pull that same image instead of rebuilding from source on each server. This keeps the deployment artifact tied to the tested artifact.
 
-The image now has a build path and a sharing path. The next practical question is how the container talks to the outside world and keeps data that should survive replacement.
+Tags need discipline because a tag is a name that can be reused by whoever can push to the repository. A team may push a new image to `latest`, and the name now points at new content. That is convenient during experiments and risky for production records.
 
-## Files, Ports, Environment, and Volumes
-<!-- section-summary: Runtime settings decide what a container can read, where it listens, which config it receives, and where durable data lives. -->
+A **digest** identifies image content by a cryptographic hash. A digest-based reference points to exact image bytes rather than a movable tag. Production systems often record digests in deployment history, and some teams deploy by digest after using tags for human-friendly release names.
 
-Every container has a few daily knobs that developers touch all the time: files, ports, environment variables, and mounts. These settings decide how the packaged process connects to the real machine around it. The `inventory-api` image can be identical in development and production, while each environment passes different database URLs, ports, and storage choices.
+The registry answers the sharing question. The next question is how a container receives settings and data at runtime, because the same image should run in development, staging, and production with different surroundings.
 
-**Files** come from the image layers and the container's writable layer. Image files give the app its packaged runtime and source code. The writable layer catches runtime changes such as temporary files, generated uploads, or package caches created after startup.
+## Files, Ports, Environment, and Mounts
+<!-- section-summary: Runtime settings connect a container to host traffic, configuration values, temporary files, and durable storage. -->
 
-**Ports** connect a container's private network namespace to the host. If the API listens on `3000` inside the container, `-p 8080:3000` lets host traffic reach it on `8080`. Docker Desktop adds an extra routing step through its Linux VM, and the developer still uses the host port from the browser.
+The image should contain the application package, and the runtime should supply environment-specific details. For `inventory-api`, development may use a local database, staging may use a shared test database, and production may use managed database credentials from a secret system. One reusable image can receive a different database URL in each environment.
 
-**Environment variables** pass runtime configuration into the process. The image can contain the application code, while each environment passes settings such as `DATABASE_URL`, `LOG_LEVEL`, and `PORT`. This keeps one image reusable across development, staging, and production.
+**Environment variables** pass configuration into the process. An environment variable is a name-value setting visible to the app at runtime, such as `PORT`, `DATABASE_URL`, or `LOG_LEVEL`. The image stays the same, while each environment passes the values it needs.
 
 ```bash
 docker run \
   --name inventory-api \
   -p 8080:3000 \
   -e PORT=3000 \
-  -e DATABASE_URL=postgres://inventory:secret@db:5432/inventory \
+  -e LOG_LEVEL=debug \
+  -e DATABASE_URL=postgres://inventory:secret@inventory-db:5432/inventory \
   inventory-api:local
 ```
 
-**Volumes** store data outside the container's writable layer. A named volume belongs to Docker and can survive after the container using it has been removed. This matters for stateful tools such as a local PostgreSQL database, because the volume protects data during routine container deletion and recreation.
+**Ports** connect container networking to the host. The service listens on port `3000` inside the container, and `-p 8080:3000` publishes it on port `8080` on the host. The left side belongs to the host, and the right side belongs to the container.
+
+That means a developer opens `http://localhost:8080` from the laptop. The application still listens on `3000` inside the container. This split lets teams run several services with their normal internal ports while choosing host ports that fit the local machine.
+
+**Files** inside the container come from the image layers plus the container's writable layer. The image layers contain the packaged app. The writable layer catches changes made after the container starts, such as temporary files, generated cache files, or logs written to local disk.
+
+The writable layer belongs to that one container. If a developer removes the container, data in that layer goes with it. That is fine for temporary files, and it is a poor place for important state such as database files, uploaded documents, or anything the team expects to survive replacement.
+
+**Volumes** store data outside an individual container's writable layer. A named volume is managed by Docker and can remain after a container is removed. For a local PostgreSQL database used by the inventory service, the database container can store its data in a named volume.
 
 ```bash
 docker volume create inventory-db-data
@@ -197,71 +234,96 @@ docker run \
   postgres:16
 ```
 
-Bind mounts solve a different development problem. A **bind mount** connects a specific host path into a container, which lets a local development container read files from the working tree as the developer edits them. Teams use bind mounts for fast local feedback, then still run clean image builds to prove the Dockerfile can package the app without depending on the live host folder.
+In that command, `inventory-db-data` is the named volume, and `/var/lib/postgresql/data` is the path inside the container where PostgreSQL stores database files. The database container can be deleted and recreated while the named volume keeps the local data.
 
-These runtime settings make containers useful day to day. They also lead to the classic comparison: how does this differ from using a virtual machine?
+**Bind mounts** connect a specific host path into a container. During development, the team may mount the working tree into a container so code changes show up immediately. That is useful for fast feedback, and the team should still run clean image builds because production runs from the image rather than a live laptop folder.
+
+```bash
+docker run \
+  --name inventory-api-dev \
+  -p 8080:3000 \
+  -v "$PWD/src:/app/src" \
+  -e PORT=3000 \
+  inventory-api:local
+```
+
+These runtime settings are the daily bridge between the packaged app and the real machine around it. Files, ports, environment variables, volumes, and bind mounts decide what the container can read, where it can listen, and which data survives replacement.
+
+With those pieces in place, Docker starts to sound like a small machine around the app. That raises a common beginner question: how is this different from a virtual machine?
 
 ## Containers and Virtual Machines
-<!-- section-summary: Containers package processes on a shared host kernel, while virtual machines package whole guest operating systems. -->
+<!-- section-summary: Containers isolate application processes on a shared host kernel, while virtual machines package complete guest operating systems. -->
 
-A **virtual machine** includes virtual hardware, a guest operating system, its own kernel, system services, and the application. A **container** shares the host kernel and runs the application as an isolated process with Docker-managed filesystem, network, and process boundaries. Both approaches isolate workloads, and they place the boundary at different layers.
+A **virtual machine** is a full guest machine. It has virtual hardware, a guest operating system, a guest kernel, system services, and then the application. A **container** runs as an isolated process on a Docker host and shares the host kernel with other containers on that host.
 
-For `inventory-api`, a VM approach might create an Ubuntu VM, install Node, copy the app, configure systemd, open a port, and keep that guest OS patched. A container approach builds an image with Node and app files, then starts a process from that image on a host already running Docker. The container usually starts faster and uses less idle memory because it skips the guest OS boot path.
+For the inventory service, a VM path might create an Ubuntu VM, install Node, copy the app, configure a service manager, open a firewall rule, and patch the guest OS over time. A Docker path builds an image with Node, dependencies, app files, and startup metadata, then starts a container from that image on a host that already runs Docker.
 
 | Topic | Container | Virtual machine |
 | --- | --- | --- |
-| Runtime boundary | Process on a Docker host | Whole guest machine |
+| Boundary | Application process with Docker-managed isolation | Complete guest machine |
 | Kernel | Shares the host kernel | Uses a guest kernel |
-| Startup feel | Starts like an application process | Boots an operating system |
-| Package content | App files, runtime, libraries, metadata | Guest OS plus app setup |
-| Common use | Services, jobs, dev environments, CI steps | Strong OS separation, legacy hosts, mixed kernels |
+| Startup path | Starts the app process | Boots an operating system and starts services |
+| Package contents | App files, runtime, libraries, metadata | Guest OS plus application setup |
+| Common use | Services, jobs, CI tasks, development environments | Strong OS separation, legacy workloads, mixed operating systems |
 
-The shared-kernel design gives containers their speed and density. It also means security still needs attention. Teams reduce risk by using trusted base images, keeping hosts patched, running processes as non-root where possible, limiting capabilities, scanning images, and giving containers only the mounts and network access they need.
+The shared-kernel design gives containers a practical advantage for many services. They often start quickly, use fewer resources than a full guest machine, and let teams run several isolated application processes on one host. Many production platforms combine both approaches: cloud VMs or Kubernetes nodes provide the host layer, and containers run the application processes on those hosts.
 
-This comparison gives a useful boundary for Docker. Docker packages and runs application processes in repeatable containers. VM platforms package entire machines. Many production systems use both: a cloud VM or node runs the Docker Engine, and Docker runs multiple containers on that node.
+This boundary also explains why container security still needs care. Teams choose trusted base images, rebuild regularly, scan images, avoid running application processes as root where possible, limit mounted host paths, and keep the Docker host patched. Docker gives useful isolation, and teams still treat the host as an important security boundary, so the final step is connecting the whole path from source code to running service.
 
 ## Putting It All Together
-<!-- section-summary: Docker connects a build artifact, runtime process, host engine, registry, and storage boundary into one deployment path. -->
+<!-- section-summary: Docker connects the source code, Dockerfile, image, container, engine, registry, and runtime settings into one repeatable service path. -->
 
-Let's replay the inventory API from the top. The team writes a Dockerfile that installs Node dependencies, copies source files, exposes port `3000`, and declares `node src/server.js` as the startup command. Docker builds that recipe into the image `inventory-api:local`.
+Let's replay `inventory-api` from the start. The team has a small service with Node code, package files, and a server that listens on port `3000`. The Dockerfile describes the runtime setup: start from a Node base image, set `/app` as the working directory, install production dependencies, copy the source, document the port, and start `node src/server.js`. The build command creates the image:
 
-The developer starts a container from the image and publishes container port `3000` to host port `8080`. The process runs with its own filesystem and network view, receives configuration through environment variables, and writes temporary files into the container writable layer. Durable database files live in a named volume instead of the application container.
-
-When the image passes tests, the pipeline tags it with a release name and pushes it to a registry. Staging and production pull the same image and create new containers from it. This gives the team a repeatable path from source code to a running service.
-
-The important pieces fit together like this:
-
-```mermaid
-flowchart TB
-    Code["Source code"] --> Build["docker build"]
-    Build --> Image["inventory-api image"]
-    Image --> LocalRun["Local container"]
-    Image --> Registry["Registry"]
-    Registry --> ProdRun["Production container"]
-    LocalRun --> Port["Host port 8080"]
-    LocalRun --> Env["Runtime environment variables"]
-    LocalRun --> Volume["Named volume for durable data"]
+```bash
+docker build -t inventory-api:local .
 ```
 
-Docker's core idea is practical: define the application package once, then run containers from that package wherever the Docker host can support it. The details matter because they all serve that path from code to image to container.
+The `.` gives Docker the build context, and `.dockerignore` keeps unnecessary or sensitive files out of that context. Docker builds the image in layers, so dependency work can be reused during normal source-code edits. A developer can start the service locally from the image:
+
+```bash
+docker run \
+  --name inventory-api \
+  -p 8080:3000 \
+  -e PORT=3000 \
+  -e DATABASE_URL=postgres://inventory:secret@inventory-db:5432/inventory \
+  inventory-api:local
+```
+
+The Docker CLI sends the request to Docker Engine. The daemon finds the image, prepares the container filesystem, sets up networking, passes the environment variables, and starts the runtime process. The developer calls `http://localhost:8080`, while the service listens on `3000` inside the container.
+
+If the service needs temporary files, it can write them into the container's writable layer. If the local database needs durable files, the database container uses a named volume. If the developer wants fast edit-refresh feedback, a bind mount can connect the host source directory into a development container. After tests pass, CI tags the image and pushes it to a registry:
+
+```bash
+docker tag inventory-api:local registry.example.com/platform/inventory-api:2026-06-21.1
+docker push registry.example.com/platform/inventory-api:2026-06-21.1
+```
+
+Staging and production pull the reviewed image from the registry and create containers from it. Deployment logs can record the tag for readability and the digest for exact content. The team now has a connected path from source code to a repeatable runtime artifact.
+
+![Docker Foundations summary infographic showing Dockerfile, Image, Container, Ports plus Env, Volumes, and Registry plus Digest as the core Docker pieces](/content-assets/articles/article-containers-orchestration-docker-what-is-docker/docker-foundations-summary.png)
+
+*The foundation is the same path every time: define the runtime, build the image, run containers, pass runtime settings, protect data, and share exact image content.*
+
+That is the core of Docker. It gives teams a way to describe an application package, build it into an image, run containers from that image, share it through a registry, and keep runtime settings separate from the artifact. The inventory service stays small in this article, and the same path scales to larger services with more dependencies and stricter release controls.
 
 ## What's Next
 
-You now have the vocabulary for Docker's main objects: images, containers, the Docker Engine, registries, ports, environment variables, volumes, and the VM comparison. The next article turns those nouns into daily commands.
+You now know the main Docker pieces: images, Dockerfiles, build context, layers, containers, Docker Engine, registries, tags, digests, ports, environment variables, writable layers, volumes, bind mounts, and the virtual machine comparison. Those pieces are the vocabulary you need before the module moves into daily Docker commands.
 
-We will follow the same `inventory-api` through the everyday Docker workflow: build, run, inspect, stop, remove, rebuild, replace, debug, and clean up local state.
+The next article, Docker Workflow, turns those pieces into daily practice. It follows the same `inventory-api` service through building, running, listing, inspecting, logging, stopping, removing, rebuilding, and cleaning up Docker objects.
 
 ---
 
 **References**
 
-- [Docker overview](https://docs.docker.com/get-started/docker-overview/) - Official overview of Docker's purpose, architecture, images, containers, registries, Docker Desktop, and the client-daemon model.
-- [Docker Engine](https://docs.docker.com/engine/) - Describes the Docker CLI, Docker APIs, Docker daemon, and Docker objects such as images, containers, networks, and volumes.
-- [Running containers](https://docs.docker.com/engine/containers/run/) - Explains containers as isolated processes with their own filesystem, networking, and process tree.
-- [Docker Desktop networking](https://docs.docker.com/desktop/features/networking/) - Documents how Docker Desktop runs the Engine inside a lightweight Linux VM and routes ports and file operations.
-- [Storage drivers](https://docs.docker.com/engine/storage/drivers/) - Explains image layers, writable container layers, and copy-on-write behavior.
-- [Volumes](https://docs.docker.com/engine/storage/volumes/) - Defines Docker-managed persistent data stores and their lifecycle outside an individual container.
-- [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) - Documents host-path mounts, syntax, constraints, and Docker Desktop behavior.
-- [Build context](https://docs.docker.com/build/concepts/context/) - Explains which files the builder can access during image builds.
-- [Docker Hub quickstart](https://docs.docker.com/docker-hub/quickstart/) - Introduces Docker Hub as a registry for finding, building on, and sharing images.
-- [Building best practices](https://docs.docker.com/build/building/best-practices/) - Covers build cache, base image tag behavior, and image build guidance.
+- [What is a container?](https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/) - Defines containers as isolated application processes and compares containers with virtual machines.
+- [What is an image?](https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-an-image/) - Explains images as standardized packages with files, binaries, libraries, configuration, immutability, and layers.
+- [What is a registry?](https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-registry/) - Introduces registries, repositories, tags, pushing images, and pulling images.
+- [Docker Engine](https://docs.docker.com/engine/) - Describes Docker Engine, the Docker daemon, APIs, CLI, and Docker objects such as images, containers, networks, and volumes.
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Documents Dockerfile instructions such as `FROM`, `WORKDIR`, `COPY`, `RUN`, `EXPOSE`, and `CMD`.
+- [Build context](https://docs.docker.com/build/concepts/context/) - Explains the files available to the builder during image builds and why context size matters.
+- [Publishing and exposing ports](https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/) - Shows how host ports map to container ports for local access.
+- [Persisting container data](https://docs.docker.com/get-started/docker-concepts/running-containers/persisting-container-data/) - Explains volumes and why durable state belongs outside a container writable layer.
+- [Sharing local files with containers](https://docs.docker.com/get-started/docker-concepts/running-containers/sharing-local-files/) - Covers bind mounts for connecting host files into containers during development.
+- [Storage drivers](https://docs.docker.com/engine/storage/drivers/) - Explains image layers, writable container layers, and copy-on-write storage behavior.

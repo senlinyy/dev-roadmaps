@@ -1,5 +1,6 @@
 ---
 title: "Security Assurance"
-description: "Track security postures as auditable evidence, manage active patching schedules, and codify risk exception scopes."
+description: "Turn delivery records, scanner output, access reviews, patch decisions, and exceptions into usable security evidence."
+tags: ["compliance", "evidence", "patching", "risk"]
 order: 1
 ---

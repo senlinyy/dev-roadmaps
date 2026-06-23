@@ -69,6 +69,10 @@ Memory deserves a careful note. Memory requests help scheduling, and memory limi
 
 Resource requests also affect cost and scheduling. If the CPU request is too high, the scheduler may leave node space unused because it reserves more CPU than the container normally needs. If the request is too low, HPA percentages can look high too early and node pressure can surprise you during spikes.
 
+![Requests set the baseline infographic showing CPU request, Pod usage, HPA target, utilization, scheduler fit, and the scale decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/requests-set-baseline.png)
+
+*The baseline visual shows why CPU-based autoscaling starts with a request value. HPA needs a denominator before it can turn live usage into a scale decision.*
+
 ## Reading Metrics From Pods and Nodes
 <!-- section-summary: kubectl top gives a quick live view, while dashboards and Prometheus provide history and application context. -->
 
@@ -156,6 +160,10 @@ Conditions:
 ```
 
 Those condition names are worth reading during incidents. `ScalingActive=False` often means HPA cannot calculate from the metric. `ScalingLimited=True` often means the recommended replica count hit `minReplicas` or `maxReplicas`.
+
+![Autoscaling control loop showing metrics source, Metrics API, HPA controller, Deployment replicas, Pods, and stabilization window](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/autoscaling-control-loop.png)
+
+*HPA is a loop, not a one-time command. The image connects metrics collection, controller decisions, Deployment replica changes, and the stabilization window that reduces churn.*
 
 ## Choose Metrics That Match the Bottleneck
 <!-- section-summary: The scaling metric should measure the part of the request path that runs out of capacity first. -->
@@ -339,6 +347,10 @@ Autoscaling review is capacity design in YAML form. A reviewer should know which
 | Can dependencies absorb the added work? | Database connections, queue throughput, and upstream rate limits were reviewed |
 | Are min and max replicas intentional? | The floor protects availability and the ceiling protects dependencies and cost |
 | Does scale-down fit traffic shape? | Warm capacity stays long enough for normal bursts |
+
+![Autoscaling guardrails checklist with min replicas, max replicas, scale up policy, scale down policy, dependency capacity, and saturation alerts](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/autoscaling-guardrails.png)
+
+*The guardrails board shows the safety rails around the scaling loop: replica floors and ceilings, behavior policies, dependency budgets, and alerts when demand reaches the ceiling.*
 
 A useful HPA evidence note for `devpolaris-orders-api` might look like this. It proves the metric, the user symptom, and the dependency budget together:
 

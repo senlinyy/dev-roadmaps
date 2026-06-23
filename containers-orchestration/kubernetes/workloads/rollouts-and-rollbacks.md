@@ -75,6 +75,10 @@ spec:
 
 This manifest introduces the pieces that matter for rollout safety: **replicas** tell Kubernetes how many Pods should exist, **RollingUpdate** tells it to replace them gradually, **progressDeadlineSeconds** tells it how long progress can stall before the Deployment reports a failure condition, and the **readiness probe** tells it whether a new Pod should receive traffic.
 
+![Rollout replacement flow infographic showing a Deployment creating new v2 Pods, waiting for readiness, removing old v1 Pods, using maxSurge one, and sending traffic only to ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollout-replacement-flow.png)
+
+_This infographic shows that a rollout replaces Pods, not running containers in place, and that readiness decides when a new Pod can join traffic._
+
 ## Revisions and the Pod Template Hash
 <!-- section-summary: Each changed Pod template gets a Deployment revision, and the Deployment controller uses ReplicaSets plus a pod-template-hash label to keep versions apart. -->
 
@@ -296,6 +300,10 @@ Other stuck rollout shapes have different first fixes:
 
 This workflow gives you the evidence needed for the rollback decision. You know whether old capacity remains healthy, whether the new template can be repaired quickly, and whether the issue affects user traffic.
 
+![Stuck rollout debug path infographic showing ProgressDeadlineExceeded, rollout status, Deployment, ReplicaSet, Pod events, logs, patch fix, and rollback](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/stuck-rollout-debug-path.png)
+
+_This infographic turns a stuck rollout into an evidence ladder, so the team can decide whether to patch the template forward or roll back from a known cause._
+
 ## History, Undo, and Restart
 <!-- section-summary: kubectl rollout history, undo, and restart let operators inspect revisions, return to an earlier template, or refresh Pods without changing the image. -->
 
@@ -425,6 +433,10 @@ The third caveat is image identity. A mutable tag like `latest` or `prod` can po
 The fourth caveat is external side effects. If the bad release published duplicate order events, charged a payment provider, or changed data in another service, a Deployment rollback will only change future Pods. The incident may still need data repair, message replay handling, or a compensating workflow.
 
 So the production habit is simple: use Kubernetes rollback to recover the workload template quickly, then keep investigating the full release. The rollback gets healthy Pods back into service. The incident review handles the database, configuration, artifact, and business effects.
+
+![Rollback boundary map infographic showing rollback restores the Pod template, image, and env, while database, ConfigMap, image tag, and external effects need separate recovery](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollback-boundary-map.png)
+
+_This infographic draws the rollback boundary clearly: Kubernetes can restore an earlier Pod template, while data changes, mutable configuration, artifacts, and business effects need their own recovery plan._
 
 ## What's Next
 <!-- section-summary: The next article explains why resource requests and limits affect scheduling, rollout speed, and failure behavior. -->

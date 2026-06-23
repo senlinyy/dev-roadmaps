@@ -30,6 +30,10 @@ That is useful for shipping the app, and it also leaves too many paths open. A d
 
 **NetworkPolicies** give you that narrowing step. A NetworkPolicy is a Kubernetes object that selects Pods and lists the traffic those Pods should allow. It can control inbound traffic, called **ingress**, and outbound traffic, called **egress**. In plain terms, it lets you say, "`orders-api` may receive traffic from `storefront` on port 8080, and it may send traffic only to DNS, `postgres`, and the payment service."
 
+![NetworkPolicy boundary map showing orders-api selected by policy, allowed ingress from storefront, allowed egress to CoreDNS, postgres, and payments-api, and denied debug or internet traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-boundary-map.png)
+
+*NetworkPolicy turns an open cluster network into named allowed paths around selected Pods.*
+
 This article builds that idea in the same order a team usually meets it in production. First we look at what the policy controls. Then we look at the default open state, because that explains why the first policy can surprise a team. After that we write ingress and egress policies, handle namespace labels, talk through the limits, and end with a safe rollout workflow.
 
 ## What A NetworkPolicy Controls
@@ -285,6 +289,10 @@ from:
 
 There are two list items now. The first allows all Pods from the `web` namespace. The second allows `storefront` Pods from the policy's own namespace, because a `podSelector` without a `namespaceSelector` is scoped to the policy namespace. That may be correct for some designs, but it is a wider rule than "storefront in web."
 
+![NetworkPolicy selector shape comparison showing one combined peer item allowing only storefront in web and split peer items allowing all Pods in web plus storefront in the policy namespace](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-selector-shape.png)
+
+*In NetworkPolicy, two selectors inside one peer item narrow the source. Two separate peer items widen the allowed set.*
+
 The same shape rule applies to ports. Multiple ports inside one rule mean any listed port can match. A rule with `from` and `ports` requires both a matching source and a matching port. An empty rule item like `ingress: [{}]` or `egress: [{}]` allows everything in that direction for the selected Pods, so teams should use that only when they truly want an explicit allow-all policy.
 
 In production, labels deserve the same review as the policy file. If a team can add `app.kubernetes.io/name: storefront` to any Pod in any namespace, and the policy trusts only that Pod label without a namespace boundary, the policy is too wide. Namespace ownership, admission policy, CI checks, and clear label conventions all support NetworkPolicy because the policy engine trusts the labels it receives.
@@ -458,6 +466,10 @@ The first object selects `orders-api` and isolates both directions. The second o
 This is the working pattern most teams use. The team selects one workload with stable labels, turns on default deny for the direction it wants to control, and adds the required sources, destinations, and ports as explicit allow rules. The team proves one allowed path and one denied path before moving on. After that evidence is in place, the same sequence can be repeated for the next workload.
 
 NetworkPolicy is one security layer in Kubernetes. It is also one of the first layers that turns a flat cluster network into intentional application traffic, because it makes each workload's allowed paths visible in YAML.
+
+![NetworkPolicy rollout summary showing observe flows, verify labels, default deny, add one allow rule, test allowed and denied paths, rollback evidence, and small changes](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-rollout-summary.png)
+
+*A safe rollout treats policy like an application traffic change: observe first, add one allow path at a time, and prove both the allowed and denied cases.*
 
 ## What's Next
 

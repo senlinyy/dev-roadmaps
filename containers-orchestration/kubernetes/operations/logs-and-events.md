@@ -37,6 +37,10 @@ These two stories answer different questions. Keep them side by side until they 
 | **Previous logs** | What did the last crashed container say? | Startup failed before the HTTP server was ready |
 | **Events** | What did Kubernetes do or refuse to do? | Kubelet could not mount a missing Secret |
 
+![Incident evidence map connecting object state, current logs, previous logs, events, and a timeline for the next safe debugging check](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/incident-evidence-map.png)
+
+*The evidence map keeps Kubernetes state, application output, and event history side by side so the incident timeline comes from several matching signals, not one loud log line.*
+
 The order matters. If you jump straight into random logs, you may read a healthy replica and miss the failing one. If you read only events, you may know Kubernetes restarted a container but miss the application error that caused the exit.
 
 ## Start With Object State
@@ -131,6 +135,10 @@ $ kubectl -n orders logs pod/devpolaris-orders-api-7c96df7d7c-2vd6k -c api --pre
 ```
 
 Those lines connect the application symptom to the platform action. The app reported liveness failure, and kubelet later restarted it. That is very different from an image pull failure or a missing Secret.
+
+![CrashLoop evidence diagram comparing previous run logs, current run logs, restart count, events, and root cause clues](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/crashloop-evidence.png)
+
+*CrashLoopBackOff investigations often need both the current container and the previous terminated one. The image highlights why `--previous` can hold the first useful error.*
 
 ## Events: What Kubernetes Decided
 <!-- section-summary: Events explain Kubernetes decisions such as scheduling, image pulling, probe failure, Secret errors, and backoff behavior. -->
@@ -304,6 +312,10 @@ For `devpolaris-orders-api`, a good logs-and-events routine starts narrow and ge
 | Read previous logs | `kubectl -n orders logs pod/<pod> -c api --previous --tail=80` | Shows the last crashed process |
 | Sort events | `kubectl -n orders get events --sort-by=.lastTimestamp` | Shows recent platform decisions |
 | Verify recovery | `kubectl -n orders rollout status deployment/devpolaris-orders-api` | Confirms the controller reached the target state |
+
+![Logs and events checklist with describe first, current logs, previous logs, time-sorted events, failure naming, and saved timeline](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/logs-events-checklist.png)
+
+*The checklist shows the smallest useful loop for incidents: scope the object, read both log streams, sort events, name the failure, and keep the timeline for review.*
 
 The main habit is to keep the stories separate until they agree. Logs tell you what the application saw. Events tell you what Kubernetes did. Object state tells you where to look. A clear incident note puts those pieces next to each other so the fix has evidence behind it.
 

@@ -42,6 +42,10 @@ The DaemonSet controller handles this coverage loop. It evaluates nodes, creates
 
 This is why DaemonSets show up in platform and cluster operations. Logging agents, node exporters, security sensors, storage daemons, CNI plugin components, and local caching helpers all need node-level placement. The important question changes from "how many replicas do we want?" to "which nodes must have this Pod?"
 
+![DaemonSet node coverage infographic showing a DaemonSet placing one log agent Pod on each eligible node and automatically adding an agent when a new app node appears](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-node-coverage.png)
+
+_This infographic shows the DaemonSet coverage loop: the desired count follows eligible nodes, not an application replica number._
+
 ## A Log Agent for Orders Nodes
 <!-- section-summary: A DaemonSet manifest combines a normal Pod template with selector rules and node-local mounts. -->
 
@@ -192,6 +196,10 @@ spec:
 DaemonSet Pods receive several built-in tolerations for node conditions such as not-ready, unreachable, pressure, and unschedulable states. That behavior lets important node-level agents start early and remain present during some node transitions. You can still add your own tolerations for dedicated pools, GPU nodes, control-plane nodes, or platform-owned infrastructure nodes.
 
 This is an area where production teams move carefully. A toleration lets a Pod pass a taint, and node selection chooses the target pool. Pair tolerations with `nodeSelector` or node affinity when the DaemonSet should cover a specific pool. That combination says both "these nodes are allowed" and "these are the nodes I want."
+
+![DaemonSet eligibility filters infographic showing app, gpu, and control nodes passing or skipping nodeSelector and toleration filters before an agent Pod is placed](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-eligibility-filters.png)
+
+_This infographic separates the two placement questions: node selection chooses the target pool, and tolerations let trusted DaemonSet Pods pass intentional taints._
 
 ## Inspecting DaemonSet Coverage
 <!-- section-summary: Coverage checks compare desired, ready, and actual Pods against the node list that should be eligible. -->
@@ -352,6 +360,10 @@ Use a DaemonSet when the node itself is part of the job. Logs, metrics, security
 | DaemonSet | Run one Pod on each eligible node | Orders log agent on app nodes |
 
 The production skill is knowing what to inspect. For DaemonSets, inspect nodes and Pods together. Check labels, selectors, taints, tolerations, resource pressure, rollout revisions, and the downstream system the agent supports. A ready DaemonSet Pod is a good sign, and the real success check is whether the node-local job is actually happening.
+
+![DaemonSet debug runbook infographic showing symptom, coverage, node state, agent logs, downstream logs, and rollback as the troubleshooting path](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-debug-runbook.png)
+
+_This infographic summarizes the DaemonSet runbook: start from the missing node-local symptom, prove coverage, inspect node state and agent logs, then verify the downstream system._
 
 ---
 

@@ -32,14 +32,9 @@ The platform networking team owns the public entry point. They care about the lo
 
 The request path looks like this:
 
-```mermaid
-flowchart LR
-    User[User in browser] --> Host[api.devpolaris.local]
-    Host --> Gateway[platform-networking/public-api Gateway]
-    Gateway --> Route[orders/devpolaris-orders-api HTTPRoute]
-    Route --> Service[orders/devpolaris-orders-api Service]
-    Service --> Pods[ready orders API Pods]
-```
+![Gateway API ownership path showing api.devpolaris.local/orders moving through GatewayClass, Gateway listener, HTTPRoute, orders Service, and ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-ownership-path.png)
+
+*Gateway API splits one request path into platform-owned listener work and application-owned route work.*
 
 That picture gives us the story for the rest of the article. We will keep following one request from the public hostname to the Pods, and every section will name which team owns the next part of the path.
 
@@ -333,6 +328,10 @@ Route status appears under `parents` because one Route can attach to more than o
 
 For a pull request, these conditions are stronger than a screenshot of YAML. They show what the controller actually accepted after it reconciled the objects. A reviewer can see whether the platform side and application side agree about the route.
 
+![Gateway API status board showing Gateway Accepted and Programmed conditions, HTTPRoute Accepted and ResolvedRefs conditions, and failure reasons like NotAllowedByListeners and BackendNotFound](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-status-conditions.png)
+
+*Gateway API status conditions point to the first failed relationship, which keeps debugging tied to the object that actually needs attention.*
+
 The same conditions also guide debugging when the request fails.
 
 ## Debugging a Broken Route
@@ -480,6 +479,10 @@ gatewayApiChangeRecord:
   platformOwns: listener, hostname, TLS Secret, allowedRoutes
   applicationOwns: HTTPRoute, Service, Pods, canary weights
 ```
+
+![Gateway API pull request evidence board with Gateway programmed, Route attached, references resolved, Service endpoints, HTTP 200, stable 90 percent, canary 10 percent, and rollback to stable 100 percent](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-rollout-evidence-summary.png)
+
+*A Gateway API change review should preserve both ownership evidence and one real request through the published route.*
 
 The platform commands should show the class, Gateway, address, listener, certificate Secret, and certificate readiness when cert-manager manages TLS:
 

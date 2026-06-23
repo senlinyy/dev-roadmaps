@@ -1,7 +1,7 @@
 ---
 title: "Data Sources: Querying Infrastructure"
 description: "Reference and consume pre-existing infrastructure safely using read-only provider queries."
-overview: "Explore how Terraform interfaces with cloud provider APIs to query networks, security configurations, and other pre-existing infrastructure components without taking lifecycle ownership."
+overview: "Learn how Terraform data sources read existing infrastructure, use filters, handle plan and apply timing, and let one team connect to resources owned by another team without taking ownership."
 tags: ["terraform", "data-sources", "querying", "state"]
 order: 3
 id: article-iac-terraform-config-data-sources
@@ -14,33 +14,35 @@ id: article-iac-terraform-config-data-sources
 3. [Systems Engineering Mechanics: Read-Only API Interactions](#systems-engineering-mechanics-read-only-api-interactions)
 4. [Dynamic Filtering and Search Constraints](#dynamic-filtering-and-search-constraints)
 5. [The Lifecycle Gap: Handling Unknown and Computed Attributes](#the-lifecycle-gap-handling-unknown-and-computed-attributes)
-6. [Putting It All Together: The Analytics Processor Deployment](#putting-it-all-together-the-analytics-processor-deployment)
+6. [Putting It All Together: The Pipeline Worker Deployment](#putting-it-all-together-the-pipeline-worker-deployment)
 7. [What's Next](#whats-next)
 
 ## The Reader's Problem: Connecting to Shared Infrastructure
+<!-- section-summary: Data sources let one Terraform configuration read shared infrastructure owned by another team. -->
 
-A Terraform data source is a read-only lookup that lets configuration reference existing infrastructure without taking ownership of that infrastructure's lifecycle.
+A **Terraform data source** is a read-only lookup. Terraform asks a provider for information about something that already exists, then your configuration uses the returned attributes.
 
-A data source is a read-only query that allows Terraform to retrieve information from external APIs or existing infrastructure that is not managed by the current configuration. To understand why this capability is essential, consider a large-scale analytics data processing pipeline. This pipeline consists of cluster compute nodes that consume raw telemetry streams, aggregate system metrics, and write summaries to a centralized data warehouse. This processor cannot sit in isolation. It requires physical network attachment to route traffic to relational databases, in-memory cache clusters, and message queues.
+A small production story makes this easier to see. A data platform team is building a batch pipeline. The pipeline workers need to run inside the company's production VPC, land in private subnets, and talk to a shared warehouse database. The team needs three facts before it can create the workers: the VPC ID, the private subnet IDs, and the security group that the database already trusts.
 
-However, the network infrastructure is not owned by the analytics team. A centralized core platform engineering team builds, maintains, and secures the primary virtual networks, the subnet partitions, the internet gateways, and the corporate security groups using a separate deployment pipeline or a completely different orchestration platform.
+The platform networking team owns those VPCs, subnets, route tables, NAT gateways, and shared security groups in a separate Terraform project. The data team only needs to attach workers to that network. The platform project keeps lifecycle ownership for updates, replacement, drift handling, and deletion.
 
-If we were to declare these network components inside our own Terraform configuration using standard resource blocks, Terraform would normally try to create new subnets and virtual networks. A resource block does not automatically adopt an existing cloud object just because the arguments look similar. Terraform manages existing infrastructure only after that object is imported into state or already tracked by the current configuration. That boundary is important: the analytics team should not create duplicate shared networks, and it should not import the platform team's network into its own state unless both teams intentionally agree to transfer lifecycle responsibility.
+If the data team writes `resource "aws_vpc" "prod"`, Terraform treats that as a VPC this project creates and manages. A resource block creates or manages objects tracked by the current state. It gains control of an existing cloud object through an import or an existing state entry. Import can be the right move during a planned ownership transfer, but it is the wrong move for a team that only needs to attach new workers to a shared network.
 
-This is the exact problem that data sources solve. They establish a clean read-only boundary. They tell Terraform's execution engine to query the cloud provider's API to fetch the current configuration of these existing resources, make their values available inside our memory space, but never touch their lifecycle.
+This is where data sources fit. They let the data team ask AWS, "Which production VPC does the platform team manage?" and then use the answer while creating only the pipeline resources.
 
 ```hcl
-data "aws_vpc" "shared_network" {
-  filter {
-    name   = "tag:Team"
-    values = ["CorePlatform"]
+data "aws_vpc" "platform_prod" {
+  tags = {
+    Environment = "prod"
+    Owner       = "platform-networking"
+    Purpose     = "shared-platform"
   }
 }
 
-data "aws_subnets" "private_subnets" {
+data "aws_subnets" "platform_private" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.shared_network.id]
+    values = [data.aws_vpc.platform_prod.id]
   }
 
   filter {
@@ -49,45 +51,77 @@ data "aws_subnets" "private_subnets" {
   }
 }
 
-data "aws_security_group" "database_access" {
-  vpc_id = data.aws_vpc.shared_network.id
+data "aws_security_group" "warehouse_clients" {
+  vpc_id = data.aws_vpc.platform_prod.id
 
   filter {
     name   = "group-name"
-    values = ["*-rds-shared-access"]
+    values = ["prod-warehouse-clients"]
   }
 }
 ```
 
-The HCL block configuration above demonstrates how this dynamic query pattern functions. By defining these queries, we instruct our local Terraform workspace to discover the existing networking topology dynamically. The returned attributes can then be referenced directly by our analytics worker resources, bridging the two separate infrastructure environments without duplicating ownership.
+The first block returns one existing VPC. The second returns the private subnets inside that VPC. The third returns the security group that the warehouse team expects pipeline clients to use. The data team's configuration can now create workers in the right place without copying VPC IDs into variables and without managing the platform team's network.
 
 ## Anatomy of a Data Source Block
+<!-- section-summary: A data source block has a provider type, a local name, search arguments, and returned attributes. -->
 
-A data source block is the Terraform syntax for one read-only lookup. It names the kind of thing to find, gives the lookup a local name, and provides enough search criteria for the provider to return the right object. Example: `data "aws_vpc" "shared_network"` asks AWS for an existing VPC, while `data.aws_vpc.shared_network.id` lets later resources use the VPC ID without creating or owning that VPC.
+A data source block is the Terraform syntax for one read-only lookup. It names the kind of thing to find, gives the lookup a local name, and provides enough search criteria for the provider to return the right object. Example: `data "aws_vpc" "platform_prod"` asks AWS for an existing VPC, while `data.aws_vpc.platform_prod.id` lets later resources use the VPC ID without creating or owning that VPC.
 
-Unlike managed resource declarations that begin with the `resource` keyword, a data query begins with the `data` keyword. The block configuration requires exactly three components to establish its identity: the `data` keyword, the specific data source type provided by the cloud provider, and the local identifier that names the block inside your configuration file. Together, the type and local identifier form a unique address in Terraform's evaluation model.
+The block has four pieces that matter in daily Terraform work.
 
-The address format is constructed as data followed by the type and the local identifier. In our example, the first query block is addressed as data.aws_vpc.shared_network. This prefix is the critical mechanism that tells Terraform's parser that this block represents a query rather than a target for resource creation. When other resources reference this address, they read directly from the map of attributes returned by the cloud provider API.
+```hcl
+data "aws_vpc" "platform_prod" {
+  tags = {
+    Environment = "prod"
+    Owner       = "platform-networking"
+    Purpose     = "shared-platform"
+  }
+}
 
-Inside the block, the arguments represent the filter constraints or search criteria. These constraints can be highly specific or broad depending on the provider implementation. If the exact physical identifier of a resource is already known, we can supply it directly. But because physical IDs are generated dynamically by cloud hypervisors and change when resources are rebuilt, we favor dynamic search attributes like metadata tags or naming conventions.
+resource "aws_security_group" "pipeline_workers" {
+  name        = "prod-pipeline-workers"
+  description = "Security group for data pipeline workers"
+  vpc_id      = data.aws_vpc.platform_prod.id
+}
+```
 
-Every data block returns a comprehensive map of attributes once evaluated. For example, data.aws_vpc.shared_network returns the core virtual network identifier, the classless inter-domain routing block, the associated route table identifiers, and the enablement status of local domain name resolution. These attributes populate our execution state, allowing subsequent resource blocks to map their configurations directly to the topology of the cloud environment.
+| Piece | What it means | In the example |
+|---|---|---|
+| `data` | This block reads an existing object | Terraform queries AWS instead of creating a VPC |
+| `aws_vpc` | The provider-defined data source type | The AWS provider knows how to look up VPCs |
+| `platform_prod` | The local name inside this module | Other blocks reference `data.aws_vpc.platform_prod` |
+| `tags` | The provider-specific search arguments | AWS should find the VPC with these exact tags |
+
+The full address is `data.aws_vpc.platform_prod`. After Terraform reads the VPC, attributes hang off that address. The security group uses `data.aws_vpc.platform_prod.id` because AWS security groups need a VPC ID.
+
+Provider documentation decides which arguments and attributes exist. For `aws_vpc`, a team can search by `id`, `cidr_block`, `default`, `tags`, or lower-level `filter` blocks. For `aws_ami`, the useful arguments look different because the real object is different. That is why the Terraform language defines the shape of the `data` block, while each provider defines the lookup details.
+
+In real projects, teams usually prefer stable labels over generated IDs. The value `vpc-0abcd1234efgh5678` works, but it changes when the platform team rebuilds the VPC. Tags like `Environment = prod` and `Owner = platform-networking` can stay stable across a rebuild. The data source gives Terraform the current generated ID at plan time.
+
+Once evaluated, the data source returns attributes. A VPC lookup can return the VPC ID, CIDR block, ARN, DNS settings, tags, and other provider-defined fields. Most configurations use only a few of those values. The rest still matter because Terraform stores the read result in state for the run.
 
 ## Systems Engineering Mechanics: Read-Only API Interactions
+<!-- section-summary: Terraform Core asks the provider to read the data source, and the provider calls the cloud API. -->
 
 A data source read is a provider API request that returns information without creating or changing the object being read. Terraform Core asks the provider plugin to perform the lookup, and the provider turns the HCL filters into the cloud service's read API call.
 
-Example: `data "aws_vpc"` becomes an AWS `DescribeVpcs` request. The result gives Terraform a VPC ID it can pass into later resources, while the VPC itself stays owned by the team or configuration that created it.
+Example: `data "aws_vpc" "platform_prod"` turns into an AWS `DescribeVpcs` request. The result gives Terraform a VPC ID it can pass into later resources, while the VPC itself stays owned by the platform networking team.
 
 ![A Terraform data source reads existing infrastructure through a provider query and returns values for the plan.](/content-assets/articles/article-iac-terraform-config-data-sources/data-source-lookup-path.png)
 
 *Data sources read existing infrastructure so new resources can connect to it without managing it.*
 
-Before any query is transmitted, the provider plugin initiates its authentication resolver. For the AWS provider, that resolver can search in-memory environment variables, local configuration files, container credential endpoints, and EC2 instance metadata credentials. The EC2 metadata address `169.254.169.254` is link-local, not loopback: it is reachable only from the local instance network path, not from the public internet. Once valid credentials are resolved, the client calculates the AWS Signature Version 4 HMAC hash. This cryptographic signature binds the request headers, the HTTP method, the query URI, and the hashed payload to a timestamped key, preventing replay attacks and verifying the caller's identity before the cloud API evaluates the query filters.
+During `terraform plan`, the output often shows the read as a small step:
 
-The transport client establishes a Transport Layer Security handshake with the service endpoint and serializes the HCL filters into an HTTP request payload. For example, a query for a VPC translates directly to a DescribeVpcs API call, while a query for subnet groups maps to a DescribeSubnets API call. These network calls represent read-only operations that do not modify cloud state. The cloud provider's API layer validates the authentication signatures, parses the query parameters, searches the provider's resource inventory, and returns a structured JSON response.
+```console
+data.aws_vpc.platform_prod: Reading...
+data.aws_vpc.platform_prod: Read complete after 0s [id=vpc-0abcd1234efgh5678]
+```
 
-When the HTTP client receives the response payload, the plugin initiates its schema mapping layer. The engine decodes the raw JSON bytes into an intermediate representation based on the cty library, which enforces strong type checking against the schema defined by the provider. Every parsed attribute, such as the VPC identifier string, the CIDR block configuration, and the map of user tags, is validated for type safety. If the response contains unexpected null values or type mismatches, the mapper generates a validation error, halting execution. Once verified, these attributes are written directly to the active state database file under the resources collection. Unlike managed resources, data source resources are serialized with the mode key set to `data`, indicating to the engine that the lifecycle of the physical resource is managed independently.
+That tiny line hides a useful chain. Terraform loads the AWS provider, the provider resolves credentials from the normal AWS credential chain, and the provider sends a read request to the AWS API. AWS checks the caller's IAM permissions before returning anything. If the caller can describe the VPC, Terraform receives the response. If the caller cannot, the plan fails with an access error.
+
+The provider then maps the API response into Terraform attributes. Terraform expects those attributes to match the provider schema. A VPC ID is a string. Tags are a map of strings. Subnet IDs are a list or set of strings, depending on the data source. This type checking is the reason `data.aws_vpc.platform_prod.id` can flow into `vpc_id` on a security group without Terraform treating it like an unstructured JSON blob.
 
 To understand how these mappings align, we can examine the relationship between HCL types, the underlying cloud API operations, and the key response fields that populate our configuration workspace:
 
@@ -98,21 +132,83 @@ To understand how these mappings align, we can examine the relationship between 
 | aws_security_group | DescribeSecurityGroups | POST | SecurityGroups.GroupId |
 | aws_ami | DescribeImages | POST | Images.ImageId |
 
-This mapping pipeline ensures that the physical configuration of the cloud is reflected in Terraform's state for the current run. Once the data is successfully mapped, Terraform serializes the retrieved attributes into state like other state entries. On later plans with refresh enabled, Terraform asks the provider to read the data source again. If refresh is disabled or skipped, Terraform may reuse values already present in state, so the result can be stale until a normal refresh occurs.
+Terraform serializes the read result into state with `mode` set to `data`. During a normal refreshed plan, Terraform asks the provider to read the data source again and update the state entry for this run. If refresh is skipped, Terraform may reuse the value already in state, so a lookup result can lag behind the real cloud object until the next refreshed run.
+
+This is also why secret data sources need care. A data source that reads a password, token, or private key can place that returned value in state unless the provider and Terraform mark it carefully as sensitive. For shared network IDs, that state entry is usually fine. For raw secrets, state access is part of the security design.
 
 ## Dynamic Filtering and Search Constraints
+<!-- section-summary: Filters turn team naming and tagging rules into precise provider searches. -->
 
-A filter is a search rule for a data source. It tells the provider which existing objects are acceptable matches, usually by tag, name, parent resource, region, or another attribute the cloud API can search. Example: instead of hardcoding `vpc-0abcd1234efgh5678`, a configuration can search for a VPC where `Team = CorePlatform` and then use whichever current VPC ID the platform team owns.
+A filter is a search rule for a data source. It tells the provider which existing objects are acceptable matches, usually by tag, name, parent resource, region, or another attribute the cloud API can search. Example: instead of hardcoding `vpc-0abcd1234efgh5678`, a configuration can search for a VPC where `Owner = platform-networking` and `Purpose = shared-platform`, then use the current VPC ID the platform team owns.
 
 Dynamic filtering keeps configuration tied to stable labels instead of fragile generated identifiers. Cloud providers assign physical IDs when resources are created, and those IDs can change when a shared network is rebuilt. Tags and naming conventions are usually the durable contract between teams.
 
-When we define a filter block inside a data source, the provider plugin compiles these blocks into the filter arrays of the API request. For instance, in our shared network scenario, we search for a VPC tagged with Team and CorePlatform. This search becomes an API query. The cloud service looks up resources in its metadata database, excludes any networks that do not match the tag intersection, and returns only the matching structures.
+Here is a filter that is too broad for a real production account:
 
-This design introduces a crucial resiliency boundary. If the core platform team performs a disaster recovery drill, destroys the existing VPC, and recreates it from template scripts, the physical identifier changes from its old value to a new randomized string. If our configuration hardcoded the old physical ID, our entire analytics deployment pipeline would break. By utilizing dynamic filters, our configuration remains unchanged. The next planning run automatically queries the new physical ID because the logical tag remains identical.
+```hcl
+data "aws_vpc" "prod" {
+  filter {
+    name   = "tag:Environment"
+    values = ["prod"]
+  }
+}
+```
 
-In large enterprise deployments with hundreds of developer workspaces, running plans concurrently can lead to API request exhaustion. AWS enforces strict request quotas on read actions using a Token Bucket rate-limiting algorithm. Frequent calls to DescribeVpcs or DescribeSubnets can deplete these tokens, causing the cloud API to reject queries with a RequestLimitExceeded error. To mitigate this throttling, the provider client implements a backoff mechanism. It intercepts HTTP status 400 errors, calculates a delay using an exponential backoff algorithm with randomized jitter, and retries the API request. This prevents the system from overloading the cloud endpoints while ensuring that plan operations eventually succeed under high-frequency conditions.
+Many accounts have more than one production VPC: one for shared services, one for data platforms, one for customer-facing apps, and one for experiments. A singular data source like `aws_vpc` needs one match, so a broad filter can fail when AWS returns several VPCs.
 
-However, dynamic filtering introduces strict operational constraints. Singular data sources, such as `aws_vpc`, `aws_security_group`, and `aws_subnet`, are expected to resolve to exactly one object. If the search criteria are too broad and return multiple resources, or if they are too narrow and return zero resources, the provider plugin raises a validation exception and aborts the execution run. Plural data sources, such as `aws_subnets`, intentionally return a collection. The table below describes the singular lookup case:
+A production version uses the tags that both teams agree on:
+
+```hcl
+data "aws_vpc" "platform_prod" {
+  tags = {
+    Environment = "prod"
+    Owner       = "platform-networking"
+    Purpose     = "shared-platform"
+  }
+}
+```
+
+For subnets, the data team usually wants a collection. The pipeline can run workers in every private subnet reserved for that workload:
+
+```hcl
+data "aws_subnets" "pipeline_private" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.platform_prod.id]
+  }
+
+  filter {
+    name   = "tag:Tier"
+    values = ["Private"]
+  }
+
+  filter {
+    name   = "tag:Workload"
+    values = ["DataPipeline"]
+  }
+}
+
+locals {
+  pipeline_subnet_ids = sort(data.aws_subnets.pipeline_private.ids)
+}
+```
+
+That example uses `aws_subnets`, the plural data source, because an autoscaling group or ECS service can accept several subnet IDs. The `sort()` call gives a stable list order inside Terraform expressions. Sorting only prevents noisy diffs when the provider returns the same IDs in a different order.
+
+For one specific subnet, a singular lookup needs enough constraints:
+
+```hcl
+data "aws_subnet" "pipeline_private_a" {
+  vpc_id = data.aws_vpc.platform_prod.id
+
+  filter {
+    name   = "tag:Name"
+    values = ["prod-pipeline-private-us-east-1a"]
+  }
+}
+```
+
+This is the practical rule: singular data sources need one clear answer, while plural data sources intentionally return a collection.
 
 | Query Result | Engine Behavior | System Rationale |
 |---|---|---|
@@ -120,45 +216,170 @@ However, dynamic filtering introduces strict operational constraints. Singular d
 | Multiple Matches | Fatal Exception | The engine cannot make assumptions about which resource is the intended target, avoiding configuration drift. |
 | Exactly One Match | Success | The unique resource attributes are mapped directly into the configuration memory space. |
 
-To prevent these failure states, filters must be constructed with high specificity. For example, instead of searching globally for private subnets, we first query the specific VPC, and then nest the VPC identifier as an input filter inside the subnet query. This structural nesting ensures that our search space is restricted to a single parent network, neutralizing the risk of retrieving duplicate subnets from other development environments.
+In a real platform, this works only when tags are treated as a contract. The networking team should document which tags consumers can rely on, and the consuming team should keep filters narrow enough to fail loudly when the contract breaks. A plan that fails because it found zero VPCs is much better than a plan that deploys workers into the wrong network.
 
 ## The Lifecycle Gap: Handling Unknown and Computed Attributes
+<!-- section-summary: Data sources can read during planning only when their search inputs are already known. -->
 
-An unknown value is a value Terraform cannot know until an apply creates or reads something. Data sources can run early only when their search inputs are already known. Example: a data source can look up a VPC by the fixed tag `Team = CorePlatform` during plan, but it cannot look up a database endpoint by an ID that will be generated by a database resource later in the same apply.
+An unknown value is a value Terraform cannot know until an apply creates or reads something. Data sources can run early only when their search inputs are already known. Example: a data source can look up a VPC by fixed platform tags during plan, but it cannot look up an endpoint by an ID that will be generated by a resource later in the same apply.
 
-A common challenge appears when a data source depends on a resource that is being created in the same execution run. If you are provisioning a database instance with a resource block and declare a data source in the same configuration to query the database's endpoint address, you create a lifecycle dependency. This dependency is represented inside Terraform's engine as a node connection in the Directed Acyclic Graph.
+The clean case looks like the platform VPC example. The tags are fixed strings, so Terraform can query the VPC during planning:
+
+```hcl
+data "aws_vpc" "platform_prod" {
+  tags = {
+    Environment = "prod"
+    Owner       = "platform-networking"
+    Purpose     = "shared-platform"
+  }
+}
+
+resource "aws_security_group" "pipeline_workers" {
+  name   = "prod-pipeline-workers"
+  vpc_id = data.aws_vpc.platform_prod.id
+}
+```
+
+Terraform can read the VPC first, then place the returned ID into the planned security group. The plan can show the real VPC ID because the lookup arguments were already known.
+
+The confusing case appears when a data source points back at something this same apply will create or change. Suppose the data team creates its worker security group in this module. The direct resource reference is the useful value:
+
+```hcl
+resource "aws_security_group" "pipeline_workers" {
+  name   = "prod-pipeline-workers"
+  vpc_id = data.aws_vpc.platform_prod.id
+}
+
+locals {
+  pipeline_worker_security_group_id = aws_security_group.pipeline_workers.id
+}
+```
+
+Reading that same security group back through a data source adds timing trouble and extra API calls:
+
+```hcl
+data "aws_security_group" "pipeline_workers" {
+  name   = aws_security_group.pipeline_workers.name
+  vpc_id = data.aws_vpc.platform_prod.id
+}
+```
+
+That second block asks AWS to find an object that this module is already managing. The resource address already has the ID, name, and VPC. Data sources work best for objects owned somewhere else. Resources work best for objects this module owns.
+
+When another team owns the warehouse access group and gives the data team a stable name, a data source makes sense:
+
+```hcl
+data "aws_security_group" "warehouse_clients" {
+  vpc_id = data.aws_vpc.platform_prod.id
+
+  filter {
+    name   = "group-name"
+    values = ["prod-warehouse-clients"]
+  }
+}
+
+locals {
+  warehouse_client_security_group_id = data.aws_security_group.warehouse_clients.id
+}
+```
 
 ![Data source values depend on when Terraform can resolve filters, provider reads, and dependent resource inputs.](/content-assets/articles/article-iac-terraform-config-data-sources/unknown-value-timing.png)
 
 *Data source values are only safe to use when Terraform can resolve them at the right point in the plan.*
 
-During compilation of the dependency graph, the Terraform core engine constructs a Directed Acyclic Graph containing all configuration blocks. The engine applies a topological sorting algorithm, similar to Kahn's algorithm or a Depth-First Search traversal, to determine the exact execution sequence. Each node in the graph represents a resource, a data source, a provider, or a variable, while the edges represent dependencies. If the topological sort detects a circular path, where a data source depends on a resource that simultaneously references the data source's output, the engine aborts the run with a dependency cycle error. This validation occurs before a single network call is initiated, protecting the active workspace from deadlock states.
+Terraform builds a dependency graph from references like `data.aws_vpc.platform_prod.id` and `aws_security_group.pipeline_workers.id`. The graph tells Terraform which reads and writes must happen first. If a data source uses only known values, Terraform usually reads it during the plan. If a data source argument depends on a resource value that will exist only after apply, Terraform may defer the read and show related attributes as known after apply.
 
-If the graph is valid but contains inputs that depend on outputs of a managed resource that does not exist yet, the engine cannot evaluate the query immediately. The database has not been created, meaning its physical network interface and domain name endpoints are not registered in the cloud provider's databases. To handle this temporal gap, Terraform implements a lazy evaluation pattern. The engine detects that the query parameters contain unknown values. Instead of throwing an error, the engine marks the data source's output attributes with a special sentinel value. In the console output, these deferred attributes are displayed as known after apply, indicating that their real values cannot be determined until the physical write operations occur.
+That timing affects every downstream value. If a launch template, security group rule, or application setting references a deferred data source attribute, that dependent argument also stays unknown during the plan. Terraform can still validate the expression shape, but it cannot show the final value yet.
 
-Any downstream resource that references these deferred data source attributes is also marked as computed. During the planning run, no API calls are sent for the deferred data source. The engine compiles the plan using these placeholder sentinels, verifying the schema validation of the configuration without asserting the physical presence of the queried values.
+There are three practical responses:
+
+| Situation | Better choice |
+|---|---|
+| This module creates the object | Reference the resource attributes directly |
+| Another module owns the object and publishes a stable name or tag | Provider data source with narrow filters |
+| Another Terraform state is the intended contract | `terraform_remote_state` or a more explicit publishing mechanism such as SSM Parameter Store, DNS, or a service registry |
 
 ![Terraform data sources can read during plan when filters are known, or wait until apply when filters depend on newly created resources.](/content-assets/articles/article-iac-terraform-config-data-sources/data-source-timing-paths.png)
 
 *Known filters can be queried during planning; filters that rely on pending resources produce known-after-apply values until the apply creates the upstream object.*
 
-The flowchart diagram above visualizes this execution lifecycle. The plan phase handles static queries immediately, saving their resolved states, while computed dependencies are deferred. Once the execution transition occurs during the apply phase, Terraform executes the API write operations to create the upstream database. The database controller returns the concrete physical attributes upon completion.
+The main idea is simple: data sources read from the outside world, so the search inputs should usually be known before Terraform starts making changes. That gives the reader a plan with concrete values instead of a plan full of placeholders.
 
-With the upstream resource provisioned, Terraform immediately executes the deferred data source query. The provider plugin sends the API read request using the newly generated database attributes, retrieves the resolved connection endpoint, and writes it to the local state database. Finally, the downstream compute nodes are provisioned using these concrete connection strings, resolving the configuration gap deterministically.
+## Putting It All Together: The Pipeline Worker Deployment
+<!-- section-summary: A full data-pipeline example shows data sources feeding managed resources without taking ownership of shared infrastructure. -->
 
-## Putting It All Together: The Analytics Processor Deployment
+The pieces connect in one small pipeline deployment. The data team owns the worker security group and worker instance. The platform networking team owns the VPC, subnets, and warehouse-client security group. Data sources provide the boundary between those responsibilities.
 
-In the analytics processor deployment, data sources let one Terraform configuration attach new compute resources to a network owned by another team. The processor needs a VPC ID, a private subnet ID, and a database access security group ID, but it should not create or delete any of those shared objects. Example: the analytics team can create `aws_instance.analytics_worker` while reading `data.aws_vpc.shared_network.id` from the platform team's existing network.
+First, Terraform reads the shared network objects:
 
-To see how these concepts function in a unified configuration, we can examine the deployment architecture of the analytics data processor. In this deployment, we query the pre-existing shared network maintained by the platform team. We discover the VPC, retrieve the array of private subnets, and locate the database access security group.
+```hcl
+data "aws_vpc" "platform_prod" {
+  tags = {
+    Environment = "prod"
+    Owner       = "platform-networking"
+    Purpose     = "shared-platform"
+  }
+}
 
-To understand how the data source cache is persisted in the local workspace, we can inspect a segment of the generated state database file. The state database stores the retrieved metadata under a schema that mirrors the cloud provider's API structure. The configuration segment below shows the serialized state of a resolved VPC query, illustrating the cache fields that are referenced by downstream resources during subsequent execution phases.
+data "aws_subnet" "pipeline_private_a" {
+  vpc_id = data.aws_vpc.platform_prod.id
+
+  filter {
+    name   = "tag:Name"
+    values = ["prod-pipeline-private-us-east-1a"]
+  }
+}
+
+data "aws_security_group" "warehouse_clients" {
+  vpc_id = data.aws_vpc.platform_prod.id
+
+  filter {
+    name   = "group-name"
+    values = ["prod-warehouse-clients"]
+  }
+}
+```
+
+Then the module creates only the objects the data team owns:
+
+```hcl
+resource "aws_security_group" "pipeline_workers" {
+  name        = "prod-pipeline-workers"
+  description = "Security group for data pipeline workers"
+  vpc_id      = data.aws_vpc.platform_prod.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "workers_to_warehouse" {
+  security_group_id            = aws_security_group.pipeline_workers.id
+  referenced_security_group_id = data.aws_security_group.warehouse_clients.id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+}
+
+resource "aws_instance" "pipeline_worker" {
+  ami                    = var.pipeline_worker_ami_id
+  instance_type          = "t3.small"
+  subnet_id              = data.aws_subnet.pipeline_private_a.id
+  vpc_security_group_ids = [aws_security_group.pipeline_workers.id]
+
+  tags = {
+    Name      = "prod-pipeline-worker-a"
+    Workload  = "DataPipeline"
+    ManagedBy = "terraform"
+  }
+}
+```
+
+The ownership line is visible in the addresses. Every `data.*` address reads something owned elsewhere. Every `resource.*` address creates or manages something in this module. That pattern keeps reviews clear because a teammate can scan the file and see which objects this state can change.
+
+Terraform also stores the resolved data source attributes in state. A VPC data source entry can look like this:
 
 ```json
 {
   "mode": "data",
   "type": "aws_vpc",
-  "name": "shared_network",
+  "name": "platform_prod",
   "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
   "instances": [
     {
@@ -169,7 +390,8 @@ To understand how the data source cache is persisted in the local workspace, we 
         "id": "vpc-0abcd1234efgh5678",
         "tags": {
           "Environment": "Production",
-          "Team": "CorePlatform"
+          "Owner": "platform-networking",
+          "Purpose": "shared-platform"
         }
       }
     }
@@ -177,102 +399,20 @@ To understand how the data source cache is persisted in the local workspace, we 
 }
 ```
 
-This JSON record is stored within the local terraform.tfstate file. During a normal refreshed plan, Terraform can ask the provider to read the VPC data source again and then update this state entry. During the rest of that run, references such as data.aws_vpc.shared_network.cidr_block read the resolved value from Terraform's evaluation memory and state model rather than repeating the same expression work.
+This record helps Terraform remember what it read during the run. It also explains why state permissions matter even for read-only lookups. The state file may include network IDs, tags, endpoint names, ARNs, and sometimes sensitive data if a provider data source returns secrets.
 
-Using these retrieved attributes, we construct our managed resources. We declare a dedicated security group for our analytics processor and use the queried database security group as a source boundary for our egress rules. This approach secures the database access path without requiring our team to manage the database's firewall directly. Finally, we launch our compute worker node in a specifically tagged private subnet.
-
-```hcl
-data "aws_vpc" "shared_network" {
-  filter {
-    name   = "tag:Team"
-    values = ["CorePlatform"]
-  }
-}
-
-data "aws_subnets" "private_subnets" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.shared_network.id]
-  }
-
-  filter {
-    name   = "tag:Tier"
-    values = ["Private"]
-  }
-}
-
-data "aws_subnet" "analytics_worker" {
-  vpc_id = data.aws_vpc.shared_network.id
-
-  filter {
-    name   = "tag:Tier"
-    values = ["Private"]
-  }
-
-  filter {
-    name   = "tag:Workload"
-    values = ["AnalyticsWorker"]
-  }
-}
-
-data "aws_security_group" "shared_rds_access" {
-  vpc_id = data.aws_vpc.shared_network.id
-
-  filter {
-    name   = "group-name"
-    values = ["*-rds-shared-access"]
-  }
-}
-
-resource "aws_security_group" "analytics_processor" {
-  name        = "analytics-processor-sg"
-  description = "Security group for the analytics batch processor"
-  vpc_id      = data.aws_vpc.shared_network.id
-}
-
-resource "aws_vpc_security_group_ingress_rule" "processor_self" {
-  security_group_id            = aws_security_group.analytics_processor.id
-  referenced_security_group_id = aws_security_group.analytics_processor.id
-  ip_protocol                  = "-1"
-}
-
-resource "aws_vpc_security_group_egress_rule" "processor_to_database" {
-  security_group_id            = aws_security_group.analytics_processor.id
-  referenced_security_group_id = data.aws_security_group.shared_rds_access.id
-  ip_protocol                  = "tcp"
-  from_port                    = 3306
-  to_port                      = 3306
-}
-
-resource "aws_instance" "analytics_worker" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "c5.xlarge"
-  subnet_id     = data.aws_subnet.analytics_worker.id
-
-  vpc_security_group_ids = [
-    aws_security_group.analytics_processor.id
-  ]
-
-  tags = {
-    Name = "analytics-worker-node"
-    Role = "DataProcessor"
-  }
-}
-```
-
-This configuration highlights the elegant interaction between queried data and managed resources. By using data.aws_vpc.shared_network.id as the vpc_id argument in our new security group, we ensure that our processor's firewall rules are bound to the correct network boundary. The database egress rule dynamically targets the physical ID of the core platform's database access group, maintaining security isolation.
-
-The analytics worker node uses a singular subnet lookup with a workload-specific tag instead of taking `ids[0]` from a plural subnet query. That matters because provider APIs do not promise that a list of matching IDs will always arrive in the operational order you meant. If a workload must land in a specific subnet, make that subnet uniquely discoverable with a tag, name, or availability-zone constraint. The entire lifecycle is resolved safely, avoiding the duplication of network infrastructure ownership and protecting the shared corporate network from accidental deletion.
+The final shape is practical. The data team avoids hardcoded VPC IDs, avoids taking ownership of platform resources, and still creates a worker in the right private subnet with the right database egress path. The platform team can rebuild the VPC later as long as it preserves the agreed tags and names. The next refreshed plan will discover the current IDs.
 
 ## What's Next
+<!-- section-summary: Remote state is another way to share values when teams want an explicit Terraform output contract. -->
 
-Understanding how to query pre-existing infrastructure dynamically is a critical step in building modular, enterprise-grade cloud deployments. However, relying purely on runtime API filtering is only one way to cross administrative boundaries. As systems scale, querying every resource via the cloud provider's search APIs can lead to rate-limiting and performance bottlenecks.
+Data sources are a good fit when the real cloud object is the source of truth. The data team asks AWS what exists right now, and Terraform uses the answer.
 
-To address these scaling challenges, we must explore alternative decoupling mechanisms. In the next article, we will examine how to read data directly from the state files of other configurations using the remote state data source. This pattern allows teams to expose specific, controlled outputs from their configurations, establishing a contract-based API between independent engineering pipelines.
+Some teams want a more explicit contract between Terraform projects. The networking project can publish outputs such as `vpc_id`, `private_subnet_ids`, and `warehouse_security_group_id`, and the pipeline project can read those outputs instead of searching AWS by tags. The next article covers `terraform_remote_state`, including where it helps and where state access creates security tradeoffs.
 
 ![A six-part summary infographic for Terraform data sources covering read-only lookup, filters, provider reads, returned values, unknown timing, and ownership boundaries.](/content-assets/articles/article-iac-terraform-config-data-sources/data-sources-summary.png)
 
-*Use this summary as the quick data-source checklist before connecting to shared infrastructure.*
+*This summary is the quick data-source checklist before connecting to shared infrastructure.*
 
 
 ---
@@ -280,8 +420,10 @@ To address these scaling challenges, we must explore alternative decoupling mech
 **References**
 
 - [Data Sources Documentation](https://developer.hashicorp.com/terraform/language/data-sources) - Official reference on declaring and referencing data blocks in HashiCorp Configuration Language.
+- [Data Block Reference](https://developer.hashicorp.com/terraform/language/block/data) - Official syntax reference for `data` blocks, including provider-specific arguments, meta-arguments, and lifecycle conditions.
 - [Resources Documentation](https://developer.hashicorp.com/terraform/language/resources) - Official distinction between managed resources and read-only data sources.
 - [AWS Provider EC2 Data Sources](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/vpc) - Technical reference for querying virtual networks and subnets using the AWS translation provider.
 - [AWS VPC Security Group Egress Rule Resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_egress_rule) - Current AWS provider pattern for standalone security group rules.
 - [DescribeVpcs API Reference](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeVpcs.html) - First-party AWS documentation on the service-level operations and query parameters for virtual networks.
 - [Terraform Core Execution Graph](https://developer.hashicorp.com/terraform/internals/graph) - Technical description of the internal dependency graph mechanics and topological evaluation order.
+- [The terraform_remote_state Data Source](https://developer.hashicorp.com/terraform/language/state/remote-state-data) - Official reference for reading root module outputs from another Terraform state snapshot and the related access tradeoffs.

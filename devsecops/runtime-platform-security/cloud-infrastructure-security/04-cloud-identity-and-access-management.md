@@ -1,8 +1,8 @@
 ---
 title: "Cloud Identity and Access Management"
-description: "Enforce least privilege IAM policies, eliminate static credentials with dynamic OIDC role assuming, and design audited break-glass recovery paths."
-overview: "Cloud infrastructure security shifts the security perimeter from network boundaries to identity policies. This article explains how to audit wildcard privileges, transition to short-lived temporary access, and orchestrate secure, time-limited emergency access sessions."
-tags: ["iam", "oidc", "least-privilege", "break-glass", "audit-logging"]
+description: "Design least-privilege cloud roles, federated CI/CD access, access reviews, and audited emergency access."
+overview: "Cloud IAM controls who and what can change cloud resources, how long that access lasts, and what evidence proves the access was approved, scoped, and reviewed."
+tags: ["devsecops", "iam", "cloud", "break-glass"]
 order: 4
 id: article-devsecops-cloud-infrastructure-security-cloud-identity-and-access
 aliases:
@@ -19,76 +19,155 @@ aliases:
 
 ## Table of Contents
 
-1. [The Identity Perimeter in Modern Cloud](#the-identity-perimeter-in-modern-cloud)
-2. [Anatomy of a Cloud Credential Hijack](#anatomy-of-a-cloud-credential-hijack)
-3. [Scoping Down IAM Policies: Action, Resource, and Condition](#scoping-down-iam-policies-action-resource-and-condition)
-4. [Eliminating Static Keys with Dynamic OIDC Role Assuming](#eliminating-static-keys-with-dynamic-oidc-role-assuming)
-5. [Privileged Just-In-Time and Break-Glass Access](#privileged-just-in-time-and-break-glass-access)
-6. [Forensic Audit Trails and Incident Investigation](#forensic-audit-trails-and-incident-investigation)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [Identity Explains Most Cloud Changes](#identity-explains-most-cloud-changes)
+2. [The Production Access Map](#the-production-access-map)
+3. [Human Federation](#human-federation)
+4. [Workload Identity](#workload-identity)
+5. [CI/CD OIDC Federation](#cicd-oidc-federation)
+6. [Least-Privilege Deployment Roles](#least-privilege-deployment-roles)
+7. [Guardrails and Permission Boundaries](#guardrails-and-permission-boundaries)
+8. [Temporary Elevation and Break-Glass Access](#temporary-elevation-and-break-glass-access)
+9. [Access Reviews and Evidence](#access-reviews-and-evidence)
+10. [Putting It All Together](#putting-it-all-together)
 
-## The Identity Perimeter in Modern Cloud
+## Identity Explains Most Cloud Changes
+<!-- section-summary: Drift findings usually lead to identity questions because every cloud API call comes from a human, workload, pipeline, or emergency role. -->
 
-In traditional on-premises infrastructure, security relied almost entirely on the network perimeter. Firewalls, physical isolation, and Virtual Private Networks (VPNs) formed a solid defensive wall around servers and data. If a bad actor was outside the corporate network, they could not touch the applications. 
+The previous article followed a drift finding: a production database security group changed after deployment, and the live cloud account no longer matched the reviewed code. The first questions were about the resource and the network path. Which port opened? Which source range changed? Was the database reachable from the internet?
 
-Modern cloud computing completely changes this security model. In a highly distributed cloud, resource endpoints—such as object storage buckets, database engines, and serverless compute functions—are theoretically accessible from anywhere on the global internet via public API endpoints. What prevents a random internet connection from deleting a production database or downloading proprietary source code is not a physical firewall, but the cloud provider's Identity and Access Management (IAM) engine.
+The next questions are identity questions. Who opened the rule? Which role allowed it? Was it a human in the console, a deployment pipeline, an application runtime role, or an emergency recovery session? How long did that access last? Did the permission match the job?
 
-Consequently, identity has become the primary security perimeter in the cloud. Every compute task, deployment runner, and system operator must carry an authenticated cryptographic identity. If a single identity is granted excessive permissions, or if its associated access keys are leaked, the entire network perimeter becomes irrelevant. Auditing and hardening how cloud workloads establish identity, acquire credentials, and exercise permissions is the most critical control in a modern cloud architecture.
+**Cloud Identity and Access Management**, usually shortened to **cloud IAM**, is the system that answers who can call cloud APIs, what they can do, which resources they can touch, and which conditions must be true. A **principal** is the caller. It can be a human user, a role session, a service account, a managed identity, a workload identity, or a CI/CD workflow token. An **action** is the API operation, like `s3:GetObject`, `ec2:AuthorizeSecurityGroupIngress`, `Microsoft.Authorization/roleAssignments/write`, or `compute.firewalls.patch`. A **resource** is the target. A **condition** is extra context, like MFA status, source branch, session tag, repository name, device state, region, or environment.
 
-## Anatomy of a Cloud Credential Hijack
+Cloud IAM matters to DevSecOps because delivery systems change production all day. Pull request checks, deployment workflows, application runtimes, incident responders, and emergency accounts all need access. A healthy design gives each caller a narrow access path with the permission it needs, only for the time it needs it, with evidence that explains why the access existed.
 
-To understand why loose identity control represents a catastrophic risk, we must examine how credential compromise unfolds in a real cloud environment. Consider a common deployment pipeline design that runs into a silent vulnerability.
+This article follows the same Northstar customer portal. The team has a production account, Terraform deployments, runtime containers, on-call engineers, and a break-glass path. We will separate human access from workload access, replace static pipeline keys with OIDC federation, design plan and deploy roles, add guardrails, and create evidence through access reviews.
 
-An engineering team deploys a serverless web API to handle order processing. Because the application was developed rapidly under pressure, the infrastructure engineer configures the application runtime role using a generic administrative wildcard policy. This policy permits every cloud action on every cloud resource. During a routine feature release, the team includes a third-party dependency in the application bundle to convert customer invoices into PDFs.
+## The Production Access Map
+<!-- section-summary: A production system needs separate access paths for planning, deploying, runtime work, incident investigation, auditing, and emergency recovery. -->
 
-A remote attacker discovers a known remote code execution vulnerability inside that third-party PDF utility. They send a malicious payload to the orders API endpoint, forcing the application to execute an arbitrary system command. The attacker runs a script that calls the cloud provider's internal metadata endpoint to retrieve the temporary credentials associated with the compute runtime role.
+The Northstar portal runs a web API, a background worker, a receipt storage bucket, and a private database. Terraform manages the infrastructure. GitHub Actions creates pull request plans and applies approved changes from a protected production environment. Engineers investigate incidents through workforce sign-in. Security reviewers need read access to policies and logs. A small emergency group can recover production when normal automation fails.
 
-Because the compute runtime role was configured with administrative wildcards, the stolen temporary credentials grant the attacker full, unrestricted access to the entire cloud account. Within minutes, the attacker bypasses all network boundaries. They log into the cloud API, disable active security logs, create administrative users, deploy thousands of high-cost cryptocurrency mining tasks, and copy customer databases to an external storage server.
+The first design move is **role separation**. One broad role for every task is simple at first, but it gives every caller too much power. A pull request plan should not be able to apply changes. A runtime application should not change IAM. An incident responder usually needs logs and configuration, not write access. Emergency recovery needs stronger permissions, but those sessions should be rare, short, and loud.
 
-The core lesson of this incident is that the primary failure was not the software vulnerability in the PDF utility, but the over-scoped identity role. Had the orders API role been strictly constrained to its narrow, intended actions, the stolen credentials would have given the attacker no path to read other secrets, provision new machines, or access customer data, halting the blast radius of the exploit immediately.
+Here is a practical access map:
 
-## Scoping Down IAM Policies: Action, Resource, and Condition
+| Role | Who or what assumes it | Duration | Main purpose | Evidence |
+|---|---|---:|---|---|
+| `northstar-prod-terraform-plan` | Pull request workflow | 30 minutes | Read state and build a speculative plan | PR number, commit SHA, workflow run ID |
+| `northstar-prod-terraform-deploy` | Protected deploy workflow | 45 minutes | Apply approved Terraform changes | Approved PR, environment approval, workflow run ID |
+| `northstar-prod-api-runtime` | Customer portal API container | Platform-managed session | Read needed secrets, write logs, use receipt storage | Task identity, service name, deployment version |
+| `northstar-prod-worker-runtime` | Receipt worker container | Platform-managed session | Write receipt files and read queue messages | Task identity, service name, deployment version |
+| `northstar-prod-incident-readonly` | On-call engineer through federation | 2 hours | Read logs, metrics, traces, and resource state | Incident ticket, human identity, MFA |
+| `northstar-prod-security-audit` | Security reviewer through federation | 4 hours | Review IAM, CloudTrail, policy findings, and exceptions | Review ticket, reviewer, date |
+| `northstar-prod-emergency-recovery` | Approved responder during serious outage | 45 minutes | Restore access or recover service when normal paths fail | Incident ticket, peer approval, audit query |
 
-Hardening cloud identity requires translating loose human intentions into strict, programmatic policies. An IAM policy is a structured statement that answers four specific questions: who is making the request, what action is being requested, which resource is targeted, and under what conditions the request is evaluated.
+The important pattern is **one job, one access path, one audit trail**. The deployment job receives deployment access. The runtime receives runtime access. The incident responder receives read-only investigation access. If someone needs stronger access, the request should name the incident, the person, the expected action, and the expiry.
 
-Most cloud provider engines evaluate these policies as an explicit allow model with a default deny. Any request that is not explicitly permitted by a matching policy is blocked. If an identity is subject to an explicit deny statement, that statement overrides all allows, regardless of policy evaluation order.
+![Production Access Map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/production-access-map.png)
 
-To secure an application runtime, we must write policies that adhere strictly to the principle of least privilege, eliminating generic wildcards in favor of explicit declarations. Consider a vulnerable policy compared directly to its hardened, scoped-down counterpart.
+*The map separates the major production access paths so plan, deploy, runtime, read-only, and emergency sessions do not blur into one broad role.*
 
-A vulnerable identity policy relies on wildcard actions and unrestricted resources:
+This map gives the rest of the article a concrete path. People need human federation. Applications need workload identity. Pipelines need OIDC. Deployment roles need least privilege. Emergency recovery needs temporary elevation. Access reviews keep the map current after teams and systems change.
+
+## Human Federation
+<!-- section-summary: Human federation replaces daily cloud users and static access keys with temporary sessions from the company identity provider. -->
+
+**Human federation** means people sign in through a central identity provider, then receive temporary cloud access based on group membership, role assignment, MFA, device posture, or approval state. The identity provider might be Microsoft Entra ID, Okta, Google Workspace, an internal directory, IAM Identity Center, or another workforce identity system.
+
+This replaces the older pattern where every engineer gets a cloud-local user and long-lived access keys. Long-lived access keys are hard to control because they keep working until someone rotates or deletes them. They can sit in `~/.aws/credentials`, CI secrets, old scripts, shell history, password managers, build logs, and forgotten laptops. When someone leaves the company, the team has to hunt every possible copy.
+
+Federation gives the team a cleaner daily path. An engineer authenticates to the company identity provider, passes MFA, chooses an assigned role, and receives a temporary session. The cloud audit log records the role session and can usually connect it back to the workforce identity. Offboarding starts in the identity provider instead of in every cloud account.
+
+For Northstar, normal human access can stay read-oriented in production:
+
+| Workforce group | Production access | Write access | Use case |
+|---|---|---:|---|
+| `Engineering` | Dashboards and documentation | No | Understand production behavior without changing it |
+| `SRE-OnCall` | `northstar-prod-incident-readonly` | No | Investigate alerts and read logs |
+| `Security-Reviewers` | `northstar-prod-security-audit` | No | Review IAM, policy results, and audit logs |
+| `Release-Managers` | Approve deployment environment | No direct console write | Approve production workflow runs |
+| `Emergency-Responders` | Eligible for emergency role | Yes, after approval | Recover serious incidents |
+
+This design keeps normal production changes inside Git and deployment automation. A release manager approves a workflow, but the workflow performs the change with a deployment role. The release manager does not need a standing administrator role in the cloud console.
+
+For command-line work, federation also changes the local workflow. AWS users may run `aws sso login`. Azure users may run `az login`. Google Cloud users may run `gcloud auth login`. The command is provider-specific, but the principle is the same: authenticate as a person, receive a temporary session, and map that session to a role with a clear purpose.
+
+Human federation handles people. Software needs a separate identity path because applications should never borrow a person's credentials.
+
+## Workload Identity
+<!-- section-summary: Workload identity gives applications their own temporary cloud credentials without storing permanent secrets in code or containers. -->
+
+**Workload identity** means an application, function, virtual machine, Kubernetes service account, container task, or batch job receives its own identity. The workload uses that identity to call cloud APIs. The application does not need a permanent cloud key in a config file.
+
+For the Northstar portal, the API runtime needs a narrow role. It might read one database connection secret, write application logs, and read a small set of receipt objects. The background worker might read messages from a queue and write receipt PDFs to a bucket. Neither workload should create IAM users, change security groups, deploy infrastructure, or read every secret in the account.
+
+Cloud platforms provide this in different ways. AWS ECS task roles and Lambda execution roles provide temporary credentials to workloads. Azure managed identities let Azure resources request tokens without storing secrets. Google Cloud service accounts and workload identity patterns give workloads a cloud identity. Kubernetes platforms often map Kubernetes service accounts to cloud identities through workload identity integrations.
+
+Here is a narrow AWS policy for a receipt worker that writes only to the receipt bucket:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AllowAllS3Operations",
+      "Sid": "ListReceiptBucket",
       "Effect": "Allow",
-      "Action": ["s3:*"],
-      "Resource": ["*"]
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::northstar-payment-receipts-prod",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "receipts/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "WriteAndReadReceiptObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::northstar-payment-receipts-prod/receipts/*"
     }
   ]
 }
-}
 ```
 
-This statement allows the identity to perform every possible action on every storage bucket in the cloud account, including deleting public buckets or modifying resource permission settings.
+This policy shows two production details. S3 bucket-level actions and object-level actions use different resource shapes. The bucket ARN controls listing. The object ARN with `/*` controls files inside the bucket. The prefix condition keeps listing focused on the worker's own path.
 
-We harden this policy by specifying the exact action, targeting the specific resource ARN, and binding the request to a runtime tag condition:
+Workload identity also helps incident response. If an audit log shows `northstar-prod-api-runtime` changed a security group, that is a serious finding because the API runtime should not have that permission. The identity name itself tells the responder which system exceeded its intended job.
+
+Now the team has a safe path for people and runtimes. The deployment pipeline needs the same treatment because static deployment keys are one of the easiest ways to lose control of production.
+
+## CI/CD OIDC Federation
+<!-- section-summary: OIDC federation lets CI/CD workflows exchange signed run tokens for short-lived cloud credentials instead of storing static deploy keys. -->
+
+**OpenID Connect**, usually shortened to **OIDC**, is a standard for signed identity tokens. In CI/CD, a workflow can request a short-lived OIDC token from the CI/CD platform. The cloud provider verifies that token and exchanges it for temporary cloud credentials if the token matches the role's trust rules.
+
+This removes static deployment keys from the pipeline. A static key in GitHub Actions, GitLab CI, Jenkins, or another system can leak through logs, compromised runners, old backups, or over-broad secret access. An OIDC token is tied to one workflow run and expires quickly. The cloud role can also inspect token claims such as repository, branch, environment, workflow, and audience.
+
+For GitHub Actions deploying to AWS, the trust policy can require the expected repository and protected environment:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadOrderInvoicesOnly",
+      "Sid": "GitHubProductionDeployOnly",
       "Effect": "Allow",
-      "Action": ["s3:GetObject"],
-      "Resource": ["arn:aws:s3:::devpolaris-orders-invoices-prod/*"],
+      "Principal": {
+        "Federated": "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "aws:PrincipalTag/Environment": "production"
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:northstar/customer-portal:environment:production"
         }
       }
     }
@@ -96,172 +175,229 @@ We harden this policy by specifying the exact action, targeting the specific res
 }
 ```
 
-This hardened policy limits the workload to a single operation (`s3:GetObject`) and restricts the target to a specific storage path (`devpolaris-orders-invoices-prod/*`). Furthermore, the condition statement adds an extra evaluation layer, verifying that the session carrying the request is formally tagged as a production resource. By implementing these constraints, the policy guarantees that a compromised credential cannot be abused to read other buckets or modify critical infrastructure settings.
+The condition is the important part. It accepts GitHub's OIDC issuer only when the token represents the expected repository and production environment. If the production environment has required reviewers, branch protections, and restricted deployment access, the repository controls and the cloud trust policy reinforce each other.
 
-## Eliminating Static Keys with Dynamic OIDC Role Assuming
+![OIDC Trust Chain](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/oidc-trust-chain.png)
 
-Historically, connecting external systems (like CI/CD runners, third-party monitoring platforms, or on-premises servers) to cloud APIs required generating static, long-lived access keys. These keys consisted of an access key ID and a secret access key, which were copied manually into pipeline secret stores or configuration files.
+*The trust chain shows how a workflow token turns into a temporary deployment role only after the cloud provider checks repository, environment, and audience claims.*
 
-Static credentials represent a severe, recurring security risk. Because they never expire automatically, they remain active indefinitely unless they are manually rotated. If a developer accidentally commits a credential file to a public repository, or if an attacker gains access to a backup of the CI/CD configuration database, the permanent key is exposed. The attacker can use these permanent credentials to access the cloud APIs from any laptop, bypassing all repository controls.
+A GitHub Actions job then requests an OIDC token and assumes the role:
 
-Modern DevSecOps workflows eliminate static keys entirely by utilizing dynamic OpenID Connect (OIDC) role assuming. OIDC establishes a federated, cryptographic trust relationship between your cloud provider and your identity provider (such as GitHub Actions, GitLab CI, or an internal corporate identity server).
+```yaml
+name: production-deploy
 
-```mermaid
-flowchart TD
-    Runner["CI/CD Runner Task"] --> RequestJWT["1. Request short-lived OIDC JWT"]
-    RequestJWT --> Provider["Identity Provider (e.g., GitHub)"]
-    Provider --> SendJWT["2. Issues signed JWT with repository context"]
-    SendJWT --> Runner
-    Runner --> AssumeRole["3. Request STS AssumeRoleWithWebIdentity (passes JWT)"]
-    AssumeRole --> CloudAPI["Cloud STS API"]
-    CloudAPI --> VerifyOIDC["4. Verify JWT signature against Identity Provider trust"]
-    VerifyOIDC --> IssueCreds["5. Returns temporary session credentials (1 hour)"]
-    IssueCreds --> Runner
-    Runner --> CloudOps["6. Perform scoped cloud operations"]
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/northstar-prod-terraform-deploy
+          aws-region: us-east-1
+          role-session-name: deploy-${{ github.run_id }}
+
+      - name: Apply reviewed plan
+        run: terraform apply -auto-approve tfplan
 ```
 
-This federated identity exchange operates through six systematic steps:
+Azure and Google Cloud use the same security pattern with different names. Azure workload identity federation can trust GitHub, GitLab, Terraform Cloud, Kubernetes, or another issuer without storing a client secret. Google Cloud Workload Identity Federation lets external workloads exchange trusted tokens for Google Cloud credentials instead of using service account keys.
 
-First, the CI/CD runner task requests a short-lived OIDC JSON Web Token (JWT) from its native identity provider. This token contains metadata about the active pipeline run, such as the repository name, branch, environment, and workflow run ID.
+OIDC answers how the pipeline gets credentials. The next section narrows what those credentials can do.
 
-Second, the identity provider issues the cryptographically signed JWT, populated with the specific repository attributes.
+## Least-Privilege Deployment Roles
+<!-- section-summary: Deployment access should be split by job so plan, deploy, runtime, read-only investigation, and emergency recovery roles do not share the same power. -->
 
-Third, the runner connects directly to the cloud provider's Security Token Service (STS) API, presenting the identity provider's signed JWT and requesting to assume a preconfigured IAM role.
+**Least privilege** means each identity receives only the permissions it needs for its job. In cloud deployments, the job matters. A plan role needs read access. A deploy role needs controlled write access. A runtime role needs application access. An incident role needs investigation access. An emergency role needs recovery access with extra monitoring.
 
-Fourth, the cloud provider's STS engine evaluates the request. It verifies the cryptographic signature of the JWT against the trusted identity provider configuration and checks the role's trust policy to ensure that the repository metadata matches the allowed criteria.
+Start by separating plan and deploy. The `northstar-prod-terraform-plan` role can read state, describe cloud resources, and generate a speculative plan. It should not modify production. This matters because pull request workflows may run before a human approves the change. Even if someone opens a malicious pull request, the plan role should not have write power.
 
-Fifth, if the metadata matches, the cloud STS engine generates temporary, short-lived session credentials (typically valid for one hour or less) and returns them to the runner.
+The `northstar-prod-terraform-deploy` role has stronger permissions, so it should run only from protected branches or protected environments. It should be able to change the resources Terraform owns, but it should not create permanent access keys, attach administrator policies, disable audit logging, or pass arbitrary roles to services.
 
-Sixth, the runner uses these temporary credentials to perform its configured infrastructure changes, discarding the credentials immediately when the job finishes.
-
-By adopting OIDC federated role assuming, we eliminate the need to store long-lived secrets inside external platforms. If an attacker compromises a runner's active memory or configuration, they only acquire access to credentials that expire within minutes, and they cannot reuse those credentials after the session window closes.
-
-## Privileged Just-In-Time and Break-Glass Access
-
-In a secure cloud environment, developers and operators must not have permanent, standing administrative access to production environments. Standard infrastructure changes, application deployments, and patch operations should proceed exclusively through automated CI/CD pipelines. Permanent administrative privileges on human accounts create a massive attack surface: a single compromised laptop or hijacked corporate password can give attackers immediate control of active cloud accounts.
-
-However, complex production incidents will occasionally occur where standard pipelines are unavailable. For example, a failed deployment script might lock the infrastructure state, or a major database connection failure might require immediate manual intervention. For these rare emergencies, organizations must design a privileged **Just-in-Time (JIT)** and **Break-Glass** access system.
-
-Break-glass access is a highly structured, temporary bypass path. It is designed to be accessible enough to use during high-stress incidents, yet rigorous enough to generate undeniable audit evidence for every action taken.
-
-To enforce security during emergency manual interventions, the JIT break-glass access flow must adhere to five strict design controls:
-
-* **Short-Lived Expiry**: Emergency credentials must never persist. The JIT system must automatically revoke the privileges or expire the session tokens after a pre-configured time limit (such as 60 minutes).
-* **Multi-Party Peer Approval**: Activating a privileged session must require a formal request that is approved by a different, named peer. This ensures that no single individual can unilaterally grant themselves administrative access during a crisis.
-* **Incident Binding**: Every request must be programmatically linked to an active, verified incident ticket ID (such as `INC-102`). The request must document the specific, expected actions the operator plans to perform.
-* **Attributable Human Sessions**: Emergency roles must never rely on generic, shared credentials. Every privileged session must be tied to a specific, authenticated human operator identity, ensuring that the audit trail attributes every API call to an individual.
-* **Compensating Post-Incident Audit**: Once the session closes, the system must trigger an automated workflow to compare the active API logs against the expected actions declared in the request, flag any deviations, and run an immediate infrastructure drift check to ensure all manual modifications are codified in Git.
-
-By implementing these structural controls, the organization ensures that emergency access is never treated as a convenient shortcut for routine operations, and that manual overrides remain completely transparent and auditable.
-
-## Forensic Audit Trails and Incident Investigation
-
-When an identity perimeter is breached or an emergency break-glass session is activated, the cloud provider's central auditing service (such as AWS CloudTrail or Google Cloud Audit Logs) becomes the primary source of forensic evidence. Audit logging must be configured globally, protected against modification, and forwarded to an isolated, read-only security account to prevent attackers from deleting the logs to cover their tracks.
-
-Investigating a cloud security incident requires a systematic forensic analysis of these log files. Let us analyze a detailed case study of a real security investigation following a privileged identity breach, illustrating how to trace an attacker's actions step-by-step through the logs.
-
-The security operations team receives a high-severity alert indicating that an unknown IP address is making unauthorized API calls to modify security group rules. The team immediately queries the centralized log repository to identify the compromised principal.
-
-They find the initial, suspicious API event in the logs:
+In AWS, `iam:PassRole` is a permission worth reviewing carefully. It lets a caller pass an IAM role to a service such as ECS, Lambda, or EC2. If a deployment role can pass any role, it may indirectly give a workload powerful access. A safer policy allows only approved runtime roles and only to the expected service:
 
 ```json
 {
-  "eventTime": "2026-05-23T20:12:04Z",
-  "eventSource": "iam.amazonaws.com",
-  "eventName": "CreateAccessKey",
-  "sourceIPAddress": "198.51.100.42",
-  "userAgent": "aws-cli/2.15.0 Python/3.11.6",
-  "userIdentity": {
-    "type": "AssumedRole",
-    "arn": "arn:aws:sts::111122223333:assumed-role/orders-api-prod-runtime/orders-api-task-7d9f"
-  },
-  "requestParameters": {
-    "userName": "backup-operator"
-  },
-  "responseElements": {
-    "accessKey": {
-      "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
-      "status": "Active"
-    }
-  }
-}
-```
-
-This log record provides the first critical clue. The `eventName` is `CreateAccessKey`, indicating a new permanent credential was generated. The `userIdentity.arn` shows that the action was performed by the `orders-api-prod-runtime` role. 
-
-This is a major architectural red flag: an application runtime task should never need to create IAM access keys. The finding indicates that an attacker has hijacked the serverless container's runtime role and is using its over-scoped wildcard permissions to establish persistence. The source IP address (`198.51.100.42`) does not match the corporate IP range or the container's private NAT gateway.
-
-The team continues their search, querying the logs for any subsequent activity associated with the newly created access key ID (`AKIAIOSFODNN7EXAMPLE`). They find a second event occurring two minutes later:
-
-```json
-{
-  "eventTime": "2026-05-23T20:14:12Z",
-  "eventSource": "ec2.amazonaws.com",
-  "eventName": "AuthorizeSecurityGroupIngress",
-  "sourceIPAddress": "198.51.100.42",
-  "userIdentity": {
-    "type": "IAMUser",
-    "arn": "arn:aws:iam::111122223333:user/backup-operator",
-    "accessKeyId": "AKIAIOSFODNN7EXAMPLE"
-  },
-  "requestParameters": {
-    "groupId": "sg-0db9f1828a2a1c0d",
-    "ipPermissions": {
-      "items": [
-        {
-          "ipProtocol": "tcp",
-          "fromPort": 5432,
-          "toPort": 5432,
-          "ipRanges": {
-            "items": [
-              {
-                "cidrIp": "0.0.0.0/0"
-              }
-            ]
-          }
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PassOnlyApprovedRuntimeRolesToEcs",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::111122223333:role/northstar-prod-api-runtime",
+        "arn:aws:iam::111122223333:role/northstar-prod-worker-runtime"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
         }
-      ]
+      }
     }
-  }
+  ]
 }
 ```
 
-This second log confirms the attacker's intent. Using the newly created static access key, they called `AuthorizeSecurityGroupIngress` to open port 5432 (PostgreSQL) on the database security group (`sg-0db9f1828a2a1c0d`) to the entire public internet (`0.0.0.0/0`).
+Least privilege often improves in stages. A team may start with broader permissions in a development account to discover what Terraform actually calls. Then it can review audit logs, access analyzer output, failed access attempts, and real deployment history. The production role should become narrower over time, not broader.
 
-Armed with this undeniable log evidence, the security team executes their response playbook. They immediately revoke the active temporary sessions for the `orders-api-prod-runtime` role, delete the attacker's static access key (`AKIAIOSFODNN7EXAMPLE`), revert the unauthorized database security group modification using Terraform, and narrow down the runtime role's IAM policy to remove all wildcard permissions. 
+The same practice applies to Azure role assignments and Google Cloud IAM roles. Built-in roles are convenient, but they can include more permission than a workload needs. Custom roles can help when a team has a stable, narrow job. The practical test is simple: can the caller do its job, and can it avoid doing the dangerous things outside its job?
 
-This forensic case study illustrates that without detailed, immutable audit logging, the compromise would have remained completely invisible, allowing the attacker to persist inside the cloud environment indefinitely.
+Least-privilege roles are one layer. Guardrails add another layer above the role.
+
+## Guardrails and Permission Boundaries
+<!-- section-summary: Guardrails set maximum permissions so one over-broad role policy cannot bypass organization rules. -->
+
+A **guardrail** is a control that sets a boundary around what teams, accounts, projects, subscriptions, or roles can do. Guardrails are useful because individual role policies can make mistakes. A developer might add a wildcard while debugging. A deployment module might create a broader role than intended. A legacy administrator role might still exist. A guardrail blocks the dangerous path even when a local policy is too loose.
+
+In AWS, common guardrails include AWS Organizations service control policies, IAM permissions boundaries, resource control policies, and account-level settings. A **permissions boundary** sets the maximum permissions for a role or user. It does not grant access by itself. The identity still needs an allow policy, and the boundary limits what that allow can become.
+
+Here is a simplified boundary shape for application-created runtime roles. It allows common runtime actions, then explicitly denies permanent credential and organization-admin paths:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPermanentCredentialAndOrgAdminPaths",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateAccessKey",
+        "iam:CreateUser",
+        "iam:AttachUserPolicy",
+        "iam:PutUserPolicy",
+        "iam:CreatePolicyVersion",
+        "organizations:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+This boundary gives the platform team a ceiling over especially dangerous actions. Application teams can still create useful runtime roles, but those roles cannot create long-lived users or change organization policy.
+
+Azure and Google Cloud have similar organization-level ideas. Azure uses management groups, Azure Policy, Azure RBAC, Privileged Identity Management, and deny assignments in some managed contexts. Google Cloud uses organization policies, IAM allow policies, deny policies, principal access boundaries, and folder or project hierarchy controls.
+
+Good guardrails focus on sharp edges. Deny disabling audit logs. Deny creating permanent admin users. Deny leaving approved regions. Deny public storage where the organization has decided it should never happen. Deny deployment outside approved identity paths. A guardrail that tries to encode every application detail can slow teams down. A guardrail that blocks the dangerous exits gives teams room to build inside a safe boundary.
+
+Guardrails also connect to emergency recovery. If normal roles cannot disable CloudTrail or remove an organization policy, the emergency role may need a rare recovery path. That path should use temporary elevation, strong approval, and loud audit evidence.
+
+## Temporary Elevation and Break-Glass Access
+<!-- section-summary: Temporary elevation gives short approved access for special work, while break-glass handles rare recovery when normal automation cannot fix production. -->
+
+**Temporary elevation** means a person receives stronger access for a short time after approval. The person does not carry standing administrator access all day. They request a role, explain the reason, link a ticket, pass MFA, and receive a session that expires automatically.
+
+This fits normal production needs. An on-call engineer may need two hours of read-only investigation. A database engineer may need a short maintenance role during a planned migration. A security reviewer may need access to IAM reports for a quarterly review. Each session should name the person and the reason.
+
+**Break-glass access** is the emergency path for serious incidents where normal automation cannot recover production. The path should exist before the incident. It should be tested. It should be rare. It should leave evidence.
+
+For Northstar, break-glass might cover these cases:
+
+| Emergency | Why normal access may fail | Recovery action |
+|---|---|---|
+| CI/CD cannot assume the deploy role | A trust policy or identity provider setting broke | Restore the last known good trust configuration |
+| Terraform state is locked and the unlock workflow is down | The deployment pipeline cannot progress | Clear the lock through the approved backend procedure |
+| A bad network change blocks health checks | Normal rollback cannot reach the service path | Revert the specific security group or route change |
+| Workforce federation has an outage | Humans cannot start normal sessions | Use monitored emergency access to restore identity integration |
+| Audit forwarding broke during incident response | Security visibility is degraded | Restore log delivery and verify retention |
+
+A practical break-glass runbook should include these steps:
+
+1. Declare the incident and record the incident ID.
+2. Request the emergency role with expected actions, expected resources, duration, and rollback plan.
+3. Get peer approval from a named person outside the responder.
+4. Authenticate with strong MFA.
+5. Start a short session with the incident ID in the session name.
+6. Perform only the planned recovery actions.
+7. Alert security monitoring when the role is assumed.
+8. Close or let the session expire.
+9. Query audit logs for every API call in the session.
+10. Run a drift check and open a pull request for any lasting infrastructure change.
+
+This runbook makes emergency access available without making it casual. The team can recover production, and the evidence trail shows why the access existed and what happened during the session.
+
+## Access Reviews and Evidence
+<!-- section-summary: Access reviews compare current permissions with real usage, ownership, exceptions, and audit logs so privilege does not grow quietly. -->
+
+An **access review** is a scheduled check of whether a person, group, workload, or role still needs its current access. The reviewer looks at business need, recent usage, permission scope, group membership, exceptions, and audit logs. The result should be a decision: keep, reduce, remove, or add an expiry.
+
+Access reviews matter because IAM drifts too. People change teams. Workloads stop using old services. Deployment roles keep permissions from retired modules. Emergency exceptions remain after incidents. A role that made sense six months ago may be too broad today.
+
+For Northstar, a quarterly review should cover these paths:
+
+| Review target | Evidence to collect | Good decision |
+|---|---|---|
+| Workforce groups | HR roster, on-call rotation, MFA status, role assignments | Remove people who changed teams |
+| Plan role | Workflow runs, state reads, describe calls, failed access attempts | Keep read-only scope |
+| Deploy role | OIDC trust policy, protected environment approvals, `iam:PassRole` usage | Remove unused write actions and broad resources |
+| Runtime roles | CloudTrail activity, secret reads, bucket access, last accessed data | Keep only actions the workload uses |
+| Emergency role | Activations, incident tickets, approvers, API calls, drift cleanup PRs | Confirm every session had a valid incident |
+| Static keys | Key age, last used date, owner, exception record | Delete unused keys and migrate exceptions to federation |
+
+The review record should be specific enough to prove what happened later:
+
+| Evidence field | Example |
+|---|---|
+| Review | `NORTHSTAR-PROD-IAM-Q3-2026` |
+| Role | `northstar-prod-terraform-deploy` |
+| Trust path | GitHub OIDC, `repo:northstar/customer-portal:environment:production` |
+| Current scope | Terraform-managed ECS, load balancer, receipt bucket, constrained `iam:PassRole` |
+| Usage evidence | CloudTrail activity for last 90 days and workflow run IDs |
+| Decision | Remove unused `rds:DescribeDBSnapshots`; keep constrained `iam:PassRole` |
+| Reviewer | `platform-security` |
+| Owner | `cloud-platform` |
+| Ticket | `SEC-8124` |
+| Next review | `2026-12-31` |
+
+Audit logs are the main evidence source. In AWS, CloudTrail records IAM and STS calls, including role assumptions. Azure Activity Logs and Microsoft Entra audit logs show role assignments, sign-ins, and many management operations. Google Cloud Audit Logs record admin activity and data access when enabled. These logs should flow to a security-controlled place where application teams and attackers cannot delete their own trail.
+
+For CI/CD, the session name should carry a run ID. For emergency work, the session name should carry an incident ID. That tiny naming habit makes later review much easier because the audit event can connect to a pull request, workflow run, or incident ticket.
+
+Access reviews should lead to changes. If a workload no longer calls a service, remove that action. If a human group contains people outside the on-call rotation, remove them. If an emergency role was used without a ticket, fix the process. If a pipeline still uses static keys, move it to OIDC and delete the key.
 
 ## Putting It All Together
+<!-- section-summary: A mature cloud IAM design uses federation, workload identities, OIDC deployment roles, guardrails, emergency access, and recurring evidence review. -->
 
-Securing cloud identity requires a comprehensive transition from static, over-scoped permissions to highly restricted, dynamic access paths. By treating identity as the primary security perimeter, writing granular resource-constrained policies, adopting OIDC role exchange, and enforcing strict JIT break-glass controls, we eliminate credential exposure risk while maintaining operational velocity.
+The Northstar production path now has clear identities. A developer opens a pull request. The plan workflow uses OIDC to assume `northstar-prod-terraform-plan`, reads current state, and posts a speculative plan. That role cannot change production.
 
-When auditing and hardening your cloud access control configurations, ensure you enforce these five core practices:
+A release manager approves the protected production environment. The deploy workflow receives a fresh OIDC token and assumes `northstar-prod-terraform-deploy`. The trust policy checks repository and environment claims. The permission policy allows the expected infrastructure changes and only passes approved runtime roles. The session name includes the workflow run ID.
 
-First, audit all active IAM roles to eliminate wildcard permissions. Inspect your policy statements regularly, replacing broad actions (`s3:*`) and unrestricted resources (`*`) with targeted operations and specific resource ARNs.
+The API and worker run with workload identities. They receive temporary credentials from the cloud platform. They can use the secrets, queues, buckets, and logs they need. They cannot modify IAM or network rules.
 
-Second, remove all static, long-lived access keys from your CI/CD pipelines. Integrate OpenID Connect (OIDC) federated role assuming to issue short-lived, temporary session credentials dynamically for every pipeline run.
+An incident starts. The on-call engineer signs in through workforce federation and activates `northstar-prod-incident-readonly` with MFA and an incident ticket. If the normal path is blocked, a responder requests `northstar-prod-emergency-recovery`, gets peer approval, and uses a short session with the incident ID in the name. Afterward, the team reviews audit logs and runs a drift check.
 
-Third, restrict human administrative privileges in production. Route standard infrastructure and application changes through automated repositories, ensuring that developers do not carry standing administrative access on their personal accounts.
+A quarterly access review keeps the design from aging badly. The team checks people, groups, deployment roles, runtime roles, emergency activations, static key exceptions, and audit logs. Permissions that no longer match real usage get removed. Exceptions get expiry dates. The evidence shows who had access, why they had it, whether they used it, and what changed.
 
-Fourth, implement a dedicated Just-in-Time (JIT) break-glass access system for production emergencies. Enforce automatic session expiration, require multi-party peer approvals, and bind every emergency request to an active incident ticket.
+That is the Cloud and Infrastructure Security module as a complete loop. Infrastructure code defines the desired change. Policy as Code checks the rules before apply. Drift and perimeter security watch the live account after deployment. IAM controls the callers behind every change and gives the team the evidence to prove the access was approved, scoped, temporary where needed, and reviewed over time.
 
-Fifth, protect and analyze your cloud provider's central audit logs. Forward all audit trails to an isolated, read-only security account, and monitor active sessions to quickly detect and isolate anomalous API patterns.
+![Cloud IAM Summary](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
 
-## What's Next
-
-Securing cloud identity, static IaC scanning, OPA policy engines, and drift perimeters establishes a highly robust infrastructure security foundation. However, as organizations scale their compute workloads, they must manage these resources within structured container orchestrators. In the next submodule, **Kubernetes Security**, we will focus on the orchestrator tier, beginning with **Kubernetes Access and RBAC** to explore how to secure API server connections, configure service accounts, and write least-privilege role bindings.
-
-![Cloud IAM summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
-
-*This summary shows IAM as principal, action, resource, condition, OIDC role, and audit trail decisions.*
+*The summary ties the IAM practices together: federated humans, workload roles, OIDC, limited deployment access, break-glass controls, and recurring evidence review.*
 
 ---
 
 **References**
 
-- [AWS IAM JSON Policy Elements Reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html) - Official guide detailing the evaluation and syntax of AWS IAM policies.
-- [GitHub Actions Security Hardening with OpenID Connect](https://docs.github.com/en/actions/security-hardening-your-workflows/about-security-hardening-with-openid-connect) - Documentation on federating pipeline runner identities with cloud providers.
-- [NIST SP 800-207 Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final) - Standards recommending continuous credential verification, least-privilege scoping, and dynamic session management.
-- [AWS CloudTrail Forensic Log Auditing Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Best practices for analyzing event trails and investigating credential misuse.
-- [OWASP Top 10 Security Logging and Monitoring Failures](https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/) - Analysis of common audit logging gaps and how to design resilient forensic evidence repositories.
+- [AWS IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html) - Official AWS documentation for IAM roles, trust policies, permissions, and temporary credentials.
+- [AWS temporary security credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Official AWS documentation for STS and temporary access.
+- [AWS OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html) - Official AWS guidance for using OIDC identity providers with IAM roles.
+- [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Official GitHub documentation for OIDC tokens in workflows.
+- [Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services) - GitHub's AWS-specific OIDC setup guidance.
+- [Google Cloud Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation) - Official Google Cloud documentation for federated workload access without service account keys.
+- [Microsoft Entra workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) - Official Microsoft documentation for federated workload credentials.
+- [AWS permissions boundaries](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) - Official AWS documentation for maximum permission boundaries.
+- [AWS Organizations service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Official AWS documentation for organization-level permission guardrails.
+- [AWS IAM Access Analyzer policy generation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-generation.html) - Official AWS documentation for generating policies from access activity.
+- [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Official AWS documentation for account activity and API audit logs.
+- [Microsoft Entra emergency access accounts](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/security-emergency-access) - Official Microsoft guidance for emergency access account planning.
+- [Microsoft Entra access reviews](https://learn.microsoft.com/en-us/entra/id-governance/access-reviews-overview) - Official Microsoft documentation for recurring access reviews.

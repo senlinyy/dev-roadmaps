@@ -1,8 +1,8 @@
 ---
-title: "State and Logs"
-description: "Use container state, logs, inspect output, and exec sessions to understand what a running or exited container actually did."
-overview: "A container is easiest to debug when you read its evidence in order. This article follows status, logs, metadata, and shell access so inspection stays tied to the main process instead of becoming command memorization."
-tags: ["docker", "logs", "exec", "inspect"]
+title: "Container State, Logs, Inspect, and Exec"
+description: "Debug Docker containers by reading state first, then logs, inspect metadata, and live exec output when the main process is still running."
+overview: "This article follows a ticketing API through real container debugging: checking status, reading logs, inspecting metadata, and using exec commands only while the main process is alive."
+tags: ["docker", "containers", "logs", "inspect", "exec"]
 order: 2
 id: article-containers-orchestration-docker-container-state-logs-and-exec
 ---
@@ -10,258 +10,388 @@ id: article-containers-orchestration-docker-container-state-logs-and-exec
 ## Table of Contents
 
 1. [The Debugging Path](#the-debugging-path)
-2. [State Tells You Where to Start](#state-tells-you-where-to-start)
-3. [Logs Tell You What the Process Said](#logs-tell-you-what-the-process-said)
-4. [Inspect Shows the Container Contract](#inspect-shows-the-container-contract)
-5. [Exec Gives You a Live View](#exec-gives-you-a-live-view)
-6. [A Crash Walkthrough](#a-crash-walkthrough)
-7. [A Running and Unreachable Walkthrough](#a-running-and-unreachable-walkthrough)
-8. [Logging Habits That Help Later](#logging-habits-that-help-later)
-9. [Where Inspection Usually Breaks](#where-inspection-usually-breaks)
+2. [State Comes First](#state-comes-first)
+3. [Exit Codes Tell You How the Process Ended](#exit-codes-tell-you-how-the-process-ended)
+4. [Logs Tell You What the Process Said](#logs-tell-you-what-the-process-said)
+5. [Inspect Shows the Container Contract](#inspect-shows-the-container-contract)
+6. [Exec Gives You a Live View](#exec-gives-you-a-live-view)
+7. [Crash Walkthrough: Missing Configuration](#crash-walkthrough-missing-configuration)
+8. [Running Walkthrough: The API Cannot Reach Its Database](#running-walkthrough-the-api-cannot-reach-its-database)
+9. [Debugging Habits Real Teams Use](#debugging-habits-real-teams-use)
 10. [What's Next](#whats-next)
 
 ## The Debugging Path
-<!-- section-summary: Container debugging works best when state, logs, inspect output, and exec each answer a different question. -->
+<!-- section-summary: Container debugging has an order: state tells us whether the process is alive, logs tell us what it said, inspect shows how Docker created it, and exec gives a live view only while it is running. -->
 
-In the previous article, we ran the `tickets-api` container and gave Docker a name, environment variables, and a port mapping. Now imagine the junior developer opens the browser and sees an error. The first instinct might be to jump inside the container with a shell, and Docker already has several pieces of evidence waiting for us.
+In the previous article, we ran a container from an image and watched Docker create a real process with a name, port mapping, writable layer, and lifecycle state. Now the same container has a problem. A small `tickets-api` service should start on port `3000`, connect to Postgres, and answer requests from the browser.
 
-The useful path has four stops. **State** tells us whether the main process still runs. **Logs** show what the process wrote to standard output and standard error. **Inspect output** shows the configuration Docker used when it created the container. **Exec** starts an extra process inside a container that already has a running main process.
+This is the kind of problem that happens during normal development and production support. Someone says, "The container started, but the API is down," or "The container exits right away after deploy." The useful move is to collect evidence in the same order every time: **state**, then **logs**, then **inspect output**, then **exec** if the main process still runs.
 
-Those four tools connect to the same container lifecycle. Exec needs a live process namespace for a shell session, so an exited main process sends us back to state, logs, and inspect output. If the main process still runs, logs and inspect output can tell us whether the service started with the settings we expected before we touch the inside of the container.
+Here is the short structure before we go deeper. **Container state** answers, "Is the main process alive right now?" **Logs** answer, "What did the process print before and during the failure?" **Inspect output** answers, "What command, environment, ports, mounts, and network settings did Docker actually give this container?" **Exec** answers, "What can a new process see from inside the running container?" Those answers build on each other, so each command earns its place.
 
-So we will follow the evidence in order. State first, logs second, inspect third, and exec when the container is alive and we need a live viewpoint.
+That order matters because `docker exec` needs the container's primary process to still be running. Docker can start an extra shell or command inside a running container, but once the main process exits, there is no live container environment for that exec session. For exited containers, state, logs, and inspect output carry the evidence.
 
-## State Tells You Where to Start
-<!-- section-summary: Container state tells you whether the main process is alive, exited, restarting, paused, or waiting for cleanup. -->
+![Docker debugging evidence path infographic showing state, logs, inspect, and exec in order with exec available only for a running container](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/debugging-evidence-path.png)
 
-**Container state** is Docker's recorded answer to the question, "What happened to the main process?" A running API should show as `Up`. A failed startup usually shows as `Exited` with an exit code. A restart policy can show `Restarting` when Docker keeps trying to start the process again.
+*The debugging path works because each tool answers a different question. State decides whether the process is alive, logs explain what it said, inspect shows the saved container contract, and exec only helps when there is still a live container to enter.*
 
-The first command after a confusing run is usually `docker ps -a`. It includes stopped containers, which matters when the process exited quickly:
+## State Comes First
+<!-- section-summary: Container state tells us whether Docker still has a running main process, and that state decides which debugging tools can help next. -->
+
+**Container state** is Docker's record of what happened to the container's main process. In a container, the main process is the command Docker started from the image and runtime arguments. For our ticketing API, that might be `node dist/server.js`, and Docker watches that process as the container's life.
+
+The first command is usually `docker ps -a`. The `ps` command lists containers, and `-a` includes stopped containers too. That detail matters because a crashing container can disappear from the normal `docker ps` view while still holding the logs and metadata we need.
 
 ```bash
 docker ps -a
 ```
 
-Example output might look like this. The rows show three different container lifetimes from the same Docker host:
+A small Docker host might show this. The exact IDs and timestamps will change on your machine, but the `STATUS`, `PORTS`, and `NAMES` columns are the important parts:
 
 ```console
-CONTAINER ID   IMAGE                          COMMAND                  STATUS                      NAMES
-1b7f2b6c9a11   devpolaris/tickets-api:local   "node dist/server.js"    Up 45 seconds               tickets-api
-88d7c92a4f30   devpolaris/tickets-api:local   "node dist/server.js"    Exited (1) 4 minutes ago    tickets-api-bad
-e23c6f9a9124   devpolaris/tickets-worker      "node worker.js"         Exited (0) 10 minutes ago   ticket-report-job
+CONTAINER ID   IMAGE                          COMMAND                  CREATED          STATUS                      PORTS                    NAMES
+6d9f3c5a80a1   devpolaris/tickets-api:local   "node dist/server.js"    45 seconds ago   Up 44 seconds               0.0.0.0:8080->3000/tcp   tickets-api
+9ac5a6f38d21   devpolaris/tickets-api:local   "node dist/server.js"    4 minutes ago    Exited (1) 4 minutes ago                             tickets-api-bad
+f238cd15ef40   devpolaris/report-worker       "node worker.js"         12 minutes ago   Exited (0) 12 minutes ago                            ticket-report-job
 ```
 
-The `STATUS` column sets the next question. `Up` means the main process still runs, so live checks and `exec` can help. `Exited (1)` means the process reported a failure, so logs should come next. `Exited (0)` means the process completed successfully, which fits a one-time report job and surprises people only when they expected a long-running service.
+Each row gives us a next step. `Up 44 seconds` means the main process still runs, so we can use logs, inspect output, and eventually `exec`. `Exited (1)` means the process ended with a failure code, so logs and inspect output should explain the startup failure. `Exited (0)` means the process ended successfully, which fits a one-time job but looks surprising for an API that should stay online.
 
-Exit codes come from the process, shell, or runtime inside the container. Docker records them and shows them back to you. That small difference matters because Docker can show the symptom while the application log explains the cause.
+When a machine runs many containers, filters make the state check calmer. These filters keep the first check focused on the service, stopped containers, or a specific exit code:
+
+```bash
+docker ps -a --filter name=tickets-api
+docker ps -a --filter status=exited
+docker ps -a --filter exited=1
+```
+
+The name filter proves which containers belong to this service. The `status=exited` filter finds containers whose main process already ended. The `exited=1` filter focuses on containers that returned exit code `1`, which usually means the application or entry command decided startup failed.
+
+## Exit Codes Tell You How the Process Ended
+<!-- section-summary: Exit codes give the first clue about whether a container completed normally, failed during startup, or stopped because of a signal. -->
+
+An **exit code** is the number a process returns to the operating system when it ends. A code of `0` means the process reported success. A non-zero code means the process reported failure, and Docker records that number in the container state.
+
+Exit codes are small, but they are useful because they separate "the container stopped" from "the application reported failure." A report job ending with `Exited (0)` can be healthy. A web API ending with `Exited (1)` needs attention because a long-running service should keep its main process alive.
+
+Docker shows the exit code in `docker ps -a`, and `docker inspect` can show the same value with timestamps. This helps when you need to know whether the process died immediately or ran for a while:
+
+```bash
+docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' tickets-api-bad
+```
+
+That command proves four things at once. `status` tells us Docker's current state for the container. `exit` tells us the process result. `started` and `finished` tell us whether the container died immediately after startup or ran for a while first.
+
+Some exit codes also point to Linux signals. For example, a process killed by signal 9 often appears as exit code `137`, because shells commonly report signal exits as `128 + signal_number`. You do not need to memorize every code at this stage, but you should notice the difference between a clean `0`, a normal app failure like `1`, and a signal-shaped value like `137`.
+
+State and exit codes tell us where to start. They still do not tell us why the ticketing API failed. For that, we read what the process printed.
 
 ## Logs Tell You What the Process Said
-<!-- section-summary: Docker logs are the captured standard output and standard error streams from the container process. -->
+<!-- section-summary: Docker logs are the captured stdout and stderr streams from the container process, so they usually explain startup failures and request-time errors before shell access does. -->
 
-**Docker logs** are the output Docker captured from the container's standard output and standard error streams. In plain English, this is what the process printed while it ran. For a web app, that should include startup messages, configuration warnings, request errors, and crash details.
+**Docker logs** are the output Docker captured from the container's standard output and standard error streams. Standard output is the normal stream a process prints to, and standard error is the stream many programs use for warnings and failures. Docker captures those streams through the container logging system, so `docker logs` shows what the process said while it ran.
 
-The common commands are small. Each one reads the same captured stream with a different viewing window:
+For our `tickets-api`, useful logs include startup lines, configuration validation, database connection errors, and request failures. A good containerized app writes these messages to stdout and stderr because Docker, Docker Compose, Kubernetes, and logging collectors can all pick them up from there.
+
+These commands read the same captured stream with different windows. The command name stays the same, and the flags change how much history you see:
 
 ```bash
 docker logs tickets-api
 docker logs --tail 80 tickets-api
-docker logs -f tickets-api
 docker logs --since 10m tickets-api
+docker logs --follow --tail 20 tickets-api
+docker logs --timestamps --tail 50 tickets-api
 ```
 
-`--tail` keeps the output focused when a service has been running for a while. `-f` follows new log lines as they arrive, which helps while you trigger a browser request in another terminal. `--since` narrows the window if the issue started after a recent run or restart.
+The plain command proves what the container printed across its available log history. `--tail 80` proves the recent ending without flooding the terminal. `--since 10m` proves what happened during a recent deploy or test. `--follow --tail 20` starts with the latest lines and streams new ones while we trigger a request. `--timestamps` proves when each line happened, which helps connect a browser request, a deploy, and an application error.
 
-For the ticketing API, a startup failure might leave this log. The app says exactly which runtime value blocked startup:
+A missing configuration crash might show the app's startup path. The process says which required value stopped it:
 
 ```log
-Booting tickets API
+Booting tickets-api
 Reading runtime configuration
 DATABASE_URL is required
 ```
 
-That log tells us Docker created the container and started the Node process. The app then rejected its runtime configuration. A rebuild would waste time here because the missing value belongs to the container run, Compose file, secret source, or deployment configuration.
+That log tells us the app reached its configuration check and stopped before opening the HTTP port. The state showed `Exited (1)`, and the log explains the cause in application language. Now we can inspect the container metadata to confirm which environment variables Docker actually passed in.
 
-This is why production container apps usually write logs to standard output and standard error. Docker can collect those streams, `docker logs` can show them locally, and orchestrators can forward them to a logging system. A log file buried inside the container filesystem gives the operator extra work at the exact moment they need fast evidence.
+Logs also help for containers that stay up. A running API might print a different shape of evidence. This example reaches the listening line and then fails during a database check:
+
+```log
+Booting tickets-api
+Listening on 0.0.0.0:3000
+Database check failed: getaddrinfo ENOTFOUND tickets-db
+GET /health 503 18ms
+```
+
+This is a different kind of problem. The API process is alive and the port mapping may be correct, but the app cannot resolve or reach `tickets-db`. The logs give us the application symptom, and inspect output tells us whether Docker gave the container the expected environment, network, and port settings.
 
 ## Inspect Shows the Container Contract
-<!-- section-summary: Inspect output shows the exact configuration Docker saved for the container, including command, environment, ports, mounts, state, and health. -->
+<!-- section-summary: Inspect output shows the exact command, environment, ports, network settings, mounts, and recorded state Docker stored for the container. -->
 
-**Inspect output** is Docker's saved metadata for a container, image, network, or volume. For a container, it shows the settings Docker used and the state Docker recorded. It can be long, and you usually enter it with one question in mind.
+**Inspect output** is Docker's detailed metadata for a container. You can think of it as the container contract Docker created: the image, command, arguments, environment variables, working directory, user, port bindings, mounts, networks, restart count, and state timestamps. Logs tell us what the process said, and inspect output tells us what Docker gave the process.
+
+The full inspect output is large JSON, so the first look can be overwhelming. It is still worth seeing once because it shows how much Docker records for a container:
 
 ```bash
 docker inspect tickets-api
 ```
 
-For environment and command checks, these fields often matter. They connect the application symptom back to the container settings Docker saved:
-
-```json
-{
-  "Config": {
-    "Cmd": ["node", "dist/server.js"],
-    "Env": [
-      "NODE_ENV=development",
-      "DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets"
-    ],
-    "WorkingDir": "/app"
-  },
-  "State": {
-    "Status": "running",
-    "ExitCode": 0
-  },
-  "HostConfig": {
-    "PortBindings": {
-      "3000/tcp": [
-        {
-          "HostIp": "",
-          "HostPort": "8080"
-        }
-      ]
-    }
-  }
-}
-```
-
-This metadata helps when the logs point at configuration. If the app says `DATABASE_URL is required`, inspect can confirm whether Docker actually passed it. If the browser fails to reach the API, inspect can confirm whether `3000/tcp` maps to host port `8080`. If the process starts in the wrong folder, inspect can show the configured working directory.
-
-You can format inspect output when the full JSON is too much. This keeps the command focused on the field you are testing:
+Full JSON proves everything Docker knows, and real debugging usually asks focused questions. Docker's `--format` option lets us pull one field or shape a small line with Go template syntax. That keeps the output tied to the question:
 
 ```bash
-docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' tickets-api
-docker inspect --format '{{json .HostConfig.PortBindings}}' tickets-api
+docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' tickets-api
+docker inspect --format 'image={{.Config.Image}} path={{.Path}} args={{json .Args}}' tickets-api
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tickets-api
+docker inspect --format 'ports={{json .HostConfig.PortBindings}}' tickets-api
+docker inspect --format 'networks={{json .NetworkSettings.Networks}}' tickets-api
+docker inspect --format 'restarts={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' tickets-api
 ```
 
-The formatted version works well in notes and scripts. The full JSON works well when you are still exploring and want to see every saved field.
+Each command proves a different part of the contract. The state line proves Docker's current status and exit code. The image and command line prove which image and startup command were used. The environment line proves which variables existed when the container was created. The ports line proves which container ports were published to the host. The networks line proves which Docker network the container joined and what address Docker assigned there. The restart line proves whether Docker has been trying to restart the container.
+
+Environment inspection deserves a small warning. Environment variables often hold connection strings, tokens, and passwords. In a real team, avoid pasting full `docker inspect` output into chat or tickets without masking secrets, and prefer focused checks that reveal only the field you need.
+
+For the ticketing API, this focused command checks only the names we care about. It narrows the environment list to the app's port and database connection:
+
+```bash
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tickets-api | grep -E '^(PORT|DATABASE_URL)='
+```
+
+That command proves whether Docker created the container with the runtime configuration the app expects. The pipe to `grep` runs on your host terminal after Docker prints the environment list. If the value is a secret, the safer version checks only presence:
+
+```bash
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tickets-api | grep -E '^(PORT|DATABASE_URL)=' | sed 's/=.*/=<set>/'
+```
+
+Inspect output also explains many "the app is running but I cannot reach it" moments. A port mapping like `0.0.0.0:8080->3000/tcp` in `docker ps` proves Docker published host port `8080` to container port `3000`. The app still has to listen inside the container on the matching container port and on an address reachable from the container network, usually `0.0.0.0` for a web server.
+
+At this point, state, logs, and inspect output give us a lot without touching the container. When the main process is still running and we need the view from inside, `exec` gives us that live viewpoint.
 
 ## Exec Gives You a Live View
-<!-- section-summary: Exec starts an extra process inside a running container, which makes it useful after state proves the main process is alive. -->
+<!-- section-summary: Docker exec starts an extra command inside a running container, so it answers live questions while durable repairs belong in the container contract. -->
 
-**Docker exec** starts a new command inside an already running container. Docker's official docs point out that the exec command runs only while the container's primary process, PID 1, is running. That makes state the gate before `exec`: `Up` gives you a live target, while an exited process sends you back to logs and inspect.
+**Docker exec** starts a new command inside a running container. That command shares the container's filesystem, environment, network namespace, and process view, so it can answer questions from inside the same runtime environment as the app. Docker can only do this while the container's primary process is running.
 
-A common shell session looks like this. It starts a new shell process inside the already running container:
+The common beginner command is an interactive shell. The first command tries `sh`, and the second tries `bash` when the image includes it:
 
 ```bash
 docker exec -it tickets-api sh
+docker exec -it tickets-api bash
 ```
 
-The `-i` flag keeps input open and `-t` gives the session a terminal. Many small Linux images include `sh`, while some images keep only the application binary and a tiny runtime. In those small images, an exec session can still run commands that exist in the image. A shell may be absent, so the available commands come from the image contents.
+`-i` keeps standard input open, and `-t` allocates a terminal. Many small production images include `sh` but skip `bash`, so `sh` is usually the first shell to try. Some minimal images include no shell at all, and then targeted commands from the app runtime are more useful.
 
-Exec is useful for live questions. You can check whether a file exists, test DNS from inside the container, print environment visible to a process, or call a local health endpoint from the same network view as the app.
+Targeted exec commands create less noise than a long shell session. They also produce short output that fits well in a ticket or comparison between runs:
 
 ```bash
 docker exec tickets-api pwd
-docker exec tickets-api printenv DATABASE_URL
-docker exec tickets-api node -e "fetch('http://127.0.0.1:3000/health').then(r => console.log(r.status))"
+docker exec tickets-api printenv PORT
+docker exec tickets-api sh -lc 'ls -la /app && cat /etc/resolv.conf'
+docker exec tickets-api sh -lc 'getent hosts tickets-db || true'
+docker exec tickets-api sh -lc 'nc -vz tickets-db 5432'
 ```
 
-Exec also has its own environment and working-directory options. Docker can set extra environment variables for the exec process, and those values apply to that one exec command. That can help with a temporary diagnostic command while leaving the container's original runtime configuration unchanged.
+These commands prove specific facts. `pwd` proves the default working directory for the exec process. `printenv PORT` proves what a new process sees for a selected variable. `cat /etc/resolv.conf` shows the DNS configuration inside the container. `getent hosts tickets-db` checks whether the dependency name resolves from inside the container. `nc -vz tickets-db 5432` checks whether the database port accepts a TCP connection, if the image includes `nc`.
 
-## A Crash Walkthrough
-<!-- section-summary: A crashed container usually needs state, logs, and inspect before shell access becomes relevant. -->
+Shell syntax has one important detail. Docker runs the executable you name, so a command with shell operators needs an explicit shell. That keeps Docker responsible for starting `sh`, and the shell responsible for operators like `&&`:
 
-Let's follow the ticketing API after it exits during startup. The junior developer says, "The run finished and I got my prompt back." That description could mean a normal foreground process completed, a server crashed, or the run was detached and still works in the background.
+```bash
+docker exec tickets-api sh -lc 'echo $HOSTNAME && ps -ef'
+```
 
-State gives the first branch. The command narrows the output to the container name we care about:
+Here `sh` is the executable, `-lc` asks the shell to run the following string, and the shell handles `$HOSTNAME` plus `&&`. This pattern helps when you need pipes, environment expansion, or a few short checks in one exec call.
+
+Use exec for live diagnosis during a running container session. If you edit a file inside a running container, that change lives in that container's writable layer and disappears when the container is replaced. In production, exec can help confirm a diagnosis, and the durable fix should go back into the image, the startup command, the environment, the network, or the deployment configuration.
+
+Now let's walk through the two common ticketing API failures from start to finish. The first one exits during startup, and the second one keeps running while the database connection fails.
+
+## Crash Walkthrough: Missing Configuration
+<!-- section-summary: For an exited API container, state proves the process ended, logs explain the app-level failure, and inspect confirms which runtime configuration Docker supplied. -->
+
+Imagine a developer starts the ticketing API after building the image. The command below intentionally leaves out `DATABASE_URL` so we can follow the failure evidence:
+
+```bash
+docker run -d --name tickets-api-bad -p 8080:3000 devpolaris/tickets-api:local
+```
+
+The command starts the container in detached mode, gives it the name `tickets-api-bad`, and publishes host port `8080` to container port `3000`. The browser fails immediately, so the first check is state. At this point, the state tells us whether any live command can still run:
+
+```bash
+docker ps -a --filter name=tickets-api-bad
+```
+
+The output shows the important clue. The row gives us the state and exit code before we spend time on anything else:
+
+```console
+CONTAINER ID   IMAGE                          COMMAND                  STATUS                    PORTS     NAMES
+9ac5a6f38d21   devpolaris/tickets-api:local   "node dist/server.js"    Exited (1) 8 seconds ago             tickets-api-bad
+```
+
+This proves the API has already stopped, and exit code `1` tells us the process reported failure. Since the main process ended, `exec` has no live process to join. The logs are the next useful evidence:
+
+```bash
+docker logs --tail 40 tickets-api-bad
+```
+
+The logs explain the startup path. The app prints the exact configuration value that blocked startup:
+
+```log
+Booting tickets-api
+Reading runtime configuration
+DATABASE_URL is required
+```
+
+Now inspect confirms the container contract. The app says `DATABASE_URL` is missing, so we check what Docker created. The command prints only the environment entries relevant to this service:
+
+```bash
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tickets-api-bad | grep -E '^(PORT|DATABASE_URL)='
+```
+
+The output might show only one value. That short result is enough to confirm the missing variable:
+
+```console
+PORT=3000
+```
+
+That proves Docker created the container without the database URL. The fix is to create a new container with the needed runtime values and put it on the network where the `tickets-db` container runs. Environment variables and network membership are set when the container is created, so the old failed container has already given us its evidence:
+
+```bash
+docker rm tickets-api-bad
+docker run -d \
+  --name tickets-api \
+  --network tickets-net \
+  -p 8080:3000 \
+  -e PORT=3000 \
+  -e DATABASE_URL=postgres://tickets:dev@tickets-db:5432/tickets \
+  devpolaris/tickets-api:local
+```
+
+After that, the same evidence path proves the new result. The commands are the same because the debugging order stays the same:
+
+```bash
+docker ps -a --filter name=tickets-api
+docker logs --tail 40 tickets-api
+docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}}' tickets-api
+```
+
+The corrected version should show `Up` in `docker ps -a` when `tickets-db` is reachable on `tickets-net`, startup logs that reach the listening line, and `status=running exit=0` from inspect. Exit code `0` appears while the container is running because Docker has no failure exit to report for the active process. If the database name still fails, the next walkthrough handles that network and DNS problem directly.
+
+## Running Walkthrough: The API Cannot Reach Its Database
+<!-- section-summary: For a running API with a dependency problem, logs show the application symptom, inspect shows network and environment metadata, and exec checks DNS and TCP connectivity from inside the container. -->
+
+Now the API stays up, but the health endpoint returns an error. This is a common production shape: the process is alive, the port is published, and the service still cannot do useful work because a dependency is missing or unreachable.
+
+The state check starts the same way. We still want Docker's recorded state before we decide whether live debugging can help:
 
 ```bash
 docker ps -a --filter name=tickets-api
 ```
 
-The output shows `Exited (1)`. That tells us the main process reported a failure, and the container record still exists. Logs become the next useful evidence source.
+The output now points us toward live debugging. The word `Up` tells us the main process still exists:
 
-```bash
-docker logs tickets-api
+```console
+CONTAINER ID   IMAGE                          COMMAND                  STATUS          PORTS                    NAMES
+6d9f3c5a80a1   devpolaris/tickets-api:local   "node dist/server.js"    Up 2 minutes    0.0.0.0:8080->3000/tcp   tickets-api
 ```
 
-The log says the app rejected its runtime configuration. The next lines point directly at the missing value:
+This proves the main process is alive and Docker published host port `8080` to container port `3000`. The port mapping says traffic can reach the container port, and the logs tell us what the application does with that traffic. Now we switch from container state to application evidence:
+
+```bash
+docker logs --since 5m tickets-api
+```
+
+The output shows the dependency problem. The API can start its HTTP server, then fails when it tries to resolve the database name:
 
 ```log
-Booting tickets API
-DATABASE_URL is required
+Booting tickets-api
+Listening on 0.0.0.0:3000
+Database check failed: getaddrinfo ENOTFOUND tickets-db
+GET /health 503 18ms
 ```
 
-Now inspect can confirm the configuration Docker used. The environment list should show whether Docker passed the missing value:
+This proves the app opened the HTTP server and then failed while resolving `tickets-db`. Now inspect helps us check whether the container joined the network where `tickets-db` should exist. We also verify the hostname the app read from its environment:
 
 ```bash
-docker inspect --format '{{json .Config.Env}}' tickets-api
+docker inspect --format 'networks={{json .NetworkSettings.Networks}}' tickets-api
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' tickets-api | grep -E '^DATABASE_URL=' | sed 's/:[^:@/]*@/:<password>@/'
 ```
 
-If `DATABASE_URL` is missing from that list, the fix belongs in the run command, env file, Compose file, or secret injection path. A corrected local run supplies it explicitly:
+The network output proves which Docker networks the container joined. The database URL check proves which hostname the app tries to use, while the `sed` expression masks the password part before the value lands in the terminal. If the container is on the default `bridge` network and the database runs on another user-defined network, the name `tickets-db` may never resolve from this container.
+
+Because the API is running, `exec` can test the same network view from inside. These commands ask the container's own DNS and TCP path what they can reach:
 
 ```bash
-docker rm tickets-api
+docker exec tickets-api sh -lc 'getent hosts tickets-db || true'
+docker exec tickets-api sh -lc 'nc -vz tickets-db 5432'
+```
+
+The first command proves whether container DNS resolves `tickets-db`. The second command proves whether the database port accepts TCP connections from this container, assuming `nc` exists in the image. If the image lacks `getent` or `nc`, a Node-based image can still use Node itself for a small DNS check:
+
+```bash
+docker exec tickets-api node -e "require('dns').lookup('tickets-db', (err, addr) => { if (err) { console.error(err.message); process.exit(1) } console.log(addr) })"
+```
+
+That command proves name resolution with the same runtime family the API uses. A successful DNS answer tells us the name exists, and a TCP failure then points toward the database process, port, firewall, or credentials. A DNS failure points toward the Docker network or the dependency name.
+
+The likely fix is to recreate the API container on the same user-defined network as the database. That gives the API and database a shared Docker DNS space where the name `tickets-db` can resolve. The recreated containers now match the dependency name used in `DATABASE_URL`:
+
+```bash
+docker network create tickets-net
+docker run -d \
+  --name tickets-db \
+  --network tickets-net \
+  -e POSTGRES_USER=tickets \
+  -e POSTGRES_PASSWORD=dev \
+  -e POSTGRES_DB=tickets \
+  postgres:16
+docker rm -f tickets-api
 docker run -d \
   --name tickets-api \
-  -e DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets \
+  --network tickets-net \
   -p 8080:3000 \
+  -e PORT=3000 \
+  -e DATABASE_URL=postgres://tickets:dev@tickets-db:5432/tickets \
   devpolaris/tickets-api:local
 ```
 
-That sequence also explains the cleanup timing. We removed the old stopped container after reading its evidence. Removing it first would have taken away the name conflict and the saved logs at the same time.
+The exact database container setup in a real project will include credentials, volumes, and migrations, so this example focuses only on the debugging shape. The important part is the evidence chain: state proved the API was alive, logs proved the dependency failure, inspect proved the configured network and hostname, and exec tested resolution from inside the running container.
 
-## A Running and Unreachable Walkthrough
-<!-- section-summary: A running container with an unreachable service usually points to port mapping, listening address, or application readiness. -->
+![Docker crash versus running debug infographic comparing an exited tickets-api container with missing DATABASE_URL and a running container that cannot reach tickets-db](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/crash-vs-running-debug.png)
 
-Now take a different shape. `docker ps` says the API is `Up`, and `docker logs` says `Listening on 3000`. The browser still fails at `http://localhost:8080`. Since the process is alive, the next question moves from crash evidence to reachability.
+*These two failures use different evidence. A startup crash stays with state, logs, and inspect; a running dependency problem can add exec checks because the container still has a live network view.*
 
-The port column in `docker ps` should show a host mapping. That mapping tells us how browser traffic reaches the container port:
+## Debugging Habits Real Teams Use
+<!-- section-summary: Production teams keep container debugging useful by writing logs to stdout and stderr, using focused inspect queries, limiting exec changes, and turning repeated checks into runbooks. -->
 
-```console
-PORTS                    NAMES
-0.0.0.0:8080->3000/tcp   tickets-api
-```
+Real teams turn this evidence path into a small runbook. A runbook is a short, repeatable set of checks people follow during an incident or support issue. For a single Docker container, the runbook can be as simple as state, recent logs, focused inspect fields, and one or two targeted exec checks.
 
-If the `PORTS` column only shows `3000/tcp`, the image exposes a port and the run skipped host publishing. The corrected run needs `-p 8080:3000`. If the mapping points to another host port, the browser URL should use that host port.
+The first habit is writing application logs to stdout and stderr. Docker's logging system is designed around those streams, and logging drivers can store or forward them to local files, journald, Fluentd, CloudWatch Logs, or another backend. If the application writes only to a file inside the container, `docker logs` may show very little, and every incident starts with a shell hunt.
 
-When the port mapping looks correct, `exec` can test the service from inside the container. This separates internal service behavior from host-side routing:
+The second habit is using focused inspect commands. Full `docker inspect` output is useful and can expose secrets or create noise. A command that prints only `.State`, `.Config.Env`, `.HostConfig.PortBindings`, or `.NetworkSettings.Networks` makes the debugging note clearer for review later.
 
-```bash
-docker exec tickets-api node -e "fetch('http://127.0.0.1:3000/health').then(r => console.log(r.status)).catch(e => console.error(e.message))"
-```
+The third habit is using exec as a focused live check. Exec can confirm DNS, ports, files, users, working directories, and runtime values. Lasting fixes belong in the Dockerfile, image build, runtime command, environment, network, secrets handling, or orchestration configuration.
 
-If the internal health call works, the application process and container port probably work. The remaining issue may sit on the host side, such as the wrong URL, a port conflict, a proxy, or a firewall rule. If the internal health call fails, the process may be alive while the service endpoint is still warming up, which leads into health checks in the last article of this group.
+The fourth habit is saving the proof with the ticket. A good incident note says, "`docker ps -a` showed `Exited (1)`, logs showed `DATABASE_URL is required`, and inspect showed no `DATABASE_URL` in `.Config.Env`." That note lets the next person understand both the symptom and the proof without replaying the whole debugging session.
 
-## Logging Habits That Help Later
-<!-- section-summary: Useful container logs include startup configuration facts, readiness changes, request failures, and shutdown events while keeping secrets out. -->
+These habits also carry forward to orchestration systems. Kubernetes has different commands, such as `kubectl get pods`, `kubectl logs`, `kubectl describe`, and `kubectl exec`, but the order stays familiar. First learn the state, then read the process output, then inspect the runtime contract, then enter the live environment only when it helps answer a specific question.
 
-Good container logs save time during incident response. For the ticketing API, a helpful startup log might include the app version, listening port, environment name, and whether optional dependencies connected. It should avoid printing full secrets, passwords, tokens, or private keys.
+![Docker debugging runbook summary infographic showing incident note, state, recent logs, inspect config, exec live checks, and fixing the container contract](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/debugging-runbook-summary.png)
 
-Here is a useful level of detail. The lines identify version, environment, listener, and dependency state while keeping secrets out:
-
-```log
-Booting tickets API version 2026.06.13
-Runtime environment: development
-HTTP server listening on 0.0.0.0:3000
-Database connection pool ready for host postgres
-```
-
-Those lines help because they connect directly to Docker evidence. The port line can be compared with `docker ps` port mappings. The database line can be compared with environment and network settings. The version line helps when the team wonders whether the running container came from the image they just built.
-
-Shutdown logs also matter. `docker stop` sends a signal to the main process, and a graceful app can log that it received the signal and closed connections. During local debugging, those lines separate a clean stop from a crash or a forceful kill.
-
-## Where Inspection Usually Breaks
-<!-- section-summary: Inspection gets confusing when evidence disappears, logs live in the wrong place, or live-shell expectations ignore the container state. -->
-
-The first common problem is automatic cleanup. `docker run --rm` removes the container record after the process exits. That works well for one-off commands, and it takes away the state and saved metadata that help after a crash. For a new service run, a named container that stays around gives you more evidence.
-
-The second problem is missing or quiet logs. If the app writes only to `/var/log/app.log`, `docker logs` may show almost nothing useful. Local teams can fix that by configuring the app logger to write to standard output and standard error, then letting Docker collect those streams.
-
-The third problem is using `exec` as the first move. Exec answers live questions inside a running container. A startup crash needs the saved state, exit code, logs, and inspect output because the main process has already finished.
-
-The fourth problem is reading the wrong container. A reused image name can create several old containers with similar names, and a generated name can hide the one you care about. `docker ps -a`, deliberate names, and labels in Compose all help the team keep evidence attached to the right run.
+*A useful incident note connects the symptom to proof: state, recent logs, focused inspect output, and live exec checks when the process is still running. The durable fix belongs back in the image, environment, network, ports, or startup command.*
 
 ## What's Next
 
-You now have a steady debugging path for a container that already exists. State tells you whether the main process lives. Logs show what the process said. Inspect shows the configuration Docker saved. Exec gives you a live view only after the process is still running.
-
-The next article moves one level earlier. We will look at how Docker decides which command to start, how `CMD` and `ENTRYPOINT` work together, and how runtime arguments and environment variables shape the process before state and logs even exist.
+You can now debug the two biggest container shapes: a process that exited during startup and a process that keeps running while a dependency fails. The next article moves one layer earlier in the lifecycle and explains how Docker chooses the startup command, how `ENTRYPOINT` and `CMD` fit together, and how environment variables shape container behavior.
 
 ---
 
 **References**
 
-- [Docker ps CLI reference](https://docs.docker.com/reference/cli/docker/container/ls/) - Documents container listing and the `--all` flag for stopped containers.
-- [Docker logs CLI reference](https://docs.docker.com/reference/cli/docker/container/logs/) - Documents retrieving, tailing, following, and filtering container logs.
-- [Docker inspect CLI reference](https://docs.docker.com/reference/cli/docker/inspect/) - Documents Docker's low-level JSON metadata output for Docker objects.
-- [Docker exec CLI reference](https://docs.docker.com/reference/cli/docker/container/exec/) - Documents running a command inside a running container and the PID 1 requirement.
-- [Docker run CLI reference](https://docs.docker.com/reference/cli/docker/container/run/) - Documents container creation flags, command overrides, environment values, and port publishing.
-- [Docker stop CLI reference](https://docs.docker.com/reference/cli/docker/container/stop/) - Documents the signal and timeout behavior Docker uses when stopping a container.
+- [Docker: `docker container ls`](https://docs.docker.com/reference/cli/docker/container/ls/) - Documents `docker ps`, `--all`, status filters, exit-code filters, and formatted output.
+- [Docker: `docker container logs`](https://docs.docker.com/reference/cli/docker/container/logs/) - Documents `--tail`, `--follow`, `--since`, `--until`, and timestamps for container logs.
+- [Docker: View container logs](https://docs.docker.com/engine/logging/) - Explains how Docker uses stdout and stderr, and why some logging drivers or file-only app logs change what `docker logs` can show.
+- [Docker: `docker container inspect`](https://docs.docker.com/reference/cli/docker/container/inspect/) - Documents detailed container metadata and `--format` output.
+- [Docker: Format command and log output](https://docs.docker.com/engine/cli/formatting/) - Explains Docker CLI Go template formatting used by `--format`.
+- [Docker: `docker container exec`](https://docs.docker.com/reference/cli/docker/container/exec/) - Documents running commands inside a running container and the primary-process requirement.
+- [Docker: `docker container run`](https://docs.docker.com/reference/cli/docker/container/run/) - Documents runtime options including `--publish`, `--env`, `--network`, logging drivers, and restart-policy fields referenced during inspection.

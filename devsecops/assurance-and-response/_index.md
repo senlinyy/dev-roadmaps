@@ -1,5 +1,6 @@
 ---
 title: "Assurance and Response"
-description: "Measure operational security compliance, triage vulnerabilities, handle exceptions, and structure modern incident response."
+description: "Measure security evidence, triage vulnerabilities, manage exceptions, prepare for incidents, and harden systems after failures."
+tags: ["assurance", "vulnerability-management", "incident-response"]
 order: 3
 ---
