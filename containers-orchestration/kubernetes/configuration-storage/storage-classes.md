@@ -48,6 +48,18 @@ spec:
 
 The PVC says what the workload needs. The StorageClass says how the cluster should satisfy that need. That split lets the application manifest stay readable while the platform team changes implementation details behind a reviewed class name.
 
+The full storage path now has a clear handoff. The **PVC** asks for storage, the **StorageClass** chooses the profile, the **CSI provisioner** creates the backend volume, Kubernetes records that backend as a **PV**, and the **Pod** mounts the claim into the container.
+
+| Step | Object or actor | What happens for `orders-api-workdir` |
+|---|---|---|
+| 1 | PVC | The app requests `20Gi` of `ReadWriteOnce` filesystem storage. |
+| 2 | StorageClass | `standard-retain` selects the retained production storage profile. |
+| 3 | CSI provisioner | The driver creates the real disk or file share for the claim. |
+| 4 | PV | Kubernetes represents the created volume as a bound PersistentVolume. |
+| 5 | Pod mount | The Deployment mounts the PVC at `/var/lib/devpolaris/orders-work`. |
+
+That handoff gives each team a natural review point. Application engineers review the claim size, access mode, and mount path. Platform engineers review the class, driver, retention, expansion, topology, backup coverage, and cost.
+
 ## The CSI Provisioner Does the Real Work
 <!-- section-summary: The provisioner field points Kubernetes to the storage driver that can create, attach, resize, and snapshot volumes. -->
 

@@ -59,7 +59,7 @@ Real teams handle that tradeoff explicitly. For normal agents, they clean the wo
 ## How Agents Connect
 <!-- section-summary: Jenkins supports several connection topologies, and the right one depends on which side can initiate the network connection. -->
 
-After the team separates controller and agent responsibilities, the next question becomes network shape. An agent must maintain a communication channel with the controller so it can receive work and stream logs. Jenkins supports several connection styles because real networks have firewalls, private subnets, NAT gateways, VPNs, and security teams with strong opinions.
+After the team separates controller and agent responsibilities, the next question is network shape. An agent must maintain a communication channel with the controller so it can receive work and stream logs. Jenkins supports several connection styles because real networks have firewalls, private subnets, NAT gateways, VPNs, and security teams with strong opinions.
 
 **SSH agents** fit long-lived Linux or Unix machines that the controller can reach over the network. Jenkins uses SSH credentials, connects to the host, starts the agent process, and uses that connection for work. Summit Retail uses this for a small pool of build VMs in the same VPC as the controller because the controller can reach those instances on port 22 and the security team already manages SSH keys.
 
@@ -107,9 +107,28 @@ pipeline {
 
 The top-level `agent none` tells Jenkins that each stage chooses its own runtime. The `Test` stage lands on a Maven-capable Linux agent, while the image stage lands on an agent with Docker access. This shape keeps special privileges narrow, because the Maven-only pool never needs Docker socket access.
 
-Labels also help with capacity planning. If the queue fills with jobs waiting for `linux && docker`, the team knows the Docker-capable pool is the bottleneck. If Windows jobs wait while Linux jobs keep moving, the Windows pool needs attention. Jenkins queue behavior becomes useful evidence because labels describe real resource classes.
+Labels also help with capacity planning. If the queue fills with jobs waiting for `linux && docker`, the team knows the Docker-capable pool is the bottleneck. If Windows jobs wait while Linux jobs keep moving, the Windows pool needs attention. Jenkins queue behavior gives useful evidence because labels describe real resource classes.
 
 Good label design stays boring and capability-based. Labels such as `linux`, `jdk21`, `docker`, `arm64`, `terraform`, and `windows` age well because they describe what a build needs. Labels such as `big-box-01` or `alice-test-vm` tie pipeline code to a single machine, and the next hardware replacement turns into a repository-wide cleanup.
+
+After adding a new label or agent pool, Summit Retail runs a tiny smoke pipeline before sending real builds there. The job proves that Jenkins can schedule the label and that the expected tools exist on the agent.
+
+```groovy
+pipeline {
+    agent { label 'linux && docker' }
+    stages {
+        stage('Agent Smoke') {
+            steps {
+                sh 'hostname'
+                sh 'java -version'
+                sh 'docker version'
+            }
+        }
+    }
+}
+```
+
+If this job waits in the queue, the label expression or executor capacity needs attention. If it starts and fails on `docker version`, the agent image or VM setup is missing a capability the label promised.
 
 ## JVM Tuning for the Controller
 <!-- section-summary: Controller tuning starts with evidence from heap usage, garbage collection, queue behavior, and disk activity. -->
@@ -135,7 +154,7 @@ A healthy tuning loop has a steady rhythm. First, keep builds off the controller
 ## Failure Modes
 <!-- section-summary: Common Jenkins architecture failures usually come from blurred boundaries, wrong connection choices, weak labels, or unmeasured controller pressure. -->
 
-Jenkins architecture problems usually announce themselves through repeated symptoms. The useful move is to map each symptom back to a boundary: controller state, agent runtime, network connection, label capacity, workspace hygiene, or JVM pressure. Once the boundary is clear, the fix becomes much more concrete.
+Jenkins architecture problems usually announce themselves through repeated symptoms. The useful move is to map each symptom back to a boundary: controller state, agent runtime, network connection, label capacity, workspace hygiene, or JVM pressure. Once the boundary is clear, the fix is much more concrete.
 
 | Symptom | Likely boundary | What the team checks |
 |---|---|---|

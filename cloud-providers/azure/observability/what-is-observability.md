@@ -70,6 +70,8 @@ This log gives the team searchable fields instead of one flat sentence. The `ope
 
 **Azure Monitor** is Microsoft's observability service for Azure and hybrid environments. It collects and analyzes telemetry from applications, Azure resources, infrastructure, and other sources. It also provides the experiences that engineers use during incidents: metrics explorer, Log Analytics, Application Insights views, workbooks, dashboards, and alerts.
 
+If you come from AWS, think of Azure Monitor as the broad operating space where several AWS habits meet: CloudWatch-style metrics and alerts, log investigation, and application tracing. The names differ, but the working question is familiar: can the team move from a user symptom to connected evidence?
+
 For our `orders-api`, Azure Monitor is the place where different evidence streams meet. App Service can emit platform metrics such as request count and response status. Azure SQL can emit database metrics and resource logs. Blob Storage can emit resource logs for blob operations. Application Insights can collect request, dependency, exception, trace, and custom event telemetry from the application code.
 
 The next useful idea is storage. Azure Monitor uses different stores because telemetry has different shapes. **Azure Monitor Metrics** stores numeric time-series data, which works well for fast charts and alert checks. **Azure Monitor Logs** stores richer log and trace data in a **Log Analytics workspace**, where engineers query it with **Kusto Query Language**, usually called **KQL**.
@@ -88,7 +90,7 @@ The names can feel crowded at first, so the simple map below keeps the first pas
 
 ![Azure Monitor evidence hub showing orders-api, Azure SQL, Blob Storage, Service Bus, logs, metrics, traces, alerts, Application Insights, Log Analytics, and Metrics plus Alerts](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/azure-monitor-evidence-hub.png)
 
-*Azure Monitor becomes useful when application code, Azure resources, and dependency calls send their signals into shared places for investigation, charts, and alerts.*
+*Azure Monitor helps when application code, Azure resources, and dependency calls send their signals into shared places for investigation, charts, and alerts.*
 
 Knowing the map helps because the rest of the module goes deeper one layer at a time. The next question is what the signals actually look like when the system emits them.
 

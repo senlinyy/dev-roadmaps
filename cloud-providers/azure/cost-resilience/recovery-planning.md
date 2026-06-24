@@ -36,10 +36,12 @@ This is the part that makes recovery planning feel bigger than backups. Azure ca
 
 The useful structure has five layers. **Recovery sources** are the backups, versions, snapshots, replicas, and logs you can restore from. **Recovery targets** are the databases, storage accounts, virtual machines, app environments, or regions that receive the restored state. **Recovery objectives** define how long the outage may last and how much recent data the business can lose. **Recovery routing** moves traffic and application configuration toward the recovered target. **Recovery evidence** proves that the recovered service can serve the real workflow.
 
+If you know AWS recovery tools, the Azure pieces are solving familiar problems: AWS Backup and EBS snapshots for VM-style recovery, RDS point-in-time restore for databases, and S3 Versioning or Object Lock for object history and protection. The product names change, but each data shape still needs its own recovery source and validation check.
+
 The first mistake usually happens at the boundary between a backup and a recovery. So before we talk about Azure SQL, Blob Storage, Front Door, or regions, we need that boundary to be very clear.
 
 ## Backup vs Recovery
-<!-- section-summary: A backup gives the team a source to restore from, while recovery describes how the restored source becomes a working service. -->
+<!-- section-summary: A backup gives the team a source to restore from, while recovery describes how the restored source returns as a working service. -->
 
 **A backup** is a saved copy of data. In Azure, that copy might come from Azure SQL automated backups, an Azure Backup vault, a Blob version, Blob soft delete, a VM recovery point, or a replicated storage account. The backup answers one question: "What old state can we retrieve?"
 
@@ -147,7 +149,7 @@ Redundancy and data protection solve different problems. If a script deletes a r
 
 This distinction matters during design reviews. The team may choose GZRS for the receipt storage account because customers need receipts during a regional event. The same team still enables blob versioning and soft delete because accidental deletion and overwrite need recoverable history. The plan uses both because physical failure and human mistake are different incident shapes.
 
-Once the team chooses recovery points and replica placement, the last design question becomes the readiness level of the secondary environment. That is where recovery strategies come in.
+Once the team chooses recovery points and replica placement, the last design question is the readiness level of the secondary environment. That is where recovery strategies come in.
 
 ## Recovery Strategies
 <!-- section-summary: A recovery strategy defines how much of the secondary environment already exists before an incident starts. -->
@@ -156,15 +158,17 @@ Once the team chooses recovery points and replica placement, the last design que
 
 **Backup and restore** has the lowest steady cost. The team stores backups, templates, and runbooks, then creates the recovery environment during an incident. For DevPolaris finance exports, this works well because the job can rerun after the orders database recovers. The RTO may be hours, and that is acceptable for a batch workflow with a clear owner.
 
-**Pilot light** keeps a tiny but important core ready in the recovery region. The data layer may replicate continuously, and the network, Key Vault, managed identities, and deployment templates already exist. App compute stays stopped, scaled to zero, or very small. For the checkout service, pilot light might mean an Azure SQL failover group in a paired region, a recovery App Service plan ready to scale, and Front Door configured with a secondary origin that becomes useful after deployment and validation.
+**Pilot light** keeps a tiny but important core ready in the recovery region. The data layer may replicate continuously, and the network, Key Vault, managed identities, and deployment templates already exist. App compute stays stopped, scaled to zero, or very small. For the checkout service, pilot light might mean an Azure SQL failover group in a paired region, a recovery App Service plan ready to scale, and Front Door configured with a secondary origin that helps after deployment and validation.
 
 **Warm standby** keeps a smaller working version of the app running in the secondary region. The recovery region already has app instances, configuration, identity assignments, secrets, and database replication. During failover, Front Door can shift traffic toward the healthy origin and the platform can scale the standby up. This costs more than pilot light, but it removes many steps from the incident timeline.
 
-**Active-active** runs full production capacity in more than one region at the same time. Azure Front Door can route users to healthy origins based on priority, latency, or weights, and health probes help decide which origins should receive traffic. The data layer becomes the hardest part because writes from multiple regions need a consistency and conflict plan. Active-active can fit read-heavy global workloads, but checkout systems often need careful database design before they can safely accept writes in multiple regions.
+**Active-active** runs full production capacity in more than one region at the same time. Azure Front Door can route users to healthy origins based on priority, latency, or weights, and health probes help decide which origins should receive traffic. The data layer is the hardest part because writes from multiple regions need a consistency and conflict plan. Active-active can fit read-heavy global workloads, but checkout systems often need careful database design before they can safely accept writes in multiple regions.
 
 Azure SQL failover groups are useful in the pilot-light and warm-standby parts of that ladder. A failover group can replicate databases to another region and provide stable listener endpoints, so the application connection string can stay pointed at the listener while the primary database role changes. The app team still needs to test login permissions, firewall paths, DNS behavior, retry logic, and the rest of the workflow.
 
 Azure Site Recovery belongs to another common case: VM-based recovery. It can replicate virtual machines and provide test failover workflows so teams can validate recovery without disrupting production. That helps lift-and-shift systems, but the same recovery questions still apply: which network receives the VM, which dependencies come with it, which users can reach it, and which smoke tests prove that the service works?
+
+For AWS readers, Azure Site Recovery sits in the same disaster-recovery conversation as AWS Elastic Disaster Recovery for VM-based workloads. Both still require the team to test networking, identity, dependencies, and application health after failover.
 
 The DevPolaris team can now make different choices for different workflows. The expensive recovery shape goes to checkout, while the slower and cheaper shapes stay with rebuildable or lower-urgency work. The table keeps those tradeoffs visible.
 
@@ -175,7 +179,7 @@ The DevPolaris team can now make different choices for different workflows. The 
 | **Nightly exports** | Backup and restore | LRS storage for outputs, job definition in source control, orders database as source of truth |
 | **Product search** | Backup and restore | Rebuild index from catalog database and deployment pipeline |
 
-The team still needs proof after choosing the strategy. A recovery plan becomes trustworthy only when the team runs the steps, measures the time, and checks the recovered app like a user would.
+The team still needs proof after choosing the strategy. A recovery plan is trustworthy only after the team runs the steps, measures the time, and checks the recovered app like a user would.
 
 ## Restore Drills
 <!-- section-summary: Restore drills turn written recovery plans into evidence by measuring the real recovery workflow in a safe target. -->
@@ -187,6 +191,27 @@ For the checkout service, a useful drill starts with a clear scenario. The team 
 The drill should measure both targets. The **actual RTO** starts when the team declares the scenario and ends when the recovered checkout workflow passes validation. The **actual RPO** comes from the age of the restored data compared with the incident time. If the target says 30-minute RTO and five-minute RPO, the drill record should show whether the team met those targets and where the time went.
 
 A good drill record includes operational details beyond a success checkbox. It names the restored database, the recovery app, the Key Vault secrets used, the Front Door origin or test host, the identity assignments, the smoke tests, the data gap, the cleanup action, and the follow-up work. Those details turn the next drill into a shorter and calmer exercise.
+
+The drill can start with a few concrete commands. These commands create a restored database target, point a recovery app at that target, and run the same health check the team expects during an incident. The production app stays pointed at the production database while the drill proves the recovery path.
+
+```bash
+az sql db restore \
+  --resource-group rg-devpolaris-orders-prod \
+  --server sql-devpolaris-orders-prod \
+  --name sqldb-devpolaris-orders-prod \
+  --dest-name sqldb-devpolaris-orders-restore \
+  --time "2026-06-11T09:55:00"
+
+az webapp config appsettings set \
+  --resource-group rg-devpolaris-orders-recovery \
+  --name app-devpolaris-checkout-recovery \
+  --slot-settings ORDERS_DB_HOST=sql-devpolaris-orders-prod.database.windows.net \
+                  ORDERS_DB_NAME=sqldb-devpolaris-orders-restore
+
+curl --fail https://checkout-recovery.devpolaris.internal/healthz
+```
+
+The values show where the recovery plan actually touches the system. `--time` defines the recovery point and therefore the practical RPO. `--dest-name` creates a separate database so the team can compare safely. `ORDERS_DB_NAME` is the app setting that points the recovery app at the restored target. The health URL proves the app, database, network, identity, and configuration worked together.
 
 ![Azure restore drill loop showing backup, restore sandbox, app verification, and recorded results while production stays separate and RTO and RPO are measured](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
 
@@ -241,7 +266,7 @@ Here is the final recovery map. It ties each user-facing workflow to the Azure f
 
 The main lesson is practical. Azure backups and redundancy provide raw materials, and the recovery plan turns those materials into a working service. RTO and RPO tell the team what "working soon enough" means. Restore drills show whether the plan survives real configuration, identity, traffic, and validation details.
 
-When a team can point to the last successful drill and explain the actual RTO, actual RPO, restored target, and gaps fixed afterward, recovery planning stops being a hopeful document. It becomes an operating habit that protects customers, data, and the engineers who have to respond under pressure.
+When a team can point to the last successful drill and explain the actual RTO, actual RPO, restored target, and gaps fixed afterward, recovery planning stops being a hopeful document. It turns into an operating habit that protects customers, data, and the engineers who have to respond under pressure.
 
 ---
 
@@ -252,6 +277,7 @@ When a team can point to the last successful drill and explain the actual RTO, a
 - [Azure Storage redundancy](https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy) - Documents LRS, ZRS, GRS, GZRS, read-access variants, asynchronous geo-replication, and storage account failover behavior.
 - [Azure SQL Database automated backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview?view=azuresql) - Describes automatic full, differential, and log backups plus short-term and long-term retention.
 - [Restore a database from a backup in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups?view=azuresql) - Explains point-in-time restore, restored database behavior, geo-restore, and restore considerations.
+- [az sql db restore](https://learn.microsoft.com/en-us/cli/azure/sql/db?view=azure-cli-latest#az-sql-db-restore) - Azure CLI reference for creating a restored Azure SQL database target from backup.
 - [Data protection overview for Azure Blob Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-protection-overview) - Covers blob versioning, blob soft delete, container soft delete, and point-in-time restore for block blobs.
 - [Failover groups overview and best practices for Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/failover-group-sql-db?view=azuresql) - Explains failover group replication, listener endpoints, failover policies, and end-to-end application recovery considerations.
 - [Azure Front Door traffic routing methods](https://learn.microsoft.com/en-us/azure/frontdoor/routing-methods) - Documents priority-based failover routing, health probes, latency routing, and weighted routing behavior.

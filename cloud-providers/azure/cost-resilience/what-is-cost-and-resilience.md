@@ -34,6 +34,8 @@ Those two ideas stay connected because every resilience choice asks Azure to hol
 
 The Azure Well-Architected Framework talks about this as a business and engineering conversation, not only a technical one. The Cost Optimization pillar asks teams to understand budgets, spending patterns, usage, and tradeoffs. The Reliability pillar asks teams to define what users need, design for faults, and recover within agreed targets. In real production work, those pillars meet in the same review: what promise are we buying, what failure does it cover, and what monthly spend does it add?
 
+AWS readers can map this to the same Well-Architected conversation. Cost Optimization asks whether spend matches value, and Reliability asks whether the workload can survive realistic failure. Azure uses Azure-specific services, but the review habit is very similar.
+
 This article connects five ideas in order. First, we will follow one concrete service. Then we will name the **cost shapes** that appear on the bill. After that we will name the **failure shapes** the service needs to survive. Then we will connect both sides through **service promises**, **redundancy**, **recovery**, and a simple **tradeoff table** that helps a team review a cost change before touching production.
 
 ## The Service Story
@@ -78,22 +80,24 @@ Naming the cost shape matters because the fix depends on the shape. A large App 
 
 **Safety copies** can look like waste until a bad day arrives. Blob versioning, SQL backups, snapshots, and geo-redundant copies all increase storage spend because they keep more than the current live data. The important question is whether those copies support a real recovery promise. A receipt PDF may need versioning and soft delete because customers and finance need proof of purchase. A temporary resized image cache may only need a short retention window because the app can rebuild it.
 
-Once the team can name the cost shape, the conversation gets more honest. The bill stops being one big scary number. It becomes a set of meters, and each meter points to a different kind of engineering decision.
+In AWS terms, this is the same family of decisions as paying for snapshots, object versions, backup plans, or cross-region copies. The key review is still whether the extra copy protects a workflow that the business actually needs to recover.
+
+Once the team can name the cost shape, the conversation gets more honest. The bill stops being one big scary number. It turns into a set of meters, and each meter points to a different kind of engineering decision.
 
 ## Failure Shapes
 <!-- section-summary: Failure shapes name what can break, so the team can choose protection that matches the real problem. -->
 
-A **failure shape** is the layer where trouble happens. Azure has many reliability tools, but each one protects against a particular kind of failure. Multiple App Service instances help when one runtime instance fails. Availability zones help when a datacenter group has trouble. Backups help when data needs to return to an earlier state. A secondary region helps when the primary region becomes unusable for a serious period.
+A **failure shape** is the layer where trouble happens. Azure has many reliability tools, but each one protects against a particular kind of failure. Multiple App Service instances help when one runtime instance fails. Availability zones help when a datacenter group has trouble. Backups help when data needs to return to an earlier state. A secondary region helps when the primary region is unusable for a serious period.
 
 The ticketing service gives us five common failure shapes. These are the same shapes that show up during real incident reviews, because most production outages come from a mix of infrastructure failure, application mistakes, data mistakes, and capacity pressure.
 
 | Failure shape | Simple definition | Ticketing service example | Azure controls that may help |
 | --- | --- | --- | --- |
 | **Instance failure** | One running compute unit or process stops working. | One App Service instance crashes during checkout. | Multiple instances, health checks, autoscale, retry-aware clients. |
-| **Zone failure** | A physically separate availability zone in a region has trouble. | Compute or storage in one zone becomes unavailable. | Zone-redundant services, zonal deployment across multiple zones, load balancing. |
+| **Zone failure** | A physically separate availability zone in a region has trouble. | Compute or storage in one zone is unavailable. | Zone-redundant services, zonal deployment across multiple zones, load balancing. |
 | **Data deletion** | A person, script, or tool deletes data the business still needs. | A cleanup job deletes receipt PDFs from Blob Storage. | Soft delete, versioning, immutability policies, backups, access control. |
 | **Bad database write** | The app writes incorrect state that needs repair. | A release marks paid tickets as unpaid for 20 minutes. | Point-in-time restore, transaction logs, repair scripts, deployment rollback. |
-| **Regional outage** | A broad problem affects the primary Azure region. | The region hosting checkout and SQL becomes unavailable. | Multi-region design, geo-redundant data, traffic failover, tested recovery plans. |
+| **Regional outage** | A broad problem affects the primary Azure region. | The region hosting checkout and SQL is unavailable. | Multi-region design, geo-redundant data, traffic failover, tested recovery plans. |
 
 ![Azure failure shape protection map matching instance crashes, zone outages, deleted receipts, bad SQL writes, and regional outages to the right protection choices](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-shape-protection-map.png)
 
@@ -143,7 +147,7 @@ The service promise also keeps the team from buying premium protection everywher
 
 Azure Storage makes this difference concrete. **Locally redundant storage**, or **LRS**, keeps copies in a single physical datacenter in the primary region. **Zone-redundant storage**, or **ZRS**, copies data synchronously across three or more availability zones in the primary region. **Geo-redundant storage**, or **GRS**, adds asynchronous copy to a paired secondary region. **Geo-zone-redundant storage**, or **GZRS**, combines zone redundancy in the primary region with asynchronous geo-replication to the secondary region.
 
-Those options protect different failure shapes. LRS helps with hardware issues inside a datacenter. ZRS helps when a zone becomes unavailable in a supported region. GRS and GZRS add regional durability, with important details around failover and read access. Read-access geo-redundant options can let applications read from the secondary endpoint, while normal GRS and GZRS need failover before the secondary region becomes the writable primary.
+Those options protect different failure shapes. LRS helps with hardware issues inside a datacenter. ZRS helps when a zone is unavailable in a supported region. GRS and GZRS add regional durability, with important details around failover and read access. Read-access geo-redundant options can let applications read from the secondary endpoint, while normal GRS and GZRS need failover before the secondary region is the writable primary.
 
 There is one detail worth pausing on. Storage redundancy copies the current state. If the app overwrites a receipt PDF with an empty file, the redundant system works hard to keep that new empty file consistent. Older versions need data protection features such as **blob versioning**, **soft delete**, **container soft delete**, **point-in-time restore for block blobs**, snapshots, or immutable storage policies.
 
@@ -170,7 +174,7 @@ Here is a version for the ticketing service:
 | **Shorten Log Analytics retention from 90 days to 30 days** | Lowers stored log cost. | Weakens long-window investigation and audit evidence. | Debug-heavy nonproduction logs. | Security, compliance, and incident review may need older data. |
 | **Keep warm standby compute in a second region** | Adds steady compute and networking spend. | Strengthens regional recovery time. | Tier-1 workflows where downtime costs more than standby capacity. | Untested standby resources create false confidence and real spend. |
 
-This table helps because the team can review a cost decision with the same words every time. The question stops being "Can we make Azure cheaper?" and becomes "Which workflow, which failure shape, which promise, which saving, and which rollback plan are attached to this change?"
+This table helps because the team can review a cost decision with the same words every time. The review question changes from "Can we make Azure cheaper?" to "Which workflow, which failure shape, which promise, which saving, and which rollback plan are attached to this change?"
 
 The email worker row shows how a cost reduction can be a good architecture choice when it matches the promise. Receipt email can sit behind a queue, retry safely, and arrive later during a spike. That means the team can save money there without treating the public checkout path the same way.
 
@@ -201,6 +205,27 @@ Here is a small decision record for the ticketing service:
 That kind of review catches a common mistake. If the team only looked at average CPU, they might shrink the shared plan and hurt checkout during the next high-demand event. By separating the admin API from checkout, they reduce waste in one workflow while keeping the stronger promise for the workflow that takes money from customers.
 
 The same habit applies to logs and stored data. A log table with verbose debug traces from staging can have a short retention period. Security audit logs for production may need longer retention because investigations often happen after the original incident. A blob container full of temporary resized images can have aggressive lifecycle cleanup. Receipt PDFs need a stricter retention and restore conversation.
+
+The review also needs the current Azure values alongside the meeting note. Before changing production spend, the Orders team might capture the live configuration like this:
+
+```bash
+az appservice plan show \
+  --resource-group rg-ticketing-prod \
+  --name plan-ticketing-prod \
+  --query "{sku:sku.name,tier:sku.tier,capacity:sku.capacity}"
+
+az storage account show \
+  --resource-group rg-ticketing-prod \
+  --name stticketingreceiptsprod \
+  --query "{redundancy:sku.name,publicNetworkAccess:publicNetworkAccess}"
+
+az monitor log-analytics workspace show \
+  --resource-group rg-ticketing-prod \
+  --workspace-name law-ticketing-prod \
+  --query "{retentionInDays:retentionInDays,sku:sku.name}"
+```
+
+Those values line up with the tradeoff table. `capacity` is the number of App Service plan workers behind the API. Storage `redundancy` tells the team whether receipt files use LRS, ZRS, GRS, or another option. `retentionInDays` is the log evidence window. A cost review that records these values can also record the rollback value, such as returning the plan to two workers or restoring the previous log retention.
 
 Cost optimization works best as an operating loop. Cost Management shows the spend. Tags and resource groups connect the spend to an owner. Metrics and logs show whether the resource carries real load. Service promises explain which workflows need protection. The tradeoff table records the decision. Monitoring and rollback watch the system after the change.
 

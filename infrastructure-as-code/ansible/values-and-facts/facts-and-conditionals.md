@@ -205,7 +205,7 @@ Registered results need the same care. If a previous task ran only on Debian hos
     - apt_refresh.rc | default(0) == 0
 ```
 
-The goal is readable safety. A condition should explain why a task applies. If the condition becomes long or repeated, move shared decisions into a well-named variable or role task rather than copying complex expressions across the playbook.
+The goal is readable safety. A condition should explain why a task applies. If the condition grows long or appears in several places, move shared decisions into a well-named variable or role task rather than copying complex expressions across the playbook.
 
 ## Verification, Failure Reading, and Rollback
 <!-- section-summary: Fact-driven playbooks should be tested against representative hosts so skips, failures, and unsupported branches are visible before production. -->
@@ -218,6 +218,14 @@ ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-ro
 ```
 
 Output reading should match the expected branch. On Ubuntu, the `apt` task should run and the `dnf` task should skip. On Rocky Linux, the `dnf` task should run and the `apt` task should skip. If both package tasks skip, the fact value or condition needs attention.
+
+The same check can inspect facts directly. This is useful when the playbook branch looks wrong and the team needs to confirm what Ansible gathered from the host.
+
+```bash
+ansible -i inventories/staging/hosts.yml orders-web-rocky-01.staging.example.com \
+  -m ansible.builtin.setup \
+  -a 'filter=ansible_os_family'
+```
 
 Common failures usually point to a small set of causes. If a task says a fact is undefined, the play may have `gather_facts: false` or the host may lack that fact. If a condition compares a version incorrectly, convert the value with `| int`. If an unsupported host silently skips key tasks, add an early `fail` task so the output shows the missing setup clearly.
 

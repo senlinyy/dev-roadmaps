@@ -53,14 +53,14 @@ For the Orders system, `vnet-devpolaris-prod` is the private network home for th
 
 If you know AWS, a VNet fills the same broad job as a VPC. One Azure detail matters early: Azure virtual networks and subnets span all availability zones in a region. A zonal virtual machine can still live in a specific zone, but the subnet itself stays regional. That means Azure subnet design usually starts with workload role boundaries, such as public entry, app compute, private endpoints, firewall, and gateway, rather than one subnet per zone.
 
-The VNet also becomes the attachment point for later networking topics. Network security groups filter packet flows. Application Gateway and Front Door handle public entry patterns. Private Link brings specific Azure service instances into the private address space. VPN Gateway and ExpressRoute connect the VNet to corporate networks. The VNet does the base job that all of those later controls need.
+The VNet is also the attachment point for later networking topics. Network security groups filter packet flows. Application Gateway and Front Door handle public entry patterns. Private Link brings specific Azure service instances into the private address space. VPN Gateway and ExpressRoute connect the VNet to corporate networks. The VNet does the base job that all of those later controls need.
 
 ## Region, Address Space, and Non-Overlap
 <!-- section-summary: A VNet address space is the private IP range for the network, and non-overlap keeps future peering and hybrid routing possible. -->
 
 A **VNet address space** is the private IP range assigned to a virtual network. It uses CIDR notation, such as `10.30.0.0/16`. The `10.30.0.0` part names the range, and the `/16` part tells Azure how many addresses belong to that range. In this example, the VNet has room for 65,536 total addresses before subnet reservations and service-specific limits enter the picture.
 
-The Orders team chooses `10.30.0.0/16` for production because it gives enough room for current subnets and future growth. The same company might use `10.20.0.0/16` for development and `10.40.0.0/16` for analytics. That planning looks like housekeeping at first, but it becomes important when networks connect to each other.
+The Orders team chooses `10.30.0.0/16` for production because it gives enough room for current subnets and future growth. The same company might use `10.20.0.0/16` for development and `10.40.0.0/16` for analytics. That planning looks like housekeeping at first, but it matters when networks connect to each other.
 
 Connected networks need **non-overlapping address spaces**. If the Orders VNet and the corporate datacenter both use `10.30.0.0/16`, a router cannot make a clean decision for `10.30.2.15` because both sides claim that address range. Peering, VPN, ExpressRoute, and hub-and-spoke designs all depend on ranges that point to one clear owner.
 
@@ -88,7 +88,7 @@ For the Orders team, the public entry layer, the API runtime, and private endpoi
 | `AzureFirewallSubnet` | `10.30.100.0/26` | Azure Firewall placement when the VNet owns an inspection point. |
 | `GatewaySubnet` | `10.30.200.0/27` | VPN Gateway or ExpressRoute Gateway placement when hybrid connectivity exists. |
 
-Subnet names should describe the job instead of the tool of the week. A name like `snet-orders-api` survives a move from virtual machines to Container Apps or App Service integration because the subnet still belongs to the Orders API tier. A name like `snet-vm-1` becomes stale as soon as the team changes the compute service.
+Subnet names should describe the job instead of the tool of the week. A name like `snet-orders-api` survives a move from virtual machines to Container Apps or App Service integration because the subnet still belongs to the Orders API tier. A name like `snet-vm-1` goes stale as soon as the team changes the compute service.
 
 Some Azure services also use **subnet delegation**. Subnet delegation tells Azure that a specific service can create service-specific resources in that subnet and apply the rules it needs. Azure Container Apps environments, App Service VNet integration patterns, and managed database services can all have subnet requirements, so production subnet planning usually leaves dedicated space for services that need their own subnet behavior.
 
@@ -132,12 +132,14 @@ The Orders team uses `/24` for normal app and private endpoint subnets because i
 
 *Subnet sizing is capacity planning. The VNet range gives the network room, each subnet gets a job, and Azure's five reserved addresses reduce the usable IP count in every subnet.*
 
-This sizing step connects directly to routes. After the subnet exists and has enough usable addresses, Azure adds system routes for the VNet address space and other defaults. The next question becomes where packets go when `orders-api-prod` talks to another address.
+This sizing step connects directly to routes. After the subnet exists and has enough usable addresses, Azure adds system routes for the VNet address space and other defaults. The next question is where packets go when `orders-api-prod` talks to another address.
 
 ## Route Tables and Effective Routes
 <!-- section-summary: Azure gives each subnet system routes, and effective routes show the combined path after system routes, custom routes, peering, gateways, and service routes are considered. -->
 
 A **route** tells Azure the next hop for traffic that leaves a subnet toward a destination IP address. A **route table** is a set of custom routes that can be associated with a subnet. Azure also creates system routes automatically, so a subnet has routing behavior even before the team creates a custom route table.
+
+For AWS readers, Azure route tables and user-defined routes fill the same broad job as VPC route tables: they decide the next hop for traffic leaving a subnet. The Azure detail to check is **effective routes**, because system routes, custom routes, peering, gateways, service routes, and private endpoints can all influence the final path.
 
 For the Orders API, a route question sounds like this: traffic leaves `snet-orders-api` toward `10.30.40.7`, `10.80.4.20`, or `203.0.113.25`; which route wins, and what next hop receives the packet? That question is much better than saying "the network is broken" because it names the source subnet, destination, and route decision.
 
@@ -227,6 +229,8 @@ This outbound choice connects directly to NAT and SNAT. When a private IP talks 
 
 **Azure NAT Gateway** is a managed outbound connectivity service for resources in a virtual network. The Orders API can sit on private IP `10.30.2.7`, start a connection to a payment provider, and have NAT Gateway translate that source to a public IP owned by the NAT Gateway. Outside services see the NAT Gateway public IP, while the workload keeps its private address inside the VNet.
 
+A useful AWS anchor is AWS NAT Gateway: private workloads make outbound internet calls through a managed public source. In Azure, associate NAT Gateway with the subnet and still check effective routes, because a broad custom route to a firewall or gateway can change the outbound path.
+
 **SNAT**, or Source Network Address Translation, is the translation of the source IP address and source port on outbound connections. A flow might start as `10.30.2.7:50124` inside the subnet and leave Azure as `52.174.12.34:32001` after NAT Gateway translates it. Return traffic for that active flow comes back through the translation table and reaches the private workload.
 
 ![Azure NAT Gateway SNAT infographic showing private source translation to stable public egress and return traffic](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/nat-snat-translation.png)
@@ -261,6 +265,8 @@ A single VNet can host a useful workload, but production networks often need mor
 
 **VPN Gateway** connects a VNet to another network through encrypted tunnels, commonly over the internet. It fits branch offices, partner connections, and early hybrid setups. **ExpressRoute** connects a private network to Microsoft through a connectivity provider, and teams use it when they need private connectivity with more predictable enterprise network integration.
 
+The AWS anchors are VPC peering, Site-to-Site VPN, and Direct Connect. The Azure names are VNet peering, VPN Gateway, and ExpressRoute, and the shared operating habit is to review address overlap, propagated routes, security rules, and DNS before assuming two private networks can talk.
+
 For the Orders team, a route to `10.80.0.0/16` might appear because the corporate network connects through VPN or ExpressRoute. A route to `10.10.0.0/16` might appear because a hub VNet is peered to the Orders VNet. Those routes can be correct and still surprise an app team that only reads the custom route table. Effective routes tell the fuller story.
 
 | Connection | Plain-English job | Route effect |
@@ -288,7 +294,7 @@ A review of this design can stay concrete. `snet-orders-api` has enough usable I
 That same review can catch common mistakes before users feel them. A private endpoint subnet that is too small can block new service endpoints. A route to a firewall with no return path can create timeouts. A broad `0.0.0.0/0` UDR can override a NAT Gateway path. A VNet range that overlaps with the corporate network can block hybrid connectivity later.
 
 ## Putting It All Together
-<!-- section-summary: A VNet design becomes understandable when every workload has a subnet, every subnet has enough space, every route has a reason, and every outbound path is explicit. -->
+<!-- section-summary: A VNet design is understandable when every workload has a subnet, every subnet has enough space, every route has a reason, and every outbound path is explicit. -->
 
 A VNet gives Azure workloads a private regional network shape. The useful beginner view is one connected chain: choose a non-overlapping address space, carve it into role-based subnets, account for Azure's five reserved addresses per subnet, inspect effective routes, add UDRs only when the next hop is part of the design, and choose an explicit outbound method for private workloads.
 

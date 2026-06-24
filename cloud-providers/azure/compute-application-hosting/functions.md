@@ -34,6 +34,8 @@ Let's start with the full picture. The Orders application has a public API that 
 
 **Azure Functions** is Azure's serverless compute service for event-driven handlers. A function is a small piece of code that runs after something starts it. That starter can be an HTTP request, a queue message, a timer, a blob upload, a Service Bus message, an Event Grid event, or another supported trigger. Azure runs the host, starts workers, passes the event data into your handler, records the invocation, and scales the runtime according to the hosting plan.
 
+If you have used AWS Lambda, Azure Functions fills the same event-driven compute job. HTTP triggers feel similar to Lambda behind API Gateway or Function URLs, queue triggers map to the same pattern as SQS event sources, blob and Event Grid triggers match the S3 event and EventBridge style of thinking, and timer triggers fill the scheduled-event role.
+
 **Serverless** means Azure operates the server layer that hosts the code. Your team still owns the handler code, dependencies, configuration, identity, storage choices, retry behavior, logging, and downstream limits. That split matters because many production incidents in Functions come from the parts the team still owns: a queue message that retries forever, a database that runs out of connections, an app setting that points to the wrong account, or a handler that takes too long for its plan.
 
 Here are the basic words we will use through the article:
@@ -220,6 +222,45 @@ That poison queue is a safety valve. It keeps one bad message from blocking the 
 
 *Retries are useful only when the handler can recognize repeated work. The durable claim happens before the side effect, so a duplicate message turns into a safe skip instead of a duplicate receipt.*
 
+The retry settings also need to be visible in configuration. For a Queue Storage trigger, the `host.json` values below tell the Functions host how many queue messages to pull at once, how long to wait before a failed message is visible again, and how many failed attempts happen before the message moves to the poison queue.
+
+```json
+{
+  "version": "2.0",
+  "functionTimeout": "00:05:00",
+  "extensions": {
+    "queues": {
+      "batchSize": 8,
+      "newBatchThreshold": 4,
+      "visibilityTimeout": "00:02:00",
+      "maxDequeueCount": 5
+    }
+  }
+}
+```
+
+Those values carry production behavior. `batchSize` and `newBatchThreshold` influence how much parallel work one host instance can pull. `visibilityTimeout` gives a failed message a short delay before the next attempt. `maxDequeueCount` decides when a repeatedly failing receipt message moves into poison-queue evidence for an operator. If the downstream email provider allows only a small connection pool, these settings may protect it better than simply adding more function instances.
+
+Environment-specific overrides can live in app settings. The Functions host supports app setting names that start with `AzureFunctionsJobHost__`, so a production app can lower queue concurrency without changing the deployed `host.json` file.
+
+```bash
+az functionapp config appsettings set \
+  --resource-group rg-devpolaris-orders-prod \
+  --name func-devpolaris-orders-jobs-prod \
+  --settings AzureFunctionsJobHost__extensions__queues__batchSize=4 \
+             AzureFunctionsJobHost__extensions__queues__newBatchThreshold=2
+```
+
+The verification step is small but useful. It proves the app setting exists on the function app before the team blames the queue, the SDK, or the email provider.
+
+```bash
+az functionapp config appsettings list \
+  --resource-group rg-devpolaris-orders-prod \
+  --name func-devpolaris-orders-jobs-prod \
+  --query "[?starts_with(name, 'AzureFunctionsJobHost__')].name" \
+  --output table
+```
+
 This is the point where hosting plan choice starts to matter. The plan controls scale, cold starts, networking, costs, and some timeout behavior.
 
 ## Hosting Plans
@@ -324,6 +365,8 @@ Functions gives us a clean home for event-shaped work around an application. The
 - [Azure Functions error handling and retries](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-error-pages) - Official guidance on retry sources, error handling, output binding caveats, and idempotency.
 - [Designing Azure Functions for identical input](https://learn.microsoft.com/en-us/azure/azure-functions/functions-idempotent) - Official guidance for idempotent function design.
 - [Azure Queue Storage trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue-trigger) - Official queue trigger behavior, poison message handling, polling, and concurrency details.
+- [Azure Queue Storage trigger and bindings settings](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue) - Official host.json settings for queue polling, visibility timeout, batch size, and poison message behavior.
+- [host.json reference for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-host-json) - Official reference for host.json values and app setting overrides with `AzureFunctionsJobHost__`.
 - [Azure Functions best practices](https://learn.microsoft.com/en-us/azure/azure-functions/functions-best-practices) - Official plan selection, storage settings, cold-start, and availability guidance.
 - [Storage considerations for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/storage-considerations) - Official requirements and security considerations for the storage account used by function apps.
 - [Create a function app without default storage secrets in its definition](https://learn.microsoft.com/en-us/azure/azure-functions/functions-identity-based-connections-tutorial) - Official tutorial for identity-based connections and reducing stored secrets.

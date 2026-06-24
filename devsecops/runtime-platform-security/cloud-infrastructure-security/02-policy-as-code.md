@@ -115,7 +115,7 @@ exceptions:
 
 This separate file matters because exceptions should receive review too. A hidden skip comment in a resource file can quietly disable a rule. A structured exception record gives the reviewer a reason, an owner, and a date when the exception should be removed or renewed.
 
-![Policy Inputs Map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-inputs-map.png)
+![Policy inputs map showing plan JSON, run metadata, exception data, and approved lists flowing into a policy engine that returns pass, warn, or block](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-inputs-map.png)
 
 *The map shows how plan data, run context, exceptions, and approved lists flow into one policy decision that can pass, warn, or block.*
 
@@ -189,7 +189,7 @@ resource "aws_s3_bucket_public_access_block" "receipts" {
 
 This rule handles one storage control. A real policy pack can add region checks, tag checks, encryption checks, network checks, IAM wildcard checks, and exception checks. The team should keep rules small and named around one idea, because a clear rule is easier to test and easier to explain in a pull request.
 
-![OPA Rule Flow](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/opa-rule-flow.png)
+![OPA rule flow showing Terraform plan data entering Rego checks, deny messages, CI feedback, and a block or pass decision](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/opa-rule-flow.png)
 
 *The flow shows the practical job of a Rego rule: select the resource change, match a rule, produce a deny message, and turn that into useful PR feedback.*
 
@@ -322,7 +322,7 @@ The biggest practical detail is rule quality. A rule that blocks a real public d
 
 The result is a security review that scales. A senior reviewer can focus on design: should this service exist, should this data flow be public, should this team own the resource, and should the exception be accepted. The policy engine handles the repeated checks that every production change must satisfy.
 
-![Policy as Code Summary](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-as-code-summary.png)
+![Policy as Code summary showing rule authoring, local tests, CI enforcement, managed policy checks, exception expiry, and review evidence](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-as-code-summary.png)
 
 *The summary shows the operating loop: write rules, test locally, run them in CI, handle exceptions, and keep evidence for later review.*
 

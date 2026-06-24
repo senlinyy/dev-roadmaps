@@ -72,7 +72,7 @@ Here is a normal config task for the orders API:
 
 In check mode, this task can usually say whether `/etc/nginx/conf.d/orders.conf` would change. With diff mode added, it can show the exact safe text change, such as `proxy_read_timeout` moving from `30s` to `45s`.
 
-Some tasks need special check-mode behavior. Ansible exposes `ansible_check_mode`, a boolean that becomes true during a check-mode run. Use it when a task should skip a side effect during preview or when a task should explain why preview cannot run a particular operation.
+Some tasks need special check-mode behavior. Ansible exposes `ansible_check_mode`, a boolean that is true during a check-mode run. Use it when a task should skip a side effect during preview or when a task should explain why preview cannot run a particular operation.
 
 ```yaml
 - name: Run orders database migration

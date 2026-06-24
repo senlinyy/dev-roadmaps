@@ -281,7 +281,7 @@ jobs:
 
 The cache key includes the operating system and a hash of `package-lock.json`. A **hash** is a fingerprint of a file's contents. When the lockfile changes, the hash changes, and the pipeline naturally creates a new cache instead of reusing packages for an old dependency tree.
 
-The `restore-keys` line gives the cache action a fallback prefix. If the exact key does not exist, the action can look for a nearby cache, such as the most recent npm cache for the same operating system. That fallback can help a first run on a new branch, but it also means the job should still run the package manager command afterward so the workspace becomes correct.
+The `restore-keys` line gives the cache action a fallback prefix. If the exact key does not exist, the action can look for a nearby cache, such as the most recent npm cache for the same operating system. That fallback can help a first run on a new branch, but it also means the job should still run the package manager command afterward so the workspace matches the lockfile.
 
 Caches are helpful, but they should never become the only source of truth. A correct pipeline can survive a cache miss because it can download dependencies again. If deleting the cache breaks the build permanently, the pipeline is relying on hidden state, and the dependency setup needs to be fixed.
 
@@ -346,7 +346,7 @@ The fix is to decide what kind of file `checkout-api.tar.gz` is. It is a run out
 
 The same bug appears with coverage reports, generated OpenAPI files, packaged Helm charts, and built frontend assets. A later job can only read files that it checks out, downloads as artifacts, creates again, or receives from another explicit storage system. Job dependencies control timing; artifacts control file transfer.
 
-A practical debugging pattern is to print the working directory and list files at the start of the failing job. If the file is missing, the next question becomes simple: should this job recreate the file, or should an earlier job upload it as an artifact? That question usually points straight to the fix. Once file movement makes sense, the other common pain comes from self-hosted runners that keep too much state between jobs.
+A practical debugging pattern is to print the working directory and list files at the start of the failing job. If the file is missing, the next question is simple: should this job recreate the file, or should an earlier job upload it as an artifact? That question usually points straight to the fix. Once file movement makes sense, the other common pain comes from self-hosted runners that keep too much state between jobs.
 
 ## Common Failure Mode: Dirty Self-Hosted Runners
 <!-- section-summary: Persistent runners need cleanup because old files, containers, processes, and credentials can affect later jobs. -->

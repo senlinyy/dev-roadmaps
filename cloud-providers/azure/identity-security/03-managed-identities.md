@@ -89,7 +89,7 @@ AZURE_CLIENT_SECRET: copied-secret-value
 
 This configuration tells the app how to authenticate as a software identity. The tenant ID names the directory. The client ID names the app identity. The client secret proves the app can use that identity. The vault URL names the target service. The code may be clean, but the runtime now carries a reusable password.
 
-Rotation is where this becomes operational pain. The team has to create a new secret, update every place that stores it, deploy safely, verify the app is using the new value, and remove the old value. During an incident, the team has to ask where the old value was copied. If a pipeline uses the same secret as the running API, the logs also become harder to read because deployment and runtime activity can share one caller.
+Rotation is where this causes operational pain. The team has to create a new secret, update every place that stores it, deploy safely, verify the app is using the new value, and remove the old value. During an incident, the team has to ask where the old value was copied. If a pipeline uses the same secret as the running API, the logs are also harder to read because deployment and runtime activity can share one caller.
 
 Azure gives us several better paths. A service principal can use a certificate instead of a secret, which improves some handling but still creates a credential lifecycle. A managed identity lets Azure-hosted workloads request tokens without developers managing the underlying credential. Workload identity federation lets external automation exchange a trusted external token for a Microsoft Entra token. To understand those paths, we first need the app registration and service principal split.
 
@@ -147,6 +147,8 @@ Many teams now move CI/CD service principals from client secrets to **workload i
 A **managed identity** is a Microsoft Entra workload identity that can be assigned to an Azure resource. The running code can request Microsoft Entra tokens through the Azure hosting environment, and Azure manages the underlying credential. Microsoft describes managed identities as a way for applications to obtain Microsoft Entra tokens without developers managing credentials.
 
 For the Orders API, this means `ca-orders-api-prod` can use `mi-orders-api-prod` when it needs to read `kv-devpolaris-prod` or write invoice blobs. The application code can drop `AZURE_CLIENT_SECRET`, the container image can avoid storage account keys, and the pipeline can stop pasting runtime secrets into app settings. The runtime asks Azure for a token, and Azure issues a token for the identity attached to the workload.
+
+If you know AWS, the closest anchors are EC2 instance profiles, ECS task roles, Lambda execution roles, and EKS pod identity patterns. The shared idea is short-lived cloud credentials for a running workload, while Azure packages the identity through Microsoft Entra and attaches it to Azure resources as a managed identity.
 
 ![Managed identity runtime path showing a Container App using a managed identity endpoint, Microsoft Entra token issuance, Azure RBAC, Key Vault, and Storage](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-runtime-path.png)
 

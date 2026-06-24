@@ -25,7 +25,7 @@ aliases:
 
 A **Jenkins Shared Library** is a Git-backed library of Groovy pipeline code that Jenkins can load into many Jenkinsfiles. It gives a platform team one place to maintain repeated delivery logic, such as standard build stages, security scans, Docker image publishing, Slack notifications, Helm deploys, and release evidence collection.
 
-Summit Retail now has good Jenkinsfiles for `checkout-api`, `inventory-api`, and `payments-api`. After a few months, the team notices that all three files contain almost the same Maven build, Trivy scan, Docker push, and Kubernetes deploy stages. A vulnerability scanner flag changes, and the platform team opens the same pull request in three repositories. Next quarter, that becomes thirty repositories.
+Summit Retail now has good Jenkinsfiles for `checkout-api`, `inventory-api`, and `payments-api`. After a few months, the team notices that all three files contain almost the same Maven build, Trivy scan, Docker push, and Kubernetes deploy stages. A vulnerability scanner flag changes, and the platform team opens the same pull request in three repositories. Next quarter, that turns into thirty repositories.
 
 That is the point where Shared Libraries become useful. Each application repository can keep a small Jenkinsfile that names the service and chooses a few options. The shared library holds the repeated build mechanics. When the platform team improves the scanner command, the change lands in one library repository instead of thirty service repositories.
 
@@ -58,7 +58,7 @@ The trust setting matters. A **trusted global library** can call Jenkins interna
 ## The Global Step in vars
 <!-- section-summary: Files in vars become pipeline-callable global steps, and a call method makes the step feel like built-in Jenkins syntax. -->
 
-The `vars/` directory is where most teams start. Each Groovy file under `vars/` becomes a global variable or step that a Jenkinsfile can call. If the file defines a `call` method, Jenkins lets the pipeline invoke the filename like a function.
+The `vars/` directory is where most teams start. Each Groovy file under `vars/` gives Jenkins a global variable or step that a Jenkinsfile can call. If the file defines a `call` method, Jenkins lets the pipeline invoke the filename like a function.
 
 Summit Retail creates this library file:
 
@@ -177,7 +177,7 @@ values = values.replace('latest', config.imageTag)
 writeFile file: 'generated-values.yaml', text: values
 ```
 
-This folder split keeps the library understandable. `vars/` exposes the friendly pipeline interface. `src/` holds real helper code. `resources/` holds templates and static files. Once a library has that shape, versioning becomes the next big design choice.
+This folder split keeps the library understandable. `vars/` exposes the friendly pipeline interface. `src/` holds real helper code. `resources/` holds templates and static files. Once a library has that shape, versioning is the next big design choice.
 
 ## Versioning by Git Ref
 <!-- section-summary: Pinning a library by branch, tag, or commit controls how quickly shared pipeline changes reach application repositories. -->
@@ -208,6 +208,20 @@ Here is the failure that teaches the lesson. Summit Retail has twenty services l
 The incident feels like a Jenkins problem, but the root cause is release management. The shared library changed a public contract without a compatibility window. The services consumed a moving branch. The platform team had no compatibility test suite that ran sample Jenkinsfiles against the new library ref before merge.
 
 The fix has several parts. First, the library restores backwards compatibility for one release by accepting both option names. Second, production services move from `main` to version tags. Third, the platform team adds a small library test suite with representative Jenkinsfiles for Maven, Node.js, and deploy-only services. Fourth, each library release gets notes that call out new parameters and deprecated ones.
+
+The representative Jenkinsfiles do not need to deploy real systems. They need to compile the library API that service teams call and run the safe stages that prove the contract still works.
+
+```groovy
+@Library('summit-pipeline@feature/image-repository-compat') _
+
+standardMavenService(
+    serviceName: 'checkout-api-smoke',
+    imageName: 'registry.summit.example/checkout-api-smoke',
+    dryRun: true
+)
+```
+
+Before a library tag moves to production, Summit Retail runs smoke jobs for old and new option names. The old shape proves compatibility, and the new shape proves the migration path. If either smoke job fails, the library release waits.
 
 A safe replacement step might look like this:
 

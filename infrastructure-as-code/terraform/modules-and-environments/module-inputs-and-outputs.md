@@ -1,7 +1,7 @@
 ---
 title: "Module Inputs and Outputs"
 description: "Define variable types, validation rules, and structured outputs so your Terraform modules have a clear, safe contract with callers."
-overview: "A module becomes reliable when its interface is boring in the best way: clear inputs, helpful validation, careful handling for sensitive values, and outputs that expose only the values callers need."
+overview: "A reliable module has an interface that is boring in the best way: clear inputs, helpful validation, careful handling for sensitive values, and outputs that expose only the values callers need."
 tags: ["modules", "variables", "outputs", "validation", "terraform"]
 order: 2
 id: article-iac-terraform-modules-inputs-outputs
@@ -65,7 +65,7 @@ variable "enable_access_logs" {
 
 The `type` line gives Terraform an early check. If a caller passes one subnet string where the module expects `list(string)`, Terraform can stop during planning with an input error. That feedback is much clearer than waiting for the AWS provider to reject a malformed API request later.
 
-The `description` line becomes small built-in documentation. Teams that generate module docs from Terraform files also use these descriptions directly. A useful description tells the caller what the value represents and how to choose it. Good descriptions add context beyond the variable name.
+The `description` line acts as small built-in documentation. Teams that generate module docs from Terraform files also use these descriptions directly. A useful description tells the caller what the value represents and how to choose it. Good descriptions add context beyond the variable name.
 
 The `default` line changes a required input into an optional input. In the example, access logs default to enabled because the platform team wants production-safe behavior by default. Callers can still set `enable_access_logs = false` in a disposable test environment if the team allows that.
 

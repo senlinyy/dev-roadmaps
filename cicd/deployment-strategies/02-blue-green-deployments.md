@@ -27,7 +27,7 @@ In the rolling deployment article, the checkout API moved from version `2026.06.
 
 Now imagine a bigger checkout change. The old version stores discount data in a column called `discount_code`. The new version reads a new table called `cart_discounts`, writes a new audit event, and changes the payment authorization payload. During a rolling deployment, both versions may process live checkouts at the same time. One user request could hit the old version, the next request could hit the new version, and background jobs may read data written by either version.
 
-That mixed state can create real production problems. The old version may read data shaped by the new version. The new version may assume a queue message includes a field the old version never writes. A payment retry may pass through a different version than the original request. This can work if the team designed every interface to handle both versions. It becomes risky when the change crosses application code, database schema, queues, and third-party calls.
+That mixed state can create real production problems. The old version may read data shaped by the new version. The new version may assume a queue message includes a field the old version never writes. A payment retry may pass through a different version than the original request. This can work if the team designed every interface to handle both versions. The risk grows when the change crosses application code, database schema, queues, and third-party calls.
 
 A **blue-green deployment** gives the new version a separate production-like environment before users touch it. One environment serves all real traffic. The other environment runs the new release and waits for validation. When the team accepts the new environment, traffic moves over in one controlled switch.
 
@@ -36,7 +36,7 @@ The important thing is the boundary. Rolling deployment changes instances inside
 ## The Blue and Green Environments
 <!-- section-summary: Blue-green uses two complete environment pools so the new release can be built and tested away from live users. -->
 
-The names **blue** and **green** are just labels. Blue might run the current production version today, and green might run the next version. After the switch, green becomes production and blue becomes the standby or cleanup target.
+The names **blue** and **green** are just labels. Blue might run the current production version today, and green might run the next version. After the switch, green serves production and blue moves into the standby or cleanup role.
 
 For our checkout API, a blue-green setup might look like this:
 
@@ -83,7 +83,7 @@ The preview Service gives the pipeline a stable address for green validation. Th
 
 *Blue-green keeps a full live environment and a full preview environment, then moves traffic at the routing layer when green is ready.*
 
-Once the green environment exists, the release becomes a routing problem. The team needs a traffic switch that moves users cleanly and predictably.
+Once the green environment exists, the release is a routing problem. The team needs a traffic switch that moves users cleanly and predictably.
 
 ## Traffic Switching
 <!-- section-summary: Blue-green traffic should move at the router or load balancer layer instead of depending on slow DNS-only changes. -->
@@ -188,7 +188,7 @@ A common production policy looks like this:
 | Before deployment | Standby environment stays at zero or low capacity if the platform supports quick scale-up. |
 | During validation | Green scales to production-equivalent capacity for realistic checks. |
 | After promotion | Old blue stays alive for 15 to 60 minutes for fast revert. |
-| After watch window | Old blue scales down or becomes the next preview target. |
+| After watch window | Old blue scales down or moves into the next preview slot. |
 
 The cost conversation should include observability too. Blue and green need separate release labels in metrics and logs so the team can compare behavior after promotion. A good label set includes `service`, `version`, `environment_color`, `deployment_id`, and `git_sha`. The names can differ by stack, but the goal is the same: when an alert fires, responders can tell which environment produced it.
 

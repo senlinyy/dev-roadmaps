@@ -24,8 +24,9 @@ aliases:
 7. [Workflows and AWS Step Functions](#workflows-and-aws-step-functions)
 8. [Schedulers and EventBridge Scheduler](#schedulers-and-eventbridge-scheduler)
 9. [Brokers and Amazon MQ](#brokers-and-amazon-mq)
-10. [Putting the Patterns Together](#putting-the-patterns-together)
-11. [What's Next](#whats-next)
+10. [Pattern Smoke Tests](#pattern-smoke-tests)
+11. [Putting the Patterns Together](#putting-the-patterns-together)
+12. [What's Next](#whats-next)
 
 ## The Production Scenario
 <!-- section-summary: One publishing system gives every integration pattern a real place in the same application. -->
@@ -284,6 +285,56 @@ The bridge service should make the boundary explicit. It can read an `Enrollment
 Amazon MQ still needs production ownership. The team should choose the broker engine deliberately, configure private networking where appropriate, use encryption in transit and at rest, monitor broker and queue metrics in CloudWatch, define maintenance windows, and test failover behavior. Managed broker service does not remove the need to understand broker semantics, but it removes much of the setup and maintenance burden compared with running brokers by hand.
 
 With brokers covered, the whole communication picture is ready. Each service now has a reason to exist, and each pattern has a place in the same publishing system.
+
+## Pattern Smoke Tests
+<!-- section-summary: Each integration pattern needs a small verification check that proves the trigger, routing rule, retry path, and consumer boundary work before users depend on it. -->
+
+Before Northstar ships the publishing flow, the team can run small checks for each communication pattern. These checks sit beside integration tests and prove that the AWS wiring matches the design.
+
+For the public API, the first check confirms that the route exists and the stage is deployed:
+
+```bash
+aws apigatewayv2 get-routes \
+  --api-id a1b2c3d4 \
+  --query 'Items[].{RouteKey:RouteKey,Target:Target,AuthorizationType:AuthorizationType}'
+
+aws apigatewayv2 get-stages \
+  --api-id a1b2c3d4 \
+  --query 'Items[].{StageName:StageName,AutoDeploy:AutoDeploy,AccessLogSettings:AccessLogSettings}'
+```
+
+For queues, the useful check is backlog, age, visibility, and DLQ wiring:
+
+```bash
+aws sqs get-queue-attributes \
+  --queue-url https://sqs.eu-west-2.amazonaws.com/111122223333/lesson-media-jobs \
+  --attribute-names ApproximateNumberOfMessages ApproximateAgeOfOldestMessage VisibilityTimeout RedrivePolicy
+```
+
+For events, the team can test the rule pattern before publishing production events:
+
+```bash
+aws events test-event-pattern \
+  --event-pattern file://lesson-published-pattern.json \
+  --event file://lesson-published-event.json
+
+aws events list-targets-by-rule \
+  --event-bus-name northstar-lessons \
+  --rule lesson-published-to-search
+```
+
+For workflows, the check should show execution status and the failing state when something goes wrong:
+
+```bash
+aws stepfunctions describe-execution \
+  --execution-arn arn:aws:states:eu-west-2:111122223333:execution:PublishLesson:pubreq-4db2
+
+aws stepfunctions get-execution-history \
+  --execution-arn arn:aws:states:eu-west-2:111122223333:execution:PublishLesson:pubreq-4db2 \
+  --max-items 20
+```
+
+These checks give beginners a concrete habit. After choosing the pattern, they verify the AWS resource that carries that pattern. API Gateway verifies routes and stages. SQS verifies backlog and DLQ behavior. EventBridge verifies matching and targets. Step Functions verifies execution history. The same habit applies to Scheduler and Amazon MQ: prove the trigger and the consumer boundary before a user action depends on them.
 
 ## Putting the Patterns Together
 <!-- section-summary: A production system often combines APIs, queues, events, workflows, schedules, and brokers in one connected flow. -->

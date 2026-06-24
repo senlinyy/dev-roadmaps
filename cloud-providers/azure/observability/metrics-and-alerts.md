@@ -43,6 +43,8 @@ Azure metrics and alerts connect a few pieces that show up together in almost ev
 | **Action group** | The notification and automation target | Email, SMS, push, webhook, Azure Function, or Logic App |
 | **Alert processing rule** | A routing or suppression layer applied as alerts fire | Suppress pages during a planned maintenance window |
 
+For AWS readers, this loop should feel close to CloudWatch metrics and alarms, with action groups covering the notification and automation fan-out that AWS teams often route through SNS, EventBridge, Lambda, or incident tools. Azure uses different resource names, but the operating loop is still measure, visualize, decide, and route.
+
 This article follows one checkout system because metrics become easier to understand when every number has a job. A CPU chart can explain pressure on the host, a request chart can show customer impact, and an alert can bring the right person into the incident before support tickets pile up.
 
 ## What Azure Monitor Metrics Stores
@@ -94,7 +96,7 @@ For the checkout system, useful custom metrics keep the dimensions small enough 
 The goal is enough detail to route the investigation. If `ReceiptUploadFailed` spikes only for `failureType=AuthorizationPermissionMismatch`, the team can start with managed identity, RBAC, Key Vault, or Storage account configuration. If the same metric spikes for every failure type, the team looks for a broader release, capacity, or dependency problem.
 
 ## Dashboards and Workbooks
-<!-- section-summary: Dashboards help humans scan live system behavior before an alert becomes an incident. -->
+<!-- section-summary: Dashboards help humans scan live system behavior before an alert turns into an incident. -->
 
 Metrics become useful to a team when they have a shared place to look. **Metrics Explorer** is the Azure Monitor tool for charting metric values over time, splitting them by dimensions, changing aggregation, and comparing resources. Microsoft documents that charts from Metrics Explorer can be pinned to Azure dashboards or saved to workbooks in the [Metrics Explorer guide](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/analyze-metrics).
 
@@ -122,7 +124,7 @@ The dashboard tells a small story from left to right. It starts with user-facing
 
 An **alert rule** is the Azure Monitor resource that checks a condition on a schedule. The official [Azure Monitor alerts overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview) describes alerts as proactive notifications based on Azure Monitor data, and the [metric alert type documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-types) explains that metric alerts evaluate resource metrics at regular intervals.
 
-A metric alert rule has a few important parts that work together each time the rule runs. If one part is vague, the alert usually becomes harder to trust during an incident.
+A metric alert rule has a few important parts that work together each time the rule runs. If one part is vague, the team usually trusts the alert less during an incident.
 
 | Part | What it means | Checkout example |
 | --- | --- | --- |
@@ -151,7 +153,7 @@ flowchart TD
 
 Metric alerts can use platform metrics, custom metrics, Application Insights custom metrics, and selected logs converted to metrics. They can also use multiple conditions, dimensions, and dynamic thresholds. For one resource with multiple conditions, Azure fires the alert when all conditions are true, then resolves it after at least one condition clears for the required checks.
 
-Metric alerts are stateful by default. A stateful alert fires once when the condition becomes true, then waits for the condition to resolve before sending more actions for the same alert. Stateless alerts fire each time the condition is met, which can be useful for some event-style notifications and noisy for paging if the rule repeats during the same incident.
+Metric alerts are stateful by default. A stateful alert fires once when the condition is true, then waits for the condition to resolve before sending more actions for the same alert. Stateless alerts fire each time the condition is met, which can be useful for some event-style notifications and noisy for paging if the rule repeats during the same incident.
 
 Multi-resource metric alerts help with fleet monitoring. Azure supports one metric alert rule that monitors multiple resources of the same type in the same Azure region, and it sends individual notifications for each monitored resource. That fits a group of App Service apps or a set of VMs, while more complex cross-resource logic usually belongs in log search alerts or workbooks.
 
@@ -186,6 +188,8 @@ Alert processing rules help during planned changes. Azure Monitor can apply proc
 <!-- section-summary: Action groups separate problem detection from notification and automation routing. -->
 
 An **action group** defines who gets notified and which automations run when an alert fires. Microsoft describes action groups as collections of notification preferences and automated actions in the [Azure Monitor action groups documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups). They can send email, SMS, push, voice, webhook calls, Azure Functions, Logic Apps, Automation runbooks, ITSM incidents, and Event Hub messages.
+
+The useful AWS comparison is the response shape. A CloudWatch alarm might publish to SNS or trigger automation; an Azure alert rule fires and sends that response through an action group.
 
 This separation is important because the same notification target can be reused by many alert rules. The ticket team can have `ag-ticket-web-oncall` for API incidents, `ag-ticket-data-team` for database incidents, and `ag-ticket-low-priority` for ticket-based operational work. The alert rule detects the condition, and the action group decides where the attention goes.
 

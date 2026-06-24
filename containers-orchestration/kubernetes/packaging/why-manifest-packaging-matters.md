@@ -428,7 +428,7 @@ The old raw manifests can stay in the repository until the packaged output succe
 
 ## What's Next
 
-The next article zooms into Helm charts, because Helm is the packaging tool many teams meet first. We will keep following `devpolaris-orders-api`, but now the source form will have `Chart.yaml`, `values.yaml`, templates, helpers, render checks, dependencies, and a chart review flow.
+The next article zooms into Helm charts, because Helm is the packaging tool many teams meet first. We will keep following `devpolaris-orders-api`, but now the source form will have `Chart.yaml`, `values.yaml`, templates, helpers, render checks, dependencies, and a chart review flow. After the chart shape is clear, the module follows Helm values and release operations before it shifts to the Kustomize path.
 
 ---
 

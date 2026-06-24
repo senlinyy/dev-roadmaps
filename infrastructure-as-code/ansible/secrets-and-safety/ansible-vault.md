@@ -169,7 +169,7 @@ ansible-playbook \
   --vault-password-file "$RUNNER_TEMP/ansible-secrets/prod-vault-pass"
 ```
 
-Vault IDs add a label to the password source. This becomes useful when one repository has separate secret domains, such as `dev`, `staging`, and `prod`, or when a shared role reads different vaulted files for different environments.
+Vault IDs add a label to the password source. This helps when one repository has separate secret domains, such as `dev`, `staging`, and `prod`, or when a shared role reads different vaulted files for different environments.
 
 ```bash
 ansible-playbook \
@@ -183,7 +183,7 @@ The label helps Ansible try the right password for the right encrypted content. 
 One rule deserves special attention: Vault password files belong outside Git. The encrypted file and the password that decrypts it should live in different trust zones. The encrypted file can be in Git, while the password belongs in a CI secret store, enterprise password manager, external secret manager, or a tightly controlled operator process.
 
 ## Using Vault During a Run
-<!-- section-summary: A vaulted value becomes ordinary Ansible data once decrypted, so playbooks need careful templates, permissions, and output controls. -->
+<!-- section-summary: A vaulted value acts like ordinary Ansible data once decrypted, so playbooks need careful templates, permissions, and output controls. -->
 
 Once Ansible decrypts a vaulted value, the value behaves like any other variable. That is convenient because templates and modules can use it normally. Vault covers the stored encrypted content, and every downstream place where the value travels needs its own boundary.
 
@@ -336,7 +336,7 @@ This gives a junior operator a safe first workflow and gives a senior reviewer u
 
 ## What's Next
 
-Vault keeps secret content encrypted before the run. During the run, the secret becomes ordinary data that Ansible can pass to modules, templates, and remote hosts. The next article focuses on that second half: keeping decrypted values out of logs, diffs, debug output, and registered results while still leaving enough evidence to operate the system.
+Vault keeps secret content encrypted before the run. During the run, Ansible handles the decrypted secret as ordinary data that modules, templates, and remote hosts can receive. The next article focuses on that second half: keeping decrypted values out of logs, diffs, debug output, and registered results while still leaving enough evidence to operate the system.
 
 ---
 

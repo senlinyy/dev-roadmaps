@@ -16,11 +16,13 @@ aliases:
 1. [Shared VPC, Hybrid Connectivity, and Troubleshooting](#shared-vpc-hybrid-connectivity-and-troubleshooting)
 2. [Host Projects and Service Projects](#host-projects-and-service-projects)
 3. [Subnet Delegation and Network User](#subnet-delegation-and-network-user)
-4. [Centralized Firewalls, Routes, and DNS](#centralized-firewalls-routes-and-dns)
-5. [Cloud VPN, Cloud Interconnect, and Cloud Router](#cloud-vpn-cloud-interconnect-and-cloud-router)
-6. [Network Connectivity Center](#network-connectivity-center)
-7. [A Practical Troubleshooting Ladder](#a-practical-troubleshooting-ladder)
-8. [Putting It All Together](#putting-it-all-together)
+4. [gcloud and Terraform Shared VPC Setup](#gcloud-and-terraform-shared-vpc-setup)
+5. [Centralized Firewalls, Routes, and DNS](#centralized-firewalls-routes-and-dns)
+6. [Cloud VPN, Cloud Interconnect, and Cloud Router](#cloud-vpn-cloud-interconnect-and-cloud-router)
+7. [Hybrid Verification Commands](#hybrid-verification-commands)
+8. [Network Connectivity Center](#network-connectivity-center)
+9. [A Practical Troubleshooting Ladder](#a-practical-troubleshooting-ladder)
+10. [Putting It All Together](#putting-it-all-together)
 
 ## Shared VPC, Hybrid Connectivity, and Troubleshooting
 <!-- section-summary: Shared VPC separates application ownership from network ownership, then hybrid connectivity extends the shared network beyond Google Cloud. -->
@@ -103,6 +105,67 @@ In production, this split prevents a common accident. The orders team can ship a
 
 Once teams can attach resources to shared subnets, the shared network controls need to stay centralized and reviewable.
 
+## gcloud and Terraform Shared VPC Setup
+<!-- section-summary: Shared VPC setup has three concrete operations: enable the host project, attach service projects, and delegate subnet use. -->
+
+The Shared VPC concept is real through three operations. The platform team enables `net-prod-host` as a host project. It attaches `app-orders-prod` as a service project. Then it grants the orders deployment identity permission to use selected shared subnets.
+
+The `gcloud` setup shape looks like this:
+
+```bash
+gcloud compute shared-vpc enable net-prod-host
+
+gcloud compute shared-vpc associated-projects add app-orders-prod \
+  --host-project=net-prod-host
+
+gcloud compute networks subnets add-iam-policy-binding apps-us-central1 \
+  --project=net-prod-host \
+  --region=us-central1 \
+  --member="serviceAccount:orders-deploy@app-orders-prod.iam.gserviceaccount.com" \
+  --role="roles/compute.networkUser"
+```
+
+The first command marks the host project as the Shared VPC host. The second command attaches the service project. The third command grants subnet-level Network User access, so the orders pipeline can attach resources to `apps-us-central1` without receiving control of every subnet and route in the host project.
+
+Verification should happen right after setup:
+
+```bash
+gcloud compute shared-vpc get-host-project app-orders-prod
+
+gcloud compute shared-vpc list-associated-resources net-prod-host \
+  --format='table(id,type)'
+
+gcloud compute networks subnets get-iam-policy apps-us-central1 \
+  --project=net-prod-host \
+  --region=us-central1 \
+  --flatten='bindings[].members' \
+  --filter='bindings.role=roles/compute.networkUser' \
+  --format='table(bindings.role,bindings.members)'
+```
+
+The same setup usually lives in Terraform:
+
+```hcl
+resource "google_compute_shared_vpc_host_project" "host" {
+  project = var.host_project_id
+}
+
+resource "google_compute_shared_vpc_service_project" "orders" {
+  host_project    = google_compute_shared_vpc_host_project.host.project
+  service_project = var.orders_project_id
+}
+
+resource "google_compute_subnetwork_iam_member" "orders_network_user" {
+  project    = var.host_project_id
+  region     = "us-central1"
+  subnetwork = google_compute_subnetwork.apps_us_central1.name
+  role       = "roles/compute.networkUser"
+  member     = "serviceAccount:orders-deploy@${var.orders_project_id}.iam.gserviceaccount.com"
+}
+```
+
+This is the point where ownership is visible in code review. A service project attachment says which team can consume the host network. A subnet IAM binding says which exact subnet that team can use. The network itself, firewall policy, routes, VPNs, Cloud Routers, and DNS zones stay in the host project.
+
 ## Centralized Firewalls, Routes, and DNS
 <!-- section-summary: Shared VPC centralizes network controls, so traffic decisions often live in the host project even when workloads live elsewhere. -->
 
@@ -159,6 +222,45 @@ Here is the beginner view. A VPN tunnel or Interconnect attachment is the transp
 In the orders scenario, the settlement system lives at `172.20.40.10` in a data center. The network team creates HA VPN tunnels between `prod-shared-vpc` and the data center gateway. Cloud Router learns `172.20.0.0/16` from the on-premises router and advertises `10.20.10.0/24` back. The orders app sends traffic to `172.20.40.10`; the VPC route table selects the dynamic route learned from Cloud Router; the packet leaves through the VPN tunnel if firewalls allow it.
 
 Hybrid bugs often come from route advertisements. The tunnel can be up while the prefix is missing. The prefix can be learned in Google Cloud while the on-premises side lacks the return route. Two peers can advertise overlapping prefixes, and a more specific route can win. BGP sessions can flap, route priorities can prefer a backup path, and asymmetric routing can confuse stateful firewalls outside Google Cloud. The first useful incident question is usually "which exact prefixes did each side learn and advertise?"
+
+## Hybrid Verification Commands
+<!-- section-summary: Hybrid troubleshooting starts with tunnel or attachment state, then Cloud Router BGP status, learned routes, advertised routes, and return-path evidence. -->
+
+For the settlement path, the network team should verify transport state and route exchange before asking the application team to change code. The first check lists the VPN tunnels or Interconnect attachments in the host project:
+
+```bash
+gcloud compute vpn-tunnels list \
+  --project=net-prod-host \
+  --filter='region:(us-central1)' \
+  --format='table(name,region,status,peerIp,router)'
+
+gcloud compute interconnects attachments list \
+  --project=net-prod-host \
+  --filter='region:(us-central1)' \
+  --format='table(name,region,interconnect,state,router)'
+```
+
+The next check asks Cloud Router for BGP status, advertised routes, and learned routes. This is one of the highest-value commands in a hybrid incident because it shows whether the route conversation agrees with the design:
+
+```bash
+gcloud compute routers get-status prod-router-us-central1 \
+  --project=net-prod-host \
+  --region=us-central1 \
+  --format=yaml
+```
+
+The network team should look for the remote prefix `172.20.0.0/16` in learned routes and the GCP source subnet `10.20.10.0/24` in advertised routes. If the tunnel is established and the route is missing, the problem is route advertisement, BGP policy, prefix filtering, or the peer side. If both routes exist and packets still fail, move to firewall evidence and flow logs.
+
+Route table checks make the selected next hop visible:
+
+```bash
+gcloud compute routes list \
+  --project=net-prod-host \
+  --filter='network~prod-shared-vpc AND destRange:172.20.' \
+  --format='table(name,destRange,nextHopVpnTunnel,nextHopInterconnectAttachment,nextHopGateway,priority)'
+```
+
+The application team can help by providing one exact flow: source IP `10.20.10.18`, destination IP `172.20.40.10`, TCP `443`, and failure time. With those facts, VPC Flow Logs, Connectivity Tests, Cloud Router status, and on-premises firewall logs all point at the same packet story.
 
 When a company has many VPCs, VPNs, Interconnect attachments, and sites, managing each connection pair by pair gets heavy. That is where Network Connectivity Center enters the story.
 
@@ -248,10 +350,17 @@ That is the operating shape of GCP networking at scale: shared ownership, delibe
 **References**
 
 - [Shared VPC](https://docs.cloud.google.com/vpc/docs/shared-vpc) - Defines host projects, service projects, subnet sharing, IAM delegation, centralized network control, billing behavior, DNS, and load balancing notes.
+- [Provision Shared VPC](https://docs.cloud.google.com/vpc/docs/provisioning-shared-vpc) - Shows the official setup workflow for enabling a host project, attaching service projects, and granting subnet access.
 - [Choosing a Network Connectivity product](https://docs.cloud.google.com/network-connectivity/docs/how-to/choose-product) - Compares Cloud VPN, Cloud Interconnect, and Cloud Router use cases.
+- [View Cloud Router details](https://docs.cloud.google.com/network-connectivity/docs/router/how-to/viewing-router-details) - Documents `gcloud compute routers get-status` for BGP session state, learned routes, and advertised routes.
 - [Cloud Interconnect overview](https://docs.cloud.google.com/network-connectivity/docs/interconnect/concepts/overview) - Describes Dedicated Interconnect, Partner Interconnect, Cross-Cloud Interconnect, benefits, capacity, encryption considerations, and route-related considerations.
+- [Google Cloud SDK: gcloud compute vpn-tunnels list](https://docs.cloud.google.com/sdk/gcloud/reference/compute/vpn-tunnels/list) - Documents current VPN tunnel listing and region filtering flags.
+- [Google Cloud SDK: gcloud compute interconnects attachments list](https://docs.cloud.google.com/sdk/gcloud/reference/compute/interconnects/attachments/list) - Documents Interconnect attachment listing and region filtering.
 - [Network Connectivity Center overview](https://docs.cloud.google.com/network-connectivity/docs/network-connectivity-center/concepts/overview) - Explains NCC hubs, spokes, VPC spokes, hybrid spokes, route exchange, and site-to-site data transfer.
 - [Connectivity Tests overview](https://docs.cloud.google.com/network-intelligence-center/docs/connectivity-tests/concepts/overview) - Documents path simulation, live data plane analysis, supported endpoints, and Google-managed service testing behavior.
 - [Network Intelligence Center overview](https://docs.cloud.google.com/network-intelligence-center/docs/overview) - Summarizes Google Cloud network visibility, monitoring, and troubleshooting modules.
 - [VPC Flow Logs](https://docs.cloud.google.com/vpc/docs/flow-logs) - Explains sampled flow logs, supported resources, use cases, scope, sampling behavior, and Shared VPC logging location.
 - [Flow Analyzer overview](https://docs.cloud.google.com/network-intelligence-center/docs/flow-analyzer/overview) - Describes flow-log analysis, filtering, traffic aggregation, and troubleshooting views.
+- [Terraform Registry: Shared VPC host project](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_shared_vpc_host_project) - Defines the Terraform resource for marking a project as a Shared VPC host.
+- [Terraform Registry: Shared VPC service project](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_shared_vpc_service_project) - Defines the Terraform resource for attaching a service project to a host project.
+- [Terraform Registry: subnetwork IAM](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_subnetwork_iam) - Defines subnet-level IAM bindings such as `roles/compute.networkUser`.

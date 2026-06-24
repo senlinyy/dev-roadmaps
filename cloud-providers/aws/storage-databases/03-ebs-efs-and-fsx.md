@@ -152,6 +152,40 @@ Performance checks depend on the service. For EBS, teams watch volume queue leng
 
 A small restore drill is worth doing before launch. Maple Market can create a test file, run a backup, delete or corrupt the test file, restore into a separate location, mount it from a test client, and verify the file contents and permissions. That drill proves the recovery path with the same tools the team would use during an incident.
 
+The production review should also include direct AWS checks. For EBS, the team can record the volume type, attachment, encryption, and snapshot path:
+
+```bash
+aws ec2 describe-volumes \
+  --filters Name=tag:Service,Values=search-index \
+  --query 'Volumes[].{VolumeId:VolumeId,Type:VolumeType,Size:Size,Az:AvailabilityZone,Encrypted:Encrypted,Attachments:Attachments[].InstanceId}'
+
+aws ec2 create-snapshot \
+  --volume-id vol-0123456789abcdef0 \
+  --description "search-index pre-release recovery check"
+```
+
+For EFS, the team can prove that mount targets exist in the intended subnets and that the application has an access point:
+
+```bash
+aws efs describe-mount-targets \
+  --file-system-id fs-1234567890abcdef0 \
+  --query 'MountTargets[].{MountTargetId:MountTargetId,SubnetId:SubnetId,LifeCycleState:LifeCycleState,IpAddress:IpAddress}'
+
+aws efs describe-access-points \
+  --file-system-id fs-1234567890abcdef0 \
+  --query 'AccessPoints[].{AccessPointId:AccessPointId,Root:RootDirectory.Path,PosixUser:PosixUser}'
+```
+
+For FSx, the check depends on the filesystem family, but the first signal is the filesystem state, subnet placement, and backup configuration:
+
+```bash
+aws fsx describe-file-systems \
+  --file-system-ids fs-0abc123def4567890 \
+  --query 'FileSystems[].{Type:FileSystemType,Lifecycle:Lifecycle,Subnets:SubnetIds,Storage:StorageCapacity,Backup:AutomaticBackupRetentionDays}'
+```
+
+These commands connect the design to evidence. A diagram may say "EFS is multi-AZ," but the mount-target output shows which subnets are actually ready. A backup policy may say "FSx is protected," but the filesystem output shows whether automatic backups are configured on the live resource.
+
 ## Choosing Between EBS, EFS, and FSx
 <!-- section-summary: The best choice comes from the filesystem behavior the workload needs, then placement, sharing, performance, and operations narrow it further. -->
 

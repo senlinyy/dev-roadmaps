@@ -19,8 +19,9 @@ aliases:
 5. [The Capacity Trap: Headroom vs. Waste](#the-capacity-trap-headroom-vs-waste)
 6. [The Boring Efficiency of Waste Removal](#the-boring-efficiency-of-waste-removal)
 7. [The Cost vs. Resilience Tradeoff Map](#the-cost-vs-resilience-tradeoff-map)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+8. [Pre-Cut Evidence and Rollback Checks](#pre-cut-evidence-and-rollback-checks)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Cost Review Crisis
 
@@ -43,11 +44,9 @@ Cost is the total financial spend required to provision running capacity, transf
 
 At a high level, cost is the spend model for your AWS architecture, while resilience is the failure-behavior model that spend supports. You review them together because reducing a bill often changes capacity, recovery, evidence retention, or isolation.
 
-To operate successfully in the cloud, you must replace the vague question *How do we make AWS cheaper?* with a precise paired equation:
+To operate successfully in the cloud, the team needs to replace the vague question *How do we make AWS cheaper?* with a precise paired equation:
 
-```text
-What specific failure does this active AWS spend protect our customers against?
-```
+> What specific failure does this active AWS spend protect our customers against?
 
 A spare ECS task looks like idle waste on a quiet Sunday afternoon, but it represents vital availability headroom if one task crashes during a heavy Monday morning deployment. A stored database snapshot appears as redundant storage cost until a faulty database migration corrupts your core tables. 
 
@@ -148,6 +147,86 @@ Cost vs. Resilience Tradeoff Map:
 | **Enable Database PITR** | Recovery Option (Snapshot storage fees). | Requisite backup cost; higher baseline storage fees. | Database RPO targets, successful restore drill logs. | Keep enabled; PITR is non-negotiable for system of record. |
 
 This tradeoff map is the core of professional cloud operations. It ensures that every cost-saving change is rolled out with clear risk boundaries, explicit metrics, and an active rollback target ready to be executed if performance degrades.
+
+## Pre-Cut Evidence and Rollback Checks
+
+A cost review should create an evidence bundle before anyone changes capacity, retention, or backup settings. The bundle does not need to be fancy. It needs to show the current setting, the customer-facing risk, the metric that will prove the change is still healthy, and the exact command or pull request that restores the old setting.
+
+For the `devpolaris-orders-api`, the team can collect a small baseline before reducing ECS capacity:
+
+```bash
+aws ecs describe-services \
+  --cluster devpolaris-prod \
+  --services devpolaris-orders-api \
+  --query 'services[].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Deployments:deployments[].rolloutState}'
+
+aws cloudwatch get-metric-data \
+  --metric-data-queries file://orders-capacity-review.json \
+  --start-time 2026-06-01T00:00:00Z \
+  --end-time 2026-06-08T00:00:00Z
+```
+
+The metric query file can track the signals that should stay healthy during the change. This example watches task CPU, memory, and load balancer target errors together, because cutting tasks only makes sense if the remaining tasks keep serving traffic cleanly.
+
+```json
+[
+  {
+    "Id": "ecs_cpu",
+    "MetricStat": {
+      "Metric": {
+        "Namespace": "AWS/ECS",
+        "MetricName": "CPUUtilization",
+        "Dimensions": [
+          { "Name": "ClusterName", "Value": "devpolaris-prod" },
+          { "Name": "ServiceName", "Value": "devpolaris-orders-api" }
+        ]
+      },
+      "Period": 300,
+      "Stat": "p95"
+    }
+  },
+  {
+    "Id": "alb_5xx",
+    "MetricStat": {
+      "Metric": {
+        "Namespace": "AWS/ApplicationELB",
+        "MetricName": "HTTPCode_Target_5XX_Count",
+        "Dimensions": [
+          { "Name": "LoadBalancer", "Value": "app/orders-prod/abc123" }
+        ]
+      },
+      "Period": 300,
+      "Stat": "Sum"
+    }
+  }
+]
+```
+
+The same habit applies to evidence retention and recovery. Before shortening log retention, the team can record the current setting and the rollback command:
+
+```bash
+aws logs describe-log-groups \
+  --log-group-name-prefix /aws/ecs/devpolaris-orders-api \
+  --query 'logGroups[].{Name:logGroupName,Retention:retentionInDays,StoredBytes:storedBytes}'
+
+aws logs put-retention-policy \
+  --log-group-name /aws/ecs/devpolaris-orders-api \
+  --retention-in-days 30
+```
+
+Before deleting snapshots or backup recovery points, the team should prove which restore point each database depends on:
+
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier orders-prod \
+  --query 'DBInstances[].{MultiAZ:MultiAZ,BackupRetention:BackupRetentionPeriod,LatestRestorableTime:LatestRestorableTime}'
+
+aws backup list-recovery-points-by-backup-vault \
+  --backup-vault-name prod-orders-vault \
+  --query 'RecoveryPoints[].{ResourceArn:ResourceArn,Created:CreationDate,Status:Status,Lifecycle:Lifecycle}'
+```
+
+These commands turn the cost review into an engineering review. A person can see the old value, the proposed new value, the metric window, and the rollback action. If checkout latency rises, task restarts climb, RDS restore coverage disappears, or incident logs no longer cover the expected investigation window, the team has a clean path back instead of a debate in the middle of an outage.
 
 ## Putting It All Together
 

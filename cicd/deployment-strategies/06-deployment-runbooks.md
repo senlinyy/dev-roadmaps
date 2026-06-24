@@ -37,7 +37,7 @@ The first step is moving from an informal checklist to something the pipeline ca
 
 A text checklist usually says things like "deploy the new image" or "check the logs." That can help, but it leaves too much interpretation for a stressful moment. Which image? Which environment? Which log query? Which metric threshold? Which rollback command?
 
-An **executable runbook** keeps the human explanation, but the actual operations point to scripts, pipeline jobs, or commands with clear inputs. The runbook becomes the bridge between people and automation.
+An **executable runbook** keeps the human explanation, but the actual operations point to scripts, pipeline jobs, or commands with clear inputs. The runbook connects people and automation.
 
 Here is a compact runbook shape for the checkout API:
 

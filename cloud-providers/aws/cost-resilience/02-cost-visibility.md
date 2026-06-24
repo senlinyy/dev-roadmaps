@@ -72,6 +72,21 @@ You must activate cost allocation tags inside the Billing and Cost Management co
 
 A major security gotcha is tag data leaks. Because tag metadata is exported in plain text to shared billing portals, invoicing systems, and third-party SaaS management tools, you must never write sensitive credentials, customer names, or private API keys inside tag values. Keep tag structures low-cardinality and operational.
 
+After the tag standard is written, the team should verify it from the resource side and the billing side. A resource can have a tag in EC2 or ECS and still fail to appear as a billing dimension if the cost allocation tag has not been activated yet.
+
+```bash
+aws resourcegroupstaggingapi get-resources \
+  --tag-filters Key=Service,Values=orders Key=Environment,Values=production \
+  --query 'ResourceTagMappingList[].{Arn:ResourceARN,Tags:Tags}'
+
+aws ce get-tags \
+  --time-period Start=2026-05-01,End=2026-06-01 \
+  --tag-key Service \
+  --query 'Tags[]'
+```
+
+The first command proves that real resources carry the ownership tags. The second proves that Cost Explorer can see values for the activated billing tag. If `orders` appears in the resource query but not in Cost Explorer, the fix is in the billing tag activation path or in the billing data delay, not in the ECS service itself.
+
 ## AWS Cost Explorer Views
 
 AWS Cost Explorer is the billing dashboard and API designed to filter, group, and analyze your account spending over historical and forecasted windows. Rather than auditing a flat line item list, you configure Cost Explorer to segment your spending.
@@ -179,6 +194,19 @@ This terminal execution establishes a tight financial guardrail:
 * `Threshold` & `ThresholdType`: Configures the alert to fire the moment actual spending crosses 80% of our limit ($3,200).
 * `Subscribers`: Decouples the alert using a regional SNS topic. The SNS topic routes the alert directly to engineering Slack channels, ensuring the team is notified immediately before the billing period ends.
 
+The budget should also be verified after creation. A practical check confirms the filter, the threshold, and the subscriber path before the team trusts the alert.
+
+```bash
+aws budgets describe-budget \
+  --account-id "111122223333" \
+  --budget-name OrdersProdMonthlyBudget
+
+aws sns list-subscriptions-by-topic \
+  --topic-arn arn:aws:sns:eu-west-2:111122223333:BillingAlerts
+```
+
+Those checks catch quiet mistakes. A budget filtered to `Environment$prod` will miss resources tagged `Environment$production`. An SNS topic with no confirmed subscriptions will accept the notification but fail to reach the team. Cost visibility works only when the billing view and the human response path are both connected.
+
 ## Decoding Spend Jumps with Operational Evidence
 
 A sudden spend jump is a symptom, not a verdict. If your daily Cost Explorer chart shows an unexpected 200% spike on a Tuesday, you must avoid the temptation to blindly delete resources. Instead, you map the cost change directly to operational telemetry to locate the root cause:
@@ -195,6 +223,31 @@ Operational Cost Diagnostics:
 | **RDS Capacity spike** | Check RDS active connections and database lock metrics. | Compute auto-scaling launched 10 new tasks, multiplying connection pool handles and saturating database limits. |
 
 By pairing billing changes with operational evidence, you ensure that your cost-saving actions solve the actual system bug rather than creating a secondary outage.
+
+For a real spend jump, the first response can be a short terminal session that narrows the time window, service, and operational clue. The example below asks for daily costs, then checks whether NAT gateway traffic and queue retries moved during the same period.
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=2026-06-01,End=2026-06-08 \
+  --granularity DAILY \
+  --metrics UnblendedCost \
+  --group-by Type=DIMENSION,Key=SERVICE
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/NATGateway \
+  --metric-name BytesOutToDestination \
+  --dimensions Name=NatGatewayId,Value=nat-0123456789abcdef0 \
+  --start-time 2026-06-01T00:00:00Z \
+  --end-time 2026-06-08T00:00:00Z \
+  --period 3600 \
+  --statistics Sum
+
+aws sqs get-queue-attributes \
+  --queue-url https://sqs.eu-west-2.amazonaws.com/111122223333/orders-worker \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+
+This gives the review a shape. Cost Explorer names the expensive service. CloudWatch shows whether network volume moved. SQS shows whether workers are falling behind or repeatedly holding messages in flight. The cost fix can then target the broken behavior instead of deleting useful capacity.
 
 ## Under-the-Hood: The Billing Data Pipeline
 
@@ -214,7 +267,7 @@ Cost visibility is not about assigning blame during audits; it is about establis
 
 Cost ownership is the operational mapping from each billable resource to a team, service, workload, and verification metric. Without that mapping, engineers cannot safely decide whether spend is useful headroom or removable waste.
 
-When every S3 bucket, RDS instance, and ECS service has a designated team owner and an active purpose tag, cost management becomes part of normal operations. When resources are untagged and unowned, every billing review becomes a manual ownership investigation, forcing engineers to guess what a running server does before they can optimize it.
+When every S3 bucket, RDS instance, and ECS service has a designated team owner and an active purpose tag, cost management is part of normal operations. When resources are untagged and unowned, every billing review turns into a manual ownership investigation, forcing engineers to guess what a running server does before they can optimize it.
 
 Every production deployment should document the active ownership coordinates:
 * **Attribution**: What service and team owns the billing tag?

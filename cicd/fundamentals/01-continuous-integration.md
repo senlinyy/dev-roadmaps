@@ -62,7 +62,7 @@ The new discount code can live in the shared codebase while `percentageDiscountC
 ## Pull Requests and Required Checks
 <!-- section-summary: Pull requests give humans a review surface, and required checks give the repository a machine-enforced merge rule. -->
 
-A **pull request**, often shortened to **PR**, is a proposed change from one branch into another branch. It gives reviewers a place to inspect the diff, discuss the design, and see the automated status of the change. In a CI workflow, the PR becomes the meeting point between human review and machine validation.
+A **pull request**, often shortened to **PR**, is a proposed change from one branch into another branch. It gives reviewers a place to inspect the diff, discuss the design, and see the automated status of the change. In a CI workflow, the PR is the meeting point between human review and machine validation.
 
 When Lina opens `lina/tax-rounding`, the repository host sends a workflow event to the CI system. GitHub Actions, GitLab CI, Jenkins, CircleCI, Buildkite, and other systems all follow the same broad shape. A repository event starts a workflow run, the workflow runs jobs on one or more runners, and the result comes back as a status check on the commit.
 
@@ -141,7 +141,7 @@ The scripts at the end should match local development. If developers run `npm ru
 ## What CI Should Test
 <!-- section-summary: CI needs enough tests to catch real integration problems while still returning feedback fast enough for daily work. -->
 
-A CI pipeline becomes useful when its tests answer the right questions quickly. A test suite with only one slow browser test may catch a real bug, yet it gives poor feedback because developers wait too long and the failure gives little detail. A test suite with only tiny unit tests may run fast, yet it can miss the moment where two pieces stop working together.
+A useful CI pipeline has tests that answer the right questions quickly. A test suite with only one slow browser test may catch a real bug, yet it gives poor feedback because developers wait too long and the failure gives little detail. A test suite with only tiny unit tests may run fast, yet it can miss the moment where two pieces stop working together.
 
 Most teams use a mix of **unit tests**, **integration tests**, and a small number of **end-to-end tests**. A unit test checks one small piece, such as `calculateDiscountWithCap(cart)`. An integration test checks two or more pieces together, such as the discount service writing the correct final total into the order repository. An end-to-end test checks a user-sized path, such as adding an item to a cart, applying a discount, and reaching the payment handoff. For `checkout-api`, the team might shape the CI test mix like this:
 
@@ -196,7 +196,7 @@ In `checkout-api`, imagine an integration test that creates an order, waits one 
 
 The fix should make the test observe the system behavior directly. The test can poll the order status with a short timeout, or the code can expose a test helper that waits for the worker queue to drain. The important point is that the test waits for a real condition instead of sleeping for a guessed number of milliseconds.
 
-When a flaky test blocks everyone, the team can quarantine it for a short time, but quarantine needs ownership. A healthy quarantine record says which test moved, why it moved, who owns the fix, and when the team will bring it back into the required check. A flaky test that stays outside CI forever becomes an untested production risk with a label on it.
+When a flaky test blocks everyone, the team can quarantine it for a short time, but quarantine needs ownership. A healthy quarantine record says which test moved, why it moved, who owns the fix, and when the team will bring it back into the required check. A flaky test that stays outside CI forever turns into an untested production risk with a label on it.
 
 The CI rule stays simple. A red required check deserves attention. If the team cannot trust that sentence, the team has to fix the signal before adding more tests.
 
@@ -220,7 +220,7 @@ The important habit is treating CI as the first shared production signal. A gree
 
 You now have the core CI loop: small changes, shared mainline, pull request checks, workflow jobs, clean runners, locked dependencies, and useful tests. That is the foundation underneath the rest of CI/CD.
 
-The next topic goes one layer deeper into pipeline structure. Once a change passes CI, teams need to understand jobs, runners, artifacts, caches, and how one validated commit becomes a build output that later deployment steps can trust.
+The next topic goes one layer deeper into pipeline structure. Once a change passes CI, teams need to understand jobs, runners, artifacts, caches, and how one validated commit turns into a build output that later deployment steps can trust.
 
 ---
 

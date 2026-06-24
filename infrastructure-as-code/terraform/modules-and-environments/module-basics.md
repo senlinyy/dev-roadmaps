@@ -53,7 +53,7 @@ modules/
     outputs.tf
 ```
 
-That directory becomes useful because it has a clear boundary. Callers can work from the inputs the module asks for and the outputs it gives back. A good module turns several low-level provider resources into one reviewed team pattern, so every caller avoids relearning which internal resource enables versioning or which resource blocks public access.
+That directory is useful because it has a clear boundary. Callers can work from the inputs the module asks for and the outputs it gives back. A good module turns several low-level provider resources into one reviewed team pattern, so every caller avoids relearning which internal resource enables versioning or which resource blocks public access.
 
 ## Your First Module: A Private Bucket
 <!-- section-summary: A small private bucket module shows how variables feed resources and outputs return the useful result. -->
@@ -145,7 +145,7 @@ Notice how the module speaks in business terms at the edge. The caller provides 
 ## Calling a Module From the Root Configuration
 <!-- section-summary: A module block points at the module source and supplies the values declared in the child module's variables. -->
 
-A **module call** is a `module` block in the root configuration. It tells Terraform where the child module lives and which input values this specific call should use. The label after `module`, such as `"artifact_bucket"`, becomes the local name callers use to reference outputs.
+A **module call** is a `module` block in the root configuration. It tells Terraform where the child module lives and which input values this specific call should use. The label after `module`, such as `"artifact_bucket"`, is the local name callers use to reference outputs.
 
 The production root configuration might call the private bucket module like this:
 
@@ -163,7 +163,7 @@ module "artifact_bucket" {
 }
 ```
 
-The `source` argument points to the module code. A local path such as `../../modules/private-bucket` tells Terraform to read files from the repository checkout. The other arguments match variables in the child module. Terraform checks those names during planning, so a misspelled input becomes a clear error before any cloud API call happens.
+The `source` argument points to the module code. A local path such as `../../modules/private-bucket` tells Terraform to read files from the repository checkout. The other arguments match variables in the child module. Terraform checks those names during planning, so a misspelled input raises a clear error before any cloud API call happens.
 
 The root can then use the child module outputs with `module.<name>.<output>`. If the deployment role needs permission to write artifacts into the bucket, the IAM policy can reference `module.artifact_bucket.bucket_arn` instead of copying a bucket ARN string by hand.
 
@@ -196,7 +196,7 @@ For a local module, the team usually edits the module files in the same reposito
 
 For a remote module, Terraform downloads a copy into `.terraform/modules/` during `terraform init`. A Registry module can use a `version` argument, and a Git module can use a `ref` query parameter. Those choices matter because the root configuration depends on the downloaded code, just like an application depends on a library package.
 
-After Terraform loads the module, it gives each internal resource a full address that includes the module path. The bucket resource inside the production call becomes `module.artifact_bucket.aws_s3_bucket.this`. Another module call could also contain an `aws_s3_bucket.this` resource, and the addresses stay separate because the module path scopes them.
+After Terraform loads the module, it gives each internal resource a full address that includes the module path. The bucket resource inside the production call has the address `module.artifact_bucket.aws_s3_bucket.this`. Another module call could also contain an `aws_s3_bucket.this` resource, and the addresses stay separate because the module path scopes them.
 
 This address shows up in plans, state, and error messages. When a production plan says `module.artifact_bucket.aws_s3_bucket_public_access_block.this` will change, the reviewer can trace the change back to the module call and the internal resource that produced it.
 
@@ -241,7 +241,7 @@ The big idea is simple enough to keep using everywhere: **common structure belon
 
 ## What's Next
 
-The next article goes deeper into the module contract: input types, validation rules, sensitive values, outputs, and how one module output becomes another module's input without coupling the modules together.
+The next article goes deeper into the module contract: input types, validation rules, sensitive values, outputs, and how one module output feeds another module's input without coupling the modules together.
 
 ---
 

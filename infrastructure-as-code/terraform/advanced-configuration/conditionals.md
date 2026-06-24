@@ -117,7 +117,7 @@ resource "aws_wafv2_web_acl_association" "main" {
 
 A conditional resource may have zero instances. That means every reference must handle the possibility that there is no object to read. Example: `aws_sns_topic.alerts[0].arn` works only when alerts are enabled and the list has an element at index `0`.
 
-When you create a resource conditionally with `count`, its Terraform address becomes a list, either a list with one element (`[0]` when `count` is 1) or an empty list (`[]` when `count` is 0). This affects how other resources reference it.
+When you create a resource conditionally with `count`, its Terraform address is a list, either a list with one element (`[0]` when `count` is 1) or an empty list (`[]` when `count` is 0). This affects how other resources reference it.
 
 If you try to reference a conditional resource with `aws_sns_topic.alerts.arn`, Terraform reports an error, that syntax expects a single resource, but a `count` resource is always a list. You must use the index syntax:
 
@@ -206,7 +206,7 @@ resource "aws_db_instance" "main" {
 }
 ```
 
-The `local.db_config[var.environment]` lookup retrieves the settings for the current environment. The resource block itself becomes simple and free of conditionals. Adding a new environment (like `staging`) means adding a new key to `local.db_config`.
+The `local.db_config[var.environment]` lookup retrieves the settings for the current environment. The resource block itself is simple and free of conditionals. Adding a new environment (like `staging`) means adding a new key to `local.db_config`.
 
 ## Filtering with for_each
 
@@ -248,7 +248,7 @@ This pattern is cleaner than a boolean `count` approach when you have a collecti
 
 ## Nested Conditionals and When to Avoid Them
 
-A nested conditional is a conditional expression inside another conditional expression. It can express more than two choices, but it becomes hard to read quickly. Example: choosing an instance type for `prod`, `staging`, and `dev` is often clearer as a map lookup than as several ternaries chained together.
+A nested conditional is a conditional expression inside another conditional expression. It can express more than two choices, but it is hard to read quickly. Example: choosing an instance type for `prod`, `staging`, and `dev` is often clearer as a map lookup than as several ternaries chained together.
 
 Conditional expressions can be nested: the value in one branch can itself be another conditional. This lets you express three-way or four-way decisions:
 

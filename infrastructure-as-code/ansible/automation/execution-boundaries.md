@@ -189,7 +189,7 @@ Use this feature when the fact belongs to the delegated host. If the fact descri
 
 Execution boundaries are also security boundaries. A task running on an orders web host can use files and credentials available to that host. A task delegated to localhost can use CI secrets, repository files, and runner environment variables. A task delegated to `lb-admin-01` can use load balancer credentials and network paths available there.
 
-That difference should be deliberate. If every app host can call the load balancer API directly, a compromised app host may gain control-plane reach. If only `lb-admin-01` can call it, the playbook has a tighter operational path, and the delegated task becomes the controlled bridge.
+That difference should be deliberate. If every app host can call the load balancer API directly, a compromised app host may gain control-plane reach. If only `lb-admin-01` can call it, the playbook has a tighter operational path, and the delegated task acts as the controlled bridge.
 
 Capacity matters too. Ten app hosts delegating work to one admin host can overload the admin host or trip an API rate limit. Combine delegation with `serial` and `throttle` when many hosts share the same delegated execution point.
 

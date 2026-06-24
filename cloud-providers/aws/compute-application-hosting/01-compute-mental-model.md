@@ -19,9 +19,10 @@ aliases:
 3. [The Workload Shape](#the-workload-shape)
 4. [The Ownership Budget](#the-ownership-budget)
 5. [EC2 vs. ECS Fargate](#ec2-vs-ecs-fargate)
-6. [Connecting the Workloads](#connecting-the-workloads)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+6. [A Practical Runtime Review](#a-practical-runtime-review)
+7. [Connecting the Workloads](#connecting-the-workloads)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Localhost Execution Illusion
 <!-- section-summary: Local development hides the different runtime shapes that appear when an application reaches AWS. -->
@@ -183,6 +184,58 @@ Selecting between these two compute models is a design decision about matching y
   * **Specialized Hardware Tuning**: The system demands direct, raw access to physical hardware Performance Monitoring Units (PMUs) or highly customized block-storage RAID array formatting that container file boundaries abstract away.
 
 By applying this decision framework, you prevent your engineering team from carrying unnecessary administrative burdens, while guaranteeing that specialized, host-dependent workloads receive the deep OS and hardware control they require.
+
+## A Practical Runtime Review
+<!-- section-summary: A compute choice should name the workload shape, runtime contract, rollout path, health signal, and rollback path before production traffic arrives. -->
+
+Before Northstar chooses EC2, ECS Fargate, or Lambda for a workload, the team can write a short runtime review. This review connects the service choice to the operational evidence the team will use after launch.
+
+| Review item | What the team writes down |
+| :--- | :--- |
+| Workload shape | Continuous service, host-shaped process, or bounded event handler |
+| Runtime contract | EC2 launch template, ECS task definition, or Lambda function configuration |
+| Entry trigger | ALB request, SQS message, EventBridge schedule, or another trigger |
+| Health signal | Target health, task health, function errors, queue age, p95 latency |
+| Scaling rule | Auto Scaling group policy, ECS desired count and service autoscaling, or Lambda concurrency |
+| Rollback path | Previous AMI, previous task definition revision, or previous Lambda version/alias |
+
+The review should include a small command bundle. For an ECS API, the team can prove the current task definition, subnet placement, and health before changing the runtime:
+
+```bash
+aws ecs describe-services \
+  --cluster northstar-prod \
+  --services checkout-api \
+  --query 'services[].{TaskDefinition:taskDefinition,Desired:desiredCount,Running:runningCount,Subnets:networkConfiguration.awsvpcConfiguration.subnets}'
+
+aws elbv2 describe-target-health \
+  --target-group-arn arn:aws:elasticloadbalancing:eu-west-2:111122223333:targetgroup/checkout-api/abc123
+```
+
+For a Lambda job, the review should show timeout, memory, concurrency, and the event source that starts the work:
+
+```bash
+aws lambda get-function-configuration \
+  --function-name receipt-emailer \
+  --query '{Runtime:Runtime,Memory:MemorySize,Timeout:Timeout,Role:Role,LastModified:LastModified}'
+
+aws lambda list-event-source-mappings \
+  --function-name receipt-emailer \
+  --query 'EventSourceMappings[].{State:State,EventSourceArn:EventSourceArn,BatchSize:BatchSize}'
+```
+
+For an EC2 host-shaped workload, the review should show the launch template, instance health, and the Auto Scaling group that replaces failed hosts:
+
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names fraud-worker-prod \
+  --query 'AutoScalingGroups[].{Min:MinSize,Desired:DesiredCapacity,Max:MaxSize,LaunchTemplate:LaunchTemplate,AZs:AvailabilityZones}'
+
+aws ec2 describe-instances \
+  --filters Name=tag:Service,Values=fraud-worker Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].{InstanceId:InstanceId,Type:InstanceType,Az:Placement.AvailabilityZone,ImageId:ImageId}'
+```
+
+These commands are useful because they match the runtime shape. ECS needs task and target-health evidence. Lambda needs function and trigger evidence. EC2 needs host fleet and launch-template evidence. The team can then approve the compute choice with both architecture reasoning and day-two operating checks.
 
 ## Connecting the Workloads
 <!-- section-summary: Compute choices need clean request, queue, and private network paths so the application parts work together. -->

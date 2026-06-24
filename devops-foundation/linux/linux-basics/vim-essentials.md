@@ -1,7 +1,7 @@
 ---
 title: "Vim Essentials"
 description: "Learn the Vim text editor from zero: modes, navigation, editing, search, and a practical workflow for editing config files on remote servers."
-overview: "Navigate and edit files confidently with Vim, the terminal-based editor available on every Linux server, so you never feel stuck when SSH'd into a machine with no GUI."
+overview: "Learn enough Vim to safely edit Nginx, systemd, and application config files while connected to a Linux server over SSH."
 tags: ["vim", "editor", "modal", "config"]
 order: 2
 id: article-devops-foundation-linux-linux-basics-vim-essentials
@@ -9,438 +9,225 @@ id: article-devops-foundation-linux-linux-basics-vim-essentials
 
 ## Table of Contents
 
-1. [Why Vim?](#why-vim)
-2. [The Modal Model](#the-modal-model)
-3. [Survival Basics: Open, Edit, Save, Quit](#survival-basics-open-edit-save-quit)
-4. [Moving Around: Navigation](#moving-around-navigation)
-5. [Editing: Delete, Copy, Paste, Undo](#editing-delete-copy-paste-undo)
-6. [Search and Replace](#search-and-replace)
-7. [Working with Multiple Files](#working-with-multiple-files)
-8. [A Practical Workflow](#a-practical-workflow)
-9. [Cheatsheet](#cheatsheet)
+1. [Why Vim Matters on a Server](#why-vim-matters-on-a-server)
+2. [Modes: How Vim Changes What Keys Do](#modes-how-vim-changes-what-keys-do)
+3. [Open, Edit, Save, and Quit](#open-edit-save-and-quit)
+4. [Move Through a Config File](#move-through-a-config-file)
+5. [Change Text Without Losing Control](#change-text-without-losing-control)
+6. [Search, Replace, and Review](#search-replace-and-review)
+7. [A Safe Remote Editing Workflow](#a-safe-remote-editing-workflow)
+8. [Cheatsheet](#cheatsheet)
+9. [References](#references)
 
-## Why Vim?
+## Why Vim Matters on a Server
+<!-- section-summary: Vim is the editor you can rely on when a remote Linux server only gives you a terminal. -->
 
-If you have been using VS Code, Sublime Text, or any other GUI editor, you might wonder why anyone would voluntarily use a terminal-based editor from the 1970s. The answer is simple: it is everywhere and sometimes it is all you have.
+When you SSH into `api-01`, the Linux VM running our `inventory-api`, you may only have a terminal. There is no desktop editor, and a broken Nginx config may need a fix before you can spend time setting up a remote IDE. Vim matters because it is usually available on servers, rescue shells, containers, and cloud images.
 
-When you SSH into a remote server, a Docker container, or an EC2 instance to fix a broken config file, there is no GUI. There is no way to open VS Code or click around with a mouse. What you do have is a terminal, and that terminal almost certainly has Vim installed. Even the most minimal Linux distributions include it. Alpine Linux, the tiny image used in most Docker containers, ships `vi` (Vim's predecessor) by default.
+Operating Linux requires only a practical Vim baseline: open a file, move to the right line, make a small change, save, quit, and recover when you press the wrong key. That baseline keeps a simple Nginx change from turning into a stressful moment.
 
-You do not need to become a Vim power user. You need to be comfortable enough to open a file, make a change, save it, and get out. That baseline skill eliminates a real category of "I'm stuck on a server and can't edit anything" moments. Once you have the basics, many engineers find that Vim's keyboard-driven workflow actually becomes faster than reaching for a mouse, and some switch to it entirely. But the goal of this article is the reliable baseline, not conversion.
+The running scenario is a common one. The API process listens on `127.0.0.1:3000`, and Nginx proxies public requests to it. The site config lives at `/etc/nginx/sites-available/inventory-api.conf`. When the backend port changes, someone has to edit that file correctly, test the Nginx config, and reload the service.
 
-The command `vi` on most modern systems actually launches Vim (Vi Improved), an enhanced version of the original `vi` editor. Throughout this article, `vim` and `vi` are interchangeable for everything we cover.
+## Modes: How Vim Changes What Keys Do
+<!-- section-summary: Vim uses modes so the same keys can either edit text or run commands, depending on the current state. -->
 
-## The Modal Model
+Vim is a **modal editor**. A mode is a state that changes what your keys mean. In one mode, typing `server_name` writes those letters into the file. In another mode, pressing `w` jumps to the next word and pressing `dd` deletes a line.
 
-Every other editor you have used works the same way: you type, and characters appear on screen. Vim is different. It has modes, and what your keys do depends on which mode you are in.
+The main modes for beginner server work are:
 
-This design has a practical origin. When Bill Joy created vi in 1976, he was working on an ADM-3A terminal over a 300-baud modem: no arrow keys, no function keys, no mouse. A modal design meant every key on the keyboard could serve as a command in Normal mode without needing Ctrl or Alt combinations. That constraint produced an editing model where every action is one to three keystrokes, which is why the design survived long after the hardware limitations disappeared.
+| Mode | Enter with | Leave with | What it is for |
+|---|---|---|---|
+| **Normal** | Vim starts here | Already here | Moving, deleting, copying, searching, and running commands |
+| **Insert** | `i`, `a`, `o`, `O` | `Esc` | Typing normal text into the file |
+| **Command-line** | `:` | `Enter` or `Esc` | Saving, quitting, replacing text, opening files |
+| **Search** | `/` or `?` | `Enter` or `Esc` | Finding text forward or backward |
 
-| Mode | Enter with | Return to Normal | Purpose |
-|------|-----------|-----------------|---------|
-| **NORMAL** | (default) | (already here) | Navigation and commands |
-| **INSERT** | `i`, `a`, `o` | `Esc` | Type text normally |
-| **COMMAND** | `:` | `Enter` or `Esc` | Run commands like `:w`, `:q`, `:%s` |
-| **SEARCH** | `/` or `?` | `Enter` or `Esc` | Find text in file |
+Normal mode is the home base. When you feel lost, pressing `Esc` once or twice returns you there. That habit matters because most useful Vim actions start from Normal mode.
 
-Normal mode is where you start when you open Vim. In this mode, every key is a command. Pressing `j` moves the cursor down, `dd` deletes a line, and `w` jumps forward one word. Nothing you type in Normal mode inserts text into the file.
+Here is how this plays out during a real edit. You open the Nginx site file and start in Normal mode. You search for `proxy_pass`, enter Insert mode to change the port, press `Esc` to return to Normal mode, then run `:wq` to write and quit.
 
-Insert mode is where Vim behaves like any other editor. Press `i` to enter Insert mode, and your keystrokes become text in the file. Press `Esc` to return to Normal mode.
+## Open, Edit, Save, and Quit
+<!-- section-summary: The survival workflow is open a file, enter Insert mode, save with `:w`, and quit with `:q`. -->
 
-Command-line mode activates when you press `:` from Normal mode. A colon appears at the bottom of the screen, and you type a command like `:wq` (save and quit) or `:%s/old/new/g` (find and replace). Press `Enter` to execute or `Esc` to cancel.
-
-If you remember nothing else, remember this: `Esc` always brings you back to Normal mode. If you are confused about what mode you are in, press `Esc` once or twice and you are back to safe ground.
-
-![A Vim mode map showing Normal mode as the central hub, with Insert, Command, and Search modes entered by keys and returned from with Escape](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-mode-map.png)
-
-*Treat Normal mode as Vim's home base. You briefly leave it to type text, run a command, or search, then use `Esc` to return to the safe command hub before doing the next action.*
-
-## Survival Basics: Open, Edit, Save, Quit
-
-Let's walk through the absolute minimum workflow. Open a file with `vim` followed by the filename:
+Opening a file is just `vim` followed by the path. System config files usually require elevated privileges, so the Nginx site file uses `sudo`.
 
 ```bash
-$ vim /etc/hostname
+$ sudo vim /etc/nginx/sites-available/inventory-api.conf
 ```
 
-Vim opens and you see the file contents. You are in Normal mode. The cursor sits on the first character. To make a change, press `i` to enter Insert mode. You will see `-- INSERT --` at the bottom of the screen. Now you can type normally. Make your edit, then press `Esc` to go back to Normal mode.
+Vim opens in Normal mode. The smallest edit flow looks like this:
 
-To save and quit, type `:wq` and press `Enter`. The `:` enters Command-line mode, `w` writes (saves) the file, and `q` quits Vim.
+1. Press `i` to enter Insert mode.
+2. Type or change the text.
+3. Press `Esc` to return to Normal mode.
+4. Type `:wq` and press `Enter` to save and quit.
 
-```text
-:wq    → save and quit
-:q!    → quit WITHOUT saving (discard all changes)
-:w     → save but stay in Vim
-:q     → quit (only works if there are no unsaved changes)
+The commands below are the ones that keep you safe during the first month of Vim:
+
+| Command | Meaning | Production use |
+|---|---|---|
+| `:w` | Write the file to disk | Save after a small correct edit |
+| `:q` | Quit | Leave a file with no unsaved changes |
+| `:wq` | Write and quit | Save a finished config edit |
+| `:q!` | Quit and discard buffer changes | Escape after editing the wrong file |
+| `:e!` | Reload the file from disk and discard buffer changes | Start over while staying in Vim |
+
+Vim edits a buffer in memory first. The file on disk changes only when you write it with `:w`. Vim also creates a swap file during editing so it can recover unsaved work after a crashed terminal session. When Vim warns about an existing swap file, pause and decide whether another person is editing the file or an old SSH session died.
+
+For the Nginx port change, the actual edit may be tiny:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
 ```
 
-The `!` in `:q!` is a force flag. It tells Vim "I know I have unsaved changes and I want to throw them away." Without the `!`, Vim refuses to quit if you have unsaved work, which is actually a helpful safety net.
+If the API moves to port `3100`, Insert mode lets you change only that number. The rest of the workflow happens outside Vim: test the config with `sudo nginx -t`, then reload Nginx if the test passes.
 
-If you accidentally opened the wrong file or made edits you regret, `:q!` is your escape hatch. No damage done.
+## Move Through a Config File
+<!-- section-summary: Normal-mode navigation lets you reach the right line quickly without scrolling through a terminal by hand. -->
 
-There is one more piece of vim's design worth knowing about before you make your first edits, because eventually you will see it on screen. When you open a file, vim does not edit the file directly. It loads the contents into an in-memory buffer and writes a hidden swap file alongside it (something like `.deploy.sh.swp`). All your edits go into the buffer, and `:w` is what actually overwrites the file on disk. The swap file exists for a single reason: crash recovery. If your SSH session drops, your laptop loses power, or vim itself crashes mid-edit, the swap file preserves your unsaved changes so you can recover them next time you open the file. The downside is that if you ever see "swap file already exists" when opening a file, vim is warning you that either another process is editing the same file, or a previous session crashed and never cleaned up. That distinction (buffer in memory, swap file on disk, real file untouched until you save) is also why `:q!` is safe: nothing you typed has touched the original file.
+Server config files can be short, but real Nginx and systemd files still grow. Normal-mode movement lets you reach the right location without treating the terminal like a slow text box.
 
-![An infographic showing Vim opening a real file into a buffer, writing a swap file for recovery, saving with colon w, and discarding buffer changes with colon q bang](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-buffer-swap-file.png)
+The basic cursor keys are `h`, `j`, `k`, and `l` for left, down, up, and right. Arrow keys also work on most systems. The reason many engineers still use `hjkl` is speed and muscle memory, especially over remote sessions where terminal behavior may vary.
 
-*Vim edits the buffer first. The real file changes only when you run `:w`, while the swap file protects unsaved work if the session dies before you save.*
+Word and line movement matter more than character movement:
 
-To create a new file, just open a name that does not exist yet:
+| Key | Movement |
+|---|---|
+| `w` | Next word |
+| `b` | Previous word |
+| `0` | Beginning of the line |
+| `^` | First non-space character on the line |
+| `$` | End of the line |
+| `gg` | First line of the file |
+| `G` | Last line of the file |
+| `42G` | Line 42 |
 
-```bash
-$ vim newfile.txt
-```
-
-Vim opens an empty buffer. Edit, then `:wq` to save it. The file is created on disk at that point.
-
-### Entering Insert Mode: More Than Just `i`
-
-The `i` key enters Insert mode with the cursor at its current position. But there are several other ways to enter Insert mode, each placing the cursor somewhere useful:
-
-```text
-i    → insert before the cursor
-a    → insert after the cursor (append)
-I    → insert at the beginning of the line
-A    → insert at the end of the line
-o    → open a new line below and enter Insert mode
-O    → open a new line above and enter Insert mode
-```
-
-The `o` and `O` keys are particularly handy. When you want to add a new line to a config file, pressing `o` in Normal mode creates the line and drops you into Insert mode in one keystroke, instead of navigating to the end of a line, pressing `Enter`, and then switching to Insert mode.
-
-## Moving Around: Navigation
-
-In Normal mode, Vim offers layered navigation: from single characters up to the entire file.
-
-### Character and Line Movement
-
-The most basic movement keys are `h`, `j`, `k`, and `l`. They move the cursor left, down, up, and right respectively. The arrow keys also work, but experienced Vim users prefer `hjkl` because your fingers never leave the home row.
-
-The reason the keys are `hjkl` specifically (and not, say, `wasd` like a video game) is the same hardware story from earlier. The ADM-3A terminal Bill Joy used had no arrow keys at all. Look at a photograph of that keyboard and you will see arrows literally printed on the `h`, `j`, `k`, and `l` keycaps, because those were the keys you used to move the cursor in any program on that machine. Joy mapped vi's navigation to the same keys because that is what users were already trained on. The arrows on the keycap disappeared decades ago, but the convention stuck because once enough scripts, plugins, and muscle memory depend on a layout, changing it costs more than keeping it.
-
-```text
-     k
-     ↑
-h ←     → l
-     ↓
-     j
-```
-
-You do not need to memorize this immediately. Use arrow keys until muscle memory kicks in.
-
-### Word Movement
-
-Moving character by character is slow. Word-level movement is faster:
-
-```text
-w    → jump to the start of the next word
-b    → jump back to the start of the previous word
-e    → jump to the end of the current word
-```
-
-In a line like `server_name example.com;`, pressing `w` three times takes you from `server_name` to `example.com;` to the next line.
-
-### Line-Level Movement
-
-```text
-0    → jump to the beginning of the line
-$    → jump to the end of the line
-^    → jump to the first non-whitespace character
-```
-
-The `^` key is especially useful in indented files like YAML or Python, where `0` would land you on whitespace but `^` lands you where the content starts.
-
-### File-Level Movement
-
-```text
-gg   → go to the first line of the file
-G    → go to the last line of the file
-42G  → go to line 42 (replace 42 with any line number)
-:42  → also goes to line 42 (Command-line mode)
-```
-
-When an error message says "syntax error on line 87," you type `87G` and you are there instantly. This is one of the first things in Vim that feels genuinely faster than a GUI editor, where you would need to open a "Go to Line" dialog or scroll manually.
-
-### Screen Movement
-
-```text
-Ctrl+d    → scroll half a page down
-Ctrl+u    → scroll half a page up
-H         → move cursor to the top of the visible screen
-M         → move cursor to the middle of the visible screen
-L         → move cursor to the bottom of the visible screen
-```
-
-These are useful when reading through a long file and you want to move your viewport without losing your place.
-
-## Editing: Delete, Copy, Paste, Undo
-
-Vim's editing commands in Normal mode operate on text objects: characters, words, lines. Once you see the pattern, it scales to everything.
-
-### Deleting
-
-```text
-x     → delete the character under the cursor
-dd    → delete the entire current line
-dw    → delete from cursor to the start of the next word
-d$    → delete from cursor to end of line
-D     → same as d$ (shortcut)
-3dd   → delete 3 lines starting from the current one
-```
-
-The `d` key is the "delete operator." It waits for a motion to tell it how much to delete. `dw` means "delete a word," `d$` means "delete to end of line," and `dG` means "delete from here to the end of the file." Any motion you learned in the navigation section works here.
-
-![An infographic showing Vim editing commands as an operator plus a motion, with examples for delete word, delete to line end, delete three lines, and change word](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-operator-motion.png)
-
-*Many Vim commands are small pieces that compose. Once you understand operator plus motion, commands like `dw`, `d$`, `3dd`, and `cw` become patterns instead of separate shortcuts to memorize.*
-
-### Copying and Pasting
-
-Vim calls copying "yanking" (the `y` key) and pasting "putting" (the `p` key):
-
-```text
-yy    → yank (copy) the entire current line
-yw    → yank from cursor to start of next word
-y$    → yank from cursor to end of line
-3yy   → yank 3 lines
-p     → put (paste) after the cursor
-P     → put (paste) before the cursor
-```
-
-When you delete something with `dd` or `dw`, the deleted text is also stored, so you can paste it back with `p`. This means `ddp` swaps two adjacent lines: delete the current line, then paste it below.
-
-### Undo and Redo
-
-```text
-u        → undo the last change
-Ctrl+r   → redo (undo the undo)
-```
-
-Vim has unlimited undo history within a session. If you make a mess, just keep pressing `u` until the file looks right.
-
-### The Dot Command
-
-The `.` key repeats the last change you made. If you just deleted a line with `dd` and want to delete three more, press `.` three times instead of typing `dd` three more times. If you just inserted the word "server" and need it in multiple places, navigate to the next location and press `.` to insert it again.
-
-The dot command is deceptively powerful. Once you start thinking in terms of "make one change, then repeat it," your editing speed increases significantly.
-
-## Search and Replace
-
-### Searching
-
-Press `/` in Normal mode to start a forward search. Type your search term and press `Enter`. Vim jumps to the first match.
-
-```text
-/error      → search forward for "error"
-?error      → search backward for "error"
-```
-
-After the initial search, you jump between matches with:
-
-```text
-n     → jump to the next match (same direction)
-N     → jump to the previous match (opposite direction)
-```
-
-So the full workflow is: type `/nginx`, press `Enter` to jump to the first match, then press `n` repeatedly to cycle through all occurrences. If you overshoot, press `N` to go back one. This continues to work even after you leave search mode; pressing `n` or `N` at any time repeats the last search.
-
-To turn off the highlighting after a search, type `:noh` (short for `:nohlsearch`) and press `Enter`.
-
-One subtlety worth knowing: Vim's search uses regular expressions by default. Characters like `.`, `*`, `[`, and `]` have special meaning. If you want to search for a literal dot, you need to escape it: `/192\.168\.1\.1`. In practice, simple word searches work fine without worrying about regex, but keep this in mind when searching for text containing special characters.
-
-### Search and Replace
-
-Vim's search-and-replace uses the `:s` (substitute) command. The basic form replaces text on the current line:
-
-```text
-:s/old/new/       → replace the first "old" with "new" on the current line
-:s/old/new/g      → replace ALL "old" with "new" on the current line
-```
-
-To replace across the entire file, prefix with `%` (which means "all lines"):
-
-```text
-:%s/old/new/g     → replace all "old" with "new" in the entire file
-:%s/old/new/gc    → same, but ask for confirmation on each match
-```
-
-The `c` flag is extremely useful when you are not sure every occurrence should be replaced. Vim highlights each match and asks `y/n/a/q/l`:
-
-```text
-y    → yes, replace this one
-n    → no, skip this one
-a    → all, replace this and all remaining matches
-q    → quit, stop replacing
-l    → last, replace this one and stop
-```
-
-You can also restrict the replacement to a range of lines. For example, to replace only on lines 10 through 25:
-
-```text
-:10,25s/old/new/g
-```
-
-In practice, the most common patterns you will use are `:%s/old/new/g` for a confident global replace and `:%s/old/new/gc` when you want to review each substitution.
-
-### Using `*` for Quick Word Searches
-
-Place your cursor on any word in Normal mode and press `*`. Vim immediately searches for the next occurrence of that exact word. Press `#` to search backward for it. This is faster than typing `/the-word-you-want` when the word is already on screen. Combined with `n` and `N`, you can quickly audit every place a variable name or configuration key appears in a file.
-
-## Working with Multiple Files
-
-You can open multiple files at once:
-
-```bash
-$ vim file1.txt file2.txt
-```
-
-Vim loads the first file. To switch between them:
-
-```text
-:n       → next file
-:prev    → previous file
-:ls      → list all open files (buffers)
-:b2      → switch to buffer number 2
-```
-
-You can also split the screen to view two files side by side:
-
-```text
-:split file2.txt    → horizontal split
-:vsplit file2.txt   → vertical split
-Ctrl+w w            → switch between splits
-Ctrl+w q            → close the current split
-```
-
-Splits are particularly useful when editing a config file while referencing another. You keep the original visible in one pane and make changes in the other.
-
-## A Practical Workflow
-
-Let's put it all together with a real scenario: editing an Nginx configuration file on a remote server.
-
-```bash
-$ ssh user@webserver
-$ sudo vim /etc/nginx/sites-available/default
-```
-
-You need to change the `server_name` from `example.com` to `myapp.io` and change the port from 80 to 8080. Here is a clean workflow:
-
-First, search for the server name. Type `/server_name` and press `Enter`. Vim jumps to the line. If there are multiple `server` blocks, press `n` to step through matches until you find the right one.
-
-Now position your cursor on `example.com`. Press `cw` (change word) to delete the word and enter Insert mode. Type `myapp.io` and press `Esc`.
-
-Next, find the port. Type `/listen` and press `Enter`. You see `listen 80;`. Place your cursor on `80`, press `cw`, type `8080`, press `Esc`.
-
-Save and quit with `:wq`.
-
-The `cw` command (change word) is one of the most useful editing commands. It deletes from the cursor to the end of the word and drops you into Insert mode in one motion. It combines `dw` (delete word) and `i` (enter Insert mode) into a single action. Similarly, `cc` changes an entire line, and `c$` changes from the cursor to the end of the line.
-
-After saving, test the config and reload:
+This helps when Nginx reports an error with a line number:
 
 ```bash
 $ sudo nginx -t
+nginx: [emerg] invalid URL prefix in /etc/nginx/sites-enabled/inventory-api.conf:18
+nginx: configuration file /etc/nginx/nginx.conf test failed
+```
+
+Back in Vim, `18G` takes you directly to line 18. The command `:set number` shows line numbers, and `:set relativenumber` can help when you need to move a known number of lines. Many operators turn on line numbers during config repair because service error messages usually speak in line numbers.
+
+## Change Text Without Losing Control
+<!-- section-summary: Vim editing commands combine an action with a movement, which makes small config changes fast and repeatable. -->
+
+Insert mode is enough for basic edits, but Normal mode gives you precise changes with fewer keystrokes. Vim often combines an operator with a motion. The operator says what to do, and the motion says how much text it affects.
+
+Common delete and change commands are:
+
+| Command | Meaning | Example use |
+|---|---|---|
+| `x` | Delete one character | Remove an extra `;` |
+| `dd` | Delete the current line | Remove a duplicate directive |
+| `D` | Delete from cursor to end of line | Clear a wrong value |
+| `cw` | Change from cursor through the word | Replace `localhost` with `127.0.0.1` |
+| `ci"` | Change inside quotes | Replace a quoted path |
+| `u` | Undo | Reverse the last edit |
+| `Ctrl+r` | Redo | Reapply an undone edit |
+
+Copy and paste use Vim's older words, **yank** and **put**. `yy` yanks the current line, `p` puts it below the cursor, and `P` puts it above. When you need a second `location` block in Nginx, `yy` and `p` can duplicate the nearby block before you edit the path.
+
+The dot command, `.`, repeats the last change. For example, if you use `cw3100` then `Esc` to change one port value, pressing `.` on another matching value repeats the same change. That is useful when a config file has the same backend port in a main server block and a health-check block.
+
+## Search, Replace, and Review
+<!-- section-summary: Search and substitution help you find every related directive before you save a server config change. -->
+
+Search starts from Normal mode. `/proxy_pass` searches forward for the next `proxy_pass`, and `?proxy_pass` searches backward. After a search, `n` jumps to the next match and `N` jumps to the previous match.
+
+This is the natural way to review every reference to the API backend:
+
+```vim
+/proxy_pass
+n
+n
+```
+
+Search also helps with config includes. Nginx files often include other files, and the active setting may live outside the file you opened first. Searching for `include`, `server_name`, and `location` gives you a quick map of the file before you edit.
+
+Substitution changes text by pattern. The form is `:%s/old/new/g`, where `%` means the whole file and `g` means every match on each line.
+
+```vim
+:%s/127.0.0.1:3000/127.0.0.1:3100/g
+```
+
+For production config, confirmation is safer:
+
+```vim
+:%s/127.0.0.1:3000/127.0.0.1:3100/gc
+```
+
+The final `c` asks before each replacement. That matters when the same text appears in a comment, a backup block, or an example line that should stay unchanged.
+
+Before leaving Vim, a quick review reduces mistakes. `:set number` shows line numbers, `/` jumps through changed directives, and `:w` writes the file. Then the shell takes over with the official service validation command.
+
+## A Safe Remote Editing Workflow
+<!-- section-summary: Safe server edits include backup, minimal change, validation, reload, and rollback path. -->
+
+Editing production files directly requires a small ritual. The ritual protects you from typos and gives you a way back if the service rejects the change.
+
+For the Nginx site file, the workflow can look like this:
+
+```bash
+$ sudo cp /etc/nginx/sites-available/inventory-api.conf \
+  /etc/nginx/sites-available/inventory-api.conf.bak.$(date +%Y%m%d-%H%M%S)
+
+$ sudo vim /etc/nginx/sites-available/inventory-api.conf
+
+$ sudo nginx -t
 nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
 nginx: configuration file /etc/nginx/nginx.conf test is successful
+
 $ sudo systemctl reload nginx
 ```
 
-Always test config files before reloading services. A syntax error in the config will prevent the service from starting, which is worse than the original problem you were fixing.
+The backup copy is simple and boring, which is exactly what you want at 02:00. The Vim edit stays small. `nginx -t` validates syntax before the live service reloads. `systemctl reload nginx` asks Nginx to reload config without dropping existing connections.
+
+If validation fails, Vim can reopen the file and fix the line. If the reload causes a real problem, the backup is ready:
+
+```bash
+$ sudo cp /etc/nginx/sites-available/inventory-api.conf.bak.20260624-091500 \
+  /etc/nginx/sites-available/inventory-api.conf
+$ sudo nginx -t
+$ sudo systemctl reload nginx
+```
+
+The same shape applies to systemd units and environment files. Back up the file, make the smallest edit, run the service's validation command when one exists, reload or restart intentionally, and keep the rollback command obvious.
 
 ## Cheatsheet
+<!-- section-summary: A compact set of Vim commands covers most remote Linux editing tasks. -->
 
-### Modes
+| Task | Keys or command |
+|---|---|
+| Enter Insert mode before cursor | `i` |
+| Enter Insert mode after cursor | `a` |
+| Open a new line below | `o` |
+| Return to Normal mode | `Esc` |
+| Save | `:w` |
+| Save and quit | `:wq` |
+| Quit and discard changes | `:q!` |
+| Search forward | `/pattern` |
+| Next search result | `n` |
+| Go to line 42 | `42G` or `:42` |
+| Delete current line | `dd` |
+| Copy current line | `yy` |
+| Paste below | `p` |
+| Undo | `u` |
+| Replace with confirmation | `:%s/old/new/gc` |
 
-```text
-i          Enter Insert mode (before cursor)
-a          Enter Insert mode (after cursor)
-o / O      Open new line below / above
-Esc        Return to Normal mode
-:          Enter Command-line mode
-```
+This is enough to edit `/etc/nginx`, `/etc/systemd/system`, `/etc/fstab`, and simple environment files during normal server work. More Vim can come later, after the basics are steady.
 
-### Navigation
+## References
 
-```text
-h j k l    Left, down, up, right
-w / b      Next word / previous word
-0 / $      Start / end of line
-^          First non-whitespace character
-gg / G     Top / bottom of file
-42G        Go to line 42
-Ctrl+d     Half page down
-Ctrl+u     Half page up
-```
-
-### Editing
-
-```text
-x          Delete character
-dd         Delete line
-dw         Delete word
-D          Delete to end of line
-yy         Yank (copy) line
-yw         Yank word
-p / P      Paste after / before cursor
-u          Undo
-Ctrl+r     Redo
-.          Repeat last change
-cw         Change word (delete + insert)
-cc         Change entire line
-c$         Change to end of line
-```
-
-### Search
-
-```text
-/pattern   Search forward
-?pattern   Search backward
-n / N      Next / previous match
-*          Search word under cursor (forward)
-#          Search word under cursor (backward)
-:noh       Clear search highlighting
-```
-
-### Search and Replace
-
-```text
-:s/a/b/          Replace first on current line
-:s/a/b/g         Replace all on current line
-:%s/a/b/g        Replace all in entire file
-:%s/a/b/gc       Replace all with confirmation
-:10,25s/a/b/g    Replace all in line range
-```
-
-### Files and Splits
-
-```text
-:w         Save
-:q         Quit (fails if unsaved changes)
-:wq        Save and quit
-:q!        Quit without saving
-:e file    Open another file
-:split     Horizontal split
-:vsplit    Vertical split
-Ctrl+w w   Switch between splits
-Ctrl+w q   Close split
-:n / :prev Next / previous file
-```
-
-### Numbers with Commands
-
-```text
-5j         Move 5 lines down
-3dd        Delete 3 lines
-4yy        Yank 4 lines
-2dw        Delete 2 words
-```
-
-![A six-part summary infographic for Vim essentials covering Normal mode, Insert mode, Command mode, chunk navigation, operator-motion editing, and search verification](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-essentials-summary.png)
-
-*Use this as the short mental checklist: return to Normal mode when confused, enter Insert mode only when you are typing, use Command mode to save or quit, move by meaningful chunks, compose edits from operators and motions, and verify config changes with search before testing the service.*
-
----
-
-**References**
-
-- [Vim Documentation](https://www.vim.org/docs.php) - The official Vim documentation covering all commands, options, and scripting.
-- [Vimtutor](https://vimschool.netlify.app/introduction/vimtutor/) - The built-in interactive Vim tutorial, accessible by typing `vimtutor` in any terminal with Vim installed.
-- [Vim Adventures](https://vim-adventures.com/) - A game-based approach to learning Vim navigation commands through puzzle levels.
-- [Practical Vim by Drew Neil](https://pragprog.com/titles/dnvim2/practical-vim-second-edition/) - A recipe-style book covering efficient editing patterns and the composability of Vim commands.
+- [Vim user manual table of contents](https://vimhelp.org/usr_toc.txt.html) - Official Vim help index for beginner and advanced topics.
+- [Vim editing effectively](https://vimhelp.org/usr_02.txt.html) - Official Vim tutorial section covering basic editing.
+- [Vim moving around](https://vimhelp.org/usr_03.txt.html) - Official Vim tutorial section covering navigation.
+- [Nginx command-line parameters](https://nginx.org/en/docs/switches.html) - Documents `nginx -t` and reload-related command options.
+- [systemctl manual](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html) - Documents `reload`, `restart`, and service control commands.

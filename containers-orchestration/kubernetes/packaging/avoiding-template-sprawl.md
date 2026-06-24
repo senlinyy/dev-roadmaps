@@ -32,7 +32,7 @@ The risk is that Helm or Kustomize starts hiding those fields. If a reviewer mus
 
 ![Template sprawl warning showing too many values, hidden helpers, long patches, review pain, and rendered YAML evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/template-sprawl-warning.png)
 
-*Template sprawl starts with helpful options, then grows until rendered YAML becomes the only shared evidence everyone can trust.*
+*Template sprawl starts with helpful options, then grows until rendered YAML is the only shared evidence everyone can trust.*
 
 ## Rendered YAML as the Shared Evidence
 <!-- section-summary: The rendered manifest gives reviewers the same object view Kubernetes will receive. -->
@@ -261,6 +261,63 @@ $ kubectl kustomize k8s/overlays/prod > /tmp/prod-before.yaml
 ```
 
 After that, cleanup can move in small steps. The team removes values that no template reads, renames vague values, splits hidden profile behavior into explicit values, collapses helpers that hide large object sections, and shortens Kustomize patch chains that all target the same Deployment.
+
+A concrete refactor makes this easier to review. Suppose the production values file hides several behaviors behind a profile flag and a raw Deployment escape hatch:
+
+```yaml
+profile: prod
+deployment:
+  rawSpec:
+    progressDeadlineSeconds: 600
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+debug:
+  rewriteProbePaths: true
+ingress:
+  host: orders.devpolaris.example
+```
+
+The cleanup keeps the same production behavior while giving each real choice a name that matches the rendered Kubernetes field. The service team can review replicas, rollout timing, probes, and routing without learning a private profile system.
+
+```yaml
+replicaCount: 3
+rollout:
+  progressDeadlineSeconds: 600
+  maxSurge: 25%
+  maxUnavailable: 25%
+probes:
+  readinessPath: /health/ready
+ingress:
+  enabled: true
+  className: nginx
+  host: orders.devpolaris.example
+```
+
+Before approving the refactor, the team renders both versions and compares the final production YAML. For a pure readability cleanup, the diff command should print nothing:
+
+```bash
+$ diff -u /tmp/prod-before.yaml /tmp/prod-after.yaml
+```
+
+No output means no rendered object changed. The source has fewer review paths, and Kubernetes still receives the same production objects.
+
+If the same pull request also includes one intentional release change, the rendered diff should show that exact change and nothing surprising around selectors, ports, probes, or routes:
+
+```diff
+@@ -38,7 +38,7 @@
+       containers:
+         - name: api
+-          image: ghcr.io/devpolaris/orders-api:2026.05.06
++          image: ghcr.io/devpolaris/orders-api:2026.05.07
+           readinessProbe:
+             httpGet:
+               path: /health/ready
+```
+
+That rendered diff is the review evidence. The source refactor may touch values, helpers, and templates, while the cluster-facing proof stays small enough for a reviewer to trust.
 
 Each cleanup step should render again and compare behavior. The team can then prove a readability cleanup did not change production runtime fields.
 

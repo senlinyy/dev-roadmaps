@@ -488,7 +488,7 @@ This habit turns release operations into a trail that people can trust. It also 
 
 You now have the main release loop: render values, install or upgrade, inspect Helm history and status, verify Kubernetes objects, and roll back when a release revision needs recovery. That loop is the practical center of Helm operations for a service like `devpolaris-orders-api`.
 
-The next packaging problem is chart growth. As more environments, toggles, and platform features appear, teams need to keep templates readable and avoid turning values into a maze. The next article focuses on avoiding template sprawl while keeping the chart useful.
+The next article shifts to Kustomize, because some teams prefer valid Kubernetes YAML with overlays instead of Helm templates and release records. The same render-first habit stays in place, but the source files, review flow, and rollback story look different.
 
 ---
 

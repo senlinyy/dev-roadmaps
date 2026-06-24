@@ -231,7 +231,7 @@ In production, some teams integrate Istio with SPIRE or another identity system 
 
 ![SPIFFE certificate flow infographic showing a checkout service account, istiod CA, certificate with SPIFFE ID, mTLS handshake, source principal, and payments verification](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/spiffe-certificate-flow.png)
 
-*The service account becomes a certificate-backed workload identity, and the destination proxy reads that identity as the source principal during policy checks.*
+*The service account uses a certificate-backed workload identity, and the destination proxy reads that identity as the source principal during policy checks.*
 
 ## Require Strict mTLS With PeerAuthentication
 <!-- section-summary: PeerAuthentication controls whether a destination workload accepts plain traffic or requires authenticated encrypted mTLS traffic. -->

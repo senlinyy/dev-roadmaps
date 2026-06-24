@@ -155,7 +155,7 @@ orders_data_dir: /var/lib/orders
 orders_data_dir: /mnt/legacy-orders-data
 ```
 
-When Ansible prepares `orders-web-02`, `orders_data_dir` becomes `/mnt/legacy-orders-data`. When it prepares `orders-web-01`, `orders_data_dir` remains `/var/lib/orders`. That is useful, and it also means hidden duplicate values can surprise people.
+When Ansible prepares `orders-web-02`, it resolves `orders_data_dir` to `/mnt/legacy-orders-data`. When it prepares `orders-web-01`, `orders_data_dir` remains `/var/lib/orders`. That is useful, and it also means hidden duplicate values can surprise people.
 
 Specific names reduce confusion. `port` is too vague in a real project because Nginx, the app, metrics, and admin endpoints may all have ports. Names like `orders_app_port`, `nginx_listen_port`, and `node_exporter_port` tell readers which system consumes the value and make debug output easier to search.
 

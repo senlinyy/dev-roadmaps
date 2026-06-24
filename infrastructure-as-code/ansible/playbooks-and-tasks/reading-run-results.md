@@ -30,7 +30,7 @@ Ansible output is the evidence trail for a run. It tells you which play started,
 
 Keep the orders platform in mind. A production deploy targets two web hosts, `orders-web-01` and `orders-web-02`. The playbook renders an API config, validates it, restarts the service through a handler, and checks the health endpoint. One host may change, the other may already be current, and a third host in a larger fleet may fail before Ansible can connect.
 
-Readable output depends on practical playbook habits. Clear task names make the log readable. Idempotent tasks make `changed` meaningful. Validation tasks with `changed_when: false` keep read-only checks quiet. With those habits in place, the output becomes a practical deployment record.
+Readable output depends on practical playbook habits. Clear task names make the log readable. Idempotent tasks make `changed` meaningful. Validation tasks with `changed_when: false` keep read-only checks quiet. With those habits in place, the output acts as a practical deployment record.
 
 ## Status Words in Task Output
 <!-- section-summary: Each task result uses a small set of status words that point to a specific host-level outcome. -->
@@ -145,7 +145,7 @@ ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.ex
 
 Diff mode adds another kind of evidence. For template and file work, `--diff` can show before-and-after content. That is excellent for reviewing a candidate config on a canary host. It can also reveal secrets if the file contains credentials, so tasks that handle sensitive files should use `diff: false` or `no_log: true` where appropriate.
 
-Check mode can change the result story. A task that normally registers a value might skip in check mode if the module cannot predict safely, and a later task may not have the data it expects. A preview that shows skipped registered data should lower confidence for that branch. The canary apply then becomes the evidence that proves the branch for real.
+Check mode can change the result story. A task that normally registers a value might skip in check mode if the module cannot predict safely, and a later task may not have the data it expects. A preview that shows skipped registered data should lower confidence for that branch. The canary apply then gives the evidence that proves the branch for real.
 
 ## Reading the Play Recap
 <!-- section-summary: The recap condenses the whole run into per-host counters that show participation, change, failure, and skips. -->
@@ -202,7 +202,7 @@ Secrets deserve special handling. Verbose logs, debug tasks, and diff output can
 
 A safe production log should prove the run without printing private data. It can show the commit, inventory, selected hosts, task names, changed counts, health-check status, and rollback target. It should avoid raw secret values, full private config diffs, and debug dumps of registered results from secret-bearing tasks.
 
-Rollback should follow the same audited path as rollout. If the bad change was a template or variable edit, revert the repository change and run the playbook against the affected host first. If the bad change was a release input, restore the previous release value and run a canary command. The recap from the rollback run becomes the evidence that the host returned to the desired state.
+Rollback should follow the same audited path as rollout. If the bad change was a template or variable edit, revert the repository change and run the playbook against the affected host first. If the bad change was a release input, restore the previous release value and run a canary command. The recap from the rollback run gives the evidence that the host returned to the desired state.
 
 ## Putting It All Together
 <!-- section-summary: Reading output well turns playbook runs into a practical record of host state, change, failure, and follow-up work. -->

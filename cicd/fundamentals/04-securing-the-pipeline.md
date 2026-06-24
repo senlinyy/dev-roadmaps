@@ -31,7 +31,7 @@ aliases:
 
 A **CI/CD pipeline** is the automated path that turns a code change into something running for users. It usually checks out the source code, installs dependencies, runs tests, builds an artifact, stores that artifact, and deploys it to an environment. When the previous article talked about continuous delivery, the important idea was repeatability: the same release process should run the same way every time.
 
-**Pipeline security** adds guardrails to that same path. The guardrails check whether the change carries leaked credentials, unsafe code patterns, vulnerable dependencies, risky container packages, and untrusted release artifacts. A secure pipeline treats those checks like unit tests. If a check finds a real release-blocking problem, the change stops before it becomes a production incident.
+**Pipeline security** adds guardrails to that same path. The guardrails check whether the change carries leaked credentials, unsafe code patterns, vulnerable dependencies, risky container packages, and untrusted release artifacts. A secure pipeline treats those checks like unit tests. If a check finds a real release-blocking problem, the change stops before it turns into a production incident.
 
 We will follow one service through the article. Imagine a team building `payflow-api`, a small payments API for an online store. The service is written in Node.js, built into a container image, pushed to a registry, and deployed to Kubernetes after a pull request merges into `main`. This is a normal production setup, and it gives us a clear way to connect each security concept to the previous one.
 
@@ -75,6 +75,15 @@ The recovery order matters. **Rotate the leaked credential first.** Rotation mea
 
 After rotation, the team investigates where the secret appeared. They check the repository, CI logs, container layers, deployment manifests, and application configuration. A secret can leak through a failed build log as easily as through source code. Build tools sometimes print environment variables during debug mode, and a single `echo $PAYMENT_API_KEY` in a shell script can turn a protected secret into plain text in a job log.
 
+A useful leak runbook records the concrete cleanup path. For `payflow-api`, the incident note should name the leaked credential, the provider account, the rotation time, the new credential owner, the places checked for exposure, and the jobs rerun after rotation. That note gives the team evidence that the old token lost access before anyone starts the slower work of removing it from Git history.
+
+- Credential: payment provider live API key
+- Rotated at: 2026-06-13 14:20 UTC
+- Old key revoked: yes
+- Updated locations: production secret store, staging secret store, webhook worker
+- Exposure checked: repository, CI logs, image layers, deployment manifests
+- Follow-up: add custom scanner pattern for `payflow_live_` tokens
+
 This is why secret handling needs two layers. The first layer prevents secrets from entering source control. The second layer reduces the number of long-lived secrets the pipeline needs in the first place.
 
 ## Secret Scanning And Short-Lived Credentials
@@ -114,7 +123,26 @@ jobs:
         run: ./scripts/deploy.sh
 ```
 
-The important detail in that workflow is the `permissions` block. `contents: read` lets the job read the repository, and `id-token: write` lets the job request an OIDC token. Other permissions stay unavailable unless the workflow asks for them. In production, the cloud trust policy should also check the repository name, branch, environment, and **audience**, which is the intended receiver of the token. For example, an AWS role can require a token meant for AWS, from the `acme/payflow-api` repository, on the `main` branch, through the `production` environment, so a random workflow cannot borrow the production role.
+The important detail in that workflow is the `permissions` block. `contents: read` lets the job read the repository, and `id-token: write` lets the job request an OIDC token. Other permissions stay unavailable unless the workflow asks for them. In production, the cloud trust policy and the protected environment should check the repository name, branch, environment, and **audience**, which is the intended receiver of the token. For example, an AWS role can require a token meant for AWS from the `acme/payflow-api` production environment, while the GitHub environment allows deployments only from `main`.
+
+A small trust policy condition makes that idea visible. The exact role ARN and account differ by company, but the important checks are the `aud` claim and the `sub` claim. In this example, AWS STS is the audience, only the production environment identity for `acme/payflow-api` can assume the role, and the environment's branch rule keeps production deploys tied to `main`.
+
+```json
+{
+  "Condition": {
+    "StringEquals": {
+      "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+      "token.actions.githubusercontent.com:sub": "repo:acme/payflow-api:environment:production"
+    }
+  }
+}
+```
+
+The deploy job should prove the token exchange before it touches production. Many teams run an identity check as the first cloud command and compare the returned account and role to the expected production deploy role.
+
+```bash
+aws sts get-caller-identity
+```
 
 The pipeline has reduced credential leaks and removed a permanent deployment key. The next check looks inside the application code itself, because a safe credential path still needs safe application behavior.
 
@@ -216,7 +244,7 @@ Dependency checks tell us about package manifests and lock files. Once the pipel
 ## Container Image Scanning
 <!-- section-summary: Image scanning checks the built artifact, including operating system packages, language packages, secrets, and image configuration. -->
 
-A **container image** is a packaged filesystem plus metadata used to start containers. It contains the application code, runtime, package manager files, operating system libraries, user settings, exposed ports, and every file copied during the build. The image becomes the thing production actually runs, so it needs its own security gate.
+A **container image** is a packaged filesystem plus metadata used to start containers. It contains the application code, runtime, package manager files, operating system libraries, user settings, exposed ports, and every file copied during the build. The image is the thing production actually runs, so it needs its own security gate.
 
 For `payflow-api`, the Dockerfile might start from a Node base image. That base image brings Linux packages with it. The application may also copy compiled assets, install production dependencies, and set runtime environment variables. A source scan can miss issues that only appear after those build steps complete.
 
@@ -324,9 +352,33 @@ At this point the pipeline has many gates. The final skill is operating those ga
 
 A security gate needs a policy that developers can understand. A simple starting policy might block leaked secrets, critical SAST alerts with high confidence, high or critical dependency vulnerabilities with a fix available, critical image vulnerabilities with a fix available, unsigned production artifacts, and deployments from untrusted branches. The exact thresholds should match the product risk, but the team needs a written rule before the first noisy week.
 
-Older findings need a different path from new findings. If a repository already has 300 medium SAST alerts, blocking every pull request will trap developers in old debt. A better rollout starts by blocking new critical findings while the team creates a backlog for existing issues. The gate then becomes a ratchet: new code cannot make the security position worse, and the team pays down the old issues in planned batches.
+Older findings need a different path from new findings. If a repository already has 300 medium SAST alerts, blocking every pull request will trap developers in old debt. A better rollout starts by blocking new critical findings while the team creates a backlog for existing issues. The gate then acts like a ratchet: new code cannot make the security position worse, and the team pays down the old issues in planned batches.
 
-Exceptions should expire. Sometimes a vulnerable package has no patched version, or a scanner reports a false positive in generated code, or a production hotfix must move before a full refactor. An exception record should name the finding, owner, reason, compensating control, and expiration date. Permanent exceptions become invisible risk, so they need review.
+A written gate policy keeps this from turning into a debate during every release. The policy can live beside the workflow or in a security runbook, but it should use language that maps to actual job behavior.
+
+```yaml
+pull_request:
+  block:
+    - leaked_secret
+    - sast_critical_high_confidence
+    - dependency_high_with_fix
+  warn:
+    - dependency_medium
+    - license_review_required
+release:
+  block:
+    - unsigned_artifact
+    - missing_sbom
+    - image_critical_with_fix
+exception:
+  requires:
+    - owner
+    - reason
+    - compensating_control
+    - expires_at
+```
+
+Exceptions should expire. Sometimes a vulnerable package has no patched version, or a scanner reports a false positive in generated code, or a production hotfix must move before a full refactor. An exception record should name the finding, owner, reason, compensating control, and expiration date. Permanent exceptions turn into invisible risk, so they need review.
 
 Pipeline speed also matters. Secret scanning, dependency review, and core SAST checks belong in the pull request path because they give fast feedback. Deep DAST scans, broad container scans, and full repository analysis can run nightly or before release if they take longer. **Dynamic application security testing**, or **DAST**, tests a running application from the outside, so it often needs a deployed test environment and more time than a normal pull request job.
 
@@ -347,7 +399,7 @@ The production deployment gate verifies the evidence. It checks that the image d
 
 The result is a delivery system that can explain itself. If someone asks what code shipped, the artifact digest answers. If someone asks what packages shipped, the SBOM answers. If someone asks who built it, provenance answers. If someone asks how risky findings were handled, the pipeline logs and exception records answer.
 
-This is the main idea behind securing the pipeline. Security becomes part of the release path instead of a separate meeting after the release path has already done its work. The checks run every time, close to the change, with enough evidence for developers to fix real problems and enough control to keep risky artifacts out of production.
+This is the main idea behind securing the pipeline. Security is part of the release path rather than a separate meeting after the release path has already done its work. The checks run every time, close to the change, with enough evidence for developers to fix real problems and enough control to keep risky artifacts out of production.
 
 ---
 

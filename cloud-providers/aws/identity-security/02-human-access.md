@@ -53,7 +53,7 @@ AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 AWS_REGION=us-east-1
 ```
 
-That key can make the first upload test succeed, and then it can quietly spread into a laptop, a container image, a CI/CD secret, a `.env` file, and a debugging screenshot. If the key leaks, CloudTrail records activity against the IAM user behind that key. CloudTrail is AWS's activity record for API calls, and its evidence becomes harder to read when the same permanent key was used by a human shell, application code, and a deployment job.
+That key can make the first upload test succeed, and then it can quietly spread into a laptop, a container image, a CI/CD secret, a `.env` file, and a debugging screenshot. If the key leaks, CloudTrail records activity against the IAM user behind that key. CloudTrail is AWS's activity record for API calls, and its evidence is harder to read when the same permanent key was used by a human shell, application code, and a deployment job.
 
 Different callers have different lifetimes. A person joins a team, changes teams, and eventually leaves. A laptop gets replaced. A Lambda function may run for seconds. A container task may be replaced several times a day. A deployment workflow should have production access only during the deployment window. One permanent key ignores those lifetimes and makes cleanup a manual hunt.
 
@@ -76,14 +76,14 @@ The repeated pattern is **temporary credentials**. Temporary credentials are sho
 
 *The important shift is from one reusable secret copied into many places to separate temporary sessions created for the caller that actually needs AWS access.*
 
-Human access is the first practical place to apply this pattern because people are usually where static keys begin spreading. Once people receive temporary access cleanly, the same idea becomes easier to apply to applications and automation.
+Human access is the first practical place to apply this pattern because people are usually where static keys begin spreading. Once people receive temporary access cleanly, the team can apply the same idea to applications and automation.
 
 ## Human Access Through Identity Center
 <!-- section-summary: IAM Identity Center gives workforce users one sign-in path into assigned AWS accounts instead of separate daily IAM users in each account. -->
 
 **IAM Identity Center** is AWS's workforce access service. It lets people sign in through one trusted identity source, choose the AWS accounts they are allowed to enter, and receive temporary role sessions for the jobs assigned to them. An **identity source** is the directory of people and groups AWS trusts for workforce sign-in, such as the built-in Identity Center directory, Microsoft Entra ID, Okta, Active Directory, or another supported identity provider.
 
-This becomes important as soon as the image service has more than a few people. A new engineer needs development access on Monday. A senior engineer needs production read access while on call. A finance partner needs billing visibility. A contractor leaves the project on Friday. Those changes belong in the workforce directory and group assignments, where the company already handles joining, moving, and leaving.
+This matters as soon as the image service has more than a few people. A new engineer needs development access on Monday. A senior engineer needs production read access while on call. A finance partner needs billing visibility. A contractor leaves the project on Friday. Those changes belong in the workforce directory and group assignments, where the company already handles joining, moving, and leaving.
 
 The daily sign-in path stays small:
 
@@ -257,7 +257,7 @@ const s3 = new S3Client({});
 
 The constructor stays empty because credentials come from the runtime environment. In Lambda, ECS, EC2, or EKS, the platform can expose temporary credentials for the role attached to that runtime. The SDK finds those credentials and refreshes them when the provider supports refresh.
 
-A copied environment variable can still cause confusion. Environment variables are part of the credential provider story for many SDKs and tools, so an old `AWS_ACCESS_KEY_ID` can become the credential source even though a platform role also exists. The application may still work, but CloudTrail points at the static key and rotation becomes a manual problem again.
+A copied environment variable can still cause confusion. Environment variables are part of the credential provider story for many SDKs and tools, so an old `AWS_ACCESS_KEY_ID` can supply the credential source even though a platform role also exists. The application may still work, but CloudTrail points at the static key and rotation returns to manual work.
 
 Each runtime has its own normal delivery path:
 

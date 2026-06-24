@@ -166,7 +166,7 @@ deploy_production:
 
 The `environment: production` line connects the job to production protection rules. The `concurrency` group prevents two production deploys for the same service from racing each other. The smoke test proves the service answers the main path after deployment.
 
-Gates should produce visible evidence. A good release record says: artifact digest, commit, CI run, scan results, staging deployment, staging smoke test, approver, production deployment, and post-release checks. That evidence becomes very useful when rollback or audit questions appear later.
+Gates should produce visible evidence. A good release record says: artifact digest, commit, CI run, scan results, staging deployment, staging smoke test, approver, production deployment, and post-release checks. That evidence helps when rollback or audit questions appear later.
 
 There is one more practical layer. Some teams promote the same image digest by copying it between registry locations or changing tags in a controlled way. That is registry promotion.
 

@@ -26,7 +26,7 @@ aliases:
 
 ## The Untested Restore Illusion
 
-When developing applications on your local workstation, database backups are rarely a concern. If your database state becomes corrupted, you run a single migrations script, reset the local container disk, or import a SQL dump. The database runs on the same physical loopback interface, uses static credentials, and is immediately accessible by your application process.
+When developing applications on your local workstation, database backups are rarely a concern. If your database state is corrupted, you run a single migrations script, reset the local container disk, or import a SQL dump. The database runs on the same physical loopback interface, uses static credentials, and is immediately accessible by your application process.
 
 In a distributed cloud environment, this simple localhost recovery assumption breaks down completely. Backups are highly complex processes that run across isolated networks, IAM boundaries, and regional compute environments. If a buggy software deployment corrupts your production database, having millions of snapshots stored in AWS Backup vaults does not mean your application is online or recoverable.
 
@@ -152,6 +152,22 @@ Every returned parameter provides critical recovery evidence:
 * `KmsKeyId`: The Key Management Service key used by RDS to secure the storage volume. Your application tasks do not decrypt database storage directly, but the restore must be allowed to use the key, and any Secrets Manager values your app reads may have their own KMS permission requirements.
 * `LatestRestorableTime`: The newest point in time that the transaction logs can currently recover.
 
+The restore command starts the recovery path. Application usability still needs its own proof. A practical verification loop waits for the new instance, records the endpoint, and checks the security and backup settings before application traffic points at it:
+
+```bash
+aws rds wait db-instance-available \
+  --db-instance-identifier restored-orders-db-temp
+
+aws rds describe-db-instances \
+  --db-instance-identifier restored-orders-db-temp \
+  --query 'DBInstances[].{Endpoint:Endpoint.Address,Status:DBInstanceStatus,Subnets:DBSubnetGroup.Subnets[].SubnetIdentifier,SecurityGroups:VpcSecurityGroups[].VpcSecurityGroupId,Encrypted:StorageEncrypted}'
+
+aws secretsmanager describe-secret \
+  --secret-id prod/orders/database
+```
+
+The first command keeps the runbook from racing the control plane. The second command gives the endpoint, subnet group, security groups, and encryption state the application will depend on. The third command reminds the team that a restored database still needs the surrounding secret path. The final cutover should also include an application-level read check against the restored endpoint, such as opening one known order, one recent receipt, and one admin report in a staging or drill task.
+
 ## Under-the-Hood: Lazy Block Restores and WAL Replay
 
 To execute recovery successfully, you must understand the physical storage mechanisms that occur during an Amazon RDS restore. When you execute `restore-db-instance-to-point-in-time`, the AWS control plane does not wait for gigabytes of data to copy before marking the database online. Doing so would result in hours of RTO downtime.
@@ -203,6 +219,31 @@ MFA Delete exists, but it is awkward as a general recovery pattern. Only the roo
 
 If S3 Versioning is disabled, a delete operation permanently erases the physical data blocks from the AWS storage grid. Enabling versioning is your primary insurance policy against human error in object storage.
 
+The object-storage recovery plan should have its own checks. Versioning and Object Lock settings are easy to assume from a diagram, so the team should record them directly from the bucket:
+
+```bash
+aws s3api get-bucket-versioning \
+  --bucket orders-prod-receipts
+
+aws s3api get-object-lock-configuration \
+  --bucket orders-prod-receipts
+
+aws s3api list-object-versions \
+  --bucket orders-prod-receipts \
+  --prefix receipts/2026/06/13/order-1042.pdf
+```
+
+If a receipt was overwritten or deleted, the version listing gives the previous version IDs and any delete marker. A restore runbook can then copy a known-good version back to the live key:
+
+```bash
+aws s3api copy-object \
+  --bucket orders-prod-receipts \
+  --key receipts/2026/06/13/order-1042.pdf \
+  --copy-source orders-prod-receipts/receipts/2026/06/13/order-1042.pdf?versionId=3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrH
+```
+
+That command is small, but it changes the recovery conversation. The team can prove whether the older object version exists before promising that S3 can recover the file.
+
 ## The Recovery Drill Blueprint
 
 The worst time to test your disaster recovery plan is during a real outage. To guarantee that your recovery targets can be met, you must run regular, non-disruptive recovery drills. A recovery drill is a simulated restoration that tests the entire application path without interrupting your live production traffic.
@@ -242,6 +283,19 @@ $ aws rds delete-db-instance \
 
 This teardown execution prevents billing leaks by ensuring that temporary restored resources are not left running overnight.
 
+The drill record should include the measured times alongside the pass/fail result:
+
+| Drill checkpoint | Example evidence |
+| :--- | :--- |
+| Restore started | RDS restore command timestamp and target restore time |
+| Database available | `aws rds wait` completion timestamp |
+| Application connected | ECS drill task log line with successful database connection |
+| Data verified | Read-only checks for known order, receipt, and report records |
+| Access verified | Secret read, KMS permission, S3 write, and queue publish checks |
+| Cleanup complete | RDS delete command timestamp and no remaining drill resources |
+
+Those timestamps turn recovery planning into an operating measurement. If the target RTO is 60 minutes and the drill takes 95 minutes, the team has useful work to do before the next real incident.
+
 ## Putting It All Together
 
 Operating a resilient cloud system requires transitioning from simple backups to verified recovery plans:
@@ -256,7 +310,7 @@ Operating a resilient cloud system requires transitioning from simple backups to
 
 ## What's Next
 
-We have completed our comprehensive review of AWS Cost and Resilience. We have built a robust mental model for cost versus reliability tradeoffs, established deep visibility using tags and budgets, optimized resources via compute and database rightsizing, and defined a rigorous recovery planning strategy. 
+We have completed our comprehensive review of AWS Cost and Resilience. We have built a practical map for cost versus reliability tradeoffs, established deep visibility using tags and budgets, optimized resources via compute and database rightsizing, and defined a rigorous recovery planning strategy.
 
 In the next module, we will pivot to dynamic application orchestration. We will dive deep into container architectures, detailing how to package applications, construct multi-stage Dockerfiles, manage local images, and configure local container networking environments.
 

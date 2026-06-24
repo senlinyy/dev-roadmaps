@@ -282,7 +282,7 @@ The orders fleet now has a complete file-to-service path. Template and partial-e
 
 The production rollout has a shape too. Validation protects the live file, handlers apply process changes, health checks confirm the new process, and `serial` keeps the fleet available while each host updates. If the service fails, logs and backups point to a practical rollback path.
 
-As these tasks, templates, files, and handlers grow, copying them across playbooks becomes painful. Roles give this service automation a reusable home, and the next article starts that structure.
+As these tasks, templates, files, and handlers grow, copying them across playbooks is painful. Roles give this service automation a reusable home, and the next article starts that structure.
 
 ## What's Next
 

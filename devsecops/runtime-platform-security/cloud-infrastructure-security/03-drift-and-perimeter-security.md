@@ -53,7 +53,7 @@ Before we investigate the incident, we need a clear definition of the three reco
 
 Drift shows up when these records disagree. The code may say the database accepts traffic only from the application security group. The live cloud may say port 5432 accepts traffic from `0.0.0.0/0`. The state file may still remember the older safe rule until the next refresh. That gap is exactly where security risk hides.
 
-![Drift Triangle](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-triangle.png)
+![Drift triangle showing Git code, IaC state, and live cloud compared together with audit logs explaining out-of-band changes](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-triangle.png)
 
 *The triangle shows why drift review compares Git code, IaC state, and the live cloud, then uses audit logs to explain the change.*
 
@@ -83,7 +83,7 @@ The engineer did not add this exact HCL to the repository. The rule was created 
 
 This is a very normal production failure shape. The on-call engineer restored service, and the missing closeout loop created the security risk. Emergency changes need time limits, audit evidence, drift checks, and a decision: revert the change, codify the change, or import a new managed resource. Without that loop, a temporary workaround turns into a quiet production exposure.
 
-![Incident Exposure Path](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/incident-exposure-path.png)
+![Incident exposure path showing a break-glass console change opening database ingress from the internet and the safer target of application-only access](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/incident-exposure-path.png)
 
 *The exposure path makes the incident concrete: a break-glass console change opens a database port, and the safe target is traffic from the application group only.*
 
@@ -289,7 +289,7 @@ The database incident also improves the team's operating habits. Emergency conso
 
 This is the practical value of drift and perimeter security. The team does not pretend the repository is the whole truth. It treats the repository as the approved design, the state file as the IaC mapping, the cloud account as the current reality, and audit logs as the evidence trail. Security work then follows a steady loop: detect the gap, understand the change, close the exposure, and update the process that allowed it.
 
-![Drift Review Loop](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-review-loop.png)
+![Drift review loop showing detection, audit log review, revert or codify or import decision, verification, and process improvement](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-review-loop.png)
 
 *The loop summarizes the response pattern: detect drift, check logs, choose whether to revert, codify, or import, then verify the account is clean.*
 

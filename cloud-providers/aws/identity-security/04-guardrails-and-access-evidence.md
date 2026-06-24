@@ -1,7 +1,7 @@
 ---
 title: "Guardrails and Access Evidence"
 description: "Use AWS Organizations, SCPs, cross-account roles, CloudTrail, Access Analyzer, credential reports, and review cadence to keep IAM safe across accounts."
-overview: "IAM gets harder after one account becomes many accounts. This article follows one payments workload as the team adds account structure, guardrails, cross-account access, audit evidence, credential review, and a repeatable cleanup rhythm."
+overview: "IAM gets harder after one account grows into many accounts. This article follows one payments workload as the team adds account structure, guardrails, cross-account access, audit evidence, credential review, and a repeatable cleanup rhythm."
 tags: ["iam", "organizations", "cloudtrail", "access-analyzer"]
 order: 4
 id: article-cloud-providers-aws-identity-security-account-guardrails
@@ -24,7 +24,7 @@ aliases:
 
 ## Table of Contents
 
-1. [When One Account Becomes Many](#when-one-account-becomes-many)
+1. [When One Account Grows Into Many](#when-one-account-grows-into-many)
 2. [The Account Map](#the-account-map)
 3. [Service Control Policies](#service-control-policies)
 4. [Common Guardrails](#common-guardrails)
@@ -35,7 +35,7 @@ aliases:
 9. [The Review Loop](#the-review-loop)
 10. [Putting It All Together](#putting-it-all-together)
 
-## When One Account Becomes Many
+## When One Account Grows Into Many
 <!-- section-summary: Multi-account AWS needs rules above local IAM and evidence after changes, because access can drift after teams, accounts, and workloads grow. -->
 
 The earlier IAM articles followed one workflow: a receipt export function needs the right role, the right policy, the right bucket path, and the right KMS key. That is already a lot for one production account. Now the same company grows past one account, and the access problem changes shape.
@@ -406,7 +406,7 @@ CloudTrail records who asked for what. `sts get-caller-identity` proves the acti
 
 The review loop turns evidence into change. Access stays when it has an owner, a reason, and a review date. Evidence can also show that a workflow needs less permission than it has today. Stale keys, role trusts, broad permissions, and vendor paths can move through reversible cleanup steps, then deletion after normal work proves the cleanup was safe.
 
-Guardrails and access evidence make IAM manageable after AWS becomes a multi-account system. Guardrails keep each account inside company limits. Evidence helps the team prove which access exists, which request happened, and which old permission can leave.
+Guardrails and access evidence make IAM manageable after AWS grows into a multi-account system. Guardrails keep each account inside company limits. Evidence helps the team prove which access exists, which request happened, and which old permission can leave.
 
 ![Operating loop connecting account map, guardrail ceiling, temporary access, activity evidence, unused access, and cleanup decisions](/content-assets/articles/article-cloud-providers-aws-identity-security-account-guardrails/guardrails-evidence-operating-loop.png)
 

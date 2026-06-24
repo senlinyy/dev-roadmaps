@@ -279,6 +279,39 @@ The Automation Framework keeps the scan plan in one YAML file. That makes change
 
 CI should store the report as an artifact even when the job fails. A failed scan without a report forces people to rerun the job just to understand the finding. A useful failure gives a link to the artifact, the endpoint, the rule, the evidence, and the owner.
 
+Before the team treats the workflow as a release gate, they can run the same scan locally against staging and save the first evidence bundle. This helps beginners see the loop without waiting for a CI run.
+
+```bash
+TARGET="https://checkout-staging.example.com"
+OPENAPI="$TARGET/openapi.json"
+TOKEN="$(curl -s \
+  -X POST "$TARGET/test-auth/token" \
+  -H "content-type: application/json" \
+  -d '{"user":"customer-a@example.test"}' | jq -r .access_token)"
+
+mkdir -p evidence/zap-staging
+
+docker run --rm \
+  -v "$PWD/evidence/zap-staging:/zap/wrk/:rw" \
+  ghcr.io/zaproxy/zaproxy:stable \
+  zap-api-scan.py \
+  -t "$OPENAPI" \
+  -f openapi \
+  -J zap-report.json \
+  -r zap-report.html \
+  -z "-config replacer.full_list(0).description=auth \
+      -config replacer.full_list(0).enabled=true \
+      -config replacer.full_list(0).matchtype=REQ_HEADER \
+      -config replacer.full_list(0).matchstr=Authorization \
+      -config replacer.full_list(0).replacement=Bearer $TOKEN"
+
+jq '.site[].alerts[] | {riskdesc, name, url}' \
+  evidence/zap-staging/zap-report.json \
+  > evidence/zap-staging/alert-summary.json
+```
+
+That local run gives the reviewer three useful records: the JSON report for machines, the HTML report for humans, and a small summary that can move into the finding triage article. The team should still use dedicated staging accounts and fake data, even for this local command.
+
 Runtime scans now produce evidence. The team still needs to understand the limits.
 
 ## What Runtime Testing Can and Cannot Prove

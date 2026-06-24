@@ -36,7 +36,7 @@ For a beginner, this is the first important split. The playbook describes the wo
 
 We will use one production-style story for the rest of the article. A small orders platform has two web servers behind a load balancer and one background worker. The web servers run Nginx and an `orders-api` systemd service. The worker server runs `orders-worker`. The team wants one reviewed automation path for staging and production instead of a set of private SSH notes.
 
-The pieces connect like this. Inventory chooses `orders_web`. The play selects that group. Each task calls one module. The module inspects the remote host, changes only what it needs to change, and returns a result. The playbook output becomes useful because every task has a name and every module reports a status.
+The pieces connect like this. Inventory chooses `orders_web`. The play selects that group. Each task calls one module. The module inspects the remote host, changes only what it needs to change, and returns a result. The playbook output is useful because every task has a name and every module reports a status.
 
 ## Hosts, Plays, Tasks, and Modules
 <!-- section-summary: Plays choose host groups, tasks express individual operations, and modules report whether each operation changed the host. -->

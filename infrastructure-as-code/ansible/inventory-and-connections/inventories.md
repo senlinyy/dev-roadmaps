@@ -29,7 +29,7 @@ aliases:
 
 An **inventory** is the list of machines Ansible knows about, plus the groups and connection details that describe those machines. Before Ansible can install a package, restart a service, or render a config file, it needs a clear answer to a simple question: which managed nodes are in scope for this work?
 
-In daily production work, inventory becomes the shared map between people and automation. Operators talk about `prod_web`, the deployment pipeline runs against `orders_workers`, and an incident note names `orders-web-02` as the first host to check. Those names only stay useful when the inventory has a careful shape.
+In daily production work, inventory acts as the shared map between people and automation. Operators talk about `prod_web`, the deployment pipeline runs against `orders_workers`, and an incident note names `orders-web-02` as the first host to check. Those names only stay useful when the inventory has a careful shape.
 
 Inventory also sets up the rest of the Ansible workflow. **Patterns** choose hosts from inventory, **limits** narrow a run, **group variables** describe shared values, and **host variables** describe one-machine exceptions. If the host map is hard to read, every later playbook command carries extra risk.
 

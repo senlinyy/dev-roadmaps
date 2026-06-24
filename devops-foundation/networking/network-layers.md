@@ -1,7 +1,7 @@
 ---
 title: "Network Layers"
-description: "Trace what happens between fetch() and a server response by learning the TCP/IP and OSI layer models, encapsulation, and where things break."
-overview: "Understand how data travels across a network by learning the layered models that every protocol, firewall rule, and debugging tool is built around."
+description: "Trace one browser request through DNS, IP routing, firewalls, TLS, Nginx, and the application by learning how network layers divide the work."
+overview: "Understand how one request travels through the network stack so DNS, subnets, firewalls, TLS, reverse proxies, and app errors land in the right debugging bucket."
 tags: ["tcp/ip", "osi", "tcpdump", "encapsulation"]
 order: 1
 id: article-devops-foundation-networking-network-layers
@@ -9,312 +9,213 @@ id: article-devops-foundation-networking-network-layers
 
 ## Table of Contents
 
-1. [Why Layers Matter](#why-layers-matter)
-2. [The Mental Model: Envelopes Inside Envelopes](#the-mental-model-envelopes-inside-envelopes)
-3. [The TCP/IP Model](#the-tcpip-model)
-4. [The OSI Model as a Debugging Map](#the-osi-model-as-a-debugging-map)
-5. [How Data Travels Down the Stack](#how-data-travels-down-the-stack)
-6. [Seeing the Layers with tcpdump](#seeing-the-layers-with-tcpdump)
-7. [Where Each Layer Breaks](#where-each-layer-breaks)
+1. [The Request Path We Will Follow](#the-request-path-we-will-follow)
+2. [What a Network Layer Means](#what-a-network-layer-means)
+3. [Encapsulation: How Data Gets Wrapped](#encapsulation-how-data-gets-wrapped)
+4. [TCP/IP Layers in One Browser Request](#tcpip-layers-in-one-browser-request)
+5. [The OSI Names People Use During Incidents](#the-osi-names-people-use-during-incidents)
+6. [Watching Layers with Real Tools](#watching-layers-with-real-tools)
+7. [Debugging by Layer](#debugging-by-layer)
 
-## Why Layers Matter
+## The Request Path We Will Follow
+<!-- section-summary: The whole networking section follows one browser request from a domain name to the application process that handles it. -->
 
-You call `fetch()` in JavaScript, and a few hundred milliseconds later JSON shows up. What actually happens in between? Your browser has to figure out which server to talk to, open a connection, negotiate encryption, package your request into chunks that fit on a wire, slap addressing information onto each chunk, and shove electrical (or optical, or radio) signals down a cable. On the other side, a server does all of that in reverse before your Express route handler ever sees the request.
+Imagine someone opens `https://app.example.com/dashboard` in a browser. The page looks simple to the user, but the machine has to do a lot of small jobs in the right order before your application code sees anything.
 
-That is an enormous amount of work, and no single piece of software handles all of it. Instead, networking is split into layers. Each layer has one job and trusts the layers above and below it to handle theirs. Your application code (the `fetch()` call) does not worry about IP addresses. The IP routing logic does not worry about whether it is carrying HTTP or DNS traffic. The Ethernet hardware does not care what the IP address is; it just pushes electrical pulses down the wire.
+The browser first needs an IP address, so it asks DNS to translate `app.example.com` into something like `203.0.113.25`. After that, the operating system decides whether that IP is local or remote by looking at its subnet and route table. The packet then moves toward the server, passing cloud firewalls and host firewalls that decide whether port `443` is allowed. If the packet reaches the server, the browser performs a TLS handshake so the connection is encrypted. Then it sends an HTTP request. Nginx receives that request, handles the public web-server work, and forwards it to the app on an internal port such as `127.0.0.1:3000`.
 
-This split was not invented for elegance. ARPANET, the 1970s research network that grew into the internet, had to interconnect machines on completely different physical media: leased phone lines, packet radio, satellite links, early Ethernet. No single protocol could speak all of them. The original designers (Cerf and Kahn) hit on a rule that still holds today: each layer hides the layer below it, so the application never has to know whether the next hop is fiber, copper, or radio. Swap out the physical link and your `fetch()` keeps working because nothing above the network access layer ever looked at it.
+That is the request path for these networking articles:
 
-Why should you, as a developer, care about any of this? Because when something breaks, the fix depends on which layer is broken. A misconfigured firewall is a different problem from a bad Ethernet cable, and both are different from your app returning a 500 error. If you do not know which layer to look at, you waste hours guessing. If you do, you solve the problem in minutes.
+```mermaid
+flowchart LR
+    Browser["Browser"]
+    DNS["DNS"]
+    IP["IP and subnet routing"]
+    Firewall["Firewall rules"]
+    TLS["TLS handshake"]
+    Nginx["Nginx reverse proxy"]
+    App["Application"]
 
-## The Mental Model: Envelopes Inside Envelopes
+    Browser --> DNS --> IP --> Firewall --> TLS --> Nginx --> App
+```
 
-Before diving into specific layers, it helps to have a mental model for how they interact. The concept is called encapsulation, and the best analogy is nested envelopes.
+Each article in this module focuses on one part of that path. This first article gives the map. The useful idea is simple: a request works because different layers handle different jobs. When a request fails, the error message usually belongs to one of those jobs.
 
-Imagine you write a letter (your application data). You fold the letter and put it in a small envelope, then write the recipient's apartment number on it (this is like adding a port number, so the data reaches the right program on the destination machine). You put that small envelope inside a medium envelope and write the street address on the outside (this is like adding an IP address). Then you put the medium envelope inside a large envelope and write the building's physical mailbox label on it (this is like adding a MAC address, the hardware identifier for the destination's network card). You hand the whole stack to the mail carrier.
+## What a Network Layer Means
+<!-- section-summary: A layer is one part of the networking job with its own responsibility, vocabulary, tools, and failure modes. -->
 
-Each envelope layer was added by a different "layer" of the mail system, and each one only reads the information on its own envelope. The mail carrier does not open the medium envelope to read the apartment number. The concierge who gets the medium envelope does not open the inner one to read the letter. Each layer peels off its envelope, reads just enough to decide where to send it next, and passes the rest upward.
+A **network layer** is a boundary between responsibilities. One layer knows how to format an HTTP request. Another knows how to open a reliable TCP connection. Another knows how to route an IP packet. Another knows how to send bits across Wi-Fi or Ethernet. Each layer receives data from the layer above it, adds the information it needs, and hands the result to the layer below it.
 
-On a network, this is exactly what happens. Each layer adds a header (and sometimes a trailer) to the data from the layer above, then passes the whole bundle downward. When it arrives at the destination, each layer strips off its header and hands the inner payload up to the next layer. The technical term for adding headers on the way down is **encapsulation**. Stripping them on the way up is **decapsulation**.
+This separation lets a browser request survive a messy real network. Your application code can send JSON without knowing whether the user is on fiber, office Wi-Fi, hotel Wi-Fi, or mobile data. A router can forward an IP packet without knowing whether the payload is an image, a login form, or a DNS lookup. A firewall can allow TCP port `443` without reading every line of your application code.
 
-| Part | Contains | Layer | Question it answers |
+The same separation helps during incidents. A DNS problem gives you names that fail to resolve. A subnet problem gives you routes that point to the wrong place. A firewall problem gives you connections that time out or get refused. A TLS problem gives you certificate or handshake errors. A reverse proxy problem gives you `502` or `504` responses. Those symptoms come from different layers, so they need different checks.
+
+The history matters a little here. The internet grew out of research networks that had to connect very different physical systems. One path might cross copper, satellite, radio, and fiber. The design that won was the one that let the upper layers keep working while the lower transport changed. That is why the request to `https://app.example.com/dashboard` can move through many networks without the browser caring which cable or radio link carried each hop.
+
+## Encapsulation: How Data Gets Wrapped
+<!-- section-summary: Encapsulation means every layer wraps the data with its own header, and the receiver unwraps those headers in reverse order. -->
+
+**Encapsulation** means each layer adds its own header around the data it receives. The header is metadata. It tells that layer how to deliver the payload. When the request reaches the destination, the destination machine removes those headers in the opposite order.
+
+For the browser request, the inner data is the HTTP message:
+
+```
+GET /dashboard HTTP/1.1
+Host: app.example.com
+Accept: text/html
+```
+
+TCP wraps that message with ports, such as source port `53142` and destination port `443`. IP wraps the TCP segment with source and destination IP addresses. Ethernet or Wi-Fi wraps the IP packet with local MAC addresses for the next hop. The result is a frame that can move across the local link.
+
+| Wrapper | Main fields | Question it answers |
+| --- | --- | --- |
+| HTTP message | Method, path, headers, body | What does the application want? |
+| TCP segment | Source port, destination port, sequence data | Which process should receive it, and in what order? |
+| IP packet | Source IP, destination IP, TTL | Which host or network should receive it? |
+| Ethernet frame | Source MAC, destination MAC | Which device receives the next local hop? |
+
+This wrapping explains why the browser can connect to `app.example.com`, while Nginx can proxy to `127.0.0.1:3000`, while the application still sees the original `Host` header. Different layers keep different pieces of the story.
+
+It also explains why packet captures look busy. A single HTTP request is not just HTTP. It is HTTP inside TCP, inside IP, inside a local link frame. Once you know what each wrapper is for, the output from tools like `tcpdump` starts to look like evidence instead of noise.
+
+## TCP/IP Layers in One Browser Request
+<!-- section-summary: The TCP/IP model groups the request path into application, transport, internet, and network access work. -->
+
+The TCP/IP model is the model that real internet software follows. It has four layers: application, transport, internet, and network access. Let us connect those layers to the `https://app.example.com/dashboard` request.
+
+The **application layer** contains protocols that applications understand directly. DNS, HTTP, and TLS all live here in practical TCP/IP conversations. DNS gives the browser an IP address. TLS protects the connection. HTTP carries the request and response. Your app cares about this layer because this is where URLs, headers, cookies, JSON, redirects, and status codes exist.
+
+The **transport layer** gives the application a conversation. For HTTPS, that usually means TCP. TCP uses ports so the destination machine can deliver traffic to the right process. Port `443` usually belongs to a web server or load balancer. Port `3000` might belong to your Node.js process on the same host. TCP also tracks sequence numbers, acknowledgments, retransmits lost data, and makes the network look like an ordered byte stream to the application.
+
+The **internet layer** handles IP addressing and routing. After DNS returns `203.0.113.25`, the local machine decides where to send packets for that destination. If the destination is outside the local subnet, the packet goes to the default gateway. Routers along the path inspect the destination IP and forward the packet toward the next hop. They do not need to understand your HTTP route or your JSON body.
+
+The **network access layer** handles the local hop. On Ethernet and Wi-Fi, that means frames and MAC addresses. MAC addresses matter only between neighbors on the same local link. Your laptop sends the first frame to the router's MAC address. The router removes that frame, keeps the IP packet, and creates a new frame for the next hop. The IP destination stays meaningful across the path; the MAC destination changes at every hop.
+
+Here is the same idea as a compact table:
+
+| TCP/IP layer | In the request path | Common tools |
+| --- | --- | --- |
+| Application | DNS, TLS, HTTP, Nginx proxy behavior, app response | `dig`, `curl`, `openssl`, logs |
+| Transport | TCP port `443`, TCP port `3000`, connection state | `ss`, `nc`, `tcpdump` |
+| Internet | IP address, subnet, route table, TTL | `ip route`, `ping`, `traceroute` |
+| Network access | Interface, MAC address, ARP, local link | `ip link`, `ip neigh`, `tcpdump -e` |
+
+The next articles zoom into these pieces. DNS explains the name lookup. IP addressing explains the subnet and routing part. Firewalls explain the allow or deny decision. HTTP and TLS explain the encrypted web conversation. Nginx explains the final public front door before the request reaches the app.
+
+## The OSI Names People Use During Incidents
+<!-- section-summary: The OSI model gives teams shared names like Layer 3, Layer 4, and Layer 7 during debugging. -->
+
+You will hear engineers say phrases like "this looks like Layer 4" or "we have a Layer 7 error." They are using the OSI model. The OSI model has seven layers. Real internet stacks do not map perfectly to it, but the layer numbers are useful shared vocabulary during debugging.
+
+| OSI layer | Name | Request-path example | Failure shape |
 | --- | --- | --- | --- |
-| Ethernet header | MAC addresses | Layer 2 | Which device? |
-| IP header | IP addresses | Layer 3 | Which host? |
-| TCP header | Ports | Layer 4 | Which app? |
-| Data | The actual content | Layer 7 | What are we saying? |
+| 7 | Application | DNS, HTTP, app routes, proxy rules | `NXDOMAIN`, `404`, `502`, bad JSON |
+| 6 | Presentation | TLS, encoding, compression | certificate mismatch, TLS alert |
+| 5 | Session | Long-lived app sessions and connection reuse | dropped WebSocket, stale pool connection |
+| 4 | Transport | TCP ports and connection state | connection refused, timeout, reset |
+| 3 | Network | IP addresses and routing | no route, wrong subnet, unreachable host |
+| 2 | Data link | MAC addresses, ARP, VLANs | ARP failure, duplicate MAC, VLAN mistake |
+| 1 | Physical | cable, radio, NIC, link signal | interface down, no carrier |
 
-This nesting is why a network engineer can swap out the physical cable (fiber instead of copper) without changing anything about your HTTP request. The inner envelopes are untouched. It is the same reason you can switch from HTTP to WebSockets without changing the underlying IP routing. Each layer is independent.
+Most day-to-day incidents land in a smaller set of buckets. Layer 3 means the IP path has a problem. Layer 4 means the port or TCP connection has a problem. Layer 7 means the application protocol, proxy, or app logic has a problem. TLS sometimes gets called Layer 6, though many teams group it with Layer 7 because it sits beside HTTP in the application stack.
 
-![A networking encapsulation infographic showing an HTTP message wrapped with TCP ports, IP addresses, and next-hop MAC information before becoming a wire signal](/content-assets/articles/article-devops-foundation-networking-network-layers/encapsulation-cross-section.png)
+A practical example helps. If `dig app.example.com` fails, the browser cannot even find the IP, so you stay in the DNS article. If DNS returns an IP but `traceroute` stops at the first hop, you move to IP routing and subnets. If the route works but `nc -vz app.example.com 443` hangs, you look at firewalls. If port `443` opens but `curl` reports a certificate name mismatch, you inspect TLS. If TLS works but the browser gets `502 Bad Gateway`, you inspect Nginx and the upstream app.
 
-*Encapsulation is easier to reason about as packet wrapping: each layer adds one header on the way down, and the receiver removes those headers in reverse order.*
+## Watching Layers with Real Tools
+<!-- section-summary: `dig`, `ip`, `ss`, `curl`, `openssl`, and `tcpdump` let you collect evidence at different layers instead of guessing. -->
 
-## The TCP/IP Model
+The best networking habit is to turn a vague report into evidence. The user says "the site is down." The tools tell you which part of the path failed.
 
-Two layer models come up in every networking conversation: TCP/IP and OSI. The TCP/IP model is the one that actually runs the internet, so we will start there. It has four layers, and each one maps to something you can point at in a real system.
-
-### Application Layer
-
-This is where your code lives. When you call `fetch('https://api.example.com/users')`, your browser is speaking HTTP, which is an application-layer protocol. DNS (which turns `api.example.com` into an IP address), SSH (which lets you remote into a server), and SMTP (which sends email) all live here too.
-
-You can think of this layer as the "what are we actually saying?" layer. It defines the structure and meaning of messages. Everything below this layer is just plumbing to get those messages from one machine to another.
-
-### Transport Layer
-
-The transport layer answers two questions: which program on the destination machine should receive this data, and how reliable does the delivery need to be?
-
-The "which program" part is handled by port numbers. A port is just a 16-bit number (0 to 65535) that identifies a specific application on a machine. When your browser connects to a web server, it sends traffic to port 443 (HTTPS) or port 80 (HTTP). The server's operating system looks at the destination port in each incoming packet and delivers it to whichever program registered for that port. It works like apartment numbers in a building: the street address (IP) gets you to the building, and the apartment number (port) gets you to the right door. This is why running two servers on the same port fails with `EADDRINUSE` in Node, or why `docker run -p 3000:3000` complains if something else already grabbed 3000.
-
-The "how reliable" part comes down to choosing between two protocols. The first is TCP (Transmission Control Protocol), and it is what you have been using all along without thinking about it. Every `fetch()`, every `curl https://...`, every SSH session, every Postgres query goes over TCP. Its job is to make a fundamentally unreliable network (where packets get dropped, duplicated, and reordered constantly) look like a clean, ordered byte stream to your application.
-
-Before two computers can have a real conversation, they need to agree they are both ready to talk and that neither side is hallucinating the other's existence. Think of calling a friend on the phone: you say "hey, can you hear me?", they say "yeah, can you hear me?", you say "yep". Now you can actually talk. TCP does the exact same thing in three packets, called SYN, SYN-ACK, and ACK. If any of the three is dropped, the connection never opens, which is why a misconfigured firewall feels like the request "hangs" instead of immediately failing: your machine is still waiting for "yeah, I hear you". Open the Network tab in your browser DevTools and look at the timing breakdown of any request. The "Connecting" or "Initial connection" segment is exactly that handshake.
-
-Once the connection is open, every chunk of data gets a sequence number (basically "this is byte 1 to 1460 of our conversation, this is byte 1461 to 2920") and the other side sends back acknowledgments ("got everything up to byte 2920"). If an acknowledgment never arrives, TCP assumes the chunk got lost and resends it. It also slows down when it sees losses (a behavior called congestion control) and speeds up when the network looks healthy. You never write any of this code yourself; the operating system's TCP implementation handles it underneath your `fetch` or `requests.get`. You only feel it indirectly, as latency in the DevTools waterfall.
-
-UDP (User Datagram Protocol) skips all of that. No handshake, no acknowledgments, no ordering guarantees. Your program hands a packet to the OS and the OS sends it. If it arrives, great. If it does not, your program has to notice and decide what to do. That sounds reckless, but it is perfect for cases where speed matters more than perfection. DNS lookups use UDP because the request and response each fit in a single tiny packet and a retry is faster than negotiating a connection. Video calls and screen sharing (the technology behind Zoom, Google Meet, and the WebRTC APIs in your browser) use UDP because a dropped video frame is fine, but a two-second delay caused by waiting for retransmissions is not. Online games use it for the same reason. Newer web protocols like HTTP/3 and gRPC's QUIC transport are also built on UDP, layering their own reliability and ordering on top so they can avoid TCP's slow start and head-of-line blocking.
-
-### Internet Layer
-
-You might wonder why "deliver this packet to that machine" and "deliver this byte stream reliably" are two separate protocols instead of one. The answer is that the network underneath is genuinely heterogeneous and unreliable, and pretending otherwise has a cost. IP is deliberately dumb: it does best-effort delivery and nothing else, no retries, no ordering, no acknowledgments. That dumbness is what lets it run over anything from a transatlantic fiber to a flaky 4G link. Reliability is layered on top by TCP only when the application wants it. UDP skips that layer entirely when you do not. If IP had reliability baked in, every video call would be paying the cost of retransmissions it does not want.
-
-This layer handles addressing and routing across networks. Every device on a network gets an IP address, and routers (devices whose entire job is forwarding packets toward their destination) use these addresses to decide where to send each packet next. Think of IP addresses as street addresses and routers as postal sorting facilities. Each facility looks at the destination on the envelope, picks which truck (which neighboring router) to send it to, and forgets about it. There is no central planner that knows the whole route from your laptop to a server in Frankfurt. Each hop just makes a local "closer to Frankfurt or further?" decision based on its routing table.
-
-The key protocol here is IP (Internet Protocol), which comes in two versions. IPv4 addresses look like `192.168.1.42` (four numbers separated by dots, each 0-255). IPv6 addresses look like `2001:0db8:85a3::8a2e:0370:7334` (eight groups of hexadecimal digits, with `::` shortening runs of zeroes). IPv4 is still dominant in most environments you will work with, but IPv6 adoption is growing.
-
-Two small fields in the IP header are worth knowing about because they explain a lot of weird behavior. The first is the TTL (Time To Live). It is just a counter, usually starting at 64 or 128, that every router decrements by one before forwarding the packet. If it ever hits zero, the packet is dropped and the router sends back an "expired" message. The original purpose was to prevent packets from looping forever in a misconfigured network, but it also turned out to be a clever debugging trick. The `traceroute` command sends a packet with TTL=1, gets back an expired message from the first router (revealing its IP), then sends one with TTL=2, gets a response from the second router, and so on. That is literally how it maps every hop between you and a destination. You are watching TTL fail, on purpose.
-
-The second is fragmentation. Different networks have different maximum packet sizes (the MTU, or Maximum Transmission Unit, typically 1500 bytes on Ethernet but lower on some VPN tunnels and mobile networks). If a packet is larger than the next link can carry, it has to be split into smaller pieces and reassembled at the destination. Fragmentation is slow and breaks in subtle ways when firewalls drop the resulting fragments. The symptom is usually that small requests work fine but large uploads or responses hang. If you ever see a "PMTU black hole", that is what is happening, and the fix is usually lowering the MTU on the affected interface or VPN.
-
-ICMP (Internet Control Message Protocol) also lives at this layer. It is the protocol behind `ping` and `traceroute`, two tools you will reach for constantly when debugging connectivity issues. ICMP is also how the TTL-expired and "fragmentation needed" messages above get sent back to the sender, which is why aggressively blocking all ICMP at a firewall is a classic mistake: it breaks `ping`, but it also breaks PMTU discovery and silently causes large requests to hang.
-
-### Network Access Layer
-
-This is the bottom of the stack, combining everything about getting bits onto a physical medium and delivering them to the next device on the local network. Ethernet, Wi-Fi, and fiber optics all live here.
-
-The critical concept at this layer is the MAC address (Media Access Control address), a hardware identifier burned into every network card. It looks like `02:42:ac:11:00:02`, six groups of hexadecimal digits. The first half of those bytes identifies the manufacturer of the card (a registered code assigned by the IEEE), and the second half is a serial number. The whole address is supposed to be globally unique. You can see your machine's MAC addresses with `ip link` on Linux or `ifconfig` on macOS.
-
-Why 48 bits, and why burned in at the factory? Early Ethernet was a single shared coaxial cable: every machine on the segment heard every frame and had to decide whether to ignore it. The cheapest way to make that work was to give every NIC ever manufactured a unique number, so each card could match on its own address in hardware and silently drop everything else. Forty-eight bits was big enough that the IEEE could hand out blocks to vendors forever without coordination, and small enough to fit in the frame header without bloating every packet. The "globally unique, hardware-burned" rule is a leftover from that shared-bus world; modern switches no longer need it, but the addressing scheme stuck.
-
-The surprising thing about MAC addresses is how short their reach is. They only matter for one hop, the trip from your machine to whichever device sits at the other end of the cable or radio link. As soon as the packet enters that next device (your router, a Wi-Fi access point, a switch), the original MAC addresses are thrown away and replaced with new ones for the next hop. By the time your `fetch()` reaches a server in another country, the MAC addresses on the frame have been rewritten dozens of times. The IP address stays constant end-to-end; the MAC address is purely local.
-
-This is also where the difference between a hub and a switch becomes interesting. An old-style Ethernet hub just shouted every incoming frame out of every port: every machine heard every conversation and ignored the ones not addressed to it. A switch is smarter. It learns which MAC address sits behind which physical port and forwards each frame only to the relevant one. You almost never see hubs anymore (they are slow and a security nightmare), but the language has stuck around: people still casually call switches "hubs".
-
-ARP (Address Resolution Protocol) is the glue between the Internet layer and this one. Your operating system has the destination's IP address, but the network card needs a MAC address to actually put a frame on the wire. So the machine effectively shouts into the local network: "Whoever has 192.168.1.1, tell me your MAC address." The device with that IP replies directly, and your machine caches the answer in its ARP table so it does not have to ask again for a few minutes. The shouting works because ARP requests are sent to a special broadcast MAC address that every device on the local segment listens to. You can inspect the cache anytime with `ip neigh show` (covered later in the debugging section). When ARP fails (wrong subnet mask, blocked broadcast, the destination is powered off), nothing on the IP layer above will work either, no matter how perfect the routing table looks.
-
-![A hop-by-hop networking infographic showing the same IP packet crossing multiple routers while the local MAC frame is rewritten at each hop](/content-assets/articles/article-devops-foundation-networking-network-layers/mac-hop-rewrite.png)
-
-*IP addressing stays meaningful from source to destination, but MAC addressing is local to one link. Each router unwraps the current frame and writes a new one for the next hop.*
-
-| OSI Layer | OSI Name | TCP/IP Layer | What lives here |
-|-----------|----------|-------------|-----------------|
-| 7 | Application | Application | HTTP, DNS, SMTP, SSH |
-| 6 | Presentation | Application | TLS encryption, data encoding |
-| 5 | Session | Application | Connection management, multiplexing |
-| 4 | Transport | Transport | TCP, UDP, port numbers |
-| 3 | Network | Internet | IP addressing, routing |
-| 2 | Data Link | Network Access | Ethernet frames, MAC addresses, switches |
-| 1 | Physical | Network Access | Cables, radio signals, NICs |
-
-The table above shows how the two models map to each other. The TCP/IP Application layer absorbs OSI layers 5, 6, and 7 because in practice, modern protocols handle session management and data encoding as part of the application itself (your TLS library, your HTTP/2 implementation). The TCP/IP Network Access layer combines OSI layers 1 and 2 because the physical medium and the local addressing scheme are tightly coupled; swapping Ethernet for Wi-Fi changes both simultaneously.
-
-## The OSI Model as a Debugging Map
-
-You will hear people on incident calls say "that is a Layer 3 problem" or "check Layer 7". They are usually referring to the OSI model, which has seven layers instead of four. The OSI model was designed decades ago as a theoretical framework, and no real protocol stack implements it exactly (TCP/IP won the actual implementation war). But its numbering system became the universal vocabulary for pointing at where in the stack something is happening, the way "500" became shorthand for "the server messed up" even outside HTTP. Treating it as a debugging map (a checklist of where things can break) is more useful than memorizing it as a clean theoretical hierarchy.
-
-Here is the full model. The "When you care" column is the important part: it tells you what kind of problem or tool lives at each layer.
-
-| Layer | Name | What It Does | When You Care |
-|-------|------|-------------|---------------|
-| 7 | Application | Defines the protocol your app speaks (HTTP, DNS, SSH) | App returns wrong status codes, API errors, SSL certificate mismatches |
-| 6 | Presentation | Handles encoding, encryption, compression | TLS handshake failures, character encoding issues |
-| 5 | Session | Manages connections between applications | WebSocket drops, session timeouts, connection pooling bugs |
-| 4 | Transport | Chooses TCP vs UDP, assigns port numbers, handles reliability | Port blocked by firewall, connection refused, retransmission storms |
-| 3 | Network | Routes packets using IP addresses | Cannot reach host, routing loops, subnet misconfiguration |
-| 2 | Data Link | Delivers frames on the local network using MAC addresses | ARP failures, VLAN misconfigs, switch port errors, duplicate MAC |
-| 1 | Physical | Moves raw bits over a physical medium | Bad cable, loose fiber, failed NIC, link light is off |
-
-In practice, layers 5 and 6 rarely come up as separate concepts. Modern protocols like HTTP/2 and TLS handle presentation and session concerns internally. Most real-world debugging boils down to: is it a Layer 1 cable problem, a Layer 2 local-network problem, a Layer 3 routing problem, a Layer 4 port/connection problem, or a Layer 7 application problem? Those five buckets cover the vast majority of network issues.
-
-> When someone says "it is a Layer 8 problem," they mean the problem is the human operating the system. It is a joke, but it comes up surprisingly often.
-
-## How Data Travels Down the Stack
-
-Let us walk through what actually happens when your browser requests `https://api.example.com/users`. If you have ever opened the Network tab in DevTools and stared at the "Waterfall" column (the colored bars showing DNS, Initial connection, SSL, Waiting, Content Download), this section is the thing those bars are visualizing. Following the data through each layer makes the abstract model concrete.
-
-**Step 1: DNS lookup (Application layer).** Your browser needs an IP address. It asks the operating system's resolver, which sends a DNS query (usually over UDP, port 53) to your configured DNS server. The response comes back: `api.example.com` resolves to `93.184.216.34`.
-
-**Step 2: TCP handshake (Transport layer).** Your browser opens a TCP connection to `93.184.216.34` on port 443. Your machine picks a random high-numbered source port (say, 52314) and sends a SYN packet. The server responds with SYN-ACK. Your machine sends ACK. The three-way handshake is complete, and both sides are ready to exchange data.
-
-**Step 3: TLS handshake (Application layer).** Since this is HTTPS, your browser and the server negotiate encryption before any HTTP data flows. They agree on a cipher suite, the server presents its certificate, and both sides derive session keys. After this, everything is encrypted.
-
-**Step 4: HTTP request (Application layer).** Your browser constructs the HTTP request: `GET /users HTTP/2`, with headers like `Host: api.example.com` and `Accept: application/json`. This is your application data, the "letter" in the mail analogy.
-
-**Step 5: Segmentation (Transport layer).** TCP takes the HTTP request, adds a header with source port 52314 and destination port 443, and wraps it into a segment. If the request were larger than the MSS (Maximum Segment Size, typically around 1460 bytes), TCP would split it into multiple segments, each with its own sequence number.
-
-**Step 6: IP packaging (Internet layer).** The IP layer adds a header with the source address (your machine's IP, say `10.0.0.5`) and the destination address (`93.184.216.34`). It also sets the TTL (Time To Live), a counter that decrements at every router and prevents packets from circling the internet forever. The result is called a packet.
-
-**Step 7: Framing (Network Access layer).** The Ethernet layer adds a header with your machine's MAC address as the source and, critically, the MAC address of your default gateway (your router) as the destination. Not the MAC of `93.184.216.34`, because that server is not on your local network. Your machine only knows how to reach the router; the router handles the next hop. A CRC checksum is appended as a trailer for error detection. The result is called a frame.
-
-**Step 8: Transmission (Physical layer).** The frame is converted to electrical signals (copper), light pulses (fiber), or radio waves (Wi-Fi) and sent over the physical medium to the router.
-
-From here, the router strips the Ethernet frame, reads the IP header, consults its routing table, wraps the packet in a new frame addressed to the next router's MAC address, and forwards it. This hop-by-hop process repeats until the packet reaches the destination server, where every layer is peeled off in reverse order until the HTTP request reaches the web application.
-
-## Seeing the Layers with tcpdump
-
-You can watch the layer model in action with `tcpdump`, a command-line packet capture tool available on virtually every Linux and macOS system. It lets you see exactly what your network interfaces are sending and receiving, header by header.
-
-The most basic capture grabs packets on a specific interface and prints a one-line summary for each:
+DNS evidence starts with `dig`:
 
 ```bash
-$ sudo tcpdump -i eth0 -c 5
-14:23:01.112233 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [S.], seq 0, ack 1, win 65160, length 0
-14:23:01.112456 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [.], ack 1, win 502, length 0
-14:23:01.115678 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [P.], seq 1:245, ack 1, win 502, length 244
-14:23:01.117890 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [.], ack 245, win 64916, length 0
-14:23:01.118123 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [P.], seq 1:1200, ack 245, win 64916, length 1199
+$ dig +short app.example.com
+203.0.113.25
 ```
 
-Each line shows a timestamp, the protocol, source IP and port, destination IP and port, TCP flags, and payload length. The `[S.]` flag is a SYN-ACK (part of the three-way handshake). `[P.]` means PUSH (actual data being sent). `[.]` is a bare ACK (acknowledgment only).
+If this returns no answer or a different IP than expected, the problem starts before any TCP connection exists. The DNS article covers that path in detail.
 
-Adding the `-e` flag reveals the Layer 2 MAC addresses that are normally hidden:
+IP and subnet evidence starts with the route table:
 
 ```bash
-$ sudo tcpdump -i eth0 -c 5 -e
-14:23:01.112233 02:42:ac:11:00:02 > 02:42:ac:11:00:01, ethertype IPv4 (0x0800), length 74: 172.17.0.2.443 > 10.0.0.5.52314: Flags [S.], seq 0, ack 1, win 65160, length 0
-14:23:01.112456 02:42:ac:11:00:01 > 02:42:ac:11:00:02, ethertype IPv4 (0x0800), length 66: 10.0.0.5.52314 > 172.17.0.2.443: Flags [.], ack 1, win 502, length 0
+$ ip route get 203.0.113.25
+203.0.113.25 via 10.0.0.1 dev eth0 src 10.0.0.42 uid 1000
+    cache
 ```
 
-Now you can see the full picture: the Ethernet framing (MAC addresses, ethertype), the IP addressing, and the TCP port numbers, all in one line. The `02:42:...` values are the MAC addresses of the sender and receiver on the local network segment.
+This says the machine will send packets for `203.0.113.25` to gateway `10.0.0.1` through interface `eth0`. If the gateway is wrong, the subnet article is the right place to look.
 
-For a deep dive into the actual bytes, use the `-XX` flag to get a hex dump of the entire frame:
+Transport evidence checks whether a port opens:
 
 ```bash
-$ sudo tcpdump -i eth0 -c 1 -XX
-14:23:01.112233 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [P.], length 244
-        0x0000:  0242 ac11 0001 0242 ac11 0002 0800 4500  .B.....B......E.
-        0x0010:  0118 a1b2 4000 4006 1a2b ac11 0002 0a00  ....@.@..+......
-        0x0020:  0005 01bb cc5a 0000 0001 0000 0001 5018  .....Z........P.
-        0x0030:  fe98 1234 0000 4745 5420 2f75 7365 7273  ...4..GET./users
+$ nc -vz app.example.com 443
+Connection to app.example.com (203.0.113.25) 443 port [tcp/https] succeeded!
 ```
 
-In that hex dump, you are looking at encapsulation in raw form. The first 14 bytes (ending at `0800`) are the Ethernet header with source and destination MAC addresses and the ethertype field (0x0800 means IPv4). The next block starting with `4500` is the IP header. After that comes the TCP header. Finally, `4745 5420 2f75 7365 7273` decodes to the ASCII text `GET /users`, your actual HTTP request payload buried inside all the layer headers.
+If this times out, a firewall or routing rule may be dropping traffic. If it says connection refused, the destination host replied but nothing accepted that port.
 
-You can also filter captures by port, host, or protocol to reduce noise:
+TLS evidence comes from `openssl`:
 
 ```bash
-$ sudo tcpdump -i eth0 port 443 -c 10
-$ sudo tcpdump -i eth0 host 93.184.216.34 -c 10
-$ sudo tcpdump -i eth0 icmp -c 5
+$ openssl s_client -connect app.example.com:443 -servername app.example.com </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+subject=CN = app.example.com
+issuer=C = US, O = Let's Encrypt, CN = R3
+notBefore=Jun 01 00:00:00 2026 GMT
+notAfter=Aug 30 23:59:59 2026 GMT
 ```
 
-The first captures only HTTPS traffic, the second only traffic to/from a specific host, and the third captures only ICMP packets (which is useful when debugging `ping` or `traceroute` issues).
+This proves which certificate the server presented, who issued it, and whether it is still valid.
 
-## Where Each Layer Breaks
-
-Every layer has its own failure modes, and the symptoms look completely different. Knowing which layer you are dealing with lets you skip the layers that are working fine and focus your debugging on the right one.
-
-### Physical layer failures (Layer 1)
-
-These are the most basic and often the most overlooked. A damaged Ethernet cable, a loose fiber connector, or a failed network card will cause complete loss of connectivity. The telltale sign is that the link light on the switch port or NIC is off or amber instead of green. No amount of configuration changes will fix a bad cable.
+HTTP and proxy evidence comes from `curl`:
 
 ```bash
-$ ip link show eth0
-2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DOWN
+$ curl -I https://app.example.com/dashboard
+HTTP/2 200
+content-type: text/html; charset=utf-8
+server: nginx
 ```
 
-The `NO-CARRIER` and `state DOWN` tell you the physical link is not established. If you see this, check cables and hardware before looking at anything else.
+The headers show that TLS and HTTP completed and that Nginx answered. If this returns `502`, the request reached the proxy but the app behind it failed or was unavailable.
 
-### Data link failures (Layer 2)
-
-Layer 2 problems show up as devices on the same local network being unable to communicate. The most common cause is ARP failures: your machine knows the IP address of the destination but cannot resolve its MAC address. You can inspect the ARP table to see what your machine has cached:
+Packet evidence comes from `tcpdump` when the usual tools disagree:
 
 ```bash
-$ ip neigh show
-192.168.1.1 dev eth0 lladdr 00:1a:2b:3c:4d:5e REACHABLE
-192.168.1.50 dev eth0 FAILED
+$ sudo tcpdump -i eth0 -n host 203.0.113.25 and port 443 -c 4
+12:01:10.100 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [S], seq 100, length 0
+12:01:10.132 IP 203.0.113.25.443 > 10.0.0.42.53142: Flags [S.], seq 200, ack 101, length 0
+12:01:10.132 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [.], ack 201, length 0
+12:01:10.150 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [P.], length 517
 ```
 
-A `FAILED` entry means ARP resolution did not work. The destination might be powered off, on a different VLAN (Virtual LAN, a logical partition of a physical switch that isolates groups of ports from each other), or blocked by a misconfigured switch port.
+The first three lines are the TCP handshake. The fourth line carries data, which for HTTPS is encrypted TLS data. This capture proves that the network path and port are open. If the app still fails, the next evidence comes from TLS, Nginx logs, and application logs.
 
-Duplicate MAC addresses on the same network also cause chaos at this layer. Traffic randomly goes to the wrong machine because the switch cannot tell which port the MAC is on. This is rare with physical hardware but can happen in virtualized environments where MAC addresses are generated by software.
+## Debugging by Layer
+<!-- section-summary: Layer-based debugging starts with the earliest failing step and moves forward through DNS, routing, firewall, TLS, proxy, and app checks. -->
 
-### Network layer failures (Layer 3)
+The shared request path gives you a repeatable debugging order. Start with the name, then the address, then the port, then the encrypted connection, then the proxy, then the app. This order keeps you from blaming the application for a DNS typo or blaming the firewall for an expired certificate.
 
-This is the "cannot reach host" layer. If `ping` times out or you see `Destination Host Unreachable`, the problem is usually routing. Either your machine does not know how to reach the destination network, or a router along the path is dropping the packets.
+| Symptom | Likely layer | First useful check |
+| --- | --- | --- |
+| Browser says the domain cannot be found | DNS / application layer | `dig app.example.com` |
+| DNS works but packets leave through the wrong gateway | Internet layer | `ip route get <ip>` |
+| Same subnet hosts cannot find each other | Data link layer | `ip neigh show` |
+| TCP connection hangs | Transport or firewall | `nc -vz app.example.com 443` and firewall logs |
+| TCP connects but TLS fails | TLS / presentation | `openssl s_client -servername app.example.com` |
+| TLS works but response is `502` | Proxy / application | Nginx `error.log` and app health check |
+| Proxy works but page returns `500` | Application | Application logs and request ID |
 
-```bash
-$ ping -c 3 93.184.216.34
-PING 93.184.216.34 (93.184.216.34) 56(84) bytes of data.
-From 10.0.0.1: icmp_seq=1 Destination Host Unreachable
+Here is a compact incident walk-through. A user reports that `https://app.example.com/dashboard` hangs. DNS returns `203.0.113.25`, so the name works. `ip route get` shows packets leave through the expected gateway, so the local route is sane. `nc -vz app.example.com 443` times out, so the browser never reaches TLS or HTTP. That points at a firewall, load balancer listener, or network ACL. The application logs can wait because the request has not reached the app.
 
-$ ip route show
-default via 10.0.0.1 dev eth0
-10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.5
+Now imagine `nc` succeeds and `openssl` shows a valid certificate, but `curl -I` returns `HTTP/2 502`. The packet path, firewall, and TLS all work. The failure now sits at the reverse proxy or upstream app. Nginx might be forwarding to the wrong port, or the app process might be down. The evidence moved you forward through the path.
 
-$ traceroute 93.184.216.34
- 1  10.0.0.1 (10.0.0.1)  1.234 ms  1.112 ms  1.001 ms
- 2  * * *
- 3  * * *
-```
-
-The `traceroute` output shows that packets reach the first router (`10.0.0.1`) but go nowhere after that. The `* * *` lines mean no response from subsequent hops, which could be a routing misconfiguration upstream, a firewall dropping ICMP, or a dead link between routers. Subnet misconfigurations also live here: if two machines think they are on the same subnet but are actually separated by a router, traffic will never arrive.
-
-### Transport layer failures (Layer 4)
-
-These typically manifest as "Connection refused" or connections that hang indefinitely. "Connection refused" means the destination machine received your SYN packet but has no process listening on that port. A hanging connection usually means a firewall is silently dropping the SYN without sending any response (called a "black hole").
-
-```bash
-$ telnet 93.184.216.34 8080
-Trying 93.184.216.34...
-telnet: connect to address 93.184.216.34: Connection refused
-
-$ telnet 93.184.216.34 443
-Trying 93.184.216.34...
-Connected to 93.184.216.34.
-```
-
-The first attempt fails because nothing is listening on port 8080. The second succeeds because a web server is listening on port 443. If neither attempt responds at all (no "refused," just silence for 30 seconds), suspect a firewall. You can also use `ss` or `netstat` to check which ports are open on the local machine:
-
-```bash
-$ ss -tlnp
-State  Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process
-LISTEN 0       128     0.0.0.0:443          0.0.0.0:*          users:(("nginx",pid=1234,fd=6))
-LISTEN 0       128     0.0.0.0:22           0.0.0.0:*          users:(("sshd",pid=567,fd=3))
-```
-
-This shows that nginx is listening on port 443 and sshd on port 22. If the service you expect to see is missing from this list, the problem is not the network; the process is not running or is bound to the wrong address. The classic version of "wrong address" is binding to `127.0.0.1` instead of `0.0.0.0`: the kernel will only ACK a SYN whose destination matches the bind address, so external clients see `Connection timed out` while a local `curl 127.0.0.1` works fine.
-
-Stateful middleboxes also break Layer 4 connections that look healthy. An NLB, NAT gateway, or stateful firewall keeps a connection-tracking entry per flow and silently evicts entries that go idle for too long (AWS NLB drops at 350s, AWS ALB at 60s by default). The next packet on either side hits a stale entry and the middlebox replies with a TCP RST, which the application sees as `Connection reset by peer` after a long quiet stretch. The fix is application or kernel TCP keepalives tuned below the middlebox's idle timeout. A related Layer 4 signature is a TCP RST that arrives *immediately* after a successful handshake (for example during SSH banner exchange): it usually means a connection-rate limiter or an `iptables -j REJECT --reject-with tcp-reset` rule fired right after `accept()`.
-
-### Application layer failures (Layer 7)
-
-If you can establish a TCP connection but the application still does not work, you are dealing with a Layer 7 problem. These include HTTP 500 errors, TLS certificate mismatches, authentication failures, malformed requests, and timeouts inside the application itself.
-
-```bash
-$ curl -v https://api.example.com/users
-* Connected to api.example.com (93.184.216.34) port 443
-* SSL certificate problem: certificate has expired
-* Closing connection
-curl: (60) SSL certificate problem: certificate has expired
-```
-
-The connection succeeded at Layer 4 (TCP handshake completed), but the TLS handshake failed at Layer 7 because the certificate expired. Renew the certificate.
-
-DNS lives at Layer 7 too, and its failures have a distinctive shape. `NXDOMAIN` means the resolver answered authoritatively that the name does not exist (typo, missing record, wrong zone). `SERVFAIL` means the resolver tried but could not get an answer (broken upstream, DNSSEC validation failure). A name that resolves on one host but not another usually points at split-horizon DNS (the same name returns different answers depending on which resolver or VPC view asks) or a stale `/etc/resolv.conf` pointing at a dead server. Compare `dig @8.8.8.8 name` against `dig @internal-resolver name` to tell them apart before blaming the application.
-
-The layer model gives you a systematic approach: start at the bottom (is the link up?), work your way up (can I reach the host? can I connect to the port?), and by the time you reach Layer 7 you have already ruled out every infrastructure problem below it.
-
-![A six-part summary infographic for network layers covering app protocols, TCP or UDP, IP routing, MAC hops, wire signals, and layer-based debugging](/content-assets/articles/article-devops-foundation-networking-network-layers/network-layers-summary.png)
-
-*Use this as the short network-layers checklist: application protocols define meaning, TCP or UDP carries conversations, IP routes between networks, MAC addresses work one hop at a time, physical links carry signals, and debugging gets faster when you identify the failing layer first.*
+That is the main value of network layers for DevOps work. They turn "networking is broken" into a concrete question: which step of the request path stopped doing its job?
 
 ---
 
 **References**
 
-- [RFC 1122: Requirements for Internet Hosts](https://datatracker.ietf.org/doc/html/rfc1122) - The foundational RFC defining the TCP/IP model's four-layer architecture and host requirements.
-- [RFC 793: Transmission Control Protocol](https://datatracker.ietf.org/doc/html/rfc793) - The original TCP specification covering the three-way handshake, sequence numbers, and reliable delivery.
-- [tcpdump Manual Page](https://www.tcpdump.org/manpages/tcpdump.1.html) - Complete reference for tcpdump flags, filters, and output format.
-- [Cloudflare Learning: What is the OSI Model?](https://www.cloudflare.com/learning/ddos/glossary/open-systems-interconnection-model-osi/) - A clear, visual introduction to all seven OSI layers with real-world examples.
-- [Julia Evans: Networking Zines](https://jvns.ca/categories/networking/) - Approachable, illustrated explanations of networking concepts from DNS to TCP to packet captures.
+- [RFC 1122: Requirements for Internet Hosts](https://datatracker.ietf.org/doc/html/rfc1122) - Defines the host requirements and layered TCP/IP architecture used by internet systems.
+- [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293) - Current TCP specification, including connection setup, sequence numbers, and reliable delivery behavior.
+- [tcpdump Manual Page](https://www.tcpdump.org/manpages/tcpdump.1.html) - Official reference for tcpdump capture options, filters, and output.
+- [IANA Protocol Numbers](https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml) - Registry of protocol numbers used inside IP packets.
+- [Cloudflare Learning Center: What is the OSI Model?](https://www.cloudflare.com/learning/ddos/glossary/open-systems-interconnection-model-osi/) - Beginner-friendly explanation of OSI layer names commonly used during troubleshooting.

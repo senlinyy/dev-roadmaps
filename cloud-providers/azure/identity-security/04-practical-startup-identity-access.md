@@ -66,6 +66,8 @@ production_targets:
 
 The rule for the whole walkthrough is this: **every production action needs a caller, a role, a scope, and evidence**. A support engineer opening the dashboard has a caller, a sign-in control, an app assignment, and a sign-in log. The API reading a secret has a caller, a Key Vault role, a vault scope, and a role assignment. The pipeline deploying production has a caller, a deployment role, a resource group scope, and an activity log.
 
+AWS readers can anchor the setup to familiar production pieces: IAM Identity Center groups for human access, IAM roles for workload and pipeline access, Secrets Manager or KMS for sensitive material, and OIDC federation for CI/CD. The walkthrough uses the Azure versions of those jobs: Microsoft Entra groups, Azure RBAC roles, managed identities, Key Vault, and an Azure DevOps service connection.
+
 ![DevPolaris Orders production access board](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/production-access-board.png)
 
 *The production board keeps the setup concrete: identities live in `devpolaris.com`, Azure resources live in subscriptions, and access connects a caller to a role at a scope.*
@@ -75,7 +77,7 @@ We also keep Microsoft guidance in mind while we build. Azure RBAC guidance says
 ## Write The Access Workbook First
 <!-- section-summary: Before creating Azure permissions, we write a small access workbook that names the real callers, resources, owners, permissions, scopes, and evidence. -->
 
-We start with a file called `orders-production-access.yml`. This is the first artifact because production access should have a written shape before it becomes a portal setting. The file stays small. It names the people, groups, software identities, resources, reasons, and evidence we expect to see later.
+We start with a file called `orders-production-access.yml`. This is the first artifact because production access should have a written shape before it is stored as a portal setting. The file stays small. It names the people, groups, software identities, resources, reasons, and evidence we expect to see later.
 
 The first page is human access. We use groups because a startup changes quickly. New support engineers join, engineers move teams, contractors leave, and direct user assignments become cleanup work. Microsoft Azure RBAC guidance also recommends assigning roles to groups where possible.
 
@@ -168,7 +170,7 @@ software_access:
       - Azure activity log
 ```
 
-This workbook changes the access conversation. A vague request like "the API needs Azure access" becomes "`mi-orders-api-prod` needs `Key Vault Secrets User` at `kv-orders-prod` because the API reads `orders-db-password` at runtime." That sentence has a caller, role, scope, and reason, so the team can approve it and test it.
+This workbook changes the access conversation. A vague request like "the API needs Azure access" changes to "`mi-orders-api-prod` needs `Key Vault Secrets User` at `kv-orders-prod` because the API reads `orders-db-password` at runtime." That sentence has a caller, role, scope, and reason, so the team can approve it and test it.
 
 ![0 to 1 Azure identity build sequence](/content-assets/articles/article-cloud-providers-azure-identity-security-practical-startup-identity-access/identity-build-sequence.png)
 
@@ -490,7 +492,7 @@ az role assignment create \
   --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
 ```
 
-The output becomes evidence. We keep the principal, role, and scope together so the launch reviewer can compare it with the workbook.
+The output is evidence. We keep the principal, role, and scope together so the launch reviewer can compare it with the workbook.
 
 ```json
 {
@@ -631,7 +633,7 @@ Now deployment has its own caller. Runtime API access comes from `mi-orders-api-
 ## Run The Launch Rehearsal
 <!-- section-summary: We prove each access path with sign-in logs, app assignments, identity attachment, RBAC output, pipeline evidence, activity logs, and one intentional failure. -->
 
-The launch rehearsal is where the setup becomes real. We take each access path, run the check, show expected output, and store the evidence. This keeps the walkthrough close to a company presentation because we are testing the actual production paths the team will use.
+The launch rehearsal is where the team proves the setup. We take each access path, run the check, show expected output, and store the evidence. This keeps the walkthrough close to a company presentation because we are testing the actual production paths the team will use.
 
 The first test is support dashboard sign-in. Maya signs in from a company laptop. The expected result is a chain of evidence.
 

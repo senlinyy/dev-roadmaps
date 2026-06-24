@@ -318,7 +318,7 @@ For `devpolaris-orders-api`, one documented pattern should own each configuratio
 | Mounted file with reload support | File may update, app reloads after change | Validate reload, keep restart as fallback |
 | `subPath` mounted file | Mounted file stays fixed | Restart or roll Pods after ConfigMap changes |
 
-When a configuration change matters for production behavior, prefer a rollout you can observe. `kubectl rollout status` shows whether the new ReplicaSet became healthy. Application logs and metrics should confirm that the new value was loaded, such as a startup log that prints `configVersion=2026-06-16` or `featureRefunds=true`.
+When a configuration change matters for production behavior, prefer a rollout you can observe. `kubectl rollout status` shows whether the new ReplicaSet is healthy. Application logs and metrics should confirm that the new value was loaded, such as a startup log that prints `configVersion=2026-06-16` or `featureRefunds=true`.
 
 ## Immutable ConfigMaps
 <!-- section-summary: Immutable ConfigMaps prevent accidental in-place edits and encourage versioned configuration objects. -->

@@ -66,6 +66,25 @@ S3 **Inventory** often pairs with Batch Operations. Inventory creates scheduled 
 
 When the job moves important data, validation should be part of the copy plan. Maple Market can compare object counts, total bytes, selected checksums, encryption status, and expected prefixes before the destination is considered ready. Copy completion alone is not the same as data confidence.
 
+For a simple S3 copy, the validation can start with counts and bytes on both prefixes:
+
+```bash
+aws s3 ls s3://maple-prod-exports/sales/ \
+  --recursive \
+  --summarize
+
+aws s3 ls s3://maple-prod-analytics/raw/sales/ \
+  --recursive \
+  --summarize
+
+aws s3api list-objects-v2 \
+  --bucket maple-prod-analytics \
+  --prefix raw/sales/ \
+  --query 'Contents[].{Key:Key,Size:Size,ETag:ETag,StorageClass:StorageClass}'
+```
+
+Those checks catch the obvious mistakes first: wrong prefix, missing objects, unexpected storage class, or a much smaller byte total. For regulated or high-value data, the team can add S3 Inventory, checksum sampling, and object-level reconciliation before consumers switch to the destination.
+
 ## File Transfers with DataSync, Transfer Family, and Storage Gateway
 <!-- section-summary: AWS has different file movement tools for online migration, partner transfer protocols, and hybrid file access. -->
 
@@ -79,6 +98,15 @@ A DataSync workflow might look like this. The command starts the task, while the
 aws datasync start-task-execution \
   --task-arn arn:aws:datasync:us-east-1:123456789012:task/task-abc123
 ```
+
+After it starts, the team should watch the task execution rather than only waiting for a completion email:
+
+```bash
+aws datasync describe-task-execution \
+  --task-execution-arn arn:aws:datasync:us-east-1:123456789012:task/task-abc123/execution/exec-456789
+```
+
+The useful fields are files transferred, bytes transferred, files skipped, verification mode, status, and any error details. A task that finishes with skipped or failed files still needs review before cutover.
 
 The useful production pieces are outside that command. The team defines the source and destination, schedules dry runs, checks transfer reports, validates file counts, watches task errors, and decides how to handle deletes and permission metadata. A migration task should be repeatable so the team can run an initial large copy, then run smaller delta copies before cutover.
 
@@ -123,6 +151,20 @@ A controlled cutover usually looks like this. The list reads like a checklist be
 ```
 
 That sequence gives the team a clear handoff point. It also gives support, database, application, and security teams the same timeline.
+
+DMS has its own health signals during that sequence. The team should record replication lag, task status, and table validation before the application endpoint changes:
+
+```bash
+aws dms describe-replication-tasks \
+  --filters Name=replication-task-id,Values=maple-postgres-to-aurora \
+  --query 'ReplicationTasks[].{Status:Status,MigrationType:MigrationType,StopReason:StopReason,Stats:ReplicationTaskStats}'
+
+aws dms describe-table-statistics \
+  --replication-task-arn arn:aws:dms:eu-west-2:111122223333:task:ABCDEF1234567890 \
+  --query 'TableStatistics[].{Schema:SchemaName,Table:TableName,State:TableState,FullLoadRows:FullLoadRows,Inserts:Inserts,Updates:Updates,Deletes:Deletes,Validation:ValidationState}'
+```
+
+If CDC lag is still growing, the cutover window is too early. If validation is failing on critical tables, pointing the application to the target database only moves the incident from migration tooling into customer traffic.
 
 ![Three migration paths showing file share to DataSync to EFS or S3, old database to DMS full load plus CDC to Aurora, and partner upload to Transfer Family to S3 inbound](/content-assets/articles/article-cloud-providers-aws-storage-databases-moving-data-into-around-aws/data-migration-paths.png)
 

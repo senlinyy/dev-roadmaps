@@ -171,7 +171,7 @@ Neither workflow removes the need to understand Kubernetes rollout behavior. A H
 
 ![Tool choice map showing ownership, reuse, release history, GitOps, incident evidence, and choosing between Helm and Kustomize](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/tool-choice-map.png)
 
-*The tool choice becomes clearer when the team talks about ownership, reuse, release history, GitOps workflow, and incident evidence instead of tool popularity.*
+*Tool choice should rest on ownership, reuse, release history, GitOps workflow, and incident evidence instead of tool popularity.*
 
 ## GitOps and Reviewability
 <!-- section-summary: GitOps workflows can use either tool, but every workflow needs rendered output that reviewers can inspect. -->

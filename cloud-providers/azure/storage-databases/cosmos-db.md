@@ -30,6 +30,8 @@ aliases:
 
 Azure Cosmos DB is Microsoft's managed database platform for distributed app data. Microsoft now describes the broader product as covering NoSQL, relational, and vector database needs, with support for several APIs and engines. In this article, Cosmos DB means the **API for NoSQL** shape because that is where beginners most often meet **items**, **containers**, **partition keys**, **request units**, and **TTL**.
 
+If you know DynamoDB, Cosmos DB for NoSQL uses a familiar design habit: start from access patterns, choose a partition key carefully, watch capacity cost, and use TTL for temporary items. Azure names the cost unit **request units**, and Cosmos DB has its own API, consistency, indexing, and multi-region choices.
+
 The practical reason to reach for Cosmos DB is simple: the application has data that looks like independent items, and the app can usually name the exact item or the exact group of items it needs. A checkout service may keep the real order ledger in Azure SQL Database, receipt PDFs in Blob Storage, and short-lived retry records in Cosmos DB. The retry record is small, it has one key, the app reads it quickly during checkout, and the record can disappear after the retry window.
 
 That same checkout system also has background export jobs. A support user starts an export, the worker updates a status record, and the support page checks that job by job ID. This status record also looks like an item: one small JSON document, one natural lookup key, a few updates, and a clear expiry window after support no longer needs it.
@@ -104,12 +106,40 @@ The `job-status` container would hold a different item shape:
 
 This second item has a separate lifecycle. It gets updated while a worker runs, support reads it by `jobId`, and the record expires after about 30 days. Keeping it in a separate container lets the team choose a different partition key, TTL, throughput, and indexing policy from the idempotency records.
 
+Here is what that choice can look like from the Azure CLI. The database is only the namespace. The important design values live on the containers: partition key path, autoscale maximum RU/s, and default TTL.
+
+```bash
+az cosmosdb sql database create \
+  --resource-group rg-devpolaris-data-prod \
+  --account-name cosmos-devpolaris-orders-prod \
+  --name orders-events
+
+az cosmosdb sql container create \
+  --resource-group rg-devpolaris-data-prod \
+  --account-name cosmos-devpolaris-orders-prod \
+  --database-name orders-events \
+  --name idempotency-keys \
+  --partition-key-path /idempotencyKey \
+  --max-throughput 4000
+
+az cosmosdb sql container update \
+  --resource-group rg-devpolaris-data-prod \
+  --account-name cosmos-devpolaris-orders-prod \
+  --database-name orders-events \
+  --name idempotency-keys \
+  --ttl 604800
+```
+
+The values are the design. `/idempotencyKey` tells Cosmos DB how to route retry records. `4000` is the autoscale maximum RU/s, so the container can rise during checkout bursts while still having a ceiling. `604800` is seven days, so expired retry keys leave the container after the retry window.
+
 ## Partition Keys
 <!-- section-summary: The partition key decides how Cosmos DB groups items and routes work, so it must match both scale and lookup paths. -->
 
 A **partition key** is the item property Cosmos DB uses to group items into logical partitions. The partition key path is the property name in the container definition, such as `/idempotencyKey` or `/jobId`. The partition key value is the value on one item, such as `pay_req_8f31` or `job_2026_06_11_0042`.
 
 Cosmos DB hashes partition key values and maps logical partitions onto physical partitions that the service manages. Azure owns the physical placement. The application team chooses a key that gives Cosmos DB enough distinct values and routes common requests efficiently.
+
+AWS readers can use DynamoDB partition-key instincts here, especially the warning about hot keys. A key with many well-distributed values helps scale, while a key such as `/status` can concentrate active writes into a few busy groups.
 
 For `idempotency-keys`, `/idempotencyKey` is a clean beginner example. Every retry token gets its own partition key value, so writes spread across many values and point reads can target one record. For `job-status`, `/jobId` has the same basic shape because support reads and workers update one job at a time.
 
@@ -129,10 +159,23 @@ The dashboard problem comes from this table. Suppose someone later adds a suppor
 
 At that moment, the team has a design conversation rather than a tuning-only conversation. The dashboard could read from Azure SQL Database if the data is relational, from an analytics pipeline if it is reporting, or from a separate Cosmos DB projection with a partition key such as `/customerId` if the product truly needs fast customer-scoped reads. Raising throughput may reduce symptoms, while the lookup path stays the same.
 
+The verification command should show the same partition key path the app design expects. If it returns `/status` or another low-cardinality field, the team has found a modeling problem before traffic arrives.
+
+```bash
+az cosmosdb sql container show \
+  --resource-group rg-devpolaris-data-prod \
+  --account-name cosmos-devpolaris-orders-prod \
+  --database-name orders-events \
+  --name idempotency-keys \
+  --query "{partitionKey:resource.partitionKey.paths,defaultTtl:resource.defaultTtl}"
+```
+
 ## Request Units and Throughput
 <!-- section-summary: Request units measure the work Cosmos DB performs, and throughput settings decide how much work the container can do per second. -->
 
 A **request unit**, usually shortened to **RU**, is Cosmos DB's unit for database work. Reads, writes, queries, and deletes all consume RUs based on the CPU, memory, and I/O the service uses for the operation. A point read by item ID and partition key costs much less than a broad query that loads many records.
+
+The closest AWS comparison is DynamoDB read and write capacity thinking, but Cosmos DB measures the work as RUs across operation types. The useful review is still capacity plus access path: point reads stay cheap, broad queries and hot partitions consume more budget.
 
 Microsoft's examples use a one-kilobyte point read as `1` RU. Larger items cost more. Queries cost more as they scan more data, use more predicates, return more results, or need more index work. Stronger read consistency levels can also increase RU cost for reads.
 
@@ -153,6 +196,22 @@ Here is the practical review board for RU pressure:
 | Repeated `429` responses | RU budget or distribution falls behind | Check normalized RU, hot partitions, and latency |
 
 This is why Cosmos DB design starts with access paths. RUs turn modeling choices into performance and cost. A small point read can feel effortless, while the wrong dashboard query can spend the same budget very quickly.
+
+The application can also record RU evidence directly from SDK responses. A point read by `id` and partition key should be cheap and predictable. The log line below gives the operator the item ID, the partition key value, and the request charge from Cosmos DB for that one read.
+
+```javascript
+const { resource, requestCharge } = await container
+  .item("pay_req_8f31", "pay_req_8f31")
+  .read();
+
+console.log({
+  id: resource.id,
+  partitionKey: resource.idempotencyKey,
+  requestCharge
+});
+```
+
+That value is a production signal. If one known-key read suddenly costs much more than expected, the team checks item size, SDK call shape, consistency, and whether the code accidentally changed from a point read to a query. If `429` responses rise at the same time, the team reviews both throughput and partition distribution before simply raising the RU ceiling.
 
 ## Indexing and Queries
 <!-- section-summary: Cosmos DB indexes item properties for queries, but the best query still follows the partition and data shape. -->
@@ -185,7 +244,7 @@ AND c.status = "completed"
 
 This second query has a better routing story, although a real point read by ID and partition key is still the preferred shape for one known item. The useful distinction is point read versus query. Filtering on `id` and partition key in SQL syntax still runs through the query path, while a point read uses the SDK or REST point-read operation.
 
-Indexing also affects writes. A large item with many indexed properties costs more to write than a small item with fewer indexed fields. If the application stores big blobs of text, PDF bytes, or image data inside Cosmos DB, the item becomes expensive and awkward. Blob Storage is usually the better home for large files, with Cosmos DB storing the metadata and blob URL when the app needs a fast item record.
+Indexing also affects writes. A large item with many indexed properties costs more to write than a small item with fewer indexed fields. If the application stores big blobs of text, PDF bytes, or image data inside Cosmos DB, the item is expensive and awkward. Blob Storage is usually the better home for large files, with Cosmos DB storing the metadata and blob URL when the app needs a fast item record.
 
 ## Consistency and Regions
 <!-- section-summary: Consistency controls how fresh reads must be after writes, especially when data lives in more than one region. -->
@@ -219,6 +278,8 @@ Now the read behavior is clear, and the next production problem is cleanup. Idem
 
 **TTL** means **time to live**. It is an expiry setting in seconds. Cosmos DB counts that number from the item's last modified time, so an update refreshes the countdown. A container must have TTL enabled before item-level `ttl` values matter, and then each item can use the container default or override it with its own value.
 
+This maps to the same cleanup habit as DynamoDB TTL. Use it for retry keys, job status, sessions, and other temporary records where expiry is part of the data contract.
+
 The `idempotency-keys` container may use a default TTL of `604800` seconds, which is seven days. That matches a retry policy where payment clients may repeat requests for a limited period. After the retry window, the key has served its purpose and should stop taking storage.
 
 The `job-status` container may use `2592000` seconds, which is 30 days. Support can still inspect recent exports, but the platform avoids keeping temporary operational records forever. If the business needs permanent audit history, that history belongs in an audit store designed for retention and review rather than in a status container with automatic expiry.
@@ -231,6 +292,8 @@ This gives TTL a real operational shape. It helps control storage growth, but it
 <!-- section-summary: Cosmos DB supports transactional work inside one logical partition, so item grouping affects correctness as well as scale. -->
 
 A **transaction** is a group of data operations that succeeds together or fails together. Cosmos DB supports ACID transactions with snapshot isolation inside a single logical partition. In practice, that means the partition key can also define the boundary for multi-item transactional work.
+
+AWS readers should connect this to the same boundary question they ask with DynamoDB transactions and item grouping. Cosmos DB can do strong transactional work inside one logical partition, so the partition key affects correctness as well as scale.
 
 For the idempotency example, the simplest design keeps one item per key. The API can create or update that one item safely with optimistic concurrency controls such as ETags. An **ETag** is a version value the service changes when the item changes, so an update can say, "apply this only if nobody changed the item since I read it."
 
@@ -285,6 +348,7 @@ Next we look at Disks and File Shares, where the storage question changes from d
 
 - [Azure Cosmos DB documentation](https://learn.microsoft.com/en-us/azure/cosmos-db/) - Official Cosmos DB documentation hub and product overview.
 - [Databases, containers, and items in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/resource-model) - Account, database, container, item, indexing, and TTL resource model.
+- [Manage Azure Cosmos DB for NoSQL resources using Azure CLI](https://learn.microsoft.com/en-us/azure/cosmos-db/manage-with-cli) - Official CLI examples for databases, containers, autoscale throughput, TTL, and throughput checks.
 - [Partitioning and horizontal scaling in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning) - Logical partitions, physical partitions, hot partitions, partition key guidance, and partition limits.
 - [Request Units in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/request-units) - RU concepts and operation cost factors.
 - [Optimize request cost in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/optimize-cost-reads-writes) - Point reads, query cost, write cost, and request charge guidance.

@@ -52,6 +52,18 @@ Most day-to-day clusters use **dynamic provisioning**. The PVC names a **Storage
 
 Here is the useful flow for the orders service. The team creates a PVC named `orders-api-workdir`, the PVC asks for the `standard-retain` StorageClass, the CSI provisioner creates a real volume, Kubernetes creates a PV object for that volume, and the PVC moves to `Bound`.
 
+The beginner bridge has five links. Each link answers a different question, and naming the failed link sends the team to the right evidence.
+
+| Link | Question it answers | Orders example |
+|---|---|---|
+| **PVC** | What storage does the workload request? | `orders-api-workdir` asks for `20Gi`, `ReadWriteOnce`, and `standard-retain`. |
+| **StorageClass** | Which reviewed storage profile should satisfy the request? | `standard-retain` points at retained encrypted block storage. |
+| **CSI driver** | Which storage integration creates and mounts the real backend? | `disk.csi.platform.devpolaris.io` creates the volume through the platform storage system. |
+| **PV** | Which cluster object represents the created volume? | Kubernetes creates a PV such as `pvc-2b4bd1b0-51f6-44f2-8a0e-6d47c0f3e28a`. |
+| **Pod mount** | Where does the container see the storage? | The Deployment mounts the claim at `/var/lib/devpolaris/orders-work`. |
+
+This chain keeps the application manifest focused on the request and the mount path. Provider disk IDs, encryption parameters, topology rules, and attach behavior stay behind the StorageClass and CSI driver, where the platform team can review them once for many workloads.
+
 The StorageClass article goes deeper into the class itself. For this article, read `storageClassName: standard-retain` as the line that chooses the cluster's storage profile for the work directory.
 
 ## Create the Claim for devpolaris-orders-api

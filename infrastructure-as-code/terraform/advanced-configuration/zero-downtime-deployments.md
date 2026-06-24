@@ -36,7 +36,7 @@ Changes that commonly trigger replacements include:
 - Changing an RDS instance's identifier or another provider-marked replacement attribute
 - Changing any attribute that the cloud provider does not allow to be modified in-place
 
-Database engine upgrades deserve a separate mental model. AWS documents RDS engine upgrades as DB instance modifications that can require downtime, and RDS Blue/Green Deployments are the database-specific strategy for reducing that downtime. Do not teach ordinary RDS engine upgrades as simple Terraform replacements; they are database operations with their own engine, maintenance-window, and rollback constraints.
+Database engine upgrades deserve a separate explanation. AWS documents RDS engine upgrades as DB instance modifications that can require downtime, and RDS Blue/Green Deployments are the database-specific strategy for reducing that downtime. Do not teach ordinary RDS engine upgrades as simple Terraform replacements; they are database operations with their own engine, maintenance-window, and rollback constraints.
 
 Terraform's plan output tells you which resources will be replaced. Look for lines marked with `+/-` (destroy and create) rather than `~` (modify in place). When you see `+/-`, think carefully about whether that replacement will cause downtime and whether `create_before_destroy` or another technique is appropriate.
 
@@ -95,7 +95,7 @@ When you change `var.ami_id` to a new AMI value, Terraform plans a replacement. 
 2. Wait for the cloud provider to report the new instance as created.
 3. Destroy the old EC2 instance.
 
-Provider "created" does not always mean "ready to serve users." If the new instance is behind a load balancer, you still need to model registration, health checks, warmup, and traffic handoff. This is where the combination with an auto-scaling group and instance refresh (covered later) becomes important.
+Provider "created" does not always mean "ready to serve users." If the new instance is behind a load balancer, you still need to model registration, health checks, warmup, and traffic handoff. This is where the combination with an auto-scaling group and instance refresh (covered later) matters.
 
 Terraform also remembers `create_before_destroy` propagation in state for dependent resources. If resource A depends on resource B, Terraform may need to create B's replacement before destroying the old B so A is not left pointing at something missing. That behavior is useful, but it means lifecycle settings are part of the resource graph, not just a local preference on one block.
 

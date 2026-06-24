@@ -30,9 +30,11 @@ aliases:
 
 The previous article got users from `orders.devpolaris.com` to the public edge of the orders system. Front Door handled the global entry point, Application Gateway handled regional layer 7 routing, and the backend app stayed in a private subnet. That solves how users reach the app, but the app still has to reach Azure SQL, Key Vault, and Blob Storage after the request arrives.
 
-That second path needs a different design. The browser should reach the public entry point, while the database, secrets store, and internal object data should be reached through private network paths. If every managed service keeps a wide public endpoint and the team only adds IP firewall rules after each breakage, production slowly turns into a pile of exceptions that becomes hard to trust.
+That second path needs a different design. The browser should reach the public entry point, while the database, secrets store, and internal object data should be reached through private network paths. If every managed service keeps a wide public endpoint and the team only adds IP firewall rules after each breakage, production slowly turns into a hard-to-trust pile of exceptions.
 
 **Private connectivity** means the workload reaches a service through a controlled private path from the VNet. In Azure, the main pieces are **private endpoints**, **Private Link**, **private DNS**, and the service's own network settings. A private endpoint gives the service a private IP in your VNet, Private Link carries traffic to the Azure service, private DNS makes the normal hostname resolve to that private IP, and the service firewall controls public access.
+
+If you know AWS, Azure Private Link and private endpoints solve a familiar problem: reaching a managed service privately from your network. The closest AWS anchors are AWS PrivateLink and interface VPC endpoints, with private DNS doing the important job of making the normal service name resolve to the private path.
 
 Here is the production story we will follow. `orders-api` runs in `vnet-devpolaris-prod`. It needs Azure SQL for orders, Key Vault for secrets, and Blob Storage for invoice exports. Customers reach the app through the public entry chain, but the app's data path should stay private.
 
@@ -66,9 +68,30 @@ Private endpoints have a few details that matter in real designs. First, a priva
 
 Second, the **target subresource** matters. A Storage account has different subresources such as `blob`, `dfs`, `file`, `queue`, `table`, and `web`. A private endpoint for `blob` covers Blob access, while Data Lake Storage Gen2 workflows may also need `dfs`. A Key Vault private endpoint targets the `vault` subresource. Azure SQL commonly uses the `sqlServer` group.
 
-Third, the private endpoint connection has an approval state. When the requester has the right permissions on the target service, Azure can approve the connection automatically. When the service belongs to another subscription, team, tenant, or provider, the service owner may need to approve it manually. Traffic starts flowing only after the connection becomes `Approved`.
+Third, the private endpoint connection has an approval state. When the requester has the right permissions on the target service, Azure can approve the connection automatically. When the service belongs to another subscription, team, tenant, or provider, the service owner may need to approve it manually. Traffic starts flowing only after the connection is `Approved`.
 
 Fourth, network placement controls who can reach the endpoint. Clients in the same VNet can reach it when routes and security rules allow the path. Clients in peered VNets, on-premises networks connected through VPN or ExpressRoute, and other routed environments can also use the endpoint when routing and DNS line up.
+
+Here is the kind of Azure CLI sequence the platform team might use for the SQL endpoint. The SQL server resource ID is the exact managed service instance. The subnet is where Azure places the endpoint network interface. The group ID `sqlServer` tells Azure which SQL private-link subresource the endpoint targets.
+
+```bash
+sql_id=$(az sql server show \
+  --resource-group rg-devpolaris-data-prod \
+  --name devpolaris-orders-sql \
+  --query id \
+  --output tsv)
+
+az network private-endpoint create \
+  --resource-group rg-devpolaris-network-prod \
+  --name pe-orders-sql \
+  --vnet-name vnet-devpolaris-prod \
+  --subnet snet-private-endpoints \
+  --private-connection-resource-id "$sql_id" \
+  --group-id sqlServer \
+  --connection-name peconn-orders-sql
+```
+
+The values in that command become the review evidence later. `pe-orders-sql` is the object responders inspect. `snet-private-endpoints` is where the private IP comes from. `devpolaris-orders-sql` is the only SQL server this endpoint is meant to reach. If any of those names point to the wrong environment, the app may have a private path that is perfectly healthy and still wrong.
 
 That last sentence introduces the next layer. The private endpoint is the local network object, but Azure still needs a platform path from that object to the managed service. That platform path is Private Link.
 
@@ -104,6 +127,30 @@ This is sometimes called split DNS. A developer laptop on a coffee shop network 
 
 The private DNS zone needs to be linked to every VNet that should resolve the private endpoint address. In a hub-and-spoke design, the platform team may link `privatelink.database.windows.net` to the app spoke, the operations spoke, and the shared services VNet. Without those links, a VM or container can have perfect routing to `10.30.40.7` and still call the public endpoint because DNS gave it the public answer.
 
+After the SQL private endpoint exists, the DNS zone group connects that endpoint to the private DNS zone. The VNet link tells clients in `vnet-devpolaris-prod` to use the zone. The record name should match the SQL server name, and the record value should be the private endpoint IP.
+
+```bash
+az network private-dns zone create \
+  --resource-group rg-devpolaris-network-prod \
+  --name privatelink.database.windows.net
+
+az network private-dns link vnet create \
+  --resource-group rg-devpolaris-network-prod \
+  --zone-name privatelink.database.windows.net \
+  --name link-vnet-devpolaris-prod \
+  --virtual-network vnet-devpolaris-prod \
+  --registration-enabled false
+
+az network private-endpoint dns-zone-group create \
+  --resource-group rg-devpolaris-network-prod \
+  --endpoint-name pe-orders-sql \
+  --name default \
+  --private-dns-zone privatelink.database.windows.net \
+  --zone-name privatelink.database.windows.net
+```
+
+The app still uses `devpolaris-orders-sql.database.windows.net` in its connection string. The private DNS zone changes the answer inside the linked VNet, so the same service name lands on `10.30.40.7` for the production app. That is why teams verify DNS from the client network before changing SQL firewall rules.
+
 Hybrid networks add one more step. On-premises DNS servers need a way to resolve Azure private zones, so teams commonly use **Azure DNS Private Resolver** with inbound endpoints and conditional forwarding. The on-premises resolver forwards `privatelink.database.windows.net` queries to Azure, Azure resolves the private zone, and the on-premises client receives the private endpoint IP.
 
 DNS and access control stay separate. A successful DNS lookup proves that a name exists and that the resolver returned an address. The remaining questions stay open: private endpoint approval, route table behavior, service firewall acceptance, and identity permission for the database or secret.
@@ -129,6 +176,8 @@ Now we can place service endpoints properly. They also secure Azure service acce
 <!-- section-summary: Service endpoints secure supported Azure services to trusted subnets, while private endpoints give a specific service instance a private IP. -->
 
 A **service endpoint** is a subnet feature that gives traffic from that subnet a trusted VNet identity when it reaches a supported Azure service. Azure routes that service traffic over the Azure backbone, and the target service can use a virtual network rule to accept traffic from that subnet. The service keeps its normal Azure service endpoint and DNS behavior, while the service firewall recognizes the subnet as an allowed source.
+
+For AWS readers, the nearest familiar pattern is a gateway endpoint for S3 or DynamoDB in the sense that a subnet gets a provider-native private route to a supported cloud service. Azure service endpoints keep the normal Azure service endpoint and use service firewall rules, so review them as their own Azure design with their own evidence.
 
 This means service endpoints solve a different problem from private endpoints. With a private endpoint, `devpolaris-orders-sql.database.windows.net` resolves to a private IP in your VNet. With a service endpoint, the service keeps the normal Azure endpoint path, and the service firewall allows the subnet because the request carries VNet identity.
 
@@ -269,7 +318,7 @@ For a new workload, teams usually choose private endpoints for the sensitive man
 
 Service endpoints still have a place in this story. They can be useful for simple subnet-based access to supported services, especially where a team wants Storage service endpoint policies or where an older design already depends on virtual network rules. The important part is naming the pattern clearly so everyone knows whether the workload is using a private endpoint IP or a service endpoint subnet rule.
 
-Private connectivity becomes manageable when every connection has a named target, a named private path, and named evidence. For the orders API, that means `orders-api` reaches `devpolaris-orders-sql` through `pe-orders-sql`, resolves the hostname through `privatelink.database.windows.net`, and proves the path from the app subnet before changing firewall rules.
+A manageable private connectivity design has a named target, a named private path, and named evidence for every connection. For the orders API, that means `orders-api` reaches `devpolaris-orders-sql` through `pe-orders-sql`, resolves the hostname through `privatelink.database.windows.net`, and proves the path from the app subnet before changing firewall rules.
 
 ---
 
@@ -277,6 +326,8 @@ Private connectivity becomes manageable when every connection has a named target
 
 - [What is Azure Private Link?](https://learn.microsoft.com/en-us/azure/private-link/private-link-overview) - Explains Private Link, private endpoints, Microsoft backbone connectivity, resource-specific access, hybrid access, and Private Link service.
 - [What is a private endpoint?](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview) - Defines private endpoint network interfaces, target subresources, approval states, DNS requirements, and supported service types.
+- [az network private-endpoint](https://learn.microsoft.com/en-us/cli/azure/network/private-endpoint?view=azure-cli-latest) - Azure CLI reference for creating, showing, and updating private endpoints.
+- [az network private-endpoint dns-zone-group](https://learn.microsoft.com/en-us/cli/azure/network/private-endpoint/dns-zone-group?view=azure-cli-latest) - Azure CLI reference for attaching private DNS zones to private endpoints.
 - [Azure Private Endpoint private DNS zone values](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns) - Documents private DNS zone behavior, recommended zone names, CNAME behavior, and common DNS warnings.
 - [Azure virtual network service endpoints](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoints-overview) - Describes service endpoints, VNet identity, Azure backbone routing, supported services, and limitations.
 - [Virtual network service endpoint policies for Azure Storage](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoint-policies-overview) - Explains Storage service endpoint policies and how they restrict service endpoint traffic to selected storage accounts.

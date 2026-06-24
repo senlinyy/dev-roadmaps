@@ -143,7 +143,7 @@ For production, a reviewed `known_hosts` file is safer than turning off host key
 
 In this play, the config task needs elevated filesystem access, so it uses `become: true`. The health check runs as the login user because it only calls a local HTTP endpoint. Keeping escalation close to the task makes the review clearer because readers can see exactly which work needs extra privilege.
 
-`become_user` controls which user the task becomes. The default is usually root. A task might use `become_user: orders` when it should run as the application account, such as a command that writes user-owned cache files or runs an application migration tool.
+`become_user` controls which user the task uses after privilege escalation. The default is usually root. A task might use `become_user: orders` when it should run as the application account, such as a command that writes user-owned cache files or runs an application migration tool.
 
 ```yaml
 - name: Run orders database migration as the service account

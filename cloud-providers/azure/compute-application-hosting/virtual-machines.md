@@ -32,6 +32,8 @@ aliases:
 
 An **Azure Virtual Machine**, or VM, is Azure's server-shaped compute option. Azure gives your team a guest operating system, virtual CPU and memory, disks, a network interface, and administrator access inside the machine. The word "virtual" means the server runs on Azure-managed physical hardware through a virtualization layer, while the operating system inside the VM behaves like a normal Linux or Windows server.
 
+If you know AWS, an Azure VM fills the same broad job as an EC2 instance. The surrounding names line up this way: an Azure image is closest to an AMI, a VM size is closest to an EC2 instance type, a managed disk is closest to EBS, temporary storage is closest to instance store, and a network interface is closest to an ENI.
+
 We will keep one example in our hands for the whole article. The `devpolaris-orders` system has a legacy inventory worker called `vm-devpolaris-orders-legacy-01` in `rg-devpolaris-orders-prod`. This worker still needs a vendor package installed at the operating system level, a mounted data disk, a local service file, and a monitoring agent that reads host logs. The team would rather run new services on Container Apps or App Service, but this one workload still has a real server requirement.
 
 That gives us a clear structure for the article. A VM is a bundle of connected decisions. The team chooses a **VM image**, a **VM size**, **managed disks**, **temporary storage**, a **network interface**, **access paths**, **startup configuration**, **process supervision**, **patching**, **backup**, and **monitoring**. Each choice affects the next one during a real incident.
@@ -170,7 +172,7 @@ Here is the thread connecting storage back to startup. A rebuild from image is o
 ## Network Interfaces And Access
 <!-- section-summary: A VM network interface gives the machine a private network identity, while production access design controls whether humans and traffic reach the VM through public, private, or brokered paths. -->
 
-A **network interface**, often shortened to NIC, is the VM's attachment to an Azure virtual network subnet. It gives the VM a private IP address, connects it to route tables and network security groups, and becomes the network identity Azure uses for packets moving in and out of the machine. The guest operating system also sees a network adapter and configures its own network stack.
+A **network interface**, often shortened to NIC, is the VM's attachment to an Azure virtual network subnet. It gives the VM a private IP address, connects it to route tables and network security groups, and serves as the network identity Azure uses for packets moving in and out of the machine. The guest operating system also sees a network adapter and configures its own network stack.
 
 For the Orders worker, the clean production shape is private. The NIC sits in a subnet such as `snet-orders-app-prod`, receives a private IP such as `10.40.12.14`, and has no public IP address. The worker reaches internal APIs, storage private endpoints, package mirrors, and log collection endpoints through approved routes. Human administration goes through a controlled path such as Azure Bastion, a VPN, a private jump host, or another approved access pattern.
 
@@ -285,7 +287,7 @@ Once recovery is clear for one VM, the next question is whether the workload sho
 
 A **Virtual Machine Scale Set** is an Azure resource for creating and managing a group of load-balanced VM instances. The scale set uses a VM model and can increase or decrease instance count based on demand or a schedule. It is useful when a server-shaped workload needs multiple similar instances instead of one hand-managed machine.
 
-For example, imagine the Orders worker becomes stateless after the team moves state to Azure SQL or Blob Storage. At that point, the team could run several identical worker VMs from the same image behind a queue-based processing model. A scale set can help create the fleet, keep instances aligned to a model, distribute them across availability choices, and apply updates in a controlled way.
+For example, imagine the Orders worker is stateless after the team moves state to Azure SQL or Blob Storage. At that point, the team could run several identical worker VMs from the same image behind a queue-based processing model. A scale set can help create the fleet, keep instances aligned to a model, distribute them across availability choices, and apply updates in a controlled way.
 
 Scale sets keep the server responsibility and spread it across every instance. The image must be solid because every instance comes from it. Startup must be repeatable because new instances appear automatically. Logs must leave every instance. Health checks must identify bad instances. Updates need a rollout policy so the fleet stays available during change. Capacity rules need testing so scaling events avoid surprise cost or downstream overload.
 
@@ -361,7 +363,7 @@ The cost of that control is operating responsibility. The team owns the guest op
 
 The healthy VM pattern looks like this: build from a versioned image, configure first boot through repeatable automation, choose a size from workload evidence, keep durable data on managed disks, treat temporary storage as disposable, avoid public administration paths, supervise the process with a service manager, stream logs off-box, patch on a schedule, test restore, and inspect Azure plus guest OS evidence before changing anything.
 
-The VM should also keep proving that it deserves to exist. If the vendor worker later becomes a container image with no special OS needs, Container Apps may become the better home. If it becomes a fleet of identical server-shaped workers, a scale set may fit. If it remains a single specialized server, keep the operations plan explicit so the machine stays understandable instead of becoming tribal knowledge.
+The VM should also keep proving that it deserves to exist. If the vendor worker later runs as a container image with no special OS needs, Container Apps may become the better home. If it runs as a fleet of identical server-shaped workers, a scale set may fit. If it remains a single specialized server, keep the operations plan explicit so the machine stays understandable instead of turning into tribal knowledge.
 
 ![Production Azure VM operating loop showing image, size, storage, private access, supervised service, patch and restore, plus evidence checks](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-operating-loop.png)
 

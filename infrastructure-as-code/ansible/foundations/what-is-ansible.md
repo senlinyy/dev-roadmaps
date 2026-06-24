@@ -52,7 +52,7 @@ This architecture explains the word **agentless** as people use it with Ansible.
 
 The same idea can reach other systems through different connection plugins and modules. Windows hosts often use WinRM or other Windows-focused paths. Network devices may use network-specific connection plugins. Cloud modules can call provider APIs from the control node. The beginner path starts with Linux over SSH because it shows the shape clearly.
 
-That control-node detail matters in production. If the run happens from a laptop, the laptop needs the SSH key, Ansible version, collections, and network path. If the run happens from CI, the CI runner becomes the control node and its workspace, secrets, and outbound network rules decide what the playbook can see. If the run happens from Automation Platform, the job template, credentials, inventory, and execution environment become the reviewed launch boundary.
+That control-node detail matters in production. If the run happens from a laptop, the laptop needs the SSH key, Ansible version, collections, and network path. If the run happens from CI, the CI runner acts as the control node and its workspace, secrets, and outbound network rules decide what the playbook can see. If the run happens from Automation Platform, the job template, credentials, inventory, and execution environment form the reviewed launch boundary.
 
 ## Inventory: The Host Map
 <!-- section-summary: Inventory tells Ansible which systems exist, how to reach them, and which groups they belong to. -->
@@ -137,7 +137,7 @@ Some tasks still need command-style work. For example, an application migration 
     creates: /var/lib/orders-api/migrations/2026.06.13.done
 ```
 
-This task says the migration command creates a marker file. When the marker exists, Ansible can skip the command. The task becomes safer because the playbook names the condition that makes the operation already complete.
+This task says the migration command creates a marker file. When the marker exists, Ansible can skip the command. The task is safer because the playbook names the condition that makes the operation already complete.
 
 ## Variables, Templates, and Handlers
 <!-- section-summary: Variables keep environment differences out of task logic, templates render config, and handlers react only when notified. -->
@@ -164,7 +164,7 @@ server {
 }
 ```
 
-The template task becomes powerful when it pairs with a **handler**. A handler is a task that runs only after another task notifies it, and it runs once per play even if several tasks notify it. That gives the team a clean pattern for service reloads: render the config, notify the reload handler only if the file changed, and keep quiet when the config already matches.
+The template task is especially useful when it pairs with a **handler**. A handler is a task that runs only after another task notifies it, and it runs once per play even if several tasks notify it. That gives the team a clean pattern for service reloads: render the config, notify the reload handler only if the file changed, and keep quiet when the config already matches.
 
 ```yaml
 - name: Configure orders web servers

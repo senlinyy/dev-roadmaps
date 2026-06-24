@@ -1,7 +1,7 @@
 ---
 title: "Expressions and Functions"
 description: "Use Terraform's built-in expressions and functions to compute, transform, and query values inside your configurations."
-overview: "Terraform is not just a list of resource declarations, it has a complete expression language for computing values. This article covers the most important expressions and built-in functions: string formatting, conditionals, for expressions, and the collection and string functions you will use constantly."
+overview: "Expressions are the calculations inside Terraform arguments. This article shows how variables, locals, functions, for expressions, conditionals, and resource references combine into values that show up in plan output."
 tags: ["expressions", "functions", "hcl", "for", "terraform"]
 order: 4
 id: article-iac-terraform-values-expressions
@@ -9,391 +9,189 @@ id: article-iac-terraform-values-expressions
 
 ## Table of Contents
 
-1. [Expressions Are Everywhere](#expressions-are-everywhere)
-2. [String Interpolation and Templating](#string-interpolation-and-templating)
-3. [Conditional Expressions](#conditional-expressions)
-4. [For Expressions](#for-expressions)
-5. [Splat Expressions](#splat-expressions)
-6. [Essential Collection Functions](#essential-collection-functions)
-7. [Essential String Functions](#essential-string-functions)
-8. [Essential Numeric and Type Functions](#essential-numeric-and-type-functions)
-9. [The jsonencode Function](#the-jsonencode-function)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [What Expressions Are](#what-expressions-are)
+2. [A Practical Tagging and Networking Example](#a-practical-tagging-and-networking-example)
+3. [Functions That Shape Values](#functions-that-shape-values)
+4. [For Expressions and Conditionals](#for-expressions-and-conditionals)
+5. [Consuming Expressions in Resources](#consuming-expressions-in-resources)
+6. [How Expressions Appear in Plans](#how-expressions-appear-in-plans)
+7. [Putting It All Together](#putting-it-all-together)
 
-## Expressions Are Everywhere
+## What Expressions Are
+<!-- section-summary: An expression is any Terraform value calculation, from a literal string to a function call that builds a map for a resource. -->
 
-A Terraform expression is any piece of configuration that computes a value from literals, references, operators, functions, or loops.
+An **expression** is the part of Terraform configuration that produces a value. `"prod"` is an expression. `var.environment` is an expression. `merge(local.default_tags, var.extra_tags)` is an expression. Terraform evaluates expressions while it builds the plan.
 
-In Terraform, the right-hand side of almost any assignment is an expression. The instance type in a resource block is an expression. The value of a local is an expression. The condition in a `count` argument is an expression. An expression can be as simple as a string literal (`"t3.small"`) or as complex as a multi-line `for` expression that filters and transforms a list.
+Expressions are everywhere because most resource arguments need values. Some values are literal. Some come from variables. Some come from resources. Some are calculated with functions, conditionals, and loops.
 
-![Expressions combine inputs and references into values that may be known now or only after apply.](/content-assets/articles/article-iac-terraform-values-expressions/expression-evaluation.png)
+The goal is not to make clever one-line formulas. The goal is to make the value path clear enough that a reviewer can see what a resource will receive before apply.
 
-Understanding expressions is what separates a configuration that just works for one specific case from one that handles many cases gracefully. Instead of creating a separate configuration for each variation, you use expressions to compute the right value from the inputs you have been given.
+## A Practical Tagging and Networking Example
+<!-- section-summary: A real module often computes names, tags, and filtered subnet lists before resources consume them. -->
 
-Terraform's expression language is intentionally limited, it is not a full programming language. There are no loops in the imperative sense, no mutable variables, no function definitions. This limitation is a deliberate design choice: it keeps configurations declarative and predictable. Everything you can do with expressions produces a value. There are no side effects.
+Imagine an application module that receives subnets from a network module and creates one security group rule per private subnet. The module also builds standard tags and names from a service name and environment.
 
-## String Interpolation and Templating
+In `variables.tf`:
 
-String interpolation means placing a Terraform value inside a larger string. It is useful when a resource name, path, or script line needs to include variables or resource attributes. Example: `"${var.project}-${var.environment}-uploads"` can produce `orders-prod-uploads` from two input variables.
+```hcl
+variable "environment" {
+  type = string
+}
 
-The most common expression you will write is a string interpolation. You embed a reference or expression inside a string using the `${...}` syntax:
+variable "service_name" {
+  type = string
+}
+
+variable "subnets" {
+  type = map(object({
+    id      = string
+    tier    = string
+    az      = string
+    cidr    = string
+  }))
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "extra_tags" {
+  type    = map(string)
+  default = {}
+}
+```
+
+The caller passes a map keyed by subnet name. Each subnet object includes its ID, tier, availability zone, and CIDR block.
+
+## Functions That Shape Values
+<!-- section-summary: Terraform functions transform values so resources receive the exact strings, maps, lists, and objects they need. -->
+
+In `locals.tf`, functions create reusable values:
 
 ```hcl
 locals {
-  bucket_name = "${var.project}-${var.environment}-uploads"
-  log_prefix  = "${var.environment}/${var.region}/"
-}
-```
-
-Inside the braces, you can use any expression, a variable reference, a resource attribute, a function call, or even a conditional. The result of the expression is converted to a string and inserted at that position.
-
-For multi-line string content, Terraform supports heredoc syntax:
-
-```hcl
-locals {
-  startup_script = <<-EOT
-    #!/bin/bash
-    echo "Starting ${var.environment} environment"
-    aws s3 cp s3://${var.config_bucket}/config.json /etc/app/config.json
-  EOT
-}
-```
-
-The `<<-EOT` heredoc strips leading whitespace from each line, so you can indent the content neatly inside the locals block. The `EOT` at the end marks where the string ends. This is useful for user-data scripts, policy documents, and any other multi-line text content.
-
-A shorthand for simple single-value references: if the entire expression is just a reference with no surrounding text, you do not need the interpolation syntax at all. `instance_type = var.instance_type` is cleaner than `instance_type = "${var.instance_type}"`. The interpolation syntax is only needed when you are combining a reference with surrounding text.
-
-## Conditional Expressions
-
-A conditional expression picks one value or another based on a true-or-false test. Teams use it when the same configuration needs small environment-specific differences. Example: production can use `t3.medium` while development uses `t3.micro` from one expression.
-
-The syntax follows the same pattern as a ternary operator in most programming languages: `condition ? value_if_true : value_if_false`.
-
-```hcl
-locals {
-  instance_type = var.environment == "prod" ? "t3.medium" : "t3.micro"
-  min_instances = var.environment == "prod" ? 2 : 1
-  enable_https  = var.environment != "dev"
-}
-```
-
-The condition can be any expression that evaluates to `true` or `false`. Common conditions include equality checks (`==`), inequality checks (`!=`), comparison operators (`>`, `<`, `>=`, `<=`), and logical operators (`&&`, `||`, `!`).
-
-Both branches should produce the same type, or values Terraform can safely convert to a common type. For example, `"2"` and `1` can be converted to strings, but relying on that conversion makes the configuration harder to read. Prefer writing both branches as the type you actually want.
-
-Conditionals are also used to control whether a resource is created at all:
-
-```hcl
-resource "aws_cloudwatch_metric_alarm" "high_cpu" {
-  count = var.enable_monitoring ? 1 : 0
-
-  alarm_name          = "${local.name_prefix}-high-cpu"
-  comparison_operator = "GreaterThanThreshold"
-  threshold           = 80
-  evaluation_periods  = 2
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/EC2"
-  period              = 300
-  statistic           = "Average"
-}
-```
-
-When `var.enable_monitoring` is `true`, `count` is `1` and the alarm is created. When it is `false`, `count` is `0` and no alarm is created. This is the standard Terraform pattern for optional resources.
-
-## For Expressions
-
-A `for` expression transforms a collection into another collection. It reads each item, computes a new value, and returns a list or map Terraform can pass into a resource. Example: a list of subnet objects can become a list of subnet IDs with `[for s in aws_subnet.web : s.id]`.
-
-The syntax might look unusual at first, but it follows a consistent pattern.
-
-To transform a list into another list, you write:
-
-```hcl
-[for item in some_list : transformed_item]
-```
-
-For example, to uppercase all values in a list of availability zones:
-
-```hcl
-locals {
-  upper_zones = [for z in var.availability_zones : upper(z)]
-}
-```
-
-To filter a list, you add an `if` condition:
-
-```hcl
-locals {
-  prod_instances = [for i in var.instances : i if i.environment == "prod"]
-}
-```
-
-To transform a list into a map, you use braces instead of brackets and provide a key:
-
-```hcl
-locals {
-  instance_by_name = { for i in var.instances : i.name => i.id }
-}
-```
-
-This produces a map where each instance's name is the key and its ID is the value.
-
-For expressions over maps work similarly, but you get access to both the key and the value:
-
-```hcl
-locals {
-  uppercased_tags = { for k, v in var.tags : upper(k) => upper(v) }
-}
-```
-
-This takes a map of tags and produces a new map with all keys and values uppercased.
-
-A practical example: suppose you have a list of objects, each describing a subnet, and you need to extract just the IDs into a list to pass to a resource:
-
-```hcl
-locals {
-  subnet_ids = [for s in aws_subnet.web : s.id]
-}
-```
-
-When `aws_subnet.web` is created with `count`, it becomes a list of subnet objects. The `for` expression extracts just the `id` attribute from each one. The next section covers a shorthand for this specific pattern.
-
-## Splat Expressions
-
-The splat expression is a shorthand for `for` expressions that extract one attribute from every element in a list. Instead of writing `[for s in aws_subnet.web : s.id]`, you write:
-
-```hcl
-locals {
-  subnet_ids = aws_subnet.web[*].id
-}
-```
-
-The `[*]` is the splat operator. It means "give me this attribute from every element in the list." This is equivalent to the `for` expression but more concise for simple cases.
-
-Splat expressions work with list-like collections: lists, sets, and tuples. They do not work directly with maps or objects. This matters for resources created with `for_each`: those resources appear as a map keyed by your `for_each` keys, so `aws_instance.app[*].id` is not the right shape. Use a full `for` expression such as `[for name, instance in aws_instance.app : instance.id]` when you need values from a `for_each` resource. For more complex transformations, such as filtering, computing derived values, or preserving map keys, use a full `for` expression.
-
-Use this rule of thumb:
-
-| Need | Best expression |
-| --- | --- |
-| Extract one attribute from every counted resource | Splat, such as `aws_instance.app[*].id` |
-| Filter a collection | `for` expression with `if` |
-| Preserve or create map keys | `for` expression with `{ key => value }` |
-| Transform a map or object | `for` expression |
-
-A common use is collecting all IDs from resources created with `count`:
-
-```hcl
-resource "aws_security_group" "allow_web" {
-  count  = length(var.web_ports)
-  name   = "allow-web-${var.web_ports[count.index]}"
-  vpc_id = aws_vpc.main.id
-}
-
-output "security_group_ids" {
-  value = aws_security_group.allow_web[*].id
-}
-```
-
-The output collects all security group IDs into a list automatically, regardless of how many were created.
-
-## Essential Collection Functions
-
-Collection functions are built-in helpers for lists, sets, and maps. They let you count, merge, flatten, filter, or look up values without writing repeated expression logic. Example: `merge(local.common_tags, { Name = "app-server" })` combines shared tags with a resource-specific name.
-
-Terraform's built-in functions handle the most common list and map operations. You do not need to write complex logic for these because the functions are built in.
-
-![Terraform functions transform raw strings, lists, maps, and JSON documents into resource arguments.](/content-assets/articles/article-iac-terraform-values-expressions/function-transform-path.png)
-
-**`length(collection)`** returns the number of elements in a list, set, or map:
-```hcl
-count = length(var.availability_zones)
-```
-
-**`merge(map1, map2, ...)`** combines multiple maps into one. Later maps override earlier ones if they share a key. Essential for tag management:
-```hcl
-tags = merge(local.common_tags, { Name = "app-server" })
-```
-
-**`concat(list1, list2, ...)`** combines multiple lists into one:
-```hcl
-all_subnet_ids = concat(local.web_subnet_ids, local.db_subnet_ids)
-```
-
-**`flatten(list_of_lists)`** turns a list of lists into a single flat list:
-```hcl
-all_cidrs = flatten([local.web_cidrs, local.db_cidrs])
-```
-
-**`distinct(list)`** removes duplicate values from a list:
-```hcl
-unique_regions = distinct(var.all_regions)
-```
-
-**`contains(list, value)`** checks whether a list contains a specific value. Returns `true` or `false`:
-```hcl
-validation {
-  condition     = contains(["dev", "staging", "prod"], var.environment)
-  error_message = "Environment must be dev, staging, or prod."
-}
-```
-
-**`keys(map)` and `values(map)`** extract the keys or values of a map as a list:
-```hcl
-locals {
-  tag_keys   = keys(var.tags)
-  tag_values = values(var.tags)
-}
-```
-
-**`lookup(map, key, default)`** retrieves a value from a map by key, returning a default if the key is not present:
-```hcl
-instance_type = lookup(var.instance_types_by_env, var.environment, "t3.micro")
-```
-
-**`toset(list)` and `tolist(set)`** convert between list and set types:
-```hcl
-zone_set = toset(var.availability_zones)
-```
-
-## Essential String Functions
-
-String functions transform text values before Terraform sends them to a provider. They are useful because cloud names, ARNs, prefixes, and labels often have strict formatting rules. Example: `lower(var.environment)` turns `Production` into `production` before it becomes part of a bucket name.
-
-String functions handle the text manipulation that comes up constantly when building resource names, constructing ARNs, and processing input values.
-
-**`format(pattern, values...)`** formats a string using printf-style placeholders:
-```hcl
-name = format("%s-%s-%03d", var.project, var.environment, count.index + 1)
-```
-
-**`formatlist(pattern, values)`** applies `format` to each element in a list:
-```hcl
-instance_names = formatlist("app-server-%02d", range(1, var.instance_count + 1))
-```
-
-**`join(separator, list)`** concatenates a list of strings with a separator between each element:
-```hcl
-cidr_list = join(", ", var.allowed_cidrs)
-```
-
-**`split(separator, string)`** splits a string into a list:
-```hcl
-parts = split("-", var.resource_name)
-```
-
-**`replace(string, search, replacement)`** replaces occurrences of one string with another:
-```hcl
-safe_name = replace(var.project_name, " ", "-")
-```
-
-**`lower(string)` and `upper(string)`** convert to lowercase or uppercase:
-```hcl
-env_lower = lower(var.environment)
-```
-
-**`trimspace(string)`** removes leading and trailing whitespace:
-```hcl
-clean_input = trimspace(var.user_input)
-```
-
-**`substr(string, offset, length)`** extracts a portion of a string:
-```hcl
-short_region = substr(var.region, 0, 2)
-```
-
-## Essential Numeric and Type Functions
-
-Numeric and type functions help Terraform calculate counts, round values, and convert values into the type a provider expects. They are useful when infrastructure size depends on input values. Example: `ceil(var.record_count / 1000)` can turn a record count into the number of shards to create.
-
-**`max(numbers...)` and `min(numbers...)`** return the highest or lowest value from a set of numbers:
-```hcl
-max_size = max(var.min_instances * 2, 4)
-```
-
-**`ceil(number)` and `floor(number)`** round up or down to the nearest integer:
-```hcl
-shard_count = ceil(var.record_count / 1000)
-```
-
-**`range(start, end)` or `range(end)`** generates a sequence of integers. Useful with `for` expressions to create numbered resources:
-```hcl
-instance_suffixes = range(1, var.instance_count + 1)
-```
-
-Terraform deliberately limits `range` to 1024 generated values. If you hit that limit in infrastructure code, it is usually a sign that the resource model should be grouped, generated outside Terraform, or managed with a provider feature instead of thousands of expression-generated items.
-
-**`tostring(value)` and `tonumber(value)` and `tobool(value)`** explicitly convert between types when Terraform cannot infer the conversion automatically:
-```hcl
-port_string = tostring(var.port)
-```
-
-**`can(expression)`** returns `true` if the expression evaluates without error, `false` otherwise. Useful in validation rules to test whether an expression is valid:
-```hcl
-is_valid_cidr = can(cidrhost(var.cidr_block, 0))
-```
-
-## The jsonencode Function
-
-`jsonencode` turns a Terraform value into valid JSON text. Use it when a provider argument expects JSON but you want Terraform to build that JSON from normal HCL values. Example: an IAM policy can be written as a Terraform object and converted into the JSON string AWS expects.
-
-The `jsonencode` function converts a Terraform value, a string, a number, a list, a map, or a nested object, into its JSON string representation. This is indispensable for writing IAM policies, Lambda environment variable JSON, and any other resource that requires a JSON string attribute.
-
-Without `jsonencode`, you would write IAM policies as heredoc strings with manual JSON formatting:
-
-```hcl
-policy = <<-EOT
-  {
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Action": ["s3:GetObject"],
-        "Resource": "arn:aws:s3:::${var.bucket_name}/*"
-      }
-    ]
+  name_prefix = lower(format("dp-%s-%s", var.service_name, var.environment))
+
+  default_tags = {
+    service     = var.service_name
+    environment = var.environment
+    managed_by  = "terraform"
   }
-EOT
+
+  tags = merge(local.default_tags, var.extra_tags)
+}
 ```
 
-This works but is fragile, formatting mistakes create invalid JSON, and interpolating dynamic values requires careful quoting. With `jsonencode`, you write the policy as a native Terraform map:
+`format` builds a string from inputs. `lower` normalizes the result. `merge` combines the default tags with caller-supplied tags. The final `local.tags` value is the map resources will consume.
+
+Functions should earn their place by making resource values safer or clearer. `lower` can prevent mixed-case naming drift. `merge` can keep common tags consistent. `coalesce` can select the first non-null value when a caller may omit an optional setting.
+
+## For Expressions and Conditionals
+<!-- section-summary: For expressions build new collections, and conditionals choose between values based on a true-or-false test. -->
+
+A **for expression** builds a new collection from an existing collection. This module only wants private subnets:
 
 ```hcl
-policy = jsonencode({
-  Version = "2012-10-17"
-  Statement = [
-    {
-      Effect   = "Allow"
-      Action   = ["s3:GetObject"]
-      Resource = "arn:aws:s3:::${var.bucket_name}/*"
-    }
-  ]
-})
+locals {
+  private_subnets = {
+    for name, subnet in var.subnets :
+    name => subnet
+    if subnet.tier == "private"
+  }
+}
 ```
 
-This is more readable, correctly formatted, and handles interpolation naturally. Terraform validates the Terraform value shape at plan time, and `jsonencode` guarantees the output is valid JSON syntax. It does not prove that AWS IAM, Kubernetes, or another provider will accept the meaning of that JSON policy or document. The provider or remote API still validates service-specific semantics. The inverse function, `jsondecode`, parses a JSON string back into a Terraform value, useful when reading JSON configuration from a data source.
+This consumes `var.subnets` and creates `local.private_subnets`, a smaller map with only private entries. Keeping the original keys is useful because resource addresses will include names like `["app-a"]` and `["app-b"]`.
+
+A conditional expression chooses one of two values:
+
+```hcl
+locals {
+  log_retention_days = var.environment == "prod" ? 90 : 14
+}
+```
+
+Production receives 90 days. Other environments receive 14 days. This is fine for a simple policy. If the condition grows into a long business rule, move it into a clearer variable or map.
+
+:::expand[Prefer named expressions over clever chains]{kind="pitfall"}
+Terraform lets you nest function calls, for expressions, conditionals, and resource references in one argument. That can produce a compact line that only the author understands.
+
+A better pattern is to name the important steps. Build `local.private_subnets` first. Build `local.tags` first. Then resource blocks can consume those locals with short references. The final plan output will show evaluated values either way, but named locals make the code review much easier.
+
+When a reviewer asks "where did this value come from," they should be able to trace it through two or three named steps, not decode a long expression inside a resource argument.
+:::
+
+## Consuming Expressions in Resources
+<!-- section-summary: Resource arguments consume expression results just like they consume literal values. -->
+
+In `main.tf`, resources consume the expression results:
+
+```hcl
+resource "aws_security_group" "app" {
+  name   = "${local.name_prefix}-app"
+  vpc_id = var.vpc_id
+  tags   = local.tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "private_subnet_https" {
+  for_each = local.private_subnets
+
+  security_group_id = aws_security_group.app.id
+  cidr_ipv4         = each.value.cidr
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+}
+
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/aws/app/${local.name_prefix}"
+  retention_in_days = local.log_retention_days
+  tags              = local.tags
+}
+```
+
+The security group name consumes `local.name_prefix`. The ingress rules consume `local.private_subnets` through `for_each`, then consume each subnet object's `cidr`. The log group consumes the conditional retention value.
+
+## How Expressions Appear in Plans
+<!-- section-summary: Plans show evaluated expression results, resource addresses from for_each keys, and unknown values when provider results are needed. -->
+
+If the caller passes two private subnets and one public subnet, the plan shows only the private ones as rule addresses:
+
+```hcl
+  # aws_vpc_security_group_ingress_rule.private_subnet_https["app-a"] will be created
+  + resource "aws_vpc_security_group_ingress_rule" "private_subnet_https" {
+      + cidr_ipv4   = "10.0.10.0/24"
+      + from_port   = 443
+      + ip_protocol = "tcp"
+      + to_port     = 443
+    }
+
+  # aws_vpc_security_group_ingress_rule.private_subnet_https["app-b"] will be created
+  + resource "aws_vpc_security_group_ingress_rule" "private_subnet_https" {
+      + cidr_ipv4   = "10.0.11.0/24"
+      + from_port   = 443
+      + ip_protocol = "tcp"
+      + to_port     = 443
+    }
+
+  # aws_cloudwatch_log_group.app will be created
+  + resource "aws_cloudwatch_log_group" "app" {
+      + name              = "/aws/app/dp-billing-prod"
+      + retention_in_days = 90
+      + tags              = {
+          + "environment" = "prod"
+          + "managed_by"  = "terraform"
+          + "owner"       = "platform"
+          + "service"     = "billing"
+        }
+    }
+```
+
+The plan shows evaluated results: the generated name, the selected retention number, the merged tags, and the filtered subnets. This is the proof that your expressions produced the values you intended.
 
 ## Putting It All Together
+<!-- section-summary: Expressions are safest when they create clear values that resources and outputs consume visibly. -->
 
-A configuration that uses expressions effectively is dramatically more reusable than one that relies on hardcoded values. The same configuration can create one instance in development and four in production by reading `var.instance_count`. It can pick the right instance type per environment using a conditional. It can generate a correctly formatted list of security group IDs using a splat expression. It can construct a valid IAM policy document using `jsonencode`.
+Expressions are Terraform's value language. Use them to build names, merge tags, filter maps, choose environment settings, and connect resources. Keep important expressions named with locals so reviewers can trace the path from variable input to resource argument to plan output.
 
-The expression layer, string interpolation, conditionals, `for` expressions, and built-in functions, is what makes Terraform more than a static configuration file. It gives you the tools to compute the right values from the inputs you have, handle common variations gracefully, and avoid repeating yourself across environments and modules.
-
-## What's Next
-
-You now have the complete picture of Terraform's values layer: input variables bring external information in, local values compute intermediate results, output values send information back out, and expressions transform everything in between. The next module covers environments and security: how to organize your configuration files to cleanly separate development, staging, and production, and how to handle secrets safely.
-
-
-![Expressions and functions summary: reference, transform, filter, and encode values before resource arguments use them.](/content-assets/articles/article-iac-terraform-values-expressions/expressions-summary.png)
-
----
-
-**References**
-
-- [Expressions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions), The full reference for all expression types, including types, operators, and splat expressions.
-- [Built-in Functions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions), A complete listing of all built-in functions with examples for each.
-- [For Expressions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/for), Detailed reference for the `for` expression syntax, including filtering and map construction.
-- [Splat Expressions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/splat), Reference for splat behavior and why maps require `for` expressions.
-- [range Function (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/range), Official limit and behavior for generated integer sequences.
-- [jsonencode Function (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/jsonencode), Reference for JSON encoding behavior.
+For official reference, use Terraform's docs for [expressions](https://developer.hashicorp.com/terraform/language/expressions), [functions](https://developer.hashicorp.com/terraform/language/functions), [for expressions](https://developer.hashicorp.com/terraform/language/expressions/for), and [conditional expressions](https://developer.hashicorp.com/terraform/language/expressions/conditionals).

@@ -28,7 +28,7 @@ A **Jenkinsfile** is a text file that describes a Jenkins Pipeline. The file usu
 
 Summit Retail starts with a UI-created job for `checkout-api`. An operator opened the Jenkins web form months ago, pasted a shell script into a build step, added a deploy command, and clicked Save. The job works until someone changes the staging deploy command in the browser and forgets which line changed. The next release fails, and Git has no diff because the delivery process lived inside Jenkins instead of the repository.
 
-Pipeline as Code fixes that workflow. The build definition becomes part of the same pull request as application changes. A reviewer can see that a test stage changed, a deploy target changed, or a credential binding appeared. A release branch can keep its older pipeline shape, while the main branch moves forward with newer tools.
+Pipeline as Code fixes that workflow. The build definition is part of the same pull request as application changes. A reviewer can see that a test stage changed, a deploy target changed, or a credential binding appeared. A release branch can keep its older pipeline shape, while the main branch moves forward with newer tools.
 
 This also changes disaster recovery. If a controller disappears and the team has a clean Jenkins configuration path, a multibranch project can scan repositories and recreate branch jobs from Jenkinsfiles. The pipeline definition comes from source control, so the controller no longer acts as the only memory of how delivery works.
 
@@ -143,7 +143,7 @@ This structure already gives the team more than a UI shell script. Jenkins can s
 
 A **stage** is a named checkpoint in the delivery process. Stage names should describe a meaningful piece of work, such as `Compile`, `Unit Test`, `Package`, `Build Image`, `Scan Image`, and `Deploy Staging`. Good stage names help the UI, logs, alerts, and humans all talk about the same failure.
 
-Summit Retail begins with this kind of script inside one stage:
+Summit Retail starts with this kind of script inside one stage:
 
 ```groovy
 stage('Build') {
@@ -196,7 +196,7 @@ stages {
 
 Now a failed test points at `Unit Test`, while a registry problem points at `Push Image`. Jenkins can also restart from a completed top-level Declarative stage, which helps when a transient environment problem hits after earlier stages already succeeded. The stage design gives the team a controlled retry point instead of a full rerun by habit.
 
-Stage splitting should follow real debugging boundaries. A team should avoid turning every single shell command into its own stage because the UI becomes noisy. The sweet spot is usually a small number of stages that match how the team says the pipeline out loud: build the code, test the code, package the artifact, scan it, deploy it, verify it.
+Stage splitting should follow real debugging boundaries. A team should avoid turning every single shell command into its own stage because the UI gets noisy. The sweet spot is usually a small number of stages that match how the team says the pipeline out loud: build the code, test the code, package the artifact, scan it, deploy it, verify it.
 
 ## Parallel Branches, Post Conditions, and Options
 <!-- section-summary: Parallel branches speed up independent checks, while options and post blocks keep the run bounded and clean. -->
@@ -306,7 +306,18 @@ This gate says the deploy stage runs only from `main` and only when the build pa
 
 Environment scope deserves care. A top-level `environment` value reaches every stage. A stage-level `environment` value reaches only that stage. Credentials should use `withCredentials` or a credential-aware environment binding in the smallest block that needs the secret, because a secret exposed to one shell step has a smaller blast radius than a secret exposed to the entire pipeline.
 
-Parameters and gates should also be visible in review. If a pull request adds `DEPLOY = true` by default, removes the branch gate, or moves a credential binding above a test command, the reviewer can catch the risk in Git. This is the practical value of Pipeline as Code: the delivery rules become code review material.
+Parameters and gates should also be visible in review. If a pull request adds `DEPLOY = true` by default, removes the branch gate, or moves a credential binding above a test command, the reviewer can catch the risk in Git. This is the practical value of Pipeline as Code: the delivery rules are code review material.
+
+A small gate test matrix keeps deploy logic honest after a Jenkinsfile change:
+
+| Run shape | Expected deploy behavior |
+|---|---|
+| Pull request build | Compile, test, and scan run. Deploy stages skip. |
+| `main` with `DEPLOY=false` | Build and publish can run. Deploy stages skip. |
+| `main` with `DEPLOY=true` and `TARGET_ENV=staging` | Staging deploy runs with staging credentials only. |
+| `main` with `DEPLOY=true` and `TARGET_ENV=production` | Production deploy waits for the protected job or environment rules. |
+
+This matrix is small enough to check during review and concrete enough to catch risky edits before a release job receives credentials.
 
 ## Multibranch Pipelines, Branches, and Pull Requests
 <!-- section-summary: Multibranch Pipeline scans source control and creates branch or pull-request jobs from Jenkinsfiles. -->

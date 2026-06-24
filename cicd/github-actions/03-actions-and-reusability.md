@@ -1,7 +1,7 @@
 ---
 title: "Actions and Reusability"
 description: "Understand custom actions, composite actions, reusable workflows, inputs, outputs, local paths, secrets passing, versioning, and the boundary between shared steps and shared jobs."
-overview: "GitHub Actions becomes easier to manage when repeated setup and policy live in shared building blocks. This article shows when to use composite actions, when to use reusable workflows, and how to design their inputs and outputs clearly."
+overview: "Shared building blocks keep repeated GitHub Actions setup and policy manageable. This article shows when to use composite actions, when to use reusable workflows, and how to design their inputs and outputs clearly."
 tags: ["actions", "reusability", "composite", "compliance"]
 order: 3
 id: article-cicd-github-actions-reusability
@@ -62,7 +62,7 @@ The team has copied the same Node.js setup block into every service. That is a p
 
 A **composite action** collects multiple steps and exposes them as one action. It runs inside the caller's job, on the caller's runner, with the caller's checked-out workspace and environment. This is useful for shared setup, validation, formatting, or small deployment helper steps.
 
-Imagine every Node.js service has this repeated block. The commands are reasonable in one repository, but the repetition becomes painful once many repositories copy them.
+Imagine every Node.js service has this repeated block. The commands are reasonable in one repository, but the repetition starts to hurt once many repositories copy them.
 
 ```yaml
 steps:
@@ -103,7 +103,7 @@ runs:
       shell: bash
 ```
 
-Then each service workflow becomes smaller. The service still owns the checkout and the job, while the shared action owns the repeated validation steps.
+Then each service workflow is smaller. The service still owns the checkout and the job, while the shared action owns the repeated validation steps.
 
 ```yaml
 jobs:
@@ -146,7 +146,7 @@ runs:
       shell: bash
 ```
 
-The caller can read that output through the step ID. The step ID becomes the handle for the values the action publishes.
+The caller can read that output through the step ID. The step ID gives the caller a handle for the values the action publishes.
 
 ```yaml
 steps:

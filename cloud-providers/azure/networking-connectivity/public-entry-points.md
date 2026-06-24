@@ -35,6 +35,8 @@ In the last Azure networking article, we controlled private packet flow with **N
 
 A **public entry point** is the internet-facing path that receives users before the request reaches your application backend. In Azure, that path usually includes a public DNS record, a TLS certificate, an entry service such as **Azure Front Door**, **Application Gateway**, or **Azure Load Balancer**, a routing rule, a backend pool, and a health check.
 
+For AWS readers, Azure DNS fills the hosted-zone job you may know from Route 53, Azure Front Door sits in the global HTTP edge family near CloudFront, Application Gateway sits near an ALB-style regional layer 7 entry point, Azure Load Balancer sits near an NLB-style layer 4 entry point, and Azure WAF policy fills the web application firewall job.
+
 Here is the important production idea. The public entry point should receive traffic, prove the hostname, apply the right network or HTTP decisions, and then forward only healthy traffic toward private backends. The application servers should stay behind that controlled entry layer even while the product serves public users.
 
 For our running example, imagine a team running `devpolaris-orders-api` in `uksouth`. The first release has two API instances in a private subnet. The team wants users to visit `orders.devpolaris.com`, use HTTPS, hit a regional gateway, and reach only the API instances that pass `/healthz`.
@@ -216,7 +218,7 @@ The layer distinction solves many design arguments. Layer 4 sees ports and proto
 
 Cost and operational complexity matter too. A small internal admin tool in one region may only need Application Gateway. A global customer API may need Front Door. A fleet of VMs serving a non-HTTP protocol may need Load Balancer. A high-value public API may combine Front Door, Application Gateway, private backends, strict NSGs, and strong health probes.
 
-The chooser becomes real when the team writes the actual entry shape. Let us make the orders API concrete.
+The chooser is real when the team writes the actual entry shape. Let us make the orders API concrete.
 
 ## Sample Entry Shape
 <!-- section-summary: A sample public entry shape names the DNS records, TLS ownership proof, route, backend pool, probe, and evidence commands before the cutover. -->
@@ -263,7 +265,7 @@ az network application-gateway show-backend-health \
 
 The CNAME output proves where users will go. The TXT output proves ownership validation. The backend health output proves whether the regional gateway sees healthy targets. Those three facts catch many failed cutovers before users feel them.
 
-After the cutover, the same evidence helps during incidents. A user report saying "orders is down" becomes a layered question instead of a panic. Does public DNS return the expected target? Does TLS present the expected certificate? Does Front Door route to the expected origin group? Does Application Gateway show healthy backends? Does the NSG allow the gateway-to-API flow?
+After the cutover, the same evidence helps during incidents. A user report saying "orders is down" turns into a layered question instead of a panic. Does public DNS return the expected target? Does TLS present the expected certificate? Does Front Door route to the expected origin group? Does Application Gateway show healthy backends? Does the NSG allow the gateway-to-API flow?
 
 Those questions bring the whole article together. They keep the team focused on the first broken link in the request path instead of changing a layer that already works.
 

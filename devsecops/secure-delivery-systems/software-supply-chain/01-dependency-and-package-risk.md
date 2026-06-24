@@ -75,7 +75,7 @@ At this point in the pull request, the reviewer has one clear job: identify the 
 
 ![Package source check infographic showing a dependency manifest, registry rule, lockfile resolved URL, and allow or block decision for private and public registries](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/package-source-check.png)
 
-*A dependency name only becomes trustworthy when the manifest, registry rule, and lockfile all point to the source the team expected.*
+*A dependency name is trustworthy only after the manifest, registry rule, and lockfile all point to the source the team expected.*
 
 ## Direct and Transitive Dependencies
 <!-- section-summary: A small direct version bump can pull in many transitive changes, so reviewers need to inspect the full dependency graph. -->
@@ -407,7 +407,7 @@ That is the core work of dependency and package risk: know the names, know the s
 
 ![Dependency risk review loop infographic showing source, graph, lockfile, behavior, signals, and rollback around a pull request and release path](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/dependency-risk-review-loop.png)
 
-*A complete dependency review loops through source, graph, lockfile, package behavior, external signals, and rollback before the update becomes a release.*
+*A complete dependency review loops through source, graph, lockfile, package behavior, external signals, and rollback before the update enters a release.*
 
 ## Next: SBOMs and Reachability
 

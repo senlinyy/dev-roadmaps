@@ -161,7 +161,7 @@ If you remove `use1b` from the map, Terraform sees that `aws_subnet.web["use1b"]
 
 ## for_each With a Map
 
-A map is the best `for_each` input when each resource needs a stable name plus several settings. The map key becomes the resource identity, and the map value holds that instance's configuration. Example: `alice = { email = "alice@example.com", admin = true }` can create one IAM user and one optional admin policy attachment for Alice.
+A map is the best `for_each` input when each resource needs a stable name plus several settings. The map key is the resource identity, and the map value holds that instance's configuration. Example: `alice = { email = "alice@example.com", admin = true }` can create one IAM user and one optional admin policy attachment for Alice.
 
 When the resources you want to create differ in more than one attribute, using a map as the `for_each` value is cleaner than managing parallel lists.
 

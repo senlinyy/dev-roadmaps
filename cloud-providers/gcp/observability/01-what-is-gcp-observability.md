@@ -133,9 +133,45 @@ A useful first GCP observability setup starts smaller than every possible featur
 
 The platform layer starts with Cloud Run's built-in metrics and logs. Cloud Monitoring can graph request count, response code class, latency, and instance behavior. Cloud Logging can store request logs, container logs, and application logs. The team should verify that production Cloud Run services have labels for environment, team, and service ownership.
 
+The first verification can be very concrete. Before creating a dashboard, confirm the service identity, revision, labels, and runtime service account:
+
+```bash
+gcloud run services describe checkout-api \
+  --project=shop-prod \
+  --region=us-central1 \
+  --format='yaml(metadata.labels,spec.template.metadata.labels,spec.template.spec.serviceAccountName,status.latestReadyRevisionName,status.url)'
+```
+
+Then confirm that the service emits request logs and application errors with the resource fields the team expects:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   resource.labels.service_name="checkout-api"
+   resource.labels.location="us-central1"
+   severity>=ERROR' \
+  --project=shop-prod \
+  --freshness=1h \
+  --limit=20 \
+  --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.message,textPayload)'
+```
+
 The application layer starts with structured logs and traces. The app should write JSON logs with stable fields, should keep secrets and payment data out of telemetry, and should attach trace and span fields when possible. OpenTelemetry is the normal production direction because it gives standard APIs and attributes across languages, collectors, metrics, logs, and traces.
 
 The audit layer starts with Cloud Audit Logs and a retention plan. Admin Activity audit logs should be easy to query during incidents, and security-sensitive logs often need central routing to a controlled project or BigQuery dataset. Data Access audit logs can be high volume, so teams enable them deliberately for the resources where that evidence matters.
+
+The audit check should use the same incident time window as the runtime evidence. A deployment audit query might look like this:
+
+```bash
+gcloud logging read \
+  'logName="projects/shop-prod/logs/cloudaudit.googleapis.com%2Factivity"
+   protoPayload.serviceName="run.googleapis.com"
+   protoPayload.methodName:"UpdateService"' \
+  --project=shop-prod \
+  --freshness=24h \
+  --limit=20 \
+  --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.methodName,protoPayload.resourceName)'
+```
 
 The response layer starts with a small dashboard and a small alert set. The top row should show user-facing health: checkout success, `5xx` rate, and p95 latency. The lower rows should show Cloud Run instances, dependency latency, database health, Pub/Sub backlog, recent deployment markers, and current incidents. The first alerts should page on sustained user impact, while brief infrastructure wiggles usually belong on dashboards or lower-priority tickets.
 
@@ -173,3 +209,5 @@ The next article goes deeper into Cloud Logging and audit evidence. We will keep
 - [Error Reporting documentation](https://cloud.google.com/error-reporting/docs) - Explains grouped application errors and exception visibility.
 - [Cloud Profiler documentation](https://cloud.google.com/profiler/docs) - Documents continuous profiling for supported applications.
 - [Cloud Logging monitored resource list](https://docs.cloud.google.com/logging/docs/api/v2/resource-list) - Lists monitored resource types and resource labels such as Cloud Run revision labels.
+- [Cloud Run monitoring](https://cloud.google.com/run/docs/monitoring) - Documents Cloud Run request logs, metrics, and service monitoring workflows.
+- [Google Cloud SDK: gcloud run services describe](https://docs.cloud.google.com/sdk/gcloud/reference/run/services/describe) - Documents the service inspection command used to verify labels, revision, URL, and runtime settings.

@@ -26,9 +26,10 @@ aliases:
 6. [Checkout Events: BigQuery](#checkout-events-bigquery)
 7. [VM Scratch And Shared Media: Persistent Disk And Filestore](#vm-scratch-and-shared-media-persistent-disk-and-filestore)
 8. [Recovery Copies](#recovery-copies)
-9. [The Orders Data Map](#the-orders-data-map)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+9. [First Inventory Checks](#first-inventory-checks)
+10. [The Orders Data Map](#the-orders-data-map)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Checkout Scenario
 <!-- section-summary: One checkout product creates several data shapes, so the team should name the job before choosing a Google Cloud service. -->
@@ -125,7 +126,7 @@ Cloud SQL also changes the operational checklist. The team needs migrations for 
 
 Some checkout state does not need a relational schema on day one. A customer may open checkout, enter a shipping address, pick a delivery option, and close the browser before paying. The frontend wants to save that draft and load it again by user and checkout ID. That shape often fits **Firestore**, Google Cloud's document database.
 
-Firestore stores **documents** inside **collections**. A document is a record with fields, and the path becomes part of how the app finds it. For Orders, a draft could live at a path such as `checkoutDrafts/cus_8842/drafts/chk_20260614_A9D3`. The app can read that one document quickly, update a few fields, and query a known collection path when it needs a predictable list.
+Firestore stores **documents** inside **collections**. A document is a record with fields, and the path is part of how the app finds it. For Orders, a draft could live at a path such as `checkoutDrafts/cus_8842/drafts/chk_20260614_A9D3`. The app can read that one document quickly, update a few fields, and query a known collection path when it needs a predictable list.
 
 ```json
 {
@@ -225,6 +226,52 @@ bq cp \
 
 That example uses BigQuery's time travel table decorator syntax to copy the table as it existed one hour ago into a recovery dataset. The exact recovery window depends on the table and project settings, so production teams write the limit into their runbook and test the command before they need it.
 
+## First Inventory Checks
+<!-- section-summary: A storage map should be backed by commands that prove each state type has a real service, owner, location, and recovery setting. -->
+
+The Orders data map should eventually become an inventory that operators can verify. A table in a design doc helps the team choose services, and commands prove what actually exists in the project. The first inventory pass can stay small: list the active buckets, database instances, Firestore databases, BigQuery datasets, disks, and file shares that carry production state.
+
+For object storage, confirm the bucket location, uniform access, public access prevention, soft delete, labels, and lifecycle policy:
+
+```bash
+gcloud storage buckets describe gs://orders-prod-receipts-us \
+  --format='yaml(name,location,storageClass,uniformBucketLevelAccess,publicAccessPrevention,softDeletePolicy,labels,lifecycle)'
+```
+
+For relational data, confirm the Cloud SQL instance location, engine, private connectivity, backup setting, and point-in-time recovery posture:
+
+```bash
+gcloud sql instances describe orders-prod \
+  --project=orders-prod-123 \
+  --format='yaml(name,databaseVersion,region,ipAddresses,settings.backupConfiguration,settings.ipConfiguration)'
+```
+
+For document data and analytics, confirm the Firestore database and BigQuery datasets:
+
+```bash
+gcloud firestore databases describe \
+  --project=orders-prod-123 \
+  --database="(default)" \
+  --format='yaml(name,locationId,type,deleteProtectionState,pointInTimeRecoveryEnablement)'
+
+bq show --format=prettyjson orders-prod-123:orders_analytics
+```
+
+For attached storage, confirm that disks and file shares have labels and backup or snapshot coverage:
+
+```bash
+gcloud compute disks list \
+  --project=orders-prod-123 \
+  --filter='labels.app=orders' \
+  --format='table(name,zone,sizeGb,type,labels)'
+
+gcloud filestore instances list \
+  --project=orders-prod-123 \
+  --format='table(name,zone,tier,fileShares[0].capacityGb,networks[0].network)'
+```
+
+These checks give the team a practical review rhythm. If a production data store lacks an owner label, location explanation, recovery setting, or restore test, it is not ready just because the service exists.
+
 ## The Orders Data Map
 <!-- section-summary: The full Orders system maps each state type to the service that owns the matching access pattern. -->
 
@@ -271,3 +318,5 @@ The first concrete storage service in this module is Cloud Storage. The next art
 - [Filestore overview](https://cloud.google.com/filestore/docs/overview) - Explains managed file shares for applications that need NFS file semantics.
 - [Cloud SQL backups and recovery](https://cloud.google.com/sql/docs/postgres/backup-recovery/backups) - Documents automated backups, on-demand backups, and recovery planning for Cloud SQL for PostgreSQL.
 - [BigQuery time travel](https://cloud.google.com/bigquery/docs/time-travel) - Documents querying and restoring historical table data within the configured time travel window.
+- [gcloud storage buckets describe](https://cloud.google.com/sdk/gcloud/reference/storage/buckets/describe) - Documents bucket metadata inspection for operational inventory checks.
+- [gcloud sql instances describe](https://cloud.google.com/sdk/gcloud/reference/sql/instances/describe) - Documents Cloud SQL instance inspection fields used in storage inventory reviews.

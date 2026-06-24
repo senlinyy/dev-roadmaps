@@ -24,10 +24,11 @@ aliases:
 5. [Instrumentation: How Evidence Gets Emitted](#instrumentation-how-evidence-gets-emitted)
 6. [Correlation: How Separate Signals Tell One Story](#correlation-how-separate-signals-tell-one-story)
 7. [CloudWatch as the AWS Operating Workspace](#cloudwatch-as-the-aws-operating-workspace)
-8. [Dashboards, Alarms, and Response Loops](#dashboards-alarms-and-response-loops)
-9. [Multi-Account and OpenTelemetry in Real Teams](#multi-account-and-opentelemetry-in-real-teams)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+8. [First Incident Evidence Bundle](#first-incident-evidence-bundle)
+9. [Dashboards, Alarms, and Response Loops](#dashboards-alarms-and-response-loops)
+10. [Multi-Account and OpenTelemetry in Real Teams](#multi-account-and-opentelemetry-in-real-teams)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Production Visibility Shift
 <!-- section-summary: Local debugging gives direct access to one process, while AWS production work needs evidence emitted from many services and runtimes. -->
@@ -212,6 +213,57 @@ The beginner trap is treating CloudWatch as one page with many buttons. In produ
 5. Runbooks and incident tools guide the response.
 
 That workflow keeps the tool choice tied to the operational question. The team looks at metrics for scope, logs for details, and traces for the path.
+
+## First Incident Evidence Bundle
+<!-- section-summary: A useful first response pulls metric scope, alarm state, log details, and trace summaries into one short evidence bundle. -->
+
+When the checkout alarm fires, the on-call engineer needs a fast evidence bundle. The goal is to answer four questions: are customers affected, which dependency looks unhealthy, what exact errors appear in logs, and which request path shows the delay.
+
+The first command can check alarm state and timing:
+
+```bash
+aws cloudwatch describe-alarms \
+  --alarm-names checkout-prod-latency-high checkout-prod-5xx-high \
+  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Updated:StateUpdatedTimestamp,Reason:StateReason}'
+```
+
+Then the responder can pull metrics for the same window. This example uses ALB latency and target 5xx count because they sit close to the customer request path:
+
+```bash
+aws cloudwatch get-metric-data \
+  --metric-data-queries file://checkout-first-look-metrics.json \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T10:30:00Z
+```
+
+The log query should use the same service and time window. A focused Logs Insights query can group errors by dependency instead of scrolling raw log lines:
+
+```
+fields @timestamp, service, route, dependency, errorType, requestId, traceId
+| filter service = "checkout-api" and level = "ERROR"
+| stats count(*) as errors by dependency, errorType
+| sort errors desc
+| limit 20
+```
+
+```bash
+aws logs start-query \
+  --log-group-name /aws/ecs/checkout-api \
+  --start-time 1781344800 \
+  --end-time 1781346600 \
+  --query-string file://checkout-errors.query
+```
+
+Finally, trace summaries can show whether slow requests share one dependency or route:
+
+```bash
+aws xray get-trace-summaries \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T10:30:00Z \
+  --filter-expression 'service("checkout-api") { fault = true OR error = true OR responsetime > 2 }'
+```
+
+This bundle turns the first ten minutes of response into a repeatable path. The alarm shows that a threshold crossed. Metrics show blast radius. Logs name the error shape. Traces show where the request spent time. The team can then decide whether to roll back a deployment, scale a worker, contact a dependency owner, or open a deeper database investigation.
 
 ## Dashboards, Alarms, and Response Loops
 <!-- section-summary: Dashboards help humans triage the current state, while alarms turn important metric changes into notifications or controlled automation. -->

@@ -28,7 +28,7 @@ aliases:
 
 A **registered result** is the structured output from a task saved into a variable. It gives later tasks evidence from the current run. That evidence might be a return code, standard output, standard error, HTTP status, file metadata, a changed flag, or module-specific data.
 
-In the orders platform, this is how the playbook becomes careful. It can render a config, validate the config, restart the API only after the config is safe, and call the health endpoint after the restart. Each host keeps its own result, so `orders-web-01` can continue while `orders-web-02` fails validation.
+In the orders platform, registered results help the playbook act carefully. It can render a config, validate the config, restart the API only after the config is safe, and call the health endpoint after the restart. Each host keeps its own result, so `orders-web-01` can continue while `orders-web-02` fails validation.
 
 The key idea is that registered data belongs to the host that produced it. If a command runs on two web servers, each web server gets its own copy of the registered variable. Later `when` conditions read the value for the current host.
 
@@ -130,7 +130,7 @@ A registered HTTP result is useful after a service restart. The playbook can cal
   when: orders_config_changed_this_run | default(false) | bool
 ```
 
-This task reads the service and retries for up to 30 seconds. It reports `ok` when the health endpoint returns HTTP 200. It fails the host if the service never becomes healthy. The `when` condition keeps the health check tied to the change that made it relevant.
+This task reads the service and retries for up to 30 seconds. It reports `ok` when the health endpoint returns HTTP 200. It fails the host if the service never reports healthy. The `when` condition keeps the health check tied to the change that made it relevant.
 
 A follow-up task can print a safe summary when the health check fails. Be careful with full response bodies because they can contain environment details or customer data. A short status message is often enough for the playbook output.
 

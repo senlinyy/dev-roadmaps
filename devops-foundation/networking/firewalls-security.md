@@ -1,406 +1,316 @@
 ---
 title: "Firewalls & Security"
-description: "Configure iptables rules, understand cloud security groups, and harden SSH access on Linux servers."
-overview: "Learn how firewalls filter traffic at every layer, from kernel-level iptables rules to cloud security groups, and apply SSH hardening to keep your servers safe."
+description: "Understand cloud and Linux firewall rules, allow the right web traffic, harden SSH access, and debug blocked connections safely."
+overview: "Learn how firewalls decide whether the routed request may reach port 443, from security groups and network ACLs to host-level packet filters and SSH protection."
 tags: ["iptables", "firewall", "ssh", "fail2ban", "security-groups"]
-order: 5
+order: 4
 id: article-devops-foundation-networking-firewalls-security
 ---
 
 ## Table of Contents
 
-1. [The 90-Second Rule](#the-90-second-rule)
-2. [Defense in Depth: Layers of Control](#defense-in-depth-layers-of-control)
-3. [iptables: The Linux Packet Filter](#iptables-the-linux-packet-filter)
-4. [Cloud Firewalls: Security Groups and NACLs](#cloud-firewalls-security-groups-and-nacls)
-5. [SSH Hardening](#ssh-hardening)
-6. [Automated Defense with fail2ban](#automated-defense-with-fail2ban)
-7. [Firewall Failure Modes](#firewall-failure-modes)
+1. [Where Firewalls Sit in the Request Path](#where-firewalls-sit-in-the-request-path)
+2. [What a Firewall Rule Means](#what-a-firewall-rule-means)
+3. [Cloud Firewalls: Security Groups and Network ACLs](#cloud-firewalls-security-groups-and-network-acls)
+4. [Host Firewalls with iptables](#host-firewalls-with-iptables)
+5. [Opening Web Traffic Without Opening Everything](#opening-web-traffic-without-opening-everything)
+6. [SSH Hardening for the Admin Path](#ssh-hardening-for-the-admin-path)
+7. [fail2ban and Reactive Blocking](#fail2ban-and-reactive-blocking)
+8. [Firewall Failure Modes](#firewall-failure-modes)
 
-## The 90-Second Rule
+## Where Firewalls Sit in the Request Path
+<!-- section-summary: After DNS and routing find the server, firewall policy decides whether the packet may reach the TLS listener on port 443. -->
 
-You spin up an EC2 instance, install your app, and it works. Congratulations, it is also reachable by every scanner on the internet. Your first SSH brute-force attempt arrives within 90 seconds. Automated bots sweep entire IP ranges 24/7, probing for open ports, default credentials, and known vulnerabilities. If your instance has a public IP and port 22 is open, something will knock on it before you finish reading this paragraph.
+The shared request path is `browser -> DNS -> IP/subnet -> firewall -> TLS -> Nginx reverse proxy -> app`. At this point, DNS has returned an IP address, and the route table has sent packets toward the server or load balancer. The next question is simple: is this packet allowed through?
 
-If you have only ever deployed to Heroku or Vercel, this feels alien. Those platforms hide the infrastructure layer from you. There is no SSH port to protect, no network traffic to filter, no firewall to configure. The platform handles all of that. But the moment you provision your own server, whether on AWS, GCP, DigitalOcean, or a bare-metal box, you inherit responsibility for every packet that reaches it. A firewall is the tool that lets you decide which packets get in and which ones get silently discarded.
+For `https://app.example.com/dashboard`, the browser wants TCP port `443`. A firewall somewhere along the path checks that packet. In cloud infrastructure, the first check may be a security group or network ACL. On a Linux server, the kernel may check iptables or nftables rules. In front of a large application, a load balancer, CDN, or web application firewall may apply another layer of policy.
 
-A firewall is a set of rules that inspects each network packet and makes a binary decision: allow it through, or drop it. Antivirus and intrusion detection tools look for malicious behavior after traffic or files are already being examined. A firewall sits at the doorway and decides whether the packet is allowed to enter at all. Think of it like the bouncer at a venue door. The bouncer does not care what you do once you are inside. It only checks whether you are on the list before letting you past the rope.
+A firewall is a rule engine for traffic. It reads fields such as source IP, destination IP, protocol, port, interface, and connection state. Then it allows, drops, or rejects the packet. **Allow** means the packet continues. **Drop** means the packet disappears silently. **Reject** means the sender gets an explicit refusal.
 
-The rest of this article walks through every layer of firewall you will encounter as a DevOps engineer: kernel-level packet filtering with iptables, cloud-level security groups and NACLs, SSH hardening, and automated defense with fail2ban. By the end, you will know how to lock down a server so that only the traffic you explicitly allow can reach your services.
+The important beginner idea is that a firewall failure can happen before TLS, Nginx, or the app ever gets involved. If TCP port `443` is blocked, the certificate can be perfect and the app can be healthy, but the browser still waits until the connection times out.
 
-## Defense in Depth: Layers of Control
+## What a Firewall Rule Means
+<!-- section-summary: A firewall rule matches packet fields and applies an action, usually as part of an allowlist with default deny. -->
 
-A single firewall is not enough. If one layer has a misconfiguration or a bug, the next layer catches what slipped through. This principle is called defense in depth, and it is the reason production systems stack multiple independent controls on top of each other.
+A firewall rule has two parts: a match and an action. The match describes traffic. The action says what to do.
 
-Think about it in layers you already interact with. A React app might have client-side form validation, server-side input validation, database constraints, and parameterized queries. No single layer is bulletproof, but an attacker would need to bypass all four to inject bad data. Network security works the same way.
+Here is a small rule written in plain language:
 
-Here are the layers from bottom to top:
-
-**Kernel-level filtering (iptables/nftables).** This is the lowest layer. The Linux kernel inspects every packet that arrives at a network interface and applies rules before the packet ever reaches your application. It runs on the machine itself and is always present, even if no cloud provider is involved. This is the equivalent of Express middleware that runs before any route handler.
-
-**Cloud firewalls (security groups, NACLs).** These operate at the cloud provider's network layer, outside your machine entirely. A security group sits in front of your instance like a gatekeeper. Even if iptables on the instance is wide open, the security group can still block traffic before it arrives. This is like CORS rules in your browser: the request might be valid, but the policy layer rejects it before your code ever sees it.
-
-**Application-level controls (authentication, rate limiting, WAFs).** Your app itself decides who can do what. A web application firewall (WAF) filters HTTP requests for SQL injection patterns, cross-site scripting, and other malicious payloads. Rate limiting prevents abuse. Authentication ensures that only authorized users reach sensitive endpoints.
-
-Each layer is independent. A misconfigured security group does not affect iptables. A bug in your WAF does not weaken SSH hardening. This independence is what makes defense in depth work. You are not stacking identical protections; you are covering different failure modes at different points in the network path.
-
-![A defense-in-depth infographic showing traffic passing through cloud firewall, host firewall, SSH rules, and application controls before reaching a service](/content-assets/articles/article-devops-foundation-networking-firewalls-security/defense-in-depth-layers.png)
-
-*Defense in depth works because each control sits at a different boundary. A packet can be stopped before the host, inside the kernel, at SSH access, or inside the application itself.*
-
-## iptables: The Linux Packet Filter
-
-Every Linux system ships with Netfilter, the kernel-level packet filtering framework. `iptables` is the user-space tool that configures it. Even if you use higher-level tools like `firewalld` or `ufw`, they all generate iptables rules underneath. Understanding iptables directly means you can debug any Linux firewall, regardless of which frontend someone chose.
-
-### Chains, Rules, and Targets
-
-Picture a building with three doors and a guard at each. The first door is for visitors arriving (`INPUT`), the second for people leaving (`OUTPUT`), the third for deliveries passing through to another building next door (`FORWARD`). Each guard has a clipboard with a numbered list of rules: "if the visitor is wearing red, let them in; if they have a backpack, send them away." The guard reads the list top to bottom and acts on the first rule that matches. If nothing matches, a default rule at the bottom of the clipboard decides what happens. The Linux firewall is exactly this, and the three doors have a name: **chains**.
-
-Most of your work happens at the `INPUT` door, because that is where attackers knock. A web server's `INPUT` clipboard says: "if the packet is heading to port 80 or 443, let it in; if it is heading to port 22, let it in; otherwise, drop it on the floor." The `OUTPUT` door is usually wide open, because servers need to fetch updates, call APIs, and look up DNS. Locked-down environments do tighten `OUTPUT` to prevent a compromised process from phoning home to an attacker, but that is the exception. The `FORWARD` door only matters when the machine is acting as a router. If you ever debug Kubernetes networking, you will spend time in `FORWARD` rules because every pod-to-pod packet passes through there.
-
-When a rule matches, the guard does one of three things, called the **target**:
-
-- `ACCEPT` waves the packet through.
-- `DROP` silently throws it in the trash. The sender hears nothing back and eventually times out.
-- `REJECT` throws it in the trash but sends back a polite "no" message (an ICMP error).
-
-For anything facing the public internet, `DROP` beats `REJECT`. A `REJECT` confirms to the scanner that something is listening on this IP, just not on this port. A `DROP` makes the scanner waste time waiting for a response that never comes, and gives them no signal at all. Silence is the best answer to a stranger trying door handles.
-
-The "default rule at the bottom of the clipboard" has its own name: the chain's **policy**. If your `INPUT` policy is `ACCEPT`, the guard waves through anything that didn't match a specific rule. That is the "no bouncer" state and it is what you get on a fresh server. You want the policy to be `DROP` so that the only way in is through a rule you explicitly wrote. This is called **default-deny**, and it is the only sane way to run a firewall. The cost is that the rules become harder to write, because forgetting a single rule (say, the one that allows SSH) locks you out of your own server. We will cover that exact failure mode at the end of the article.
-
-![An iptables rule-evaluation infographic showing an incoming packet entering the INPUT chain, checking rules in order, stopping at the first match, and falling to default DROP when no rule matches](/content-assets/articles/article-devops-foundation-networking-firewalls-security/iptables-rule-evaluation.png)
-
-*iptables is ordered and first-match wins. The safest rule set allows only known traffic, logs what remains, and lets the default policy drop everything else.*
-
-### Building a Rule Set
-
-Here is a complete, minimal firewall for a web server that also accepts SSH:
-
-```bash
-$ sudo iptables -L -n -v --line-numbers
+```
+Allow TCP traffic from anywhere to destination port 443.
 ```
 
-Start by viewing your current rules. On a fresh server, you will see empty chains with ACCEPT policies, meaning everything is allowed. That is the "no bouncer" state. Fix it:
+The same idea as an iptables command looks like this:
+
+```bash
+$ sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+```
+
+The rule says: append a rule to the `INPUT` chain, match TCP packets whose destination port is `443`, and accept them. That is the packet-level version of "allow HTTPS."
+
+Most production firewall policy follows **default deny**. Default deny means traffic is blocked unless a rule explicitly allows it. This is the network version of an allowlist. A public web server usually allows `80` and `443` from the internet, allows SSH only from trusted admin networks, allows loopback traffic, allows replies to existing connections, and drops everything else.
+
+Two fields deserve extra attention:
+
+| Field | Meaning | Example |
+| --- | --- | --- |
+| Source | Where the packet came from | `203.0.113.0/24`, a VPN CIDR, or anywhere |
+| Destination port | Which service the packet wants | `22` for SSH, `80` for HTTP, `443` for HTTPS |
+
+The source matters because not every service should be public. Port `443` for a public app can accept traffic from anywhere. Port `22` for SSH should usually accept traffic only from a VPN, bastion host, office IP range, or emergency admin range.
+
+## Cloud Firewalls: Security Groups and Network ACLs
+<!-- section-summary: Cloud firewalls filter traffic before it reaches the host, with security groups attached to resources and NACLs attached to subnets. -->
+
+Cloud providers put firewall layers outside your server. That matters because packets blocked there never reach the Linux host. If `curl localhost:3000` works on the instance but the browser cannot connect to the public IP, the cloud firewall is one of the first places to inspect.
+
+In AWS, the two common layers are **Security Groups** and **Network ACLs**.
+
+A **Security Group** attaches to a resource, such as an EC2 instance, load balancer, or database. It is stateful. Stateful means the firewall remembers accepted connections. If a security group allows inbound TCP `443`, the return traffic for those connections is allowed automatically. This is why most day-to-day AWS firewall work happens in Security Groups.
+
+A typical public load balancer Security Group might look like this:
+
+| Direction | Protocol | Port | Source |
+| --- | --- | --- | --- |
+| Inbound | TCP | `80` | `0.0.0.0/0` |
+| Inbound | TCP | `443` | `0.0.0.0/0` |
+| Outbound | TCP | App port `3000` | App server Security Group |
+
+An app server Security Group behind that load balancer should be narrower:
+
+| Direction | Protocol | Port | Source |
+| --- | --- | --- | --- |
+| Inbound | TCP | `3000` | Load balancer Security Group |
+| Inbound | TCP | `22` | Bastion or VPN CIDR |
+| Outbound | All | All | As required by the app |
+
+This pattern keeps the app port private. The internet reaches the load balancer. The load balancer reaches the app. Random clients on the internet cannot connect directly to `3000`.
+
+A **Network ACL**, usually shortened to NACL, attaches to a subnet. It is stateless. Stateless means it does not remember the original connection. If a NACL allows inbound `443`, it also needs an outbound rule that allows the response traffic back to the client's ephemeral port. Ephemeral ports are temporary high-numbered ports the client operating system uses for the client side of a TCP connection.
+
+| Feature | Security Group | Network ACL |
+| --- | --- | --- |
+| Scope | Resource | Subnet |
+| State | Stateful | Stateless |
+| Rule evaluation | All matching allow rules matter | Ordered rules, first match wins |
+| Common use | Precise access to instances and load balancers | Broad subnet guardrails |
+
+The practical debugging rule is direct. If traffic never appears on the host in `tcpdump`, inspect the cloud firewall, route table, and load balancer listener. If traffic appears on the host but the app does not receive it, inspect host firewall rules and the listening process.
+
+AWS CLI output can give the exact policy:
+
+```bash
+$ aws ec2 describe-security-groups \
+>   --group-ids sg-0123456789abcdef0 \
+>   --query 'SecurityGroups[0].IpPermissions'
+```
+
+```bash
+$ aws ec2 describe-network-acls \
+>   --filters Name=vpc-id,Values=vpc-abc123 \
+>   --query 'NetworkAcls[].Entries[]'
+```
+
+Those commands show what the cloud is enforcing. They are especially useful when console screenshots, Terraform files, and actual deployed state might disagree.
+
+## Host Firewalls with iptables
+<!-- section-summary: iptables configures Linux kernel packet filtering through ordered chains and actions. -->
+
+Linux packet filtering happens in the kernel through Netfilter. `iptables` is one tool for configuring Netfilter. Many distributions now use `nftables` underneath, and tools like `ufw` or `firewalld` provide friendlier frontends. The concepts stay the same: packets enter chains, rules match fields, and actions decide what happens.
+
+The most common chains are:
+
+| Chain | Traffic it handles | Common server use |
+| --- | --- | --- |
+| `INPUT` | Packets coming into this host | Web traffic, SSH, monitoring |
+| `OUTPUT` | Packets leaving this host | Updates, API calls, DNS, logs |
+| `FORWARD` | Packets routed through this host | Routers, NAT gateways, Kubernetes nodes |
+
+For a basic web server, most rules live in `INPUT`. A safe starting pattern allows loopback traffic, allows replies to existing connections, allows public web traffic, allows restricted SSH, logs unexpected traffic, and drops the rest.
+
+Connection state matters. A server may initiate an outbound request to an API. The response comes back as inbound traffic to a high local port. Without a state rule, a default-deny `INPUT` policy could block the response. The kernel's connection tracking system, called **conntrack**, records active flows so reply packets can be accepted.
+
+A minimal rule set can look like this:
 
 ```bash
 $ sudo iptables -P INPUT DROP
 $ sudo iptables -P FORWARD DROP
 $ sudo iptables -P OUTPUT ACCEPT
-```
-
-These three commands set the default policy for each chain. INPUT and FORWARD default to DROP (deny everything unless a rule explicitly allows it). OUTPUT defaults to ACCEPT because most servers need unrestricted outbound access to fetch updates, talk to APIs, and resolve DNS.
-
-```bash
 $ sudo iptables -A INPUT -i lo -j ACCEPT
-```
-
-Rule 1: allow loopback traffic. The loopback interface (`lo`) is how the machine talks to itself. Many services (databases, caches, internal APIs) listen on `127.0.0.1`. Without this rule, your own applications cannot communicate with each other on the same machine.
-
-```bash
 $ sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-```
-
-Rule 2: allow replies to conversations the server already started. Imagine your server calls an API to fetch a JSON payload. The outbound request leaves through `OUTPUT` (which is wide open). The reply has to come back through `INPUT`, but the reply is a brand-new inbound packet from the API's IP, on some random high port your server picked. None of your specific allow rules cover it. Without this rule, your server could shout questions into the internet and never hear the answers.
-
-The kernel solves this with **connection tracking** (`conntrack`), basically a notebook the kernel keeps of every active network conversation: "my server opened a connection to 1.2.3.4 on port 443 from local port 54321 at 10:32; it's still open." When a packet arrives, conntrack checks the notebook. If the packet matches an entry, it gets the state `ESTABLISHED` (a reply to one of our conversations) or `RELATED` (a side-channel message about one of our conversations, like an ICMP "destination unreachable"). This rule says: if the packet is part of a conversation we already started, let it in. This is what "stateful firewall" actually means: the firewall remembers state about open connections, so you don't have to write separate rules for every reply packet.
-
-```bash
-$ sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 $ sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 $ sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+$ sudo iptables -A INPUT -p tcp -s 198.51.100.10 --dport 22 -j ACCEPT
+$ sudo iptables -A INPUT -j LOG --log-prefix "iptables dropped: "
 ```
 
-Rules 3 through 5: allow SSH, HTTP, and HTTPS. Each rule specifies the protocol (`-p tcp`) and destination port (`--dport`). Only these three ports will accept new inbound connections. Everything else hits the default DROP policy.
+The SSH rule allows only one admin source IP, `198.51.100.10`. In real production, that source is often a VPN CIDR or bastion host address rather than a single laptop IP.
+
+The current rule order is visible with line numbers:
 
 ```bash
-$ sudo iptables -A INPUT -j LOG --log-prefix "DROPPED: " --log-level 4
-```
-
-Rule 6: log everything that makes it past the allow rules before the default policy drops it. The log entries appear in `/var/log/kern.log` or `/var/log/messages` depending on your distribution. This gives you visibility into what is being blocked, which is essential for debugging and for spotting attack patterns.
-
-Now verify the complete rule set:
-
-```bash
-$ sudo iptables -L -n --line-numbers
+$ sudo iptables -L INPUT -n --line-numbers
 Chain INPUT (policy DROP)
-num  target     prot opt source               destination
-1    ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0
-2    ACCEPT     all  --  0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
-3    ACCEPT     tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:22
-4    ACCEPT     tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:80
-5    ACCEPT     tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:443
-6    LOG        all  --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4 prefix "DROPPED: "
-
-Chain FORWARD (policy DROP)
-num  target     prot opt source               destination
-
-Chain OUTPUT (policy ACCEPT)
-num  target     prot opt source               destination
+num  target  prot opt source          destination
+1    ACCEPT  all  --  0.0.0.0/0       0.0.0.0/0
+2    ACCEPT  all  --  0.0.0.0/0       0.0.0.0/0       ctstate RELATED,ESTABLISHED
+3    ACCEPT  tcp  --  0.0.0.0/0       0.0.0.0/0       tcp dpt:80
+4    ACCEPT  tcp  --  0.0.0.0/0       0.0.0.0/0       tcp dpt:443
+5    ACCEPT  tcp  --  198.51.100.10   0.0.0.0/0       tcp dpt:22
+6    LOG     all  --  0.0.0.0/0       0.0.0.0/0       LOG flags 0 level 4 prefix "iptables dropped: "
 ```
 
-Read this output from top to bottom, because that is exactly how the kernel evaluates it. A packet arriving on the loopback interface matches rule 1 and is accepted immediately. A packet that is part of an existing connection matches rule 2. A new TCP connection to port 22 matches rule 3. Anything that does not match any rule gets logged by rule 6 and then dropped by the chain's default policy.
+iptables reads the chain from top to bottom and stops at the first match. Rule order is part of the policy, not decoration. A broad allow rule above a narrow deny rule can make the deny rule useless.
 
-> The default should always be deny. Every open port is a deliberate, documented decision. If you cannot explain why a port is open, close it.
+## Opening Web Traffic Without Opening Everything
+<!-- section-summary: A production web path usually exposes only ports 80 and 443 publicly, while app ports stay private behind the proxy or load balancer. -->
 
-Finally, save your rules so they persist across reboots:
+For the shared request path, the browser should reach Nginx on `443`. It should not reach the Node, Django, Rails, or Go app port directly. The app port should listen on `127.0.0.1` if Nginx is on the same host, or on a private subnet address if Nginx or a load balancer sits on another host.
+
+A local process check tells you what is listening:
 
 ```bash
-$ sudo iptables-save > /etc/iptables/rules.v4
+$ sudo ss -tlnp
+State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port Process
+LISTEN  0       511     0.0.0.0:443         0.0.0.0:*         users:(("nginx",pid=1200,fd=7))
+LISTEN  0       511     0.0.0.0:80          0.0.0.0:*         users:(("nginx",pid=1200,fd=6))
+LISTEN  0       128     127.0.0.1:3000      0.0.0.0:*         users:(("node",pid=2200,fd=18))
+LISTEN  0       128     10.0.32.14:22       0.0.0.0:*         users:(("sshd",pid=900,fd=3))
 ```
 
-On Debian and Ubuntu, the `iptables-persistent` package restores these rules automatically at boot. On RHEL-based systems, use `iptables-save > /etc/sysconfig/iptables` instead. If you skip this step, a reboot wipes your entire firewall back to the default "allow everything" state.
+This is a good shape for a single-host Nginx deployment. Nginx listens publicly on `80` and `443`. The app listens only on loopback. SSH listens on a private interface or is restricted by firewall source.
 
-## Cloud Firewalls: Security Groups and NACLs
-
-The classic junior moment: you launch an EC2 instance, install your app, run `curl localhost:3000` from the box and it works perfectly. Then you open the public IP in your browser and it just spins. "It works locally but not in prod." Nine times out of ten, the answer is not your code. It is an AWS Security Group blocking port 3000. The cloud provider runs its own firewall that sits in front of your instance, and `iptables` on the box can't help you, because the packet never reaches the box in the first place.
-
-AWS gives you two of these cloud firewalls, layered on top of each other, and juniors mix them up constantly. Get this distinction in your head once and you will save yourself hours of debugging.
-
-**Security Groups** wrap individual resources: one EC2 instance, one RDS database, one Lambda function inside a VPC. Think of them as a personal bodyguard assigned to that resource. The bodyguard is stateful, meaning it remembers conversations: if you allow inbound port 443, replies to those connections are automatically allowed back out without a separate rule. You only write inbound rules and outbound rules; the bodyguard fills in the return-trip details for you. The default Security Group denies all inbound traffic and allows all outbound traffic, which matches what most apps actually need. If you have set CORS on a web API ("only allow requests from these origins"), Security Groups follow the same allowlist mindset, just at the network layer instead of the HTTP layer. The same idea shows up again in Kubernetes as `NetworkPolicy`, which is essentially a per-pod Security Group: "this pod accepts traffic only from pods with these labels on these ports."
-
-**Network ACLs (NACLs)** wrap entire subnets. Think of them as a checkpoint at the gate of a neighborhood, not the door of a single house. Every packet entering or leaving the subnet passes through the NACL, regardless of which instance it is going to. The catch: NACLs are **stateless**. The checkpoint guard has no memory. If you allow inbound traffic on port 443, you also have to write a separate outbound rule for the reply traffic, which goes out on a random **ephemeral port** in the range 1024-65535 (an ephemeral port is just a temporary port the OS picks for the client side of a TCP connection). Forget that outbound rule and inbound requests arrive but replies get dropped, and your app looks broken in a baffling "requests come in but never finish" way. NACLs also evaluate rules in order by rule number, first match wins, just like iptables.
-
-Here is the practical difference:
-
-| Feature | Security Group | Network ACL |
-|---------|---------------|-------------|
-| Scope | Instance-level | Subnet-level |
-| Statefulness | Stateful (return traffic auto-allowed) | Stateless (must allow both directions) |
-| Default | Deny all inbound, allow all outbound | Allow all (default NACL) |
-| Rule evaluation | All rules evaluated together | Rules processed in order by number |
-| Use case | Per-instance access control | Subnet-wide guardrails |
-
-The combination of Security Groups (instance-level, stateful) and NACLs (subnet-level, stateless) gives you defense in depth at the cloud layer. A compromised instance with a misconfigured Security Group still has the NACL as a backstop. In practice, most teams rely heavily on Security Groups for day-to-day access control and use NACLs as a coarse safety net at the subnet boundary. Layer on top of that whatever your team uses for HTTP-level filtering (Cloudflare WAF, AWS WAF, an Nginx reverse proxy with rate limits) and you are filtering bad traffic at four different points before it reaches your application code.
-
-![A cloud firewall comparison infographic showing a stateful security group attached to one instance and a stateless network ACL around a subnet, with return traffic handled differently](/content-assets/articles/article-devops-foundation-networking-firewalls-security/security-group-vs-nacl.png)
-
-*Security groups protect resources and remember return traffic. Network ACLs protect subnet boundaries and need separate thinking for both inbound and outbound paths.*
-
-One more place this layering bites juniors: Docker. When you run `docker run -p 8080:80 nginx`, Docker quietly inserts iptables rules that punch a hole through the host firewall to forward port 8080 to the container. People then add an iptables `DROP` rule for port 8080 and are surprised it does nothing, because Docker's rules are evaluated first. If your container's published port is unexpectedly reachable, check `iptables -L DOCKER -n` before assuming your firewall is broken.
+A quick outside check confirms the public ports:
 
 ```bash
-$ aws ec2 describe-security-groups \
-    --group-ids sg-0123456789abcdef0 \
-    --query 'SecurityGroups[].IpPermissions[]'
+$ nc -vz app.example.com 443
+Connection to app.example.com (203.0.113.25) 443 port [tcp/https] succeeded!
 
-$ aws ec2 describe-network-acls \
-    --filters "Name=vpc-id,Values=vpc-abc123" \
-    --query 'NetworkAcls[].Entries[]'
+$ nc -vz app.example.com 3000
+nc: connect to app.example.com port 3000 (tcp) failed: Connection timed out
 ```
 
-These AWS CLI commands let you inspect the actual rules in place. When something is not reachable and you cannot figure out why, check both the security group on the instance and the NACL on the subnet. It is almost always one of the two.
+That result is healthy. Port `443` is reachable because users need it. Port `3000` is hidden because only Nginx should talk to it.
 
-One more cloud-firewall trap that does not look like a firewall at all: idle timeouts on managed load balancers. AWS NLB drops idle TCP flows after 350 seconds, ALB after 60 seconds, and most cloud NAT gateways sit somewhere in between. The connection is still open from your application's point of view, but the next packet hits a stale entry on the LB and gets a TCP RST. The fix is to enable TCP keepalives in the application or kernel (`net.ipv4.tcp_keepalive_time`) below the LB's idle timeout, or shorten your client-side connection pool's max idle time.
+## SSH Hardening for the Admin Path
+<!-- section-summary: SSH is a separate admin path, so it needs key-based access, source restrictions, and a safe rollout process. -->
 
-## SSH Hardening
+SSH is not part of the browser request path, but it is part of server security. If attackers can brute-force or steal SSH access, they can change the firewall, Nginx, certificates, or app. A public server should treat SSH as an admin-only path.
 
-SSH is the remote access protocol for every Linux server. When you run `ssh user@your-server`, you are opening an encrypted tunnel that gives you a full shell on the remote machine. A default SSH configuration is functional but dangerously permissive: it accepts password logins, allows root to log in directly, and listens on the well-known port 22 where every bot on the internet expects to find it.
+**SSH** is the encrypted remote shell protocol used to manage Linux servers. The common port is `22`. The safest day-to-day setup uses SSH keys, disables password login, blocks direct root login, limits users, and restricts source IPs in the firewall or cloud Security Group.
 
-Hardening SSH is your first real security task on any new server. It takes ten minutes and eliminates entire categories of attacks. Think of it as locking the front door of a house you just moved into. The house works fine without a lock, but you would not sleep there without one.
+Important `/etc/ssh/sshd_config` settings often look like this:
 
-Edit `/etc/ssh/sshd_config` and apply these changes:
-
-```bash
-# Disable password authentication (key-based only)
+```sshconfig
 PasswordAuthentication no
 PubkeyAuthentication yes
-
-# Disable root login
 PermitRootLogin no
-
-# Change the default port (reduces noise from automated scanners)
-Port 2222
-
-# Limit authentication attempts
-MaxAuthTries 3
-
-# Disable empty passwords
 PermitEmptyPasswords no
-
-# Restrict to specific users
+MaxAuthTries 3
 AllowUsers deploy admin
-
-# Use only strong key exchange algorithms
-KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
 ```
 
-Each setting addresses a specific attack vector. `PasswordAuthentication no` eliminates brute-force password guessing entirely; attackers cannot try passwords if the server refuses to accept them. `PermitRootLogin no` prevents direct root access, forcing attackers to compromise a regular user account first and then escalate privileges. `AllowUsers` restricts SSH access to named accounts, so even if someone creates a new system user, it cannot SSH in unless explicitly listed.
+After changing SSH config, a safe rollout keeps the current SSH session open while a second terminal tests a new login. If the new login fails, the open session can revert the change. This simple habit prevents a lockout.
 
-After saving the file, restart the SSH daemon:
+The firewall source rule should be narrow:
 
 ```bash
-$ sudo systemctl restart sshd
+$ sudo iptables -A INPUT -p tcp -s 198.51.100.10 --dport 22 -j ACCEPT
 ```
 
-Changing the SSH port from 22 to something non-standard is obscurity that reduces log noise from automated scanners by over 99%. That quieter log stream makes real attack attempts visible instead of burying them under thousands of bot login failures. Combine the port change with key-based authentication and fail2ban for meaningful protection.
+In cloud infrastructure, the same rule belongs in the Security Group:
 
-One critical warning: before you set `PasswordAuthentication no`, make sure your SSH key is already installed on the server and you can log in with it. If you disable passwords before setting up key-based auth, you are locked out. If this is a cloud instance, your only recovery option is detaching the disk, mounting it on another instance, editing the config file, and reattaching it. This brings us to the failure modes section later in this article.
-
-## Automated Defense with fail2ban
-
-Even with strong SSH hardening, your logs will still show failed login attempts from bots that try common usernames like `root`, `admin`, and `ubuntu`. These attempts are harmless if key-based auth is enabled, but the noise makes it hard to spot real threats. `fail2ban` solves this by monitoring log files and automatically banning IP addresses that show malicious behavior.
-
-fail2ban watches for patterns in your logs (repeated failed SSH logins, failed web authentication attempts, and other configurable triggers) and creates temporary iptables rules to block the offending IPs. It is reactive defense: something bad happens, fail2ban notices, and it slams the door shut before more damage can occur.
-
-```bash
-$ sudo apt install fail2ban
+```
+Inbound: TCP 22 from 198.51.100.10/32
 ```
 
-Never edit the main config file (`jail.conf`) directly. It gets overwritten on package updates. Instead, create a local override:
+Many teams place servers behind a VPN or bastion host so SSH is never open to the public internet. That design reduces scanner noise and gives a central place for logging and access review.
 
-```bash
-$ sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-```
+## fail2ban and Reactive Blocking
+<!-- section-summary: fail2ban watches logs for repeated failures and adds temporary firewall blocks for abusive sources. -->
 
-Edit `/etc/fail2ban/jail.local` and configure the SSH jail:
+**fail2ban** is a local defense tool that watches logs and bans IP addresses after repeated suspicious behavior. For SSH, it reads authentication logs. If one IP fails too many times in a short window, fail2ban adds a temporary firewall rule that blocks that IP.
+
+A minimal SSH jail looks like this in `/etc/fail2ban/jail.local`:
 
 ```ini
 [sshd]
 enabled = true
-port = 2222
+port = 22
 maxretry = 3
-bantime = 3600
 findtime = 600
+bantime = 3600
 ```
 
-This configuration watches for SSH login failures on port 2222. If an IP address fails 3 times (`maxretry`) within 10 minutes (`findtime`, in seconds), fail2ban blocks that IP for 1 hour (`bantime`, in seconds) by inserting a DROP rule into iptables.
+This means three failed SSH attempts within ten minutes leads to a one-hour ban. The exact values depend on your environment. Public servers often use stricter rules because automated scanners are constant.
 
-Start and enable the service:
-
-```bash
-$ sudo systemctl enable fail2ban
-$ sudo systemctl start fail2ban
-```
-
-Check the current status of the SSH jail:
+Status output shows what fail2ban is doing:
 
 ```bash
 $ sudo fail2ban-client status sshd
 Status for the jail: sshd
 |- Filter
-|  |- Currently failed:	2
-|  |- Total failed:	15
-|  `- File list:	/var/log/auth.log
+|  |- Currently failed: 1
+|  `- Total failed: 18
 `- Actions
-   |- Currently banned:	1
-   |- Total banned:	3
-   `- Banned IP list:	203.0.113.42
+   |- Currently banned: 2
+   `- Banned IP list: 203.0.113.40 203.0.113.41
 ```
 
-The output shows how many login attempts have failed, how many IPs are currently banned, and which specific addresses are blocked. Each banned IP gets a temporary iptables rule that drops all traffic from it for the configured ban duration. After the ban expires, the rule is removed automatically and the IP can try again.
-
-![A fail2ban lifecycle infographic showing failed logins flowing through a log watcher, retry threshold, temporary ban, and later unban](/content-assets/articles/article-devops-foundation-networking-firewalls-security/fail2ban-lifecycle.png)
-
-*fail2ban turns repeated log evidence into temporary firewall action. It is reactive, local, and reversible, which makes noisy brute-force traffic much less useful to attackers.*
-
-If you accidentally ban your own IP (it happens), you can unban it manually from a different session or from the server console:
-
-```bash
-$ sudo fail2ban-client set sshd unbanip 203.0.113.42
-```
+fail2ban is not a replacement for SSH keys, MFA-protected bastions, VPNs, or cloud policy. It is a useful reactive layer that turns repeated log evidence into temporary network blocks.
 
 ## Firewall Failure Modes
+<!-- section-summary: Firewall incidents often come from blocked ports, wrong sources, rule order mistakes, missing state rules, or unsaved host rules. -->
 
-Firewalls protect you, but they can also lock you out or silently break your services if misconfigured. These are the most common ways things go wrong, and knowing them in advance will save you from panic at 2 AM.
+Firewall problems usually show up as one of a few patterns.
 
-### Locked out of SSH
+**Connection timeout** often means a firewall dropped the packet silently. The browser waits. `nc -vz app.example.com 443` hangs. `tcpdump` on the server shows no SYN packet. That points at cloud Security Groups, NACLs, routing, load balancer listeners, or an upstream firewall.
 
-This is the single most common firewall disaster. You set the default INPUT policy to DROP but forget to add the SSH allow rule first. Or you change the SSH port in `sshd_config` to 2222 but your iptables rule still allows port 22. Either way, your next connection attempt hangs and you are locked out.
-
-Prevention: always add your SSH allow rule before setting the policy to DROP. Run both commands in the same session, in the right order:
-
-```bash
-$ sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-$ sudo iptables -P INPUT DROP
-```
-
-If you are changing the SSH port, add a rule for the new port before removing the rule for the old one. Keep your current SSH session open while you test the new port from a second terminal. Do not close the working session until you confirm the new connection works.
-
-On cloud instances, if you are completely locked out, most providers offer a serial console or instance console that bypasses the network entirely. In AWS, you can also stop the instance, detach its root volume, mount it on another instance, fix the config, and reattach it.
-
-### Accidentally dropped all traffic
-
-You run `sudo iptables -P INPUT DROP` on a fresh server with no allow rules. Every connection dies instantly, including your SSH session. This is the "pulled the rug out from under yourself" scenario.
-
-If you are working on a remote server and want a safety net, schedule a cron job that flushes all rules after 5 minutes:
+**Connection refused** means the destination host sent a refusal. The packet reached something, but no process accepted the port, or a reject rule sent back a TCP reset.
 
 ```bash
-$ echo "sudo iptables -F && sudo iptables -P INPUT ACCEPT" | at now + 5 minutes
+$ nc -vz app.example.com 443
+nc: connect to app.example.com port 443 (tcp) failed: Connection refused
 ```
 
-This gives you a 5-minute window to test your rules. If something goes wrong and you get locked out, the cron job will reset the firewall and restore access. Once you have confirmed everything works, cancel the scheduled job.
+That is different from a timeout. Refused traffic reached a host. Timed-out traffic may have been dropped before it arrived.
 
-### Rule order mistakes
+**Wrong source rule** happens when SSH or app traffic is allowed from the office IP, but the engineer is on VPN, home broadband, or a rotated NAT gateway. The rule looks right, but the packet source is different from the expected CIDR. Cloud flow logs and firewall logs reveal the actual source.
 
-Because iptables evaluates rules top to bottom and stops at the first match, order matters. A common mistake is placing a broad ACCEPT rule before a specific DROP rule: the broad rule matches first and the specific rule never fires.
+**Rule order mistakes** happen in ordered firewalls. A broad accept above a narrow drop means the narrow drop never runs:
 
 ```bash
-$ sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-$ sudo iptables -A INPUT -s 203.0.113.0/24 -p tcp --dport 80 -j DROP
+$ sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+$ sudo iptables -A INPUT -s 203.0.113.0/24 -p tcp --dport 443 -j DROP
 ```
 
-This looks like it blocks the `203.0.113.0/24` subnet from port 80, but it does not. Rule 1 accepts all TCP traffic on port 80 regardless of source. The DROP rule never gets evaluated for port 80 traffic. The fix is to reverse the order: put the more specific rule first.
+The fix is to place the narrow rule first:
 
 ```bash
-$ sudo iptables -A INPUT -s 203.0.113.0/24 -p tcp --dport 80 -j DROP
-$ sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+$ sudo iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 443 -j DROP
 ```
 
-If you need to insert a rule at a specific position in an existing chain rather than appending it to the end, use `-I` (insert) instead of `-A` (append):
+**Missing conntrack allow rules** break replies. A server can send outbound traffic, but the response packets are dropped on the way back through `INPUT`. The usual iptables rule is:
 
 ```bash
-$ sudo iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 80 -j DROP
+$ sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ```
 
-This inserts the rule at position 1, pushing all existing rules down by one.
-
-### Conntrack Table Overflow
-
-Stateful filtering needs a slot in the conntrack table for every active flow. The table has a hard ceiling (`net.netfilter.nf_conntrack_max`, often 65,536 or 262,144 by default). On a busy host (NAT gateway, reverse proxy, anything fronting a high-fanout service), bursts of new connections can fill the table and the kernel starts dropping new packets with `nf_conntrack: table full, dropping packet` in `dmesg`. The connection counter and the limit are visible directly:
+**Unsaved iptables rules** disappear after reboot. On Debian and Ubuntu, `iptables-persistent` can restore saved rules:
 
 ```bash
-$ sudo sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
-net.netfilter.nf_conntrack_count = 245112
-net.netfilter.nf_conntrack_max = 262144
+$ sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null
 ```
 
-The fix is either raising `nf_conntrack_max`, lowering `nf_conntrack_tcp_timeout_established` (default is 5 days, which holds entries forever), or marking high-volume non-stateful traffic with `-j CT --notrack` so it bypasses conntrack entirely. Symptoms look exactly like a firewall problem (random new connections fail while existing ones keep working) but no rule was changed.
-
-### Forgot to save rules
-
-You spend 30 minutes building a careful iptables rule set. It works perfectly. You reboot the server for a kernel update, and when it comes back up, the firewall is wide open again. All your rules are gone.
-
-iptables rules live in kernel memory. They do not persist to disk unless you explicitly save them. On Debian and Ubuntu, save with:
-
-```bash
-$ sudo iptables-save > /etc/iptables/rules.v4
-```
-
-Install the `iptables-persistent` package to restore these rules automatically at boot:
-
-```bash
-$ sudo apt install iptables-persistent
-```
-
-On RHEL-based systems (CentOS, Rocky, AlmaLinux), the path is different:
-
-```bash
-$ sudo iptables-save > /etc/sysconfig/iptables
-$ sudo systemctl enable iptables
-```
-
-Make saving your rules the last step of every firewall change session. Building rules without saving them is like writing code without committing.
-
-![A six-part summary infographic for firewalls and security covering default deny, rule order, conntrack, cloud firewalls, SSH hardening, and fail2ban](/content-assets/articles/article-devops-foundation-networking-firewalls-security/firewalls-security-summary.png)
-
-*Use this as the short firewall checklist: default to deny, read ordered rules carefully, understand conntrack before blocking replies, check both cloud and host firewalls, harden SSH first, and use fail2ban to react to repeated login abuse.*
+A careful firewall change has three checks: the cloud policy allows the intended path, the host firewall allows the intended port, and a packet capture or connection test proves the packet reaches the next layer. After port `443` passes the firewall, the request path moves to TLS.
 
 ---
 
 **References**
 
-- [iptables(8) - Linux Admin Man Page](https://man7.org/linux/man-pages/man8/iptables.8.html) - Comprehensive reference for iptables rule syntax, chain management, and match extensions.
-- [Netfilter Connection Tracking](https://conntrack-tools.netfilter.org/manual.html) - Deep dive into the conntrack system that makes stateful firewalling possible in the Linux kernel.
-- [AWS Security Groups Documentation](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Official guide to security group rules, defaults, and best practices for EC2 and VPC resources.
-- [AWS Network ACLs Documentation](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) - How NACLs work at the subnet level and why they complement security groups.
-- [OpenSSH sshd_config Manual](https://man.openbsd.org/sshd_config) - The authoritative reference for every SSH daemon configuration directive.
-- [fail2ban Documentation](https://www.fail2ban.org/wiki/index.php/Main_Page) - Official wiki covering jail configuration, filter definitions, and action plugins.
+- [iptables(8) Linux Manual Page](https://man7.org/linux/man-pages/man8/iptables.8.html) - Official Linux manual for iptables rules, chains, targets, and options.
+- [nftables Wiki](https://wiki.nftables.org/wiki-nftables/index.php/Main_Page) - Official nftables documentation for modern Linux packet filtering.
+- [AWS Security Groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Official AWS documentation for stateful resource-level firewall rules.
+- [AWS Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) - Official AWS documentation for stateless subnet-level firewall rules.
+- [OpenSSH `sshd_config` Manual](https://man.openbsd.org/sshd_config) - Authoritative reference for SSH daemon configuration.
+- [fail2ban Documentation](https://www.fail2ban.org/wiki/index.php/Main_Page) - Official project documentation for jails, filters, and actions.

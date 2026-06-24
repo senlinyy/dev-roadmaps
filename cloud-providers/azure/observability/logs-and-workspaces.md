@@ -49,6 +49,8 @@ In real incidents, this order gives the team a checklist. First confirm that eac
 
 There are a few log types worth separating early. The **Azure Activity log** records subscription-level control-plane events, such as someone updating a resource, creating a diagnostic setting, or changing access. **Resource logs** come from Azure services and describe the operation of those resources, such as Application Gateway access records or Blob Storage read and write records. **Application logs and telemetry** come from the running app or instrumentation layer, such as Container App console logs or Application Insights request and exception records.
 
+For AWS readers, the Azure Activity log sits closest to the CloudTrail habit: it helps answer who changed cloud resources and when. Resource logs and application telemetry are a different layer, closer to CloudWatch Logs and service-specific operational records.
+
 For `devpolaris-orders-api`, each type answers a different question. Activity records can show whether someone changed the gateway or diagnostic settings. Resource logs can show that Application Gateway returned HTTP `500` for `POST /checkout`. Application logs can show that the Container App printed `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net`.
 
 Knowing the log types gives the team the vocabulary. The next question is more operational: how do those records leave the Azure resources and arrive in `law-devpolaris-prod`?
@@ -167,7 +169,7 @@ This structure is the reason Log Analytics feels different from opening a raw `.
 
 Azure has both resource-specific tables and broader legacy-style tables. For example, Storage Blob resource logs can land in `StorageBlobLogs`, where fields such as `OperationName`, `StatusCode`, `ObjectKey`, `CallerIpAddress`, and `_ResourceId` make storage investigations very direct. Some resource logs can also appear in `AzureDiagnostics`, which is a wider table used by services in Azure Diagnostics mode.
 
-Application Insights tables have their own shapes. `AppRequests` includes fields such as `Name`, `ResultCode`, `DurationMs`, `Success`, `OperationId`, and `TimeGenerated`. `AppDependencies` tells you about outbound calls from the app. `AppExceptions` carries exception information that often becomes the first useful developer clue.
+Application Insights tables have their own shapes. `AppRequests` includes fields such as `Name`, `ResultCode`, `DurationMs`, `Success`, `OperationId`, and `TimeGenerated`. `AppDependencies` tells you about outbound calls from the app. `AppExceptions` carries exception information that often gives the first useful developer clue.
 
 During the `checkout-5001` incident, table choice changes the question. `ContainerAppConsoleLogs_CL` can answer what the Orders API printed. `AzureDiagnostics` or `AGWAccessLogs` can answer what the gateway saw. `AppRequests`, `AppDependencies`, and `AppExceptions` can answer how the application request, dependency call, and exception relate to one operation.
 
@@ -177,6 +179,8 @@ Tables give us the nouns. KQL gives us the grammar for asking useful questions a
 <!-- section-summary: KQL is the read-only query language Azure Monitor Logs uses to filter, shape, join, and summarize workspace data. -->
 
 **Kusto Query Language**, or **KQL**, is the read-only query language used by Azure Monitor Logs. Microsoft describes Azure Monitor log queries as using the same KQL foundation as Azure Data Explorer. A KQL query usually starts with a table name, then uses pipe-separated operators to filter, shape, group, and order the rows.
+
+KQL fills the same investigation slot that CloudWatch Logs Insights fills for many AWS teams. The syntax is different, but the habit is familiar: start with a tight time window, filter to the resource or operation, then project only the fields that prove the incident story.
 
 The first habit is to start with time. Log work can become expensive and noisy when the query scans a huge window, and incident work usually starts with a known time range. For the Orders incident, the team begins around `2026-05-07T09:42:00Z`, then expands the window if needed.
 
@@ -251,7 +255,7 @@ For the Orders team, 30 days might be enough for normal debugging, but some audi
 
 **Cost** comes mostly from data ingestion and retention. Microsoft describes workspace cost around the data you ingest and keep, so every selected category can add volume. A noisy debug log category can become expensive quickly if every request prints full payloads, stack traces, or repeated health-check records.
 
-The practical cost habit is to collect the categories the team will actually use. Container app console logs, gateway access logs, gateway firewall logs, Application Insights requests, dependencies, and exceptions can be valuable for the checkout path. A high-volume category with no owner, no query, and no retention reason deserves review before it becomes permanent production noise.
+The practical cost habit is to collect the categories the team will actually use. Container app console logs, gateway access logs, gateway firewall logs, Application Insights requests, dependencies, and exceptions can be valuable for the checkout path. A high-volume category with no owner, no query, and no retention reason deserves review before it turns into permanent production noise.
 
 Azure Monitor can also transform or filter some incoming log data before it lands in a workspace through data collection rule-based transformations. This is useful for removing noisy fields, shaping records, or dropping known low-value rows such as routine health probes. Treat transformations like production code because they can remove evidence before anyone can query it. Keep the rule in infrastructure code, review it with the team that owns the incident process, and test a known event after every change.
 

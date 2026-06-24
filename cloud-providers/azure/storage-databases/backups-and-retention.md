@@ -33,6 +33,8 @@ For `LearnTrail`, one accident can hit several data shapes at the same time. A r
 
 The practical recovery map has four questions:
 
+If you know AWS recovery tools, the Azure rows solve familiar problems. Azure Backup vaults sit near AWS Backup plans and vaults, Azure SQL PITR sits near RDS or Aurora point-in-time restore, Blob versioning and immutability sit near S3 Versioning and Object Lock, and managed disk snapshots sit near EBS snapshots. The service names change, but each data shape still needs a recovery source, a safe restore target, and a validation check.
+
 | Question | What the team needs to know | LearnTrail example |
 | --- | --- | --- |
 | **What data changed?** | The exact database, container, share, disk, or blob prefix | `invoices/2026/06/` in Blob Storage |
@@ -46,7 +48,7 @@ That last question keeps the article grounded. Recovery design includes the plat
 
 *The recovery map turns the incident into five concrete choices before anyone starts copying data back into production.*
 
-Once the map exists, retention becomes the next decision. The team needs to know how long each recovery point remains available.
+Once the map exists, retention is the next decision. The team needs to know how long each recovery point remains available.
 
 ## Retention Windows
 <!-- section-summary: Retention is the time limit on recovery, so the setting has to match how long the business may take to notice and respond to data loss. -->
@@ -180,7 +182,7 @@ By this point, `LearnTrail` has service-level recovery options. The next layer i
 
 For `LearnTrail`, vault-based backup keeps the video worker VM and Azure Files shares under policy instead of depending on a person to remember snapshots. The policy says how often Azure creates recovery points and how long those points remain. The vault gives operations a place to review failures, inspect protected items, and start restore workflows.
 
-The vault itself becomes important during a security incident. Ransomware and malicious actors often try to delete backups after damaging production data. **Immutable vault** settings help by blocking operations that could lead to loss of recovery points. Microsoft documents that immutability can be enabled and then locked to make the setting irreversible. That is powerful protection, and it needs careful testing before the team locks it.
+The vault itself matters during a security incident. Ransomware and malicious actors often try to delete backups after damaging production data. **Immutable vault** settings help by blocking operations that could lead to loss of recovery points. Microsoft documents that immutability can be enabled and then locked to make the setting irreversible. That is powerful protection, and it needs careful testing before the team locks it.
 
 **Backup soft delete** adds another safety layer for backup data. Microsoft documents Azure Backup soft delete as a way to recover backup data after accidental or malicious deletion. The default retention is 14 days, and the retention can be extended up to 180 days in supported configurations. In regions with secure-by-default enforcement, soft delete can be on by default and harder to disable from the portal.
 

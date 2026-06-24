@@ -26,7 +26,7 @@ aliases:
 ## The Runner as a Control Node
 <!-- section-summary: A CI runner can run Ansible like any other control node, so it needs the same attention to tools, credentials, network access, and logs. -->
 
-Running Ansible in CI means the pipeline runner becomes the control node. It checks out the repository, installs Ansible and collections, reads inventory, decrypts Vault content when allowed, connects to managed hosts, and stores the job output. That is powerful because deployments become repeatable jobs instead of private terminal sessions.
+Running Ansible in CI means the pipeline runner acts as the control node. It checks out the repository, installs Ansible and collections, reads inventory, decrypts Vault content when allowed, connects to managed hosts, and stores the job output. That is powerful because deployments run as repeatable jobs instead of private terminal sessions.
 
 The orders platform is a good example. A pull request changes an Nginx template and a systemd override. CI should run linting and syntax checks before merge. After approval, a deployment job should preview one production host, apply the canary, and then roll through the rest of `orders_web` in controlled batches.
 
@@ -62,7 +62,7 @@ collections:
     version: "==11.4.0"
 ```
 
-For larger teams, an **execution environment** is often a better long-term shape. An execution environment is a container image that packages Ansible, collections, Python dependencies, and system packages needed by automation. The CI job runs Ansible inside that image, so the control node becomes reproducible.
+For larger teams, an **execution environment** is often a better long-term shape. An execution environment is a container image that packages Ansible, collections, Python dependencies, and system packages needed by automation. The CI job runs Ansible inside that image, so the control node has a reproducible runtime.
 
 ```yaml
 name: orders-ansible-ee
@@ -343,7 +343,7 @@ ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --vault-id
 
 The deployment record now tells a clear story. It shows the commit, the pinned runtime, the target inventory, the canary limit, the preview, the approval, and the real apply. If something fails, the team knows whether to inspect the runner, credentials, target selection, remote host, or service health.
 
-That is the main shift when Ansible moves into CI. The pipeline becomes the repeatable control node and the written deployment process for the team. The command matters, and the gates around the command matter just as much.
+That is the main shift when Ansible moves into CI. The pipeline acts as the repeatable control node and the written deployment process for the team. The command matters, and the gates around the command matter just as much.
 
 ---
 

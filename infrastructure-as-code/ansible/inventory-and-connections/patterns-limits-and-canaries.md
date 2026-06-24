@@ -181,7 +181,7 @@ ansible-playbook -i inventories/prod deploy-orders-web.yml --tags config --list-
 ansible-playbook -i inventories/prod deploy-orders-web.yml --list-tags
 ```
 
-Those commands help reviewers catch tag designs that select half of a dependency chain. If `--tags config` renders a file but skips the validation task that protects it, the tag set needs cleanup before it becomes a production shortcut.
+Those commands help reviewers catch tag designs that select half of a dependency chain. If `--tags config` renders a file but skips the validation task that protects it, the tag set needs cleanup before teams use it as a production shortcut.
 
 ## Verifying the Target Set
 <!-- section-summary: --list-hosts and inventory graph checks make the selected hosts visible before tasks run. -->

@@ -1,7 +1,7 @@
 ---
 title: "Local Values"
 description: "Use local values to name and reuse computed expressions inside a Terraform configuration, removing repetition and making complex logic readable."
-overview: "When the same expression appears in three resource blocks, that is a sign you need a local value. Locals let you give a name to any computed expression, a combination of variables, resource attributes, and function calls, and reference it throughout the configuration. This article explains when and how to use them."
+overview: "Local values are named expressions inside a module. This article shows how locals shape variable inputs into names, tags, policy fragments, and resource arguments that appear clearly in Terraform plans."
 tags: ["locals", "local values", "expressions", "terraform", "hcl"]
 order: 2
 id: article-iac-terraform-values-locals
@@ -9,343 +9,148 @@ id: article-iac-terraform-values-locals
 
 ## Table of Contents
 
-1. [The Problem Locals Solve](#the-problem-locals-solve)
-2. [Declaring and Using Locals](#declaring-and-using-locals)
-3. [Locals as Computed Intermediate Values](#locals-as-computed-intermediate-values)
-4. [Locals for Tag Management](#locals-for-tag-management)
-5. [Locals With for Expressions](#locals-with-for-expressions)
-6. [Locals Are Not Variables](#locals-are-not-variables)
-7. [Debugging an Unexpected Local Value](#debugging-an-unexpected-local-value)
-8. [When Locals Go Too Far](#when-locals-go-too-far)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [What Local Values Do](#what-local-values-do)
+2. [The Naming and Tagging Problem](#the-naming-and-tagging-problem)
+3. [Declaring Locals](#declaring-locals)
+4. [Consuming Locals in Resources](#consuming-locals-in-resources)
+5. [Reading Locals in Plan Output](#reading-locals-in-plan-output)
+6. [When Locals Help and When They Hide Too Much](#when-locals-help-and-when-they-hide-too-much)
+7. [Putting It All Together](#putting-it-all-together)
 
-## The Problem Locals Solve
+## What Local Values Do
+<!-- section-summary: Local values give names to expressions inside one module so repeated logic has one readable home. -->
 
-A local value is a named expression result inside a module, used to centralize repeated calculations and naming logic.
+A **local value** is a named expression inside a Terraform module. You declare it in a `locals` block and reference it as `local.<name>`. Locals do not accept values from outside the module. They are calculated from variables, resource attributes, functions, and literal values already available inside the module.
 
-Imagine a configuration that creates a set of AWS resources, a VPC, several subnets, an EC2 instance, an RDS database, and a security group. Each resource needs a name tag and an environment tag. The name follows the pattern `<project>-<environment>-<resource-type>`.
+Locals are useful when a value appears in several places or when an expression deserves a name. A bucket name rule, a common tag map, or a generated IAM policy document can be easier to review when the expression is named once and consumed by resources.
 
-![Local values normalize repeated raw inputs into consistent names, tags, and resource arguments.](/content-assets/articles/article-iac-terraform-values-locals/locals-normalization.png)
+The practical test is simple: a local should make the resource code easier to read. If a local hides one tiny literal that is used once, it may add noise. If it explains a naming rule or keeps tags consistent across ten resources, it earns its place.
 
-Without locals, you either hardcode the name in every resource block (which means updating it in five places if the project name ever changes) or you repeat the same string interpolation expression in every resource:
+## The Naming and Tagging Problem
+<!-- section-summary: Real Terraform modules often repeat service names, environment names, and tags unless locals centralize those expressions. -->
 
-```hcl
-resource "aws_vpc" "main" {
-  cidr_block = var.cidr_block
-  tags = {
-    Name        = "${var.project}-${var.environment}-vpc"
-    environment = var.environment
-    project     = var.project
-  }
-}
+Imagine a team building a module for a service log bucket and a CloudWatch log group. Both resources need the service name, environment, owner, and cost center. Without locals, every resource repeats the same tag expression and every name repeats the same string pattern.
 
-resource "aws_instance" "app" {
-  ami  = var.ami_id
-  tags = {
-    Name        = "${var.project}-${var.environment}-app"
-    environment = var.environment
-    project     = var.project
-  }
-}
-```
+That repetition creates review risk. One resource gets `environment = "prod"` while another gets `env = "prod"`. One name uses `billing-prod`, while another uses `prod-billing`. Locals let the module define those rules once.
 
-Every resource repeats `"${var.project}-${var.environment}-..."`. If you need to add a `team` tag, you add it in every resource. If you want to change the naming pattern, you update it everywhere.
+## Declaring Locals
+<!-- section-summary: A locals block can collect naming rules, common tags, and derived values that resources will consume later. -->
 
-Locals let you compute these values once and give them a name:
+In `locals.tf`, the module turns variables into reusable values:
 
 ```hcl
 locals {
-  name_prefix = "${var.project}-${var.environment}"
-  common_tags = {
-    environment = var.environment
-    project     = var.project
-    team        = "platform"
-  }
+  name_prefix = "dp-${var.service_name}-${var.environment}"
+
+  common_tags = merge(
+    {
+      service     = var.service_name
+      environment = var.environment
+      managed_by  = "terraform"
+    },
+    var.extra_tags
+  )
+
+  log_bucket_name = "${local.name_prefix}-logs"
+  app_log_group   = "/aws/app/${local.name_prefix}"
 }
 ```
 
-Now the resources become:
+`local.name_prefix` consumes `var.service_name` and `var.environment`. `local.common_tags` consumes both variables and `var.extra_tags`. The later locals consume earlier locals in the same module, which keeps the naming chain clear.
+
+Locals can appear in one `locals` block or several. Terraform treats all local values in the module as one namespace. Teams often keep them in `locals.tf` because it gives reviewers one place to inspect naming and tagging rules.
+
+## Consuming Locals in Resources
+<!-- section-summary: Locals show up in resource blocks through local.name references. -->
+
+In `main.tf`, resources consume the local values:
 
 ```hcl
-resource "aws_vpc" "main" {
-  cidr_block = var.cidr_block
-  tags = merge(local.common_tags, { Name = "${local.name_prefix}-vpc" })
+resource "aws_s3_bucket" "logs" {
+  bucket = local.log_bucket_name
+  tags   = local.common_tags
 }
 
-resource "aws_instance" "app" {
-  ami  = var.ami_id
-  tags = merge(local.common_tags, { Name = "${local.name_prefix}-app" })
+resource "aws_cloudwatch_log_group" "app" {
+  name              = local.app_log_group
+  retention_in_days = var.retention_days
+  tags              = local.common_tags
 }
 ```
 
-One change to `local.name_prefix` or `local.common_tags` propagates everywhere that references them. Adding a new tag means editing one `locals` block, not every resource.
+The resource blocks stay compact. The bucket does not repeat the full string template, and the log group does not rebuild the tag map. Both resources consume the same local tags, so a change to the tag rule affects both in one reviewable place.
 
-## Declaring and Using Locals
-
-A `locals` block is where you give names to expressions inside the current module. Each entry is a local name and the expression Terraform should evaluate for it. Example: `local.bucket_name` can combine a project name, short region, and account ID into one reusable bucket name.
-
-All local values are declared in a single `locals` block, or in multiple `locals` blocks if that keeps related values close together. Each entry is a name and an expression:
+Locals can also feed outputs:
 
 ```hcl
-locals {
-  region_short   = substr(var.region, 0, 2)
-  account_id     = data.aws_caller_identity.current.account_id
-  bucket_name    = "${var.project}-${local.region_short}-${local.account_id}"
+output "resource_name_prefix" {
+  description = "Shared prefix used by resources in this module."
+  value       = local.name_prefix
 }
 ```
 
-You reference a local with `local.<name>`, note the singular `local`, not `locals`. The `local.` prefix is how Terraform distinguishes local value references from variable references (`var.`) and resource attributes.
+That output helps parent modules and deployment logs understand the naming rule without duplicating it.
 
-Locals can reference other locals, as shown above where `bucket_name` references `region_short` and `account_id`. Terraform evaluates locals lazily in the correct dependency order, it works out which locals depend on which and evaluates them in sequence. There is no need to declare locals in any particular order.
+## Reading Locals in Plan Output
+<!-- section-summary: Terraform plans show the evaluated result of a local, not the local expression itself. -->
 
-What locals cannot do: they cannot reference their own name, because circular references are not allowed. They can reference resource attributes and module outputs, but if those values are only known after apply, the local value is also unknown until apply. That is fine for normal resource arguments, but it does not work in places where Terraform must know the shape of the graph during planning, such as `count`, `for_each` keys, and some lifecycle decisions.
-
-## Locals as Computed Intermediate Values
-
-A computed intermediate value is a value you calculate once so resource blocks can stay readable. It is especially useful when the expression involves a function, a loop, or a condition. Example: `local.subnet_cidrs` can hold the list of CIDR blocks generated from `var.vpc_cidr` before the subnet resources use it.
-
-The most common use for locals beyond string construction is computing values that would be awkward or unreadable if written inline in a resource block.
-
-Consider a configuration that needs to compute a CIDR block for each availability zone. The `cidrsubnet` function takes a base CIDR block and splits it into smaller sub-networks. Computing this inline in a resource `count` expression would be messy. A local makes it readable:
+If the caller passes `service_name = "billing"` and `environment = "prod"`, Terraform evaluates the locals before building the resource diff:
 
 ```hcl
-locals {
-  az_count   = length(var.availability_zones)
-  subnet_cidrs = [
-    for i in range(local.az_count) :
-    cidrsubnet(var.vpc_cidr, 8, i)
-  ]
-}
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "dp-billing-prod-logs"
+      + tags   = {
+          + "environment" = "prod"
+          + "managed_by"  = "terraform"
+          + "owner"       = "platform"
+          + "service"     = "billing"
+        }
+    }
 
-resource "aws_subnet" "web" {
-  count             = local.az_count
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = local.subnet_cidrs[count.index]
-  availability_zone = var.availability_zones[count.index]
-}
+  # aws_cloudwatch_log_group.app will be created
+  + resource "aws_cloudwatch_log_group" "app" {
+      + name              = "/aws/app/dp-billing-prod"
+      + retention_in_days = 90
+      + tags              = {
+          + "environment" = "prod"
+          + "managed_by"  = "terraform"
+          + "owner"       = "platform"
+          + "service"     = "billing"
+        }
+    }
 ```
 
-The `subnet_cidrs` local uses a `for` expression to generate a list of CIDR blocks, one per availability zone. The subnet resource then iterates over the availability zones using `count` and picks the matching CIDR from the pre-computed list.
+The plan shows `dp-billing-prod-logs`, not `local.log_bucket_name`. Reviewers connect the two by reading the code path: variables feed locals, and locals feed resource arguments.
 
-This is more readable than writing the `cidrsubnet` call inline in the resource block. It is also safer because the CIDR expression has one named definition that every subnet reads. The local does not behave like a mutable cache; it is a named expression result in Terraform's evaluation model.
+## When Locals Help and When They Hide Too Much
+<!-- section-summary: Locals help when they name real shared logic, but too many locals can make readers jump around for simple values. -->
 
-Another common use is conditional logic. Suppose some resources should only be created in production, and you want to express that concisely:
+Good locals usually have one of three jobs. They name a repeated expression, they give business meaning to a derived value, or they keep a rule consistent across resources. `local.common_tags`, `local.name_prefix`, and `local.private_subnet_ids_by_az` are examples that usually help.
 
-```hcl
-locals {
-  is_production       = var.environment == "prod"
-  enable_multi_az     = local.is_production
-  db_deletion_protect = local.is_production
-  replica_count       = local.is_production ? 2 : 0
-}
-```
-
-Now resource blocks can reference `local.enable_multi_az` and `local.replica_count` instead of repeating the `var.environment == "prod"` expression throughout.
-
-## Locals for Tag Management
-
-Consistent tagging is one of the most practically useful applications of locals. Cloud providers charge you for resources, and tags are how you know which team, project, or environment to attribute those charges to. When tags are inconsistent, some resources have an `environment` tag, others have `env`, some use `prod`, others use `production`, cost allocation reports become unreliable.
-
-A locals block that defines the complete tag set used across all resources in a configuration keeps tags consistent:
+Weak locals usually rename a value without adding meaning:
 
 ```hcl
 locals {
-  tags = {
-    project     = var.project
-    environment = var.environment
-    region      = var.region
-    managed_by  = "terraform"
-  }
+  env = var.environment
 }
 ```
 
-Each resource then uses the `merge` function to combine the common tags with any resource-specific ones:
+If every resource now uses `local.env`, reviewers have to jump from the resource to the local and then to the variable to learn the value. The local did not reduce complexity.
 
-```hcl
-resource "aws_s3_bucket" "uploads" {
-  bucket = "${local.name_prefix}-uploads"
-  tags   = merge(local.tags, { purpose = "user-uploads" })
-}
+:::expand[The local that grows into a module boundary]{kind="pattern"}
+A local sometimes starts as a simple expression and grows into business logic. For example, a module may build a large IAM policy document from variables, feature flags, and resource ARNs. At first, a local keeps the policy readable. Later, the policy generation takes over half the file.
 
-resource "aws_rds_cluster" "main" {
-  cluster_identifier = "${local.name_prefix}-db"
-  tags               = merge(local.tags, { purpose = "primary-database" })
-}
-```
+That is a signal to reconsider the design. The module may need a clearer input object, a separate submodule, or a data source such as `aws_iam_policy_document` that gives the policy structure. The local itself is not the problem. The problem is that the module boundary no longer explains the rule clearly.
 
-`merge` combines multiple maps, with later maps overriding earlier ones if there are duplicate keys. So `merge(local.tags, { purpose = "user-uploads" })` produces a map that includes all four common tags plus the `purpose` key.
-
-When the organization decides to add a `cost-center` tag to all resources, you add it to the `local.tags` map once and every resource picks it up.
-
-## Locals With for Expressions
-
-A local can hold the result of a `for` expression, which means it can store a transformed collection under a clear name. Use this when several resources need the same filtered list or lookup map. Example: `local.users_by_name` can turn a list of user objects into a map keyed by username.
-
-Locals and `for` expressions are a natural pairing. A `for` expression transforms one collection into another by filtering, reshaping, or regrouping. When that transformation is needed in multiple places, wrapping it in a local prevents the repetition of a complex expression throughout the configuration.
-
-![For expressions can derive reusable maps from lists before resources consume the normalized values.](/content-assets/articles/article-iac-terraform-values-locals/derived-values-map.png)
-
-A common real-world pattern is deriving a map from a list. Suppose you have a list of objects describing your team's users, and you frequently need to look up a user by name. A `for` expression can build the lookup map once:
-
-```hcl
-variable "users" {
-  type = list(object({
-    name  = string
-    email = string
-    admin = bool
-  }))
-}
-
-locals {
-  users_by_name  = { for u in var.users : u.name => u }
-  admin_emails   = [for u in var.users : u.email if u.admin]
-  non_admin_names = [for u in var.users : u.name if !u.admin]
-}
-```
-
-`local.users_by_name` is a map where each user's name is the key and the full user object is the value. You can now look up a specific user with `local.users_by_name["alice"]` anywhere in the configuration, without repeating the `for` expression.
-
-`local.admin_emails` is a filtered list, only the email addresses of users who have `admin = true`. You might use this to configure an SNS subscription or an email notification list.
-
-`local.non_admin_names` is the opposite filter. Both derived lists come from the same source variable and stay in sync automatically, add a new admin user to `var.users` and `local.admin_emails` includes them without any other changes.
-
-Another common pattern is transforming environment-specific configuration. Suppose you have a map of environment settings and you need to extract just the instance types as a flat list:
-
-```hcl
-variable "environments" {
-  type = map(object({
-    instance_type = string
-    count         = number
-    region        = string
-  }))
-}
-
-locals {
-  instance_types     = { for env, cfg in var.environments : env => cfg.instance_type }
-  multi_region_envs  = { for env, cfg in var.environments : env => cfg if cfg.region != "us-east-1" }
-}
-```
-
-`local.instance_types` extracts just the instance type for each environment into a simple map of strings. `local.multi_region_envs` filters to only the environments not in the primary region. Both are cleaner to read than repeating the `for` expression inline every time you need these derived collections.
-
-The underlying principle: if you find yourself writing the same `for` expression more than once, give it a name in a `locals` block. The name documents the intent, the single definition prevents bugs from inconsistent copies, and future changes only need to happen in one place.
-
-## Locals Are Not Variables
-
-A local is internal to the module. A variable is part of the module's public input interface. Example: callers can set `var.environment` in `prod.tfvars`, but they cannot override `local.name_prefix` from the command line.
-
-Unlike input variables, locals cannot be set by the caller. They are computed entirely from the configuration itself, from variables, resource attributes, data source results, and expressions. The caller cannot override a local from the command line or a `.tfvars` file.
-
-This is by design. Locals are internal implementation details of a configuration. They are how the configuration author builds intermediate values from the inputs the caller provides. Exposing them to external override would break the abstraction.
-
-This distinction matters when you are designing a module. If a value should be configurable by the module's caller, it should be an input variable. If it is computed from the caller's inputs and used internally, it should be a local.
-
-A common mistake is making something a local when it should be a variable. For example, making the `name_prefix` a local computed from `project` and `environment` assumes that the naming pattern never needs to change. If a caller needs to override the prefix, because their project has an unusual naming convention, they cannot. Terraform variable defaults cannot reference locals or other configuration values, so the usual pattern is `variable "name_prefix" { default = null }` plus a local that falls back when the caller does not provide a value.
-
-```hcl
-variable "name_prefix" {
-  type    = string
-  default = null
-}
-
-locals {
-  default_name_prefix = "${var.project}-${var.environment}"
-  name_prefix         = var.name_prefix != null ? var.name_prefix : local.default_name_prefix
-}
-```
-
-## Debugging an Unexpected Local Value
-
-Debugging a local means evaluating the expression and then checking the inputs it depends on. The fastest tool is `terraform console`, which lets you ask Terraform what a value is before applying changes. Example: if `local.name_prefix` is `myproject-prod` when you expected `myproject-staging`, check `var.environment` next.
-
-When a `terraform plan` shows a value that does not match what you expected, and the value comes from a local, you need to trace back through the chain of locals and the expressions they use to find where the discrepancy is.
-
-The most direct tool is `terraform console`. This is an interactive session where you can type any Terraform expression and immediately see its evaluated value. After running `terraform init`, start the console:
-
-```bash
-terraform console
-```
-
-Inside the console, you can evaluate locals directly:
-
-```
-> local.name_prefix
-"myproject-prod"
-
-> local.common_tags
-{
-  "environment" = "prod"
-  "managed_by"  = "terraform"
-  "project"     = "myproject"
-  "region"      = "us-east-1"
-}
-
-> local.subnet_cidrs
-tolist([
-  "10.0.0.0/24",
-  "10.0.1.0/24",
-  "10.0.2.0/24",
-])
-```
-
-If `local.name_prefix` shows `"myproject-prod"` but you expected `"myproject-staging"`, you can check the variables it depends on:
-
-```
-> var.environment
-"prod"
-```
-
-If `var.environment` is `"prod"` when you expected `"staging"`, the problem is in how you are providing the variable value, check your `.tfvars` file or environment variables.
-
-The console evaluates locals in real-time, including any resource attributes available from the state file. This makes it the fastest way to verify that a complex chain of locals, ones that reference variables, filter lists, and compute CIDR blocks, produces the values you intend before running `terraform plan`.
-
-Another debugging approach is to add a temporary `output` block for the local you want to inspect:
-
-```hcl
-output "debug_common_tags" {
-  value = local.common_tags
-}
-```
-
-Running `terraform plan` with this output block shows the current value of `local.common_tags` in the plan output. Remove the output block after debugging, you do not want permanent debug outputs cluttering the configuration.
-
-## When Locals Go Too Far
-
-Locals go too far when they hide simple resource settings behind too many named intermediate values. A local should make the configuration easier to read, not force the reader to chase a long chain of expressions. Example: `local.common_tags` is useful across many resources, but `local.tmp1` feeding `local.tmp2` feeding one argument is usually harder to maintain than an inline expression.
-
-Locals can become a problem when they obscure what the configuration actually does. If a locals block contains twenty entries, each one building on the previous ones in complex ways, the configuration becomes difficult to read and debug. When a plan shows an unexpected value, tracing back through a chain of locals to find where it came from is tedious.
-
-A good test is whether the local's purpose is immediately obvious from its name. `local.name_prefix`, `local.common_tags`, `local.is_production`, these are clear. `local.x`, `local.computed_value`, `local.tmp`, these signal that the author was using locals as scratch space rather than as named, meaningful values.
-
-Another warning sign is a local that is used in only one place. If you compute `local.complicated_expression` and then use it only once, in one resource block, the expression might be just as readable inline. Locals add value when they eliminate repetition or when they name a concept that would be opaque as an inline expression.
-
-The general rule: use a local when the expression would appear in more than one place, or when the expression is complex enough that naming it makes the intent clear to a reader who did not write it.
+During review, ask whether the local makes the resource easier to understand. If the answer is yes, keep it. If the answer requires tracing many unrelated branches, simplify the inputs or move the logic to a better boundary.
+:::
 
 ## Putting It All Together
+<!-- section-summary: Locals are best when they name a real expression that several resources or outputs consume. -->
 
-Locals are the glue in the middle layer of a Terraform configuration. Input variables bring in external information, the region, the environment, the project name. Resources create real infrastructure. Locals sit between them, transforming the raw inputs into derived values, name prefixes, tag maps, computed CIDR blocks, boolean flags, that the resources can use directly.
+Local values sit between inputs and resources. Variables bring values into the module. Locals shape those values into names, tags, maps, lists, and policy fragments. Resources and outputs consume the locals.
 
-A well-used locals block is a sign of a mature configuration. Instead of repeating the same expression in ten resource blocks, you see `local.name_prefix` referenced cleanly. Instead of each resource declaring its own tags independently, they all call `merge(local.common_tags, {...})`. Changes that would otherwise require finding and updating every occurrence now require editing one line in the locals block.
+Use locals for repeated rules and meaningful derived values. Keep them close enough to the resource story that a reviewer can trace `var.service_name` into `local.name_prefix`, then into `aws_s3_bucket.logs.bucket`, then into the plan output.
 
-Combined with `for` expressions, locals become a powerful data-transformation layer. A list of user objects from a variable can be transformed into a lookup map, a filtered list of admins, and a list of email addresses, each as a separate, named local, so that every resource that needs any of those shapes can reference it directly rather than re-deriving it.
-
-When a local produces an unexpected value, `terraform console` gives you an interactive way to evaluate the expression chain and pinpoint where the value diverges from expectation. This makes even complex multi-step locals debuggable without running a full plan and apply cycle.
-
-The discipline to apply is: write locals that clearly name a concept, put them close to where they are used (in the same file if the configuration is split across multiple files), and resist the temptation to build overly deep chains of locals just because the language allows it. The right amount of abstraction in locals, like the right amount of abstraction anywhere, is the amount that makes the configuration easier to read without requiring the reader to trace through layers of indirection.
-
-## What's Next
-
-Input variables bring values in and locals compute intermediate values from them. The third part of the values layer is outputs: how a configuration or module exposes information back to the caller or to the operator running the apply. The next article covers how to declare outputs, when to mark them sensitive, and how they carry data between modules.
-
-
-![Local values summary: reduce repetition, compute shared values once, and keep external inputs separate.](/content-assets/articles/article-iac-terraform-values-locals/locals-summary.png)
-
----
-
-**References**
-
-- [Local Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/locals), Full reference for the `locals` block syntax and evaluation semantics.
-- [Variable Block Reference (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/block/variable), Official reference for defaults and variable declaration limits.
-- [Functions: merge (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/merge), Reference for the `merge` function, essential for tag management with locals.
-- [Functions: cidrsubnet (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/cidrsubnet), Reference for computing IP subnet ranges from a base CIDR, commonly used with locals.
+For official reference, use Terraform's docs for [local values](https://developer.hashicorp.com/terraform/language/values/locals), [references to values](https://developer.hashicorp.com/terraform/language/expressions/references), and [functions](https://developer.hashicorp.com/terraform/language/functions).

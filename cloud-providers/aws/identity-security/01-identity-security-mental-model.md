@@ -1,7 +1,7 @@
 ---
 title: "What Is AWS IAM"
 description: "Understand the AWS access model: root, users, groups, roles, policies, least privilege, MFA, and temporary credentials."
-overview: "IAM is the system AWS uses to answer who is calling, what they can do, and how long that access should last. This article builds the beginner mental model before the module moves into daily access, policy design, and account guardrails."
+overview: "IAM is the system AWS uses to answer who is calling, what they can do, and how long that access should last. This article builds the beginner access map before the module moves into daily access, policy design, and account guardrails."
 tags: ["iam", "security", "authorization", "aws"]
 order: 1
 id: article-cloud-providers-aws-identity-security-identity-security-mental-model
@@ -108,7 +108,7 @@ Those keys never expire. An access key created today works forever unless someon
 
 It also creates offboarding nightmares. When someone leaves, you have to find and rotate every key they touched. Did they copy a key into a Docker image? Into a Lambda environment variable? Into a Slack message six months ago? AWS can deactivate the IAM user's active keys, but it cannot automatically erase every place those secret values were pasted.
 
-CloudTrail, AWS's activity record for API calls, can show that a key made a request. But if the same long-lived key was used from a laptop, a script, and a deployment job, the evidence becomes harder to read. Was the request the person, the script, a copied key, or an attacker?
+CloudTrail, AWS's activity record for API calls, can show that a key made a request. But if the same long-lived key was used from a laptop, a script, and a deployment job, the evidence is harder to read. Was the request the person, the script, a copied key, or an attacker?
 
 Modern AWS access tries to avoid credentials that work forever. If a temporary credential leaks, the exposure is limited to the time left in that session, often minutes or hours.
 
@@ -208,7 +208,7 @@ graph LR
 
 The engineer authenticates once against the identity provider. From there, Identity Center handles which AWS accounts the engineer can access, which permission sets they can use, and how long each session lasts.
 
-This changes every problem from the IAM user model. Onboarding becomes adding the person to the right group and account assignment. Offboarding becomes disabling or deleting the person in the identity source, and they cannot start new AWS sessions. Credential leaks shrink because there are no long-lived AWS access keys for normal human work. Audit is cleaner because CloudTrail records which role session was used and which human identity started it.
+This changes every problem from the IAM user model. Onboarding means adding the person to the right group and account assignment. Offboarding means disabling or deleting the person in the identity source, and they cannot start new AWS sessions. Credential leaks shrink because there are no long-lived AWS access keys for normal human work. Audit is cleaner because CloudTrail records which role session was used and which human identity started it.
 
 For the CLI, engineers run `aws sso login`, authenticate in their browser, and the AWS CLI receives temporary credentials through the configured profile. No access keys need to sit in `~/.aws/credentials`.
 
@@ -427,7 +427,7 @@ The diagram connects the pieces in the order we introduced them.
 
 **IAM roles** handle service-to-service access and delegated sessions. Lambda, EC2, ECS, deployment workflows, and cross-account access all use temporary credentials that expire automatically.
 
-**IAM Identity Center** handles normal human access. Engineers sign in through the workforce directory, choose assigned accounts and permission sets, and receive temporary role sessions. Offboarding becomes a directory change instead of a credential hunt.
+**IAM Identity Center** handles normal human access. Engineers sign in through the workforce directory, choose assigned accounts and permission sets, and receive temporary role sessions. Offboarding is a directory change instead of a credential hunt.
 
 **Policies** express what each identity can do. AWS evaluates one request at a time: principal, action, resource, and context. Explicit deny wins. Missing allow fails by default.
 

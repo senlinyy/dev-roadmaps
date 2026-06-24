@@ -64,7 +64,7 @@ Here is a practical access map:
 
 The important pattern is **one job, one access path, one audit trail**. The deployment job receives deployment access. The runtime receives runtime access. The incident responder receives read-only investigation access. If someone needs stronger access, the request should name the incident, the person, the expected action, and the expiry.
 
-![Production Access Map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/production-access-map.png)
+![Production access map showing separate plan, deploy, runtime, read-only incident, security audit, and emergency recovery roles with evidence trails](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/production-access-map.png)
 
 *The map separates the major production access paths so plan, deploy, runtime, read-only, and emergency sessions do not blur into one broad role.*
 
@@ -177,7 +177,7 @@ For GitHub Actions deploying to AWS, the trust policy can require the expected r
 
 The condition is the important part. It accepts GitHub's OIDC issuer only when the token represents the expected repository and production environment. If the production environment has required reviewers, branch protections, and restricted deployment access, the repository controls and the cloud trust policy reinforce each other.
 
-![OIDC Trust Chain](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/oidc-trust-chain.png)
+![OIDC trust chain showing a CI workflow token matched against repository, environment, audience, and branch claims before receiving temporary cloud credentials](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/oidc-trust-chain.png)
 
 *The trust chain shows how a workflow token turns into a temporary deployment role only after the cloud provider checks repository, environment, and audience claims.*
 
@@ -359,6 +359,41 @@ The review record should be specific enough to prove what happened later:
 | Ticket | `SEC-8124` |
 | Next review | `2026-12-31` |
 
+For an AWS review, the platform security team can collect a first evidence bundle from the CLI before the meeting. The bundle should show the role definition, attached policies, recent role assumptions, and analyzer findings that mention the role. The reviewer then decides what to keep or remove.
+
+```bash
+REVIEW_ID="NORTHSTAR-PROD-IAM-Q3-2026"
+ROLE_NAME="northstar-prod-terraform-deploy"
+ROLE_ARN="arn:aws:iam::111122223333:role/northstar-prod-terraform-deploy"
+ANALYZER_ARN="arn:aws:access-analyzer:us-east-1:111122223333:analyzer/northstar-prod"
+START="2026-07-01T00:00:00Z"
+END="2026-09-30T23:59:59Z"
+
+mkdir -p "evidence/$REVIEW_ID/$ROLE_NAME"
+
+aws iam get-role \
+  --role-name "$ROLE_NAME" \
+  > "evidence/$REVIEW_ID/$ROLE_NAME/role.json"
+
+aws iam list-attached-role-policies \
+  --role-name "$ROLE_NAME" \
+  > "evidence/$REVIEW_ID/$ROLE_NAME/attached-policies.json"
+
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=ResourceName,AttributeValue="$ROLE_NAME" \
+  --start-time "$START" \
+  --end-time "$END" \
+  --output json \
+  > "evidence/$REVIEW_ID/$ROLE_NAME/cloudtrail-role-events.json"
+
+aws accessanalyzer list-findings \
+  --analyzer-arn "$ANALYZER_ARN" \
+  --filter "{\"resource\":{\"eq\":[\"$ROLE_ARN\"]}}" \
+  > "evidence/$REVIEW_ID/$ROLE_NAME/access-analyzer-findings.json"
+```
+
+This gives the reviewer the raw record before they discuss the decision. The same pattern works in Azure and Google Cloud: export the role assignment or IAM policy, export recent audit activity, list policy findings, and write the keep, reduce, or remove decision beside the evidence.
+
 Audit logs are the main evidence source. In AWS, CloudTrail records IAM and STS calls, including role assumptions. Azure Activity Logs and Microsoft Entra audit logs show role assignments, sign-ins, and many management operations. Google Cloud Audit Logs record admin activity and data access when enabled. These logs should flow to a security-controlled place where application teams and attackers cannot delete their own trail.
 
 For CI/CD, the session name should carry a run ID. For emergency work, the session name should carry an incident ID. That tiny naming habit makes later review much easier because the audit event can connect to a pull request, workflow run, or incident ticket.
@@ -380,7 +415,7 @@ A quarterly access review keeps the design from aging badly. The team checks peo
 
 That is the Cloud and Infrastructure Security module as a complete loop. Infrastructure code defines the desired change. Policy as Code checks the rules before apply. Drift and perimeter security watch the live account after deployment. IAM controls the callers behind every change and gives the team the evidence to prove the access was approved, scoped, temporary where needed, and reviewed over time.
 
-![Cloud IAM Summary](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
+![Cloud IAM summary showing federated human access, workload identity, CI OIDC, least-privilege deployment roles, break-glass access, and access review evidence](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
 
 *The summary ties the IAM practices together: federated humans, workload roles, OIDC, limited deployment access, break-glass controls, and recurring evidence review.*
 

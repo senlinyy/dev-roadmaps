@@ -30,6 +30,8 @@ aliases:
 
 Blob Storage is Azure's object storage service for **unstructured data**, which usually means text or binary bytes with no table schema. Receipt PDFs, profile photos, support attachments, CSV exports, backup files, media uploads, and archived logs all fit this shape. The application reads or writes the file as one named object through an HTTP API.
 
+If you have used Amazon S3, Blob Storage fills the same object-storage job in Azure. The Azure detail to notice is that the **storage account** is an operational boundary above containers, so endpoint, region, redundancy, networking, encryption, and billing decisions live on the account while blob organization lives inside containers.
+
 Let's use one production example through the whole article. The `devpolaris-orders-api` creates a receipt PDF after checkout. The order record belongs in Azure SQL Database because it has customer IDs, payment state, line items, constraints, and queries. The PDF bytes belong in Blob Storage because they are a file-like payload. The database stores the order facts and the blob name, while Blob Storage stores the PDF itself.
 
 This split matters when the app runs on App Service, Container Apps, Functions, AKS, or virtual machines. Compute can restart, scale out, recycle, deploy a new image, or move to a different host. A receipt saved only on the local filesystem of one instance can disappear from the user path or stay hidden from the next instance. Blob Storage gives the receipt a durable service address that every approved runtime can use.
@@ -42,6 +44,8 @@ Blob Storage has three main coordinates:
 | **Container** | A named group of blobs inside the account | `receipts` |
 | **Blob** | The object itself, including bytes, properties, metadata, and a name inside the container | `2026/05/order-417.pdf` |
 
+AWS readers can think about a storage account and container together as covering much of the work an S3 bucket often carries. Azure splits the top-level account boundary from the container namespace, and the object itself is the blob.
+
 That structure gives us the article path. First we choose the account boundary, then containers and names, then upload behavior, then access, then cost and recovery. The same receipt example will keep showing why each layer exists.
 
 ![Azure Blob Storage object path from order database to storage account, container, and blob URL](/content-assets/articles/article-cloud-providers-azure-storage-databases-storage-accounts-blob-storage/blob-object-path.png)
@@ -51,9 +55,9 @@ That structure gives us the article path. First we choose the account boundary, 
 ## Storage Accounts
 <!-- section-summary: The storage account is the real operational boundary for endpoint, region, redundancy, network access, encryption, and billing. -->
 
-A **storage account** is the Azure resource that contains Blob Storage data and exposes the storage namespace. The account name becomes part of the service endpoint. If the account is named `stordersreceiptsprod`, the Blob endpoint is usually `https://stordersreceiptsprod.blob.core.windows.net`.
+A **storage account** is the Azure resource that contains Blob Storage data and exposes the storage namespace. The account name is part of the service endpoint. If the account is named `stordersreceiptsprod`, the Blob endpoint is usually `https://stordersreceiptsprod.blob.core.windows.net`.
 
-The account name has production consequences because it must be unique across Azure, can contain only lowercase letters and numbers, and is between 3 and 24 characters long. That endpoint becomes a stable address in application configuration, logs, runbooks, private DNS, and monitoring. Choose names that identify the workload and environment without leaking sensitive business details.
+The account name has production consequences because it must be unique across Azure, can contain only lowercase letters and numbers, and is between 3 and 24 characters long. That endpoint is a stable address in application configuration, logs, runbooks, private DNS, and monitoring. Choose names that identify the workload and environment without leaking sensitive business details.
 
 For our receipt system, one production account might hold private customer receipt PDFs. A separate development account should hold test receipts. A separate public assets account might hold marketing images. Those boundaries give the team cleaner access reviews because a developer script pointed at development has no route to production receipts in the same account.
 
@@ -69,7 +73,7 @@ Many important controls live at the storage account level:
 | **Encryption settings** | Controls platform-managed or customer-managed encryption choices |
 | **Billing boundary** | Groups capacity, transactions, redundancy, data transfer, and tier costs |
 
-So the account is more than a folder. It is the place where storage becomes a production resource with security, cost, network, and recovery settings.
+So the account is more than a folder. It is the place where storage works as a production resource with security, cost, network, and recovery settings.
 
 ## Containers and Blob Names
 <!-- section-summary: Containers group related objects, while blob names provide the exact lookup path inside a flat object namespace. -->
@@ -143,7 +147,7 @@ For our receipt system, the production API can run with a managed identity. A **
 
 Then the storage team grants a narrow Blob data role. For example, the API may need permission to create and read receipts in the `receipts` container. A support export job may need read access to `exports`. A cleanup automation may need delete access only where lifecycle rules leave a gap. The role assignment should match the job instead of the convenience of the engineer writing the first script.
 
-Account keys deserve special care. A storage account key can authorize broad access to the account. If someone pastes that key into frontend code, a ticket, a notebook, a CI variable with wide visibility, or a laptop script, the blast radius becomes much larger than one receipt. Azure lets teams prevent Shared Key authorization on a storage account, which pushes callers toward Entra-based access and user delegation SAS patterns.
+Account keys deserve special care. A storage account key can authorize broad access to the account. If someone pastes that key into frontend code, a ticket, a notebook, a CI variable with wide visibility, or a laptop script, the blast radius grows far beyond one receipt. Azure lets teams prevent Shared Key authorization on a storage account, which pushes callers toward Entra-based access and user delegation SAS patterns.
 
 Here is the practical habit. Application code should use managed identity where it can. Human operators should use their own Entra sign-in and data roles. Account keys should stay out of normal app paths, especially browser code and shared scripts.
 
@@ -152,7 +156,9 @@ Here is the practical habit. Application code should use managed identity where 
 
 Sometimes a caller needs direct storage access with no Azure credentials of its own. A browser needs to download one receipt. A partner process needs to upload one file. A customer support tool needs a temporary link to one export. This is where a **Shared Access Signature**, usually called a **SAS**, appears.
 
-A SAS is a signed token added to a storage URL. It says which resource the caller may use, which permissions are allowed, and how long the token works. The token travels with the URL, so anyone who gets the URL can use it until it expires or becomes invalid through the design around it. That is why SAS links should use HTTPS, short expiration windows, narrow permissions, and careful logging behavior.
+A SAS is a signed token added to a storage URL. It says which resource the caller may use, which permissions are allowed, and how long the token works. The token travels with the URL, so anyone who gets the URL can use it until it expires or the surrounding design invalidates it. That is why SAS links should use HTTPS, short expiration windows, narrow permissions, and careful logging behavior.
+
+This is the same access-handoff job that S3 presigned URLs often solve. A SAS should still be treated as a temporary bearer credential, so narrow permissions, short expiry, HTTPS, and careful logging matter.
 
 There are three common SAS types:
 
@@ -197,6 +203,8 @@ Network reachability is the other half. A storage account has service endpoints 
 <!-- section-summary: Access tiers control storage cost and retrieval behavior, while lifecycle rules automate tier movement and deletion as objects age. -->
 
 Files change value over time. A receipt PDF may be downloaded often during the first week after purchase. After the refund window closes, it may be accessed only during support cases or audits. Temporary imports may have no value after processing finishes. Blob Storage uses **access tiers** and **lifecycle management** to control this cost pattern.
+
+This is the same storage-class and lifecycle-policy conversation AWS teams have with S3. Azure uses Hot, Cool, Cold, and Archive tiers, and lifecycle rules automate movement or deletion as the object ages.
 
 The common access tiers are:
 
@@ -258,6 +266,8 @@ Now we can talk about the painful production moment: the app wrote the wrong byt
 **Blob versioning** keeps previous versions when a blob changes. If a PDF generator bug overwrites `2026/05/order-417.pdf` with a blank file, versioning can preserve the older good version. The current name still points at the current version, while previous versions remain available for recovery until lifecycle or retention policy removes them.
 
 **Blob soft delete** keeps deleted blobs recoverable for a configured retention period. **Container soft delete** gives a recovery path when someone deletes an entire container. These settings help with common logical mistakes, especially cleanup jobs and human errors.
+
+AWS readers can anchor this to S3 Versioning and Object Lock-style recovery discussions. The feature names and retention controls differ, but the design question is the same: which older object state needs to survive an overwrite, delete, or cleanup mistake?
 
 For important receipt files, the team might choose:
 

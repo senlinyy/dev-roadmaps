@@ -394,7 +394,7 @@ This is the practical shape to remember in production. A Service issue has visib
 
 ![Kubernetes Service debugging path with caller, Service, DNS, EndpointSlice, readiness, and app response evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-debugging-summary.png)
 
-*A Service incident becomes easier to debug when the team collects one small proof at each layer instead of changing several objects at once.*
+*A Service incident needs one small proof at each layer instead of several object changes at once.*
 
 Once Services make one internal backend reachable, the next question is how different Service types expose traffic in different ways.
 

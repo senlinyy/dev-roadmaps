@@ -58,9 +58,9 @@ Here is a realistic old release path for `booking-api`. An engineer connects to 
 
 The first failure mode is **repeatability**. A repeatable process produces the same result each time because the instructions and inputs stay controlled. Manual work breaks repeatability because one missed command can leave one server running the new code with old dependencies while another server runs old code with new dependencies.
 
-The second failure mode is **environment drift**. Drift means an environment slowly becomes different from what the team believes exists. One engineer adds a hotfix file directly on the server. Another changes a process limit during an outage. A third rotates a secret on one host and forgets the second host. The next release now behaves differently on machines that the dashboard describes as identical.
+The second failure mode is **environment drift**. Drift means an environment slowly drifts away from what the team believes exists. One engineer adds a hotfix file directly on the server. Another changes a process limit during an outage. A third rotates a secret on one host and forgets the second host. The next release now behaves differently on machines that the dashboard describes as identical.
 
-The third failure mode is weak recovery. A manual release often has a vague rollback plan like "put the old branch back" or "restart the previous process." During an incident, the team then has to remember which commit ran before, which dependency versions came with it, and which config files changed during the release. Recovery becomes a second manual release under stress.
+The third failure mode is weak recovery. A manual release often has a vague rollback plan like "put the old branch back" or "restart the previous process." During an incident, the team then has to remember which commit ran before, which dependency versions came with it, and which config files changed during the release. Recovery turns into a second manual release under stress.
 
 Continuous delivery removes those hand-built release steps from the production path. The pipeline performs the same deployment action every time, records which artifact moved, records who approved it, and gives the team one place to see the result. That only works if the artifact itself stays stable across every environment.
 
@@ -178,7 +178,7 @@ jobs:
 
 The `needs: deploy-staging` line creates the dependency. Production waits for staging to finish successfully. The `environment: production` line connects the job to the platform's production rules, so required reviewers can inspect the release before the job receives production secrets and starts the deployment.
 
-This is where continuous delivery becomes more than a YAML file. The approval screen should show useful evidence: image digest, commit SHA, pull request links, test results, staging smoke-test result, migration summary, and release notes. The approver should review a small release packet rather than guess from a job name.
+This is where continuous delivery is more than a YAML file. The approval screen should show useful evidence: image digest, commit SHA, pull request links, test results, staging smoke-test result, migration summary, and release notes. The approver should review a small release packet rather than guess from a job name.
 
 Promotion controls reduce the blast radius of a bad change. **Blast radius** means the amount of damage a failure can cause. A broken deployment in staging affects testers and internal workflows. A broken deployment in production affects customers, revenue, and trust. The pipeline uses environments, checks, and approvals to catch problems before the blast radius grows.
 
@@ -224,7 +224,7 @@ spec:
 
 The `maxUnavailable: 0` setting tells Kubernetes to keep the current capacity available during the update. The `maxSurge: 1` setting allows one extra pod above the desired count while the new version proves itself. These values cost a little extra capacity during rollout, but they protect customers from a release that removes healthy pods too early.
 
-Health checks turn deployment from "the command succeeded" into "the new version can serve traffic." That distinction becomes very clear during a failed rollout.
+Health checks turn deployment from "the command succeeded" into "the new version can serve traffic." That distinction is very clear during a failed rollout.
 
 ## A Rollout That Fails Safely
 <!-- section-summary: A safe rollout blocks broken new pods before they take customer traffic. -->
@@ -267,7 +267,7 @@ Error: required environment variable PAYMENT_PROVIDER_URL is missing
 
 The code expected `PAYMENT_PROVIDER_URL`, but the production environment settings used the old key name `PAYMENTS_URL`. The image worked in staging because staging had both keys during a previous migration. Production only had the old key, so the application crashed at startup.
 
-This failure teaches an important CD lesson. The artifact promotion path was correct, and the health checks protected traffic. The weak part was configuration compatibility between environments. The team can fix the production environment value, rerun the same image digest, and add a preflight config check to the staging smoke test so the same mistake becomes visible earlier next time.
+This failure teaches an important CD lesson. The artifact promotion path was correct, and the health checks protected traffic. The weak part was configuration compatibility between environments. The team can fix the production environment value, rerun the same image digest, and add a preflight config check to the staging smoke test so the same mistake shows up earlier next time.
 
 Some failures pass startup checks and still hurt users. A discount calculation bug might return the wrong price while every pod stays healthy. That is where recovery design matters.
 

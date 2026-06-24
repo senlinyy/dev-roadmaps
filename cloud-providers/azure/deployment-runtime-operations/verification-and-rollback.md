@@ -42,7 +42,7 @@ This article has four jobs. First, we define the **watch window** so the team kn
 ## The Release Continues When Traffic Moves
 <!-- section-summary: Moving traffic starts the verification period where the team proves the candidate behaves well for real users. -->
 
-Traffic movement is the moment the release becomes visible to users. In App Service, traffic might move through a slot swap or slot routing. In Container Apps, traffic might move through revision weights. In AKS, traffic might move through a rolling update, service selector, ingress route, or progressive delivery controller.
+Traffic movement is the moment the release is visible to users. In App Service, traffic might move through a slot swap or slot routing. In Container Apps, traffic might move through revision weights. In AKS, traffic might move through a rolling update, service selector, ingress route, or progressive delivery controller.
 
 The team still has active work after traffic moves because staging only approximates production conditions. Production has real customer data, real concurrency, real dependency limits, real background jobs, real caching, and real user behavior. A candidate can pass `/healthz`, pass a staging smoke test, and then fail for a production-only path because the storage account permission, database lock, request size, or feature flag value only appears under real traffic.
 
@@ -163,6 +163,8 @@ Azure Monitor and Application Insights are the Azure surfaces in this article, b
 
 For the orders API, OpenTelemetry should add stable fields that make release queries possible. The exact backend can be Application Insights, Grafana, Datadog, New Relic, Honeycomb, or another tool chosen by the company. The important release fields are provider-neutral: service name, environment, version, revision, route, dependency target, and trace id. Azure Monitor's OpenTelemetry distribution can export those traces, metrics, and logs into Application Insights, where the Kusto queries in this article can group by revision.
 
+AWS teams can use the same telemetry contract with CloudWatch, X-Ray, or another backend. The release query needs stable fields such as service, version, route, dependency target, and trace ID no matter which provider stores the telemetry.
+
 ```yaml
 telemetry_contract:
   standard: OpenTelemetry
@@ -280,7 +282,7 @@ dependencies
 | order by timestamp asc
 ```
 
-This dependency query helps the team see whether failures come from Azure SQL, Storage, payment provider calls, or another downstream service. If `orders-api--v31` has rising Storage failures while `v30` stays healthy, the receipt retry change becomes a strong suspect. If both revisions show Azure SQL failures, the release may have exposed an existing dependency problem rather than introduced a candidate-only bug.
+This dependency query helps the team see whether failures come from Azure SQL, Storage, payment provider calls, or another downstream service. If `orders-api--v31` has rising Storage failures while `v30` stays healthy, the receipt retry change is a strong suspect. If both revisions show Azure SQL failures, the release may have exposed an existing dependency problem rather than introduced a candidate-only bug.
 
 Exceptions add another angle. They help the team see whether failures share one error type, one message, or one candidate revision:
 
@@ -315,6 +317,8 @@ container_apps_rollback:
 ```
 
 For App Service, rollback often means swapping slots back. If the team swapped the staging slot into production and users start seeing failures, a swap back can restore the previous slot content and settings according to the slot configuration. The team still needs to check sticky settings because a slot swap may leave some values attached to the slot by design.
+
+AWS rollback often uses the same pattern through different controls: a CodeDeploy rollback, a Lambda alias shifted back to the previous version, an ECS service deployment rollback, or an ALB weighted route moved away from the candidate. The Azure command changes, but the release decision is still about returning new traffic to a known-good path.
 
 For configuration, rollback means restoring the previous setting or secret reference. If the retry feature flag causes failures, setting `CHECKOUT_RECEIPT_RETRY_ENABLED` back to `"false"` may stop the bad path. If a Key Vault reference points to a bad secret version, restoring the previous versioned URI may recover the app. The release record should show the previous values so nobody has to discover them during pressure.
 
@@ -535,7 +539,7 @@ This record is useful during the incident and after it. During the incident, it 
 
 Release records also feed better automation. If every rollback needs the same traffic command, the team can automate it. If every watch window needs the same Kusto queries, the team can save them in a workbook. If every release forgets to record previous config values, the pipeline can capture them before deployment.
 
-Now let us connect the final story from traffic movement to stable production. The release becomes easier to reason about when each step leaves evidence behind.
+Now let us connect the final story from traffic movement to stable production. Evidence behind each step keeps the release story clear.
 
 ## Putting It All Together
 <!-- section-summary: Verification and runtime operations turn traffic movement into an evidence-based release decision. -->

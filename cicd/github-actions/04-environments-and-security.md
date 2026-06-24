@@ -60,7 +60,7 @@ Secrets can live at different scopes. The scope controls which workflows can eve
 | Environment secret | Available only to jobs targeting a named environment | Production deployment credentials |
 | Organization secret | Shared with selected repositories in an organization | A scanner token used by many services |
 
-For `checkout-api`, a repository secret might be enough for a staging-only demo token. A production database password or deploy token belongs behind an environment because the environment can add approval and branch rules before the secret becomes available.
+For `checkout-api`, a repository secret might be enough for a staging-only demo token. A production database password or deploy token belongs behind an environment because the environment can add approval and branch rules before the secret is available.
 
 Secrets are one part of the answer. The deployment target itself needs a name and rules, and that is what environments provide.
 

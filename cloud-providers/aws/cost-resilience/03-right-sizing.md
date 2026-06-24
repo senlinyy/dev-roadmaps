@@ -44,9 +44,7 @@ At its core, right-sizing is evidence-based resource fit. It compares provisione
 
 To right-size successfully, you must replace high-level assumptions with a specific, evidence-backed question:
 
-```text
-What resource shape does this workload actually require, and what telemetry evidence proves it?
-```
+> What resource shape does this workload actually require, and what telemetry evidence proves it?
 
 This work requires combining both cost data and deep runtime metrics. A low average utilization graph is not proof of waste. Mathematical averages smooth out and hide the critical latency spikes that occur during software deployments, flash sales, and nightly batch windows. You must analyze the tail performance percentiles (p95 and p99) across full operational cycles before adjusting resource limits.
 
@@ -70,6 +68,35 @@ Fargate Compute Optimization Matrix:
 | **CPU spikes during deploys** | The rolling update requires significant capacity to boot fresh tasks. | Keep baseline task desired counts high; verify CPU grace periods. |
 
 Never change task configurations during high-traffic windows. Every task size adjustment requires registering a new task definition revision, rolling it out gradually, and verifying that tail latency and container restart metrics remain healthy under load.
+
+A practical Fargate review starts by collecting the service shape and the pressure signals in the same change note:
+
+```bash
+aws ecs describe-services \
+  --cluster orders-prod \
+  --services orders-api \
+  --query 'services[].{Desired:desiredCount,Running:runningCount,TaskDefinition:taskDefinition,Deployments:deployments[].{Status:status,Rollout:rolloutState}}'
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ECS \
+  --metric-name CPUUtilization \
+  --dimensions Name=ClusterName,Value=orders-prod Name=ServiceName,Value=orders-api \
+  --start-time 2026-06-01T00:00:00Z \
+  --end-time 2026-06-08T00:00:00Z \
+  --period 300 \
+  --extended-statistics p95
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/ApplicationELB \
+  --metric-name TargetResponseTime \
+  --dimensions Name=LoadBalancer,Value=app/orders-prod/abc123 \
+  --start-time 2026-06-01T00:00:00Z \
+  --end-time 2026-06-08T00:00:00Z \
+  --period 300 \
+  --extended-statistics p95
+```
+
+The service command shows which task definition and deployment state the team is changing. The CloudWatch commands show whether CPU and customer-facing latency have room to move. If the API already has p95 latency near the target, reducing CPU creates a latency risk instead of a clean saving.
 
 ## Tuning Relational Databases Beyond CPU Graphs
 
@@ -98,6 +125,55 @@ To configure lifecycle rules safely, you must align your S3 key prefixes with th
 * `exports/tmp/`: Temporary processing chunks created during multipart uploads. Set an automated lifecycle rule to delete incomplete multipart uploads after 7 days, eliminating hidden storage fees.
 
 The gotcha is bucket-level rules. If you apply a single, overriding lifecycle rule to an entire bucket without matching key prefixes, you can accidentally delete critical compliance files or customer documents, creating legal and operational liability. Structure S3 keys by explicit prefixes first.
+
+The lifecycle configuration should be reviewed like application code. This example keeps temporary export chunks short-lived while leaving customer receipt prefixes untouched:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "ExpireTemporaryExports",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "exports/tmp/"
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 7
+      },
+      "Expiration": {
+        "Days": 14
+      }
+    },
+    {
+      "ID": "ArchiveMonthlyExports",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "exports/monthly/"
+      },
+      "Transitions": [
+        {
+          "Days": 30,
+          "StorageClass": "GLACIER_IR"
+        }
+      ],
+      "Expiration": {
+        "Days": 365
+      }
+    }
+  ]
+}
+```
+
+```bash
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket orders-prod-exports \
+  --lifecycle-configuration file://orders-export-lifecycle.json
+
+aws s3api get-bucket-lifecycle-configuration \
+  --bucket orders-prod-exports
+```
+
+The review signal is prefix coverage. Temporary files should match `exports/tmp/`, monthly reports should match `exports/monthly/`, and receipts should stay outside both rules. That prefix review prevents a storage saving from turning into deleted customer evidence.
 
 ## Eliminating Log Ingestion Noise
 
@@ -152,22 +228,32 @@ Right-sizing changes must be rolled out with the exact same discipline as a soft
 
 A safe right-sizing adjustment is a reversible infrastructure change. It has a bounded blast radius, target telemetry, versioned implementation, rollback setting, and post-change observation window.
 
-```text
-Step 1: Isolate the blast radius.
-  Select one specific layer to change (e.g. Fargate task size), keeping databases and logs stable.
+1. Isolate the blast radius. Select one specific layer to change, such as Fargate task size, while databases and logs stay stable.
+2. Define the target telemetry bounds. A useful success target might say Fargate CPU can rise to 40%, while p95 latency stays below 200 ms and 5xx errors stay at zero.
+3. Deploy through versioned infrastructure code. Register a new task definition revision and let the service controller roll it out gradually.
+4. Keep the rollback target ready. Record the previous task definition revision or capacity setting before the change starts.
+5. Review after a full operational cycle. Watch peak hours, nightly batch windows, and deployment events before declaring the saving safe.
 
-Step 2: Define the target telemetry bounds.
-  Success criteria: Fargate CPU rises to 40%, but p95 latency remains below 200ms and 5xx errors remain at zero.
+For ECS, the rollback path is concrete. The team records the stable task definition revision, updates to the new revision during the planned window, and keeps the old revision ready:
 
-Step 3: Deploy via versioned infrastructure code.
-  Register a new task definition revision, updating the service controller gradually.
+```bash
+aws ecs describe-services \
+  --cluster orders-prod \
+  --services orders-api \
+  --query 'services[].taskDefinition'
 
-Step 4: Keep the rollback target ready.
-  Maintain the stable, previous task definition revision or capacity settings to enable rapid recovery.
+aws ecs update-service \
+  --cluster orders-prod \
+  --service orders-api \
+  --task-definition arn:aws:ecs:eu-west-2:111122223333:task-definition/orders-api:42
 
-Step 5: Review after a full operational cycle.
-  Monitor performance through peak hours, nightly batch windows, and deployment events before declaring success.
+aws ecs update-service \
+  --cluster orders-prod \
+  --service orders-api \
+  --task-definition arn:aws:ecs:eu-west-2:111122223333:task-definition/orders-api:41
 ```
+
+The second command represents the optimized revision. The third command is the rollback to the previous known-good revision. The change is not ready for production review until both commands are known, the monitoring window is agreed, and the on-call engineer knows which metrics decide rollback.
 
 By enforcing this operational sequence, you ensure that you can safely optimize your cloud environments without risking customer-facing regressions.
 

@@ -51,6 +51,8 @@ This structure matters because Microsoft Entra ID can feel like a pile of portal
 
 **Microsoft Entra ID** is Microsoft's cloud identity and access management service. In plain English, it is the trusted identity system that Azure, Microsoft 365, Dynamics, and many custom apps use when they need to know who or what is trying to sign in or call an API. Microsoft describes it as the foundational Microsoft Entra product for authentication, policy enforcement, and protection for users, devices, apps, and resources.
 
+If you come from AWS, Microsoft Entra ID spans several familiar identity areas. It covers workforce sign-in patterns you may associate with IAM Identity Center, workload and application identities you may associate with IAM roles and trust policies, and app or customer identity patterns you may associate with Cognito or external identity systems.
+
 The older name was **Azure Active Directory**, often shortened to Azure AD. Microsoft started the rename to Microsoft Entra ID in 2023, and the old name still appears in many older blog posts, screenshots, package names, portal paths, and scripts. The rename kept existing sign-in URLs, APIs, and tools working, so real production teams still search for both names while they learn and troubleshoot.
 
 The first useful split is **identity** and **permission**. Identity answers who or what the caller is. Permission answers what that known caller can do. Microsoft Entra ID handles identity records, sign-in, policy checks, and token issuance; Azure RBAC handles many Azure resource permissions; Microsoft Entra roles handle directory administration; and application code may add its own app roles or rules.
@@ -245,7 +247,7 @@ The basic shape of a policy sounds like an if-and-then decision, and the portal 
 | Sign-in risk appears high | Require stronger verification or block access |
 | Emergency access account signs in | Allow through a planned exception and alert the security team |
 
-**MFA**, or multifactor authentication, means the user supplies another proof beyond the password. That proof might be a passkey, hardware security key, authenticator prompt, or one-time code. For a production support app, MFA helps reduce the chance that a stolen password becomes a full working dashboard session.
+**MFA**, or multifactor authentication, means the user supplies another proof beyond the password. That proof might be a passkey, hardware security key, authenticator prompt, or one-time code. For a production support app, MFA helps reduce the chance that a stolen password opens a full working dashboard session.
 
 Conditional Access also needs operational discipline. Teams usually test new policies in report-only mode, exclude carefully controlled emergency access accounts, and inspect sign-in logs after a confusing prompt or block. The policy gives the organization control, and the logs give the team evidence about which signals and controls affected a sign-in.
 

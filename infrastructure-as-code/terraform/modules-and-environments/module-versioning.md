@@ -24,11 +24,11 @@ id: article-iac-terraform-modules-versioning
 ## Why Module Versioning Matters
 <!-- section-summary: Module versioning keeps reusable infrastructure code on a schedule the caller can review and choose. -->
 
-**Module versioning** is dependency control for Terraform modules. When a root configuration calls reusable module code from a Registry or Git repository, that module becomes part of the production change path. A version pin tells Terraform which release or reference the team has reviewed.
+**Module versioning** is dependency control for Terraform modules. When a root configuration calls reusable module code from a Registry or Git repository, that module is part of the production change path. A version pin tells Terraform which release or reference the team has reviewed.
 
 Think about the Orders production VPC. The team calls a shared network module that creates subnets, route tables, endpoints, and flow logs. Today the module creates exactly the network shape the team expects. Three months later, the module maintainers publish a new release that changes a default route table behavior and adds a new endpoint by default.
 
-If the production root configuration always downloads the newest module release, a normal `terraform init` can bring in that new code before the team has reviewed it. The next plan may show route and endpoint changes from the dependency rather than the root module diff. Review becomes harder because the real infrastructure change lives outside the pull request.
+If the production root configuration always downloads the newest module release, a normal `terraform init` can bring in that new code before the team has reviewed it. The next plan may show route and endpoint changes from the dependency rather than the root module diff. Review is harder because the real infrastructure change lives outside the pull request.
 
 Versioning fixes that workflow. The root configuration says which module release it accepts. The team upgrades deliberately, reads the changelog, runs a plan, and promotes the change through environments. Shared modules still improve over time, but production only moves when the service team chooses to move.
 
@@ -168,7 +168,7 @@ terraform apply tfplan
 
 The `-upgrade` flag tells Terraform to re-evaluate version constraints and install newer matching provider or module packages instead of reusing cached selections. The saved plan file gives the team one reviewed artifact for the apply. In CI, many teams split this into pull request plan evidence and a protected apply job after approval.
 
-If the plan shows an unexpected replacement or deletion, the team backs out the version change and investigates before applying. A module upgrade is easy to revert in Git when the pull request changes one dependency at a time. It becomes much harder when five module upgrades, a provider upgrade, and several root configuration changes land together.
+If the plan shows an unexpected replacement or deletion, the team backs out the version change and investigates before applying. A module upgrade is easy to revert in Git when the pull request changes one dependency at a time. The work is much harder when five module upgrades, a provider upgrade, and several root configuration changes land together.
 
 ## Pinning Modules to Git References
 <!-- section-summary: Git module sources use refs, and protected tags or commit hashes are safer pins than moving branches. -->

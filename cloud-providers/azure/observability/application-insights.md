@@ -35,6 +35,8 @@ Let's set up the whole picture before we zoom into queries. In the previous obse
 
 **Application Insights** is the application performance monitoring feature of **Azure Monitor**. It collects telemetry from running application code, including incoming requests, outgoing dependency calls, exceptions, traces, metrics, availability checks, and usage signals. For a backend API, that means the team can follow one checkout request from the first HTTP route to the SQL call, storage write, exception, and custom log messages that happened along the way.
 
+If you have used AWS X-Ray, Application Insights covers a similar application-investigation need, and it also includes request, exception, metric, and portal performance views around the trace data. Treat it as Azure's application telemetry home for the running code.
+
 We will use one production story through the whole article. The `devpolaris-orders-api` service runs in Azure, sends telemetry to an Application Insights component called `appi-devpolaris-orders-prod`, and stores that telemetry in the Log Analytics workspace `law-devpolaris-prod`. A customer says checkout failed once at 09:42 UTC, and support gives the engineering team operation ID `checkout-5001`.
 
 Here is the structure we will build up:
@@ -50,7 +52,7 @@ Here is the structure we will build up:
 | **Trace** | App log or diagnostic message | `charge approved, writing order` |
 | **Operation ID** | The shared value that ties rows from one operation together | `checkout-5001` |
 
-That table is the map for the article. Application Insights becomes useful because it connects these pieces. A single failed checkout becomes a readable story instead of a pile of separate log lines.
+That table is the map for the article. Application Insights helps because it connects these pieces. A single failed checkout turns into a readable story instead of a pile of separate log lines.
 
 ## The Application Signal
 <!-- section-summary: Platform metrics show the outside of a running resource, while Application Insights records what the application did inside one operation. -->
@@ -215,6 +217,8 @@ The field beginners see first is usually `OperationId`. In our scenario, `checko
 
 This connects to the wider tracing world. **Distributed tracing** follows work across services. **W3C Trace Context** is the standard header format that lets services pass trace identity through HTTP calls. A **span** is one timed unit of work inside a trace, such as the incoming request span or the SQL dependency span. OpenTelemetry uses this language, and Application Insights maps the collected telemetry into Azure Monitor tables and portal views.
 
+This is where AWS and Azure teams can share a lot of vocabulary. OpenTelemetry trace IDs, spans, service names, and dependency targets can travel across providers even when the backend view is Application Insights, X-Ray, or another observability platform.
+
 A common production setup carries both platform correlation and business correlation. Application Insights might use `OperationId = checkout-5001`, while the app logs also carry `correlationId = corr-checkout-5001` and `orderId = ord-8147`. The operation ID connects telemetry rows. The business IDs help the team connect telemetry to support tickets, database records, customer communication, and audit trails.
 
 The safest habit is to keep these identifiers consistent and visible:
@@ -233,7 +237,7 @@ Correlation gives the team the thread. Now the team can write one query that ass
 ## Querying One Checkout Failure
 <!-- section-summary: A combined KQL query can show the request, dependencies, exceptions, and traces for one operation in chronological order. -->
 
-KQL becomes very practical once the team has the operation ID. The goal is simple: pull the important rows from the main Application Insights tables, shape them into similar columns, and sort them by time. That gives the incident channel one readable timeline.
+KQL is very practical once the team has the operation ID. The goal is simple: pull the important rows from the main Application Insights tables, shape them into similar columns, and sort them by time. That gives the incident channel one readable timeline.
 
 Here is a combined query for operation ID `checkout-5001`:
 
@@ -279,7 +283,7 @@ That timeline works well for one operation. During a wider incident, the team al
 
 **Application Map** is the Application Insights view that shows application components and their dependencies as a topology. A node might represent the Orders API, the checkout worker, or another application role. A line might represent an HTTP dependency, SQL call, queue call, or storage dependency discovered from telemetry.
 
-The map uses fields such as application role name and dependency calls to build the picture. This is why naming matters. If every service reports the same role name, the map becomes a blob of mixed telemetry. If `devpolaris-orders-api`, `devpolaris-checkout-worker`, and `devpolaris-receipt-worker` each report clear role names, the map can show which component talks to which dependency.
+The map uses fields such as application role name and dependency calls to build the picture. This is why naming matters. If every service reports the same role name, the map turns into a blob of mixed telemetry. If `devpolaris-orders-api`, `devpolaris-checkout-worker`, and `devpolaris-receipt-worker` each report clear role names, the map can show which component talks to which dependency.
 
 For the checkout incident, the map can show the Orders API connected to Azure SQL, Blob Storage, and the payment provider. If the SQL connector has a high failure rate or long average duration, the map makes the relationship visible. The operator can select the node or connector and jump into failures, performance, transaction details, or Logs for deeper KQL work.
 
@@ -357,7 +361,7 @@ useAzureMonitor({
 
 In production, teams pass the connection string through the hosting environment rather than source code. For Container Apps, App Service, Functions, AKS, or a VM, the deployment pipeline should set `APPLICATIONINSIGHTS_CONNECTION_STRING` per environment and keep the value out of the repository. The application startup should also set a clear service or role name so the emitted rows identify `devpolaris-orders-api` instead of a generic process name.
 
-Good setup also names the application role clearly. `devpolaris-orders-api` tells the map and queries what emitted the telemetry. A vague role name such as `web` becomes painful once a system has several APIs, workers, jobs, and background consumers. The role name should match how the team talks about the service during incidents.
+Good setup also names the application role clearly. `devpolaris-orders-api` tells the map and queries what emitted the telemetry. A vague role name such as `web` causes pain once a system has several APIs, workers, jobs, and background consumers. The role name should match how the team talks about the service during incidents.
 
 For the Orders API, the production telemetry contract might say:
 

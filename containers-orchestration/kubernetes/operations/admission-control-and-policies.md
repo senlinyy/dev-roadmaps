@@ -33,7 +33,7 @@ Use `devpolaris-orders-api` in the `orders` namespace as the running example. Th
 
 ![API server checkpoint showing authentication, authorization, mutating admission, validating admission, storing in etcd, and rejection with a reason](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/api-server-checkpoint.png)
 
-*The checkpoint visual shows admission in the exact place it matters: after the caller is known and allowed, but before the requested object becomes stored cluster state.*
+*The checkpoint visual shows admission in the exact place it matters: after the caller is known and allowed, but before the API server records the requested object.*
 
 This checkpoint is powerful because it acts before the workload runs. Cleaning up a privileged Pod after it starts is incident response. Rejecting that Pod during admission is prevention. Good admission policy gives teams a clear error message and a clear fix while the release is still in the delivery path.
 
@@ -175,6 +175,48 @@ For `devpolaris-orders-api`, a practical policy set might include these rules:
 | Require resource requests | Unpredictable scheduling and autoscaling | Service team |
 | Enforce restricted Pod settings | Privileged or weak container settings | Platform security |
 | Require owner and service labels | Missing alert routing and cost ownership | Platform operations |
+
+A small Kyverno policy can express the owner-label rule as Kubernetes YAML. This example starts in `Audit`, so Kyverno records violations and can emit warnings without blocking the orders team while they clean up existing manifests.
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-orders-owner-label
+spec:
+  background: true
+  emitWarning: true
+  rules:
+    - name: deployment-owner-label
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+              namespaces:
+                - orders
+      validate:
+        failureAction: Audit
+        message: "Deployments in orders must set metadata.labels['devpolaris.io/owner']."
+        pattern:
+          metadata:
+            labels:
+              devpolaris.io/owner: "?*"
+```
+
+After applying the policy, the platform team can look at the namespace report before changing the rule to `Enforce`. A report with failures gives the service team a concrete repair list instead of a surprise release block.
+
+```bash
+$ kubectl apply -f policies/require-orders-owner-label.yaml
+$ kubectl get policyreport -n orders
+```
+
+```bash
+NAME                                PASS   FAIL   WARN   ERROR   SKIP   AGE
+cpol-require-orders-owner-label     12     1      0      0       0      3m
+```
+
+When the failures are fixed, the rule can move to `failureAction: Enforce`. The same `missing-owner.yaml` dry-run from the next section should then fail with the Kyverno message, and that message should tell the developer exactly which label to add.
 
 Real policy programs usually start in audit or warn mode. Teams need to see which objects fail before deny mode blocks releases. That audit period turns policy from a surprise into a cleanup project with owners.
 

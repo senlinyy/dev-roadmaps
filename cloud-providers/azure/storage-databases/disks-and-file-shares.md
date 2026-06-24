@@ -32,6 +32,8 @@ Azure has several storage services because applications ask for data in differen
 
 That last group is the world of **Managed Disks** and **Azure Files**. A **Managed Disk** is Azure-managed block storage attached to a virtual machine. The VM operating system sees it as a disk, formats it, mounts it, and reads or writes blocks. **Azure Files** is a managed file share service. It gives clients a mounted folder through file sharing protocols such as SMB or NFS.
 
+For AWS readers, Managed Disks fill the same VM block-storage job as EBS volumes. Azure Files fills the shared file-system job, with EFS as a useful anchor for NFS-style Linux shares and FSx as a useful anchor for Windows-style SMB file shares.
+
 Let's keep one concrete production story through the article. The Orders team runs a newer `orders-api` that stores receipt PDFs in Blob Storage, order facts in Azure SQL Database, and idempotency records in Cosmos DB. They also still have a legacy invoice worker named `vm-devpolaris-orders-legacy-01`. That worker has a managed data disk named `disk-orders-legacy-data-01`, and during migration it still reads templates from an Azure Files share named `legacy-orders-share` in storage account `stdevpolarisordersprod`.
 
 This setup sounds messy because real migrations are messy. One part of the system is modern and service-oriented. Another part expects a VM disk and a shared folder. The useful habit is to name the storage contract before choosing a service.
@@ -89,6 +91,8 @@ That output answers practical questions. Which disk exists? How large is it? Whi
 <!-- section-summary: Temporary runtime storage is scratch space for retryable work, so durable application data needs another home. -->
 
 **Temporary storage** is local scratch space that can disappear when a VM, container, app instance, or host changes. On Azure VMs, some sizes include local temporary disks, sometimes called resource disks. Microsoft documents these temporary disks as separate from Managed Disks and outside the persistent storage path. On app platforms and containers, local paths such as `/tmp` or an instance filesystem usually have the same warning sign: useful for scratch work, risky for durable customer data.
+
+This is closest to EC2 instance store or container-local scratch space. Use it for cache files, temp downloads, and retryable work, while customer data and application state live in Managed Disks, Blob Storage, Azure Files, or a database.
 
 Imagine the invoice worker writes generated files to `/tmp/invoices`. It works during a quiet test. Then the worker restarts, another replica serves the next request, or the host gets replaced. Support looks for the invoice and finds an empty folder. Increasing memory or disk size only makes the temporary folder larger. It still has the wrong durability contract.
 
@@ -153,6 +157,8 @@ Host caching also connects back to temporary storage. Some data is scratch data 
 
 A **shared disk** is a managed disk configured so more than one VM can attach to it. That sounds like the answer to every shared-folder request, but the important word is **cluster-aware**. Shared disks are designed for applications that understand shared block storage, such as failover clusters and clustered databases.
 
+For AWS readers, this belongs in the same specialized design space as EBS Multi-Attach. The block device can be shared, but the application or cluster layer must coordinate writes, ownership, and failover.
+
 Block storage gives several machines access to raw blocks. Cluster software supplies the coordination for normal file writes, failover, ownership, and consistency. If two ordinary VMs mount and write the same filesystem at the same time without that cluster layer, they can damage the filesystem or application data.
 
 The migration team might ask, "Can we attach `disk-orders-legacy-data-01` to every worker so they all see the same folder?" That request is a good moment to pause. If the workers only need shared templates or shared exports, Azure Files is usually the better first service to review. It provides a managed file share with file protocol semantics, access controls, snapshots, and a folder path the clients can mount.
@@ -165,6 +171,8 @@ Now the article can move naturally from "one VM has a disk" and "clustered block
 <!-- section-summary: Azure Files provides managed SMB or NFS file shares for workloads that need a shared mounted directory. -->
 
 **Azure Files** is Azure's managed file share service. A file share gives clients a folder-like path through standard protocols. Windows workloads often use **SMB**, which means Server Message Block. Linux and Unix-style workloads may use **NFS**, which means Network File System. Microsoft documents Azure Files support for both SMB and NFS, with protocol choice depending on the workload and share type.
+
+The AWS anchors depend on protocol. For Linux NFS-style shares, think about the EFS job. For Windows SMB-style shares, think about the FSx for Windows File Server job. Azure Files gives those mounted-folder semantics as an Azure Storage service.
 
 The legacy orders migration uses a share named `legacy-orders-share` in storage account `stdevpolarisordersprod`. The share has a quota, an enabled protocol, a performance tier, and snapshots. Those details matter because a shared folder is more than a string in an app config file. It is a storage resource with capacity, access, performance, and recovery behavior.
 
@@ -227,7 +235,7 @@ A **snapshot** is a point-in-time copy of a storage resource. Managed disks supp
 
 For `legacy-orders-share`, a snapshot before the migration release gives the team a recovery point for templates and shared files. If the new worker overwrites `invoice-template-v3.docx`, the team can inspect the snapshot and restore the older file. Microsoft documents Azure Files share snapshots as read-only point-in-time copies, and Azure Backup can schedule and retain snapshots for Azure file shares.
 
-For `disk-orders-legacy-data-01`, a disk snapshot before a risky VM change can help create a recovery disk. The team still has to respect application consistency. A disk snapshot of a running app may capture a crash-consistent state. Some workloads need the app to flush writes, stop briefly, or use an application-aware backup path before the snapshot becomes a useful recovery point.
+For `disk-orders-legacy-data-01`, a disk snapshot before a risky VM change can help create a recovery disk. The team still has to respect application consistency. A disk snapshot of a running app may capture a crash-consistent state. Some workloads need the app to flush writes, stop briefly, or use an application-aware backup path before the snapshot is a useful recovery point.
 
 The migration evidence should name both sides:
 

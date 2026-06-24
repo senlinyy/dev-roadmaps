@@ -534,6 +534,27 @@ The table below follows the review flow in the order the platform team uses it. 
 
 Then the reviewer reads the action definition. For GitHub Actions, the `action.yml` or `action.yaml` file explains how the action runs. A JavaScript action usually points to a built file such as `dist/index.js`. A composite action lists shell steps. A Docker action points to a Dockerfile or image.
 
+The review can start with a lightweight repository audit. This gives the reviewer a list of current action references, current workflow permissions, and any places where the workflow still uses moving references. The reviewer then inspects the risky lines first.
+
+```bash
+REPO="summit-retail/checkout-api"
+mkdir -p evidence/action-review
+
+rg --line-number "uses:" .github/workflows \
+  > evidence/action-review/workflow-uses-lines.txt
+
+rg --line-number "uses: .*@(main|master|HEAD|v[0-9]+)$" .github/workflows \
+  > evidence/action-review/moving-action-references.txt || true
+
+gh api "repos/$REPO/actions/permissions" \
+  > evidence/action-review/actions-permissions.json
+
+gh api "repos/$REPO/dependabot/alerts?state=open" \
+  > evidence/action-review/dependabot-open-alerts.json
+```
+
+The output is intentionally small. `workflow-uses-lines.txt` shows every external action and reusable workflow. `moving-action-references.txt` shows references that deserve a pinning conversation. The GitHub API exports show whether repository settings and open dependency alerts support the review decision.
+
 For a composite action, a reviewer looks closely at shell usage. Composite actions often contain only a few lines, and they can still pass untrusted input into shell commands.
 
 ```yaml

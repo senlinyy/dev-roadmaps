@@ -1,7 +1,7 @@
 ---
 title: "Input Variables"
 description: "Parameterize your Terraform configurations with input variables so the same code works across different environments and teams."
-overview: "Input variables are how you make Terraform configurations flexible. Instead of hardcoding every value, you declare variables and let the caller provide the specifics. This article covers how to declare variables, all the ways to provide values, and how type constraints and defaults make configurations safer and easier to use."
+overview: "Input variables are the public inputs to a Terraform module. This article shows how variables are declared, how values are supplied, where they are consumed in resources and locals, and how the evaluated values appear in plan output."
 tags: ["variables", "input", "parameterization", "terraform", "hcl"]
 order: 1
 id: article-iac-terraform-values-input-variables
@@ -9,302 +9,221 @@ id: article-iac-terraform-values-input-variables
 
 ## Table of Contents
 
-1. [Why Hardcoding Values Is a Problem](#why-hardcoding-values-is-a-problem)
-2. [Declaring a Variable](#declaring-a-variable)
-3. [Using Variables in Configuration](#using-variables-in-configuration)
-4. [Ways to Provide Variable Values](#ways-to-provide-variable-values)
-5. [Variable Files: .tfvars](#variable-files-tfvars)
-6. [Type Constraints](#type-constraints)
-7. [Default Values and Required Variables](#default-values-and-required-variables)
-8. [Sensitive Variables](#sensitive-variables)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [What Input Variables Do](#what-input-variables-do)
+2. [Declaring the Inputs](#declaring-the-inputs)
+3. [Supplying Values for an Environment](#supplying-values-for-an-environment)
+4. [Consuming Variables in Locals and Resources](#consuming-variables-in-locals-and-resources)
+5. [Reading Variables in the Plan](#reading-variables-in-the-plan)
+6. [Validation, Defaults, and Sensitive Values](#validation-defaults-and-sensitive-values)
+7. [Putting It All Together](#putting-it-all-together)
 
-## Why Hardcoding Values Is a Problem
+## What Input Variables Do
+<!-- section-summary: Input variables let one Terraform configuration accept different environment values without copying the resource code. -->
 
-An input variable is a named parameter for Terraform configuration, letting callers provide environment-specific values without editing resource blocks.
+An **input variable** is a named value that a Terraform module receives from the outside. It works like a module setting. The module declares what it needs, and the caller supplies the actual value for development, staging, production, or another deployment.
 
-Suppose you build a Terraform configuration that creates a web server in `us-east-1` using an instance type of `t3.small`. You deploy it to production. Six months later, a colleague wants to set up an identical server for a staging environment, same configuration, but in `us-west-2` and using `t3.micro` to save cost.
+Think about a logging bucket module. The bucket naming rule stays the same, but each environment has a different service name, retention setting, and tag set. Variables let you keep one resource definition and feed it the values that change.
 
-If the region and instance type are hardcoded in the resource blocks, your colleague either has to edit the configuration file directly (risking an accidental commit to the production branch) or make a copy of the entire configuration and change those two lines. Both options create problems. Editing the live file risks changing production. Copying the file creates two separate codebases that will slowly drift from each other, just like the manual infrastructure problem that Terraform was supposed to solve.
+This matters in real teams because copied Terraform folders drift quickly. One copied folder gets a new tag. Another gets a stronger retention setting. A third keeps the old name rule. Variables keep the reusable shape in one place and make the changing pieces visible in the plan.
 
-Input variables eliminate this problem. Instead of writing `us-east-1` directly inside a resource block, you write `var.region`. Then you create a variable called `region`. The production deployment provides `"us-east-1"` for that variable. The staging deployment provides `"us-west-2"`. The same configuration code, run twice with different inputs, produces two separate and correctly configured environments.
+## Declaring the Inputs
+<!-- section-summary: A variable block declares the input name, type, description, default behavior, and optional validation rules. -->
 
-This is the same idea as a function parameter in any programming language. You do not write a separate function for every value you might need. You write one function with parameters and call it with different arguments.
-
-## Declaring a Variable
-
-A variable block defines one input your Terraform configuration accepts. The label is the input name, and the attributes inside the block describe its type, documentation, and optional default. Example: `variable "instance_type"` creates an input that resources can read with `var.instance_type`.
-
-Variables are declared with a `variable` block. The block's label is the variable name. The name becomes the key you use to reference the variable's value throughout the configuration.
-
-![Input variables act as a typed contract between callers, configuration, and resource arguments.](/content-assets/articles/article-iac-terraform-values-input-variables/variable-contract.png)
-
-```hcl
-variable "region" {
-  type        = string
-  description = "AWS region to deploy into, such as us-east-1 or eu-west-1."
-  default     = "us-east-1"
-}
-
-variable "instance_type" {
-  type        = string
-  description = "EC2 instance type for the application server."
-}
-
-variable "instance_count" {
-  type        = number
-  description = "Number of instances to create in the auto-scaling group."
-  default     = 2
-}
-```
-
-Each attribute inside the `variable` block is optional, but you should include at least `type` and `description` for every variable.
-
-`type` constrains what values are acceptable. `string`, `number`, and `bool` are the basic types. Terraform will try to coerce the value into the declared type, if you declare `type = number` and the caller provides `"3"` (a string containing a digit), Terraform converts it to the number `3`. If the value cannot be coerced (like trying to convert `"hello"` to a number), Terraform reports an error immediately, before making any API calls.
-
-`description` is free-form text that explains what the variable is for and what values make sense. It appears in the output of `terraform plan` when a variable has no value and Terraform asks for one interactively. Good descriptions save time, they answer "what should I put here?" without requiring the reader to trace through the rest of the configuration.
-
-`default` makes the variable optional. If the caller does not provide a value, Terraform uses the default. A variable with no default is required, Terraform will not proceed without a value for it.
-
-## Using Variables in Configuration
-
-A variable reference reads the value the caller provided. Terraform uses the `var.` prefix so it can distinguish an input from hardcoded text. Example: `instance_type = var.instance_type` means "use the selected instance type for this run," while `"t3.small"` means "always use this exact value."
-
-Inside your configuration, you reference a variable with `var.<name>`:
-
-```hcl
-provider "aws" {
-  region = var.region
-}
-
-resource "aws_instance" "app" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = var.instance_type
-  count         = var.instance_count
-}
-```
-
-The `var.` prefix is how Terraform distinguishes a variable reference from a literal value. `"t3.small"` is a hardcoded string. `var.instance_type` is a reference to whatever value the caller provided for the `instance_type` variable.
-
-Variable references can appear in resource blocks, module blocks, data source blocks, and local value expressions. Backend configuration is still special: backend blocks are processed during initialization and cannot use normal input variables. Provider requirements also have tight initialization rules. Newer Terraform versions support `const` variables for a small set of initialization-time fields such as module and provider source or version arguments, but the beginner-safe model is still to treat backends and provider installation as early setup, separate from ordinary runtime variables.
-
-## Ways to Provide Variable Values
-
-Variable value precedence is the rule Terraform uses when the same input is provided from more than one place. Later, more explicit sources override earlier defaults. Example: a default can set `instance_type = "t3.small"`, but `terraform plan -var="instance_type=t3.medium"` overrides it for that command.
-
-Terraform accepts variable values from several different sources. It processes them in a specific order of precedence, with later sources overriding earlier ones.
-
-**Default values** in the variable declaration are the starting point. If nothing else provides a value for a variable that has a default, the default is used.
-
-**Environment variables** prefixed with `TF_VAR_` override defaults. For example, to provide the `region` variable through an environment variable:
-
-```bash
-export TF_VAR_region=eu-central-1
-terraform plan
-```
-
-This is useful in CI/CD pipelines where injecting values through environment variables is standard practice, and for sensitive values that you do not want written to a file that might be committed to version control.
-
-**A file named `terraform.tfvars`** in the working directory is automatically loaded by Terraform. You do not need to reference it explicitly. Create this file with one variable assignment per line:
-
-```hcl
-region         = "us-west-2"
-instance_type  = "t3.micro"
-instance_count = 1
-```
-
-Terraform also automatically loads `terraform.tfvars.json`, then any files ending in `.auto.tfvars` or `.auto.tfvars.json` in lexical order. These automatic files override environment variables and earlier automatic files.
-
-**Files passed explicitly with the `-var-file` flag** override automatically loaded variable files:
-
-```bash
-terraform plan -var-file=staging.tfvars
-```
-
-This lets you maintain separate variable files for each environment without changing the configuration code.
-
-**The `-var` flag** on the command line provides a single variable value and has the same high precedence as `-var-file`. If you pass several `-var` and `-var-file` options, Terraform processes them in the order they appear on the command line, so later options can override earlier ones:
-
-```bash
-terraform plan -var="instance_type=t3.medium"
-```
-
-This is convenient for one-off overrides but becomes unwieldy if you have many variables to provide.
-
-**Interactive prompt** is the last resort for a required variable that still has no value. The prompt does not have a normal file-style precedence; it only fills in missing required values. This is only useful in manual workflows. In automated pipelines, a missing variable should cause the pipeline to fail with a clear error rather than hang waiting for input.
-
-## Variable Files: .tfvars
-
-A `.tfvars` file is a plain variable values file for one run or environment. It lets the Terraform code stay the same while each environment supplies its own inputs. Example: `dev.tfvars` can set `instance_count = 1`, while `prod.tfvars` sets `instance_count = 4`.
-
-The `.tfvars` file pattern is the most common way teams provide environment-specific values in practice. You maintain one file per environment:
-
-`dev.tfvars`:
-```hcl
-region         = "us-east-1"
-instance_type  = "t3.micro"
-instance_count = 1
-min_size       = 1
-max_size       = 2
-```
-
-`prod.tfvars`:
-```hcl
-region         = "us-east-1"
-instance_type  = "t3.medium"
-instance_count = 4
-min_size       = 2
-max_size       = 10
-```
-
-Your deployment commands then reference the correct file:
-
-```bash
-# For development
-terraform plan -var-file=dev.tfvars
-
-# For production
-terraform plan -var-file=prod.tfvars
-```
-
-One important thing to know: if you put variable files containing secrets (like `db_password = "supersecret"`) in your project directory, be careful about what gets committed to Git. A `.gitignore` entry for `*.tfvars` or `*.auto.tfvars` prevents secret-containing files from being accidentally committed. Use environment variables (via `TF_VAR_`) for secrets in CI/CD rather than files, since environment variables can be injected from a secrets manager without ever touching the filesystem.
-
-Terraform also automatically loads files named `terraform.tfvars.json` and any files ending in `.auto.tfvars`, both the plain-text and JSON variants. Files loaded via `-var-file` are loaded explicitly and not automatically.
-
-## Type Constraints
-
-A type constraint tells Terraform what shape of value a variable accepts. This catches mistakes during plan before Terraform reaches a cloud API. Example: `list(string)` accepts `["us-east-1a", "us-east-1b"]`, but rejects a single number like `3`.
-
-The type system in Terraform covers more than just strings and numbers. Understanding the full range lets you design variable interfaces that validate inputs at plan time rather than failing mid-apply when the wrong type is passed to an API.
-
-**Primitive types**:
-- `string`, any text value
-- `number`, any integer or decimal number
-- `bool`, `true` or `false`
-
-**Collection types** hold multiple values of one type:
-- `list(string)`, an ordered list of strings: `["us-east-1a", "us-east-1b"]`
-- `set(string)`, an unordered, deduplicated collection, usually written by callers with list syntax and converted by Terraform: `["us-east-1a", "us-east-1b"]`
-- `map(string)`, named string values: `{ environment = "prod", team = "platform" }`
-
-**Structural types** define a fixed shape:
-- `object({ key = type, ... })`, a fixed set of named attributes, each with its own type
-- `tuple([type, type, ...])`, a fixed-length, ordered list where each position has its own type
-
-Here is a practical example using a `list(string)` for availability zones and a `map(string)` for tags:
-
-```hcl
-variable "availability_zones" {
-  type        = list(string)
-  description = "List of availability zones to spread resources across."
-  default     = ["us-east-1a", "us-east-1b"]
-}
-
-variable "tags" {
-  type        = map(string)
-  description = "Tags to apply to all resources. Keys and values must be strings."
-  default     = {}
-}
-```
-
-A caller provides:
-
-```hcl
-availability_zones = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
-
-tags = {
-  environment = "production"
-  team        = "infrastructure"
-  cost-center = "eng-core"
-}
-```
-
-And the resource uses them:
-
-```hcl
-resource "aws_subnet" "web" {
-  count             = length(var.availability_zones)
-  cidr_block        = cidrsubnet(var.cidr_block, 8, count.index)
-  availability_zone = var.availability_zones[count.index]
-  tags              = var.tags
-}
-```
-
-This creates one subnet per availability zone, each tagged with whatever the caller provided. The type constraint ensures the caller provides a list of strings for zones and a map of strings for tags, if they accidentally provide a number or a boolean, Terraform catches it immediately during plan.
-
-## Default Values and Required Variables
-
-A variable with a default value is optional. Terraform uses the default when no other source provides a value. Defaults should be the most sensible value for most use cases, something a new user running the configuration would want without knowing every possible setting.
-
-![Defaults and validation let Terraform accept clean values and reject bad inputs early.](/content-assets/articles/article-iac-terraform-values-input-variables/validation-and-defaults.png)
-
-A variable without a default is required. If no value is provided from any source, Terraform stops with an error. Required variables are for information that is fundamentally different between contexts, the target region, the environment name, the database password, where there is no reasonable default that would be safe to assume.
-
-A common pattern is to require the critical, environment-specific variables and give defaults to everything else:
+Variables usually live in `variables.tf`. The block name is the reference name used elsewhere as `var.<name>`.
 
 ```hcl
 variable "environment" {
   type        = string
-  description = "Deployment environment: dev, staging, or prod. Required."
+  description = "Deployment environment, such as dev, stage, or prod."
+
+  validation {
+    condition     = contains(["dev", "stage", "prod"], var.environment)
+    error_message = "environment must be one of dev, stage, or prod."
+  }
 }
 
-variable "region" {
+variable "service_name" {
   type        = string
-  description = "AWS region to deploy into."
-  default     = "us-east-1"
+  description = "Short service name used in names and tags."
 }
 
-variable "instance_type" {
-  type    = string
-  default = "t3.small"
+variable "retention_days" {
+  type        = number
+  description = "Number of days to retain log objects."
+  default     = 30
+}
+
+variable "extra_tags" {
+  type        = map(string)
+  description = "Additional tags supplied by the owning team."
+  default     = {}
 }
 ```
 
-`environment` is required, there is no sensible default because `dev` and `prod` have very different implications. `region` has a default that most teams will override for multi-region deployments but that is correct for many single-region setups. `instance_type` has a default that is appropriate for development and can be overridden for production.
+The type is part of the contract. `environment` must be a string. `retention_days` must be a number. `extra_tags` must be a map where every value is a string. Terraform can catch wrong shapes before it calls a provider API.
 
-## Sensitive Variables
+## Supplying Values for an Environment
+<!-- section-summary: Teams usually pass variable values through tfvars files, CI variables, parent modules, or environment variables. -->
 
-A sensitive variable is an input whose display value should be hidden in normal Terraform output. Use it for passwords, private keys, API tokens, and similar values. Example: `sensitive = true` keeps `db_password` from being printed in a CI log during a plan.
-
-Variables containing secrets, passwords, private keys, API tokens, should be marked with `sensitive = true`:
+A local development run might use `dev.tfvars`:
 
 ```hcl
-variable "db_password" {
-  type      = string
-  sensitive = true
+environment    = "dev"
+service_name   = "billing"
+retention_days = 7
+
+extra_tags = {
+  owner = "platform"
 }
 ```
 
-With `sensitive = true`, Terraform replaces the variable's value with `(sensitive value)` in normal plan and apply output, and in many error messages. This prevents many accidental leaks into CI/CD logs.
+A production run might use `prod.tfvars`:
 
-The sensitive marking is not a security wall. The value is usually still stored in the state file in plain text, and it is still accessible to any code or resource that uses it. The `sensitive` attribute only controls display. Protecting the actual secret requires restricting access to the state file and to whatever secrets manager you use to inject the value.
+```hcl
+environment    = "prod"
+service_name   = "billing"
+retention_days = 90
 
-For short-lived values that should not be written to state or plan files, Terraform also supports `ephemeral` variables in supported contexts. Ephemeral is different from sensitive: sensitive hides display, while ephemeral is designed to omit the value from Terraform artifacts where the language and provider feature support it.
+extra_tags = {
+  owner       = "platform"
+  compliance  = "sox"
+  cost_center = "finops-42"
+}
+```
 
-For sensitive variables in automated pipelines, the recommended pattern is to inject them as `TF_VAR_` environment variables sourced from a secrets manager (AWS Secrets Manager, Azure Key Vault, HashiCorp Vault, GitHub Actions secrets), rather than writing them to `.tfvars` files that might end up in version control.
+In CI/CD, the pipeline often chooses the file:
+
+```bash
+terraform plan -var-file=env/prod.tfvars
+```
+
+For child modules, the caller supplies variables inside the `module` block:
+
+```hcl
+module "log_bucket" {
+  source = "./modules/log-bucket"
+
+  environment    = "prod"
+  service_name   = "billing"
+  retention_days = 90
+  extra_tags     = local.platform_tags
+}
+```
+
+This is where variables define an interface. The module author chooses the input names and types. The caller chooses the values.
+
+## Consuming Variables in Locals and Resources
+<!-- section-summary: Variables help when locals and resources consume them through var.name references. -->
+
+Variables do not create cloud resources by themselves. They do their work when other `.tf` files consume them.
+
+In `locals.tf`, the module shapes the variable values into names and tags:
+
+```hcl
+locals {
+  bucket_name = "dp-${var.service_name}-${var.environment}-logs"
+
+  tags = merge(
+    {
+      service     = var.service_name
+      environment = var.environment
+      managed_by  = "terraform"
+    },
+    var.extra_tags
+  )
+}
+```
+
+In `main.tf`, resources consume those locals and one variable directly:
+
+```hcl
+resource "aws_s3_bucket" "logs" {
+  bucket = local.bucket_name
+  tags   = local.tags
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  rule {
+    id     = "expire-old-logs"
+    status = "Enabled"
+
+    expiration {
+      days = var.retention_days
+    }
+  }
+}
+```
+
+The value path is concrete. `var.service_name` and `var.environment` feed `local.bucket_name`. `local.bucket_name` feeds `aws_s3_bucket.logs.bucket`. `var.retention_days` feeds `aws_s3_bucket_lifecycle_configuration.logs.rule.expiration.days`.
+
+## Reading Variables in the Plan
+<!-- section-summary: Plan output shows where variable values landed after Terraform evaluated locals and resource arguments. -->
+
+If production passes `service_name = "billing"`, `environment = "prod"`, and `retention_days = 90`, the plan shows the evaluated values inside resources:
+
+```hcl
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "dp-billing-prod-logs"
+      + tags   = {
+          + "compliance"  = "sox"
+          + "cost_center" = "finops-42"
+          + "environment" = "prod"
+          + "managed_by"  = "terraform"
+          + "owner"       = "platform"
+          + "service"     = "billing"
+        }
+    }
+
+  # aws_s3_bucket_lifecycle_configuration.logs will be created
+  + resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+      + bucket = (known after apply)
+
+      + rule {
+          + id     = "expire-old-logs"
+          + status = "Enabled"
+
+          + expiration {
+              + days = 90
+            }
+        }
+    }
+```
+
+The plan does not usually say "this came from `var.retention_days`." You connect that by reading the `.tf` files. The code says `days = var.retention_days`, and the plan shows `days = 90`. That is the review loop.
+
+## Validation, Defaults, and Sensitive Values
+<!-- section-summary: Validation blocks catch bad inputs, defaults reduce repeated values, and sensitive variables hide display output without removing state risk. -->
+
+Validation belongs close to the variable because it protects every resource that consumes the input. The `environment` validation above catches a typo like `prd` before Terraform creates incorrectly tagged infrastructure.
+
+Defaults are useful when the value has a safe common choice. `retention_days = 30` can be a reasonable default for development. Production can override it with a longer value. Required variables omit `default`, so Terraform asks the caller to provide a value.
+
+Sensitive variables hide values from normal CLI output:
+
+```hcl
+variable "database_password" {
+  type        = string
+  description = "Password used only for a local training database."
+  sensitive   = true
+}
+```
+
+Sensitive display is helpful, but it does not make Terraform state a secret vault. If a sensitive value is sent to a resource argument, Terraform may still store it in state so future plans can compare changes. Real production secrets should usually come from a secret manager, short-lived identity, or provider-managed password feature.
+
+:::expand[Choosing a variable type that helps the caller]{kind="pattern"}
+A loose variable type makes a module flexible at first, but it can push errors into resource planning. A stronger type catches mistakes at the module boundary.
+
+For example, `type = map(any)` accepts almost anything. That may let a caller pass a number where the module expected a string tag. `type = map(string)` gives Terraform enough information to reject the bad input early.
+
+Objects are useful when several values travel together. Instead of three separate variables for `min_size`, `max_size`, and `instance_type`, a module can accept an object named `capacity`. The caller sees one grouped input, and the module can validate the relationship between fields.
+:::
 
 ## Putting It All Together
+<!-- section-summary: A good variable has a clear name, a useful type, a caller-friendly description, and visible consumption in locals, resources, or child modules. -->
 
-Input variables are the parameterization layer of Terraform. Instead of writing configurations that only work in one specific context, you write configurations that describe a shape of infrastructure and accept variable inputs that specify the details. The region, the instance size, the number of replicas, the tags, all of these become parameters rather than hardcoded values.
+Input variables are the doorway into a Terraform module. They should explain what the caller can change, what type each value must have, and which values have safe defaults. The real test is whether a reviewer can follow the variable from `variables.tf` into locals, resources, module calls, and plan output.
 
-The same configuration code, paired with a `dev.tfvars` file, deploys a lightweight development environment. Paired with a `prod.tfvars` file, it deploys a fully scaled production environment. The logic of how to build the infrastructure lives in one place. The specifics of each environment live in their respective variable files.
-
-Type constraints catch mistakes at plan time, before any real resources are touched. Defaults reduce the cognitive load for new users. Sensitive marking keeps secrets out of logs, and ephemeral variables help with temporary secret values where Terraform supports them. Together, these features make a well-designed variable interface one of the most important investments you can make in a Terraform configuration.
-
-## What's Next
-
-Variables provide values from outside the configuration. But sometimes you need to compute intermediate values, combinations, transformations, or reformatted versions of other values, that are used in multiple places within the same configuration. The next article covers local values, which let you compute and name these intermediate expressions so you do not have to repeat them.
-
-
-![Input variables summary: define clear contracts, provide values deliberately, and protect sensitive inputs.](/content-assets/articles/article-iac-terraform-values-input-variables/variables-summary.png)
-
----
-
-**References**
-
-- [Input Variables (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables), Complete reference for variable declaration, type system, sensitive flag, and validation rules.
-- [Variable Block Reference (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/block/variable), Current reference for variable attributes including sensitive, ephemeral, and initialization-time constraints.
-- [Manage Sensitive Data (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/manage-sensitive-data), Guidance on sensitive and ephemeral values.
-- [Variable Definition Precedence (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence), The exact order in which Terraform processes values from different sources.
-- [Environment Variables (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/config/environment-variables), Reference for `TF_VAR_` and other Terraform environment variables.
+For official reference, use Terraform's docs for [input variables](https://developer.hashicorp.com/terraform/language/values/variables), [type constraints](https://developer.hashicorp.com/terraform/language/expressions/type-constraints), [custom validation](https://developer.hashicorp.com/terraform/language/expressions/custom-conditions), and [sensitive data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data).

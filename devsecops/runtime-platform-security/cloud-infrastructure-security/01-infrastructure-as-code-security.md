@@ -30,7 +30,7 @@ The first security habit is treating infrastructure changes like application cha
 
 This article follows one team through that process. The team uses Terraform or OpenTofu, and the same ideas apply to other IaC tools. The exact syntax changes, while the security questions stay very similar.
 
-![IaC Review Funnel](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-review-funnel.png)
+![IaC review funnel showing pull request code becoming plan JSON, IaC scans, secrets scans, provider checks, and controlled apply with reach, access, and data questions](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-review-funnel.png)
 
 *The funnel shows how a pull request turns into plan data, automated checks, and a controlled apply instead of a direct jump from code to cloud APIs.*
 
@@ -178,7 +178,7 @@ HIGH  aws_iam_role_policy.worker_receipts
 
 That output is useful because it names the resource, the risk, and the expected direction. A scanner report that only says "failed rule 123" sends engineers into a search tab. A good PR gate should help the author fix the change while the code is fresh in their head.
 
-![Risky vs Safer Terraform](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/risky-vs-safer-terraform.png)
+![Risky versus safer Terraform comparison showing public storage, open database ingress, and admin IAM replaced with private access and scoped permissions](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/risky-vs-safer-terraform.png)
 
 *This comparison turns the scanner findings into the concrete design shift: public paths and wildcard permissions move toward private paths and scoped roles.*
 
@@ -384,7 +384,7 @@ The safer Terraform version then replaces the risky draft. The bucket blocks pub
 
 This is the practical value of IaC security. The team does not wait for a security incident, a cloud audit, or a production ticket to find the problem. The code review catches the risky design while the author can still change a few lines.
 
-![IaC Security Summary](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-security-summary.png)
+![IaC security summary showing plan review, IaC scans, secrets checks, module review, provider policy, pull request feedback, and controlled apply](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-security-summary.png)
 
 *The summary shows the full Northstar PR review path: plan, scan, secrets, modules, provider policy, and a safer apply at the end.*
 

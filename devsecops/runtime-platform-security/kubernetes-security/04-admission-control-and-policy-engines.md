@@ -259,6 +259,31 @@ For the policy itself, a platform engineer can ask the server to validate the po
 kubectl apply --dry-run=server --validate=strict -f disallow-privileged-pods.yaml
 ```
 
+A good policy pull request includes proof for both sides of the rule. The first check proves the unsafe pod is rejected. The second check proves a normal application pod still passes. That keeps the review focused on behavior instead of only reading CEL expressions.
+
+```bash
+kubectl create namespace policy-lab --dry-run=client -o yaml \
+  | kubectl apply -f -
+
+kubectl apply --dry-run=server --validate=strict \
+  -f disallow-privileged-pods.yaml
+
+kubectl apply --dry-run=server --validate=strict \
+  -f risky-pod.yaml \
+  2> evidence-admission-deny.txt
+
+kubectl run safe-web \
+  --namespace policy-lab \
+  --image=nginx:1.27 \
+  --dry-run=server \
+  -o yaml \
+  > evidence-safe-pod.yaml
+
+kubectl delete namespace policy-lab
+```
+
+The pull request can attach `evidence-admission-deny.txt` and `evidence-safe-pod.yaml`. The first file shows the denial message that developers will see. The second file shows that ordinary pods still pass server-side admission.
+
 The `--validate=strict` flag asks kubectl and the server to reject unknown or duplicate fields when server-side field validation is available. That catches mistakes such as a misspelled field in the policy binding before the team trusts the rule.
 
 After the policy is applied, Kubernetes records type-checking information for ValidatingAdmissionPolicy expressions in status. This check helps catch CEL expressions that do not line up with the matched resource type:

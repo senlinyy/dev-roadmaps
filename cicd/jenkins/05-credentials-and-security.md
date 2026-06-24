@@ -70,6 +70,8 @@ stage('Publish Image') {
 
 The stage has three useful controls. The `when` block keeps publishing on `main`. The `withCredentials` block keeps the registry secret inside one narrow scope. The shell uses `--password-stdin`, so the password travels through standard input instead of appearing as a command-line argument.
 
+The verification path should prove the credential works without printing it. A staging publish job can push a harmless image tag, then the operator checks the registry for that tag and confirms the Jenkins log contains no raw username, password, or token output. That kind of check tests the real integration while keeping the secret value out of the evidence.
+
 Jenkins supports several credential shapes. **Secret text** works for API tokens. **Username and password** works for registries and basic-auth services. **SSH private key** works for Git or remote deployment targets. **Secret file** works for kubeconfig files, certificates, signing keys, or OIDC token files. The pipeline should choose the narrowest type that matches the tool.
 
 Here is an SSH key binding for a private Git fetch:
@@ -233,6 +235,8 @@ withCredentials([file(credentialsId: 'aws-prod-oidc-token', variable: 'AWS_WEB_I
 This design removes the long-lived AWS access key from Jenkins. The build receives a short-lived token, AWS verifies the token, and STS returns temporary credentials for a role with narrow permissions. If a token leaks, its lifetime and claim restrictions limit the incident compared with a static access key that remains valid until rotation.
 
 OIDC still needs operational care. Jenkins must serve a stable HTTPS issuer or a configured alternate issuer. The IAM provider must trust the right issuer and audience. The role policy must grant only the needed actions. The trust policy must narrow subjects enough that one pipeline cannot borrow another pipeline's deploy role. The pipeline should still keep the token binding in the smallest possible block.
+
+The first OIDC rollout should fail closed during testing. Summit Retail runs the job once with the expected Jenkins job path and confirms `aws sts get-caller-identity` returns the production deploy role. Then they run a non-production job path against the same role and expect AWS to deny the call. That negative test proves the trust policy is checking the subject claim instead of trusting every Jenkins token from the issuer.
 
 ## Putting It All Together
 <!-- section-summary: Jenkins security works when storage, runtime scope, author trust, branch trust, and cloud identity all line up. -->

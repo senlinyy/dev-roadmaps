@@ -33,7 +33,7 @@ GitHub Actions is GitHub's automation system for running build, test, release, a
 
 Think about a small team working on a service called `checkout-api`. Every pull request needs the same basic checks: install dependencies, run the linter, run unit tests, and maybe build a Docker image. Without automation, someone has to remember those commands every time, and different people will run slightly different versions of the same checklist.
 
-A workflow makes that checklist part of the repository. When a developer pushes code or opens a pull request, GitHub reads the workflow file, creates a workflow run, and shows the result beside the commit. The green or red status becomes a shared signal for the whole team, not a private result on one laptop.
+A workflow makes that checklist part of the repository. When a developer pushes code or opens a pull request, GitHub reads the workflow file, creates a workflow run, and shows the result beside the commit. The green or red status gives the whole team a shared signal, not a private result on one laptop.
 
 This article follows `checkout-api` from its first workflow to a more realistic setup. The pieces arrive in a practical order: where the workflow file lives, which events start it, how jobs and steps fit together, how filters reduce noise, how contexts pass event data, how matrix jobs test several versions, and how concurrency cancels stale runs.
 
@@ -366,7 +366,7 @@ runs-on: ${{ matrix.os }}
 
 This creates four runs: Ubuntu with Node.js 20, Ubuntu with Node.js 22, Windows with Node.js 20, and Windows with Node.js 22. `fail-fast: false` lets the remaining matrix runs finish even after one fails, which gives the team a fuller picture of what broke.
 
-Matrix jobs increase confidence, but they also increase run count. When developers push several commits quickly, the repository can end up running old checks nobody cares about anymore. That is where concurrency becomes useful.
+Matrix jobs increase confidence, but they also increase run count. When developers push several commits quickly, the repository can end up running old checks nobody cares about anymore. That is where concurrency helps.
 
 ## Concurrency
 <!-- section-summary: Concurrency groups prevent older runs for the same branch or deployment target from wasting runner time after newer work arrives. -->

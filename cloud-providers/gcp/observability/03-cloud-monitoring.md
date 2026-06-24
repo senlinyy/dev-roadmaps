@@ -190,6 +190,52 @@ The `alignmentPeriod` groups incoming points into one-minute intervals. The `ALI
 
 This policy still needs production tuning. A low-traffic service might need a minimum request volume condition so one failed request stays out of high-priority paging. A very critical service might need a lower threshold or a shorter duration. The right threshold comes from the service's reliability target, traffic pattern, and incident response expectations.
 
+The same policy belongs naturally in Terraform when the team manages monitoring as reviewed infrastructure:
+
+```hcl
+resource "google_monitoring_alert_policy" "checkout_5xx_ratio" {
+  project      = var.project_id
+  display_name = "checkout-api high 5xx rate"
+  combiner     = "OR"
+  enabled      = true
+
+  notification_channels = [
+    google_monitoring_notification_channel.oncall.name
+  ]
+
+  documentation {
+    content   = "Checkout is returning a sustained 5xx ratio. Open the production dashboard, filter logs by checkout-api and the current revision, then check recent Cloud Run audit logs before rollback."
+    mime_type = "text/markdown"
+  }
+
+  conditions {
+    display_name = "5xx ratio above 5 percent"
+
+    condition_threshold {
+      filter             = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"checkout-api\" AND resource.labels.location=\"us-central1\" AND metric.labels.response_code_class=\"5xx\""
+      denominator_filter = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"checkout-api\" AND resource.labels.location=\"us-central1\""
+      comparison         = "COMPARISON_GT"
+      threshold_value    = 0.05
+      duration           = "300s"
+
+      aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+
+      denominator_aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+}
+```
+
+The Terraform version makes alert review part of the same change process as Cloud Run, IAM, and networking. A reviewer can see the metric filter, denominator filter, duration, threshold, notification channel, and runbook text before the alert starts paging people.
+
 ## SLOs, SLIs, Error Budgets, And Burn Rate
 <!-- section-summary: SLO monitoring turns service health into explicit reliability targets and uses burn rate to page when the target is being spent too quickly. -->
 
@@ -253,3 +299,4 @@ The next article follows one failed checkout request through Cloud Trace and Ope
 - [gcloud monitoring policies create](https://docs.cloud.google.com/sdk/gcloud/reference/monitoring/policies/create) - Documents creating alerting policies from JSON or YAML files.
 - [Service monitoring concepts](https://docs.cloud.google.com/stackdriver/docs/solutions/slo-monitoring) - Explains services, SLIs, SLOs, error budgets, and burn-rate alerting.
 - [PromQL for Cloud Monitoring](https://docs.cloud.google.com/monitoring/promql) - Documents PromQL support in Cloud Monitoring and Managed Service for Prometheus workflows.
+- [Terraform Registry: google_monitoring_alert_policy](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/monitoring_alert_policy) - Defines the Terraform alert policy resource, threshold conditions, aggregations, documentation, and notification channels.

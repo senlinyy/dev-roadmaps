@@ -22,7 +22,8 @@ aliases:
 5. [Reserved Addresses and Private Placement](#reserved-addresses-and-private-placement)
 6. [Routes and Internet Paths](#routes-and-internet-paths)
 7. [Planning a Small Production Network](#planning-a-small-production-network)
-8. [What's Next](#whats-next)
+8. [gcloud and Terraform Starter VPC](#gcloud-and-terraform-starter-vpc)
+9. [What's Next](#whats-next)
 
 ## The VPC Network
 <!-- section-summary: A VPC network gives Google Cloud resources a shared private network boundary, routing map, and firewall surface. -->
@@ -179,6 +180,128 @@ The firewall plan belongs in the next article, but the network design already se
 
 For a beginner, the most useful checkpoint is this: **the VPC network is the global container, the subnet is the regional IP pool, the primary range gives normal interface addresses, secondary ranges support alias IP use cases, routes choose paths, and firewall rules control packet access**.
 
+## gcloud and Terraform Starter VPC
+<!-- section-summary: A starter production VPC should be reproducible, with custom mode, explicit subnets, secondary ranges, Private Google Access, and a planned outbound path. -->
+
+Now turn the food delivery network plan into actual infrastructure shape. The first command creates a custom-mode VPC so subnets appear only where the team creates them:
+
+```bash
+gcloud compute networks create food-prod-vpc \
+  --project=food-prod \
+  --subnet-mode=custom \
+  --bgp-routing-mode=global
+```
+
+Then the team creates the regional subnets. The API subnet includes secondary ranges for a future GKE cluster, and the subnets enable Private Google Access so internal-IP VMs can reach supported Google APIs through the private path:
+
+```bash
+gcloud compute networks subnets create subnet-web-us-central1 \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --region=us-central1 \
+  --range=10.20.10.0/24 \
+  --enable-private-ip-google-access
+
+gcloud compute networks subnets create subnet-api-us-central1 \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --region=us-central1 \
+  --range=10.20.20.0/24 \
+  --secondary-range=pods=10.21.0.0/20,services=10.22.0.0/24 \
+  --enable-private-ip-google-access
+```
+
+If internal-only VMs need outbound internet access for package updates or external APIs, Cloud NAT gives them an outbound path without assigning external IP addresses to every VM. Cloud NAT uses Cloud Router as its control resource:
+
+```bash
+gcloud compute routers create food-prod-router-us-central1 \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --region=us-central1
+
+gcloud compute routers nats create food-prod-nat-us-central1 \
+  --project=food-prod \
+  --router=food-prod-router-us-central1 \
+  --router-region=us-central1 \
+  --nat-all-subnet-ip-ranges \
+  --auto-allocate-nat-external-ips
+```
+
+The Terraform version keeps the same design in reviewable code:
+
+```hcl
+resource "google_compute_network" "food_prod" {
+  project                 = var.project_id
+  name                    = "food-prod-vpc"
+  auto_create_subnetworks = false
+  routing_mode            = "GLOBAL"
+}
+
+resource "google_compute_subnetwork" "web_us_central1" {
+  project                  = var.project_id
+  name                     = "subnet-web-us-central1"
+  region                   = "us-central1"
+  network                  = google_compute_network.food_prod.id
+  ip_cidr_range            = "10.20.10.0/24"
+  private_ip_google_access = true
+}
+
+resource "google_compute_subnetwork" "api_us_central1" {
+  project                  = var.project_id
+  name                     = "subnet-api-us-central1"
+  region                   = "us-central1"
+  network                  = google_compute_network.food_prod.id
+  ip_cidr_range            = "10.20.20.0/24"
+  private_ip_google_access = true
+
+  secondary_ip_range {
+    range_name    = "pods"
+    ip_cidr_range = "10.21.0.0/20"
+  }
+
+  secondary_ip_range {
+    range_name    = "services"
+    ip_cidr_range = "10.22.0.0/24"
+  }
+}
+
+resource "google_compute_router" "us_central1" {
+  project = var.project_id
+  name    = "food-prod-router-us-central1"
+  region  = "us-central1"
+  network = google_compute_network.food_prod.id
+}
+
+resource "google_compute_router_nat" "us_central1" {
+  project                            = var.project_id
+  name                               = "food-prod-nat-us-central1"
+  region                             = "us-central1"
+  router                             = google_compute_router.us_central1.name
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+}
+```
+
+After deployment, verify the network, subnet ranges, and default route before writing firewall rules:
+
+```bash
+gcloud compute networks describe food-prod-vpc \
+  --project=food-prod \
+  --format='yaml(name,autoCreateSubnetworks,routingConfig.routingMode)'
+
+gcloud compute networks subnets list \
+  --project=food-prod \
+  --filter='network~food-prod-vpc' \
+  --format='table(name,region,ipCidrRange,privateIpGoogleAccess,secondaryIpRanges)'
+
+gcloud compute routes list \
+  --project=food-prod \
+  --filter='network~food-prod-vpc' \
+  --format='table(name,destRange,nextHopGateway,nextHopInstance,nextHopIp,nextHopVpnTunnel,priority)'
+```
+
+This setup still needs firewall rules, load balancer design, DNS, and private service access before the app is production-ready. The value of this first shape is that the address plan, regional placement, API private access, and outbound path are explicit.
+
 ## What's Next
 <!-- section-summary: The next article uses the VPC map from this article and adds packet access decisions with firewall rules. -->
 
@@ -194,3 +317,7 @@ The next article follows GCP firewall rules as packet access decisions. It cover
 - [Google Cloud: Subnets](https://docs.cloud.google.com/vpc/docs/subnets) - Documents primary and secondary subnet ranges, alias IP use, valid ranges, reserved addresses, and subnet range limitations.
 - [Google Cloud: Routes](https://docs.cloud.google.com/vpc/docs/routes) - Explains subnet routes, default routes, route destinations, next hops, and route interactions.
 - [Google Cloud: Create and manage VPC networks](https://docs.cloud.google.com/vpc/docs/create-modify-vpc-networks) - Shows the operational workflow for creating VPC networks and subnets.
+- [Google Cloud: Cloud NAT overview](https://docs.cloud.google.com/nat/docs/overview) - Explains Cloud NAT for outbound internet access from private resources.
+- [Terraform Registry: google_compute_network](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_network) - Defines the Terraform VPC network resource.
+- [Terraform Registry: google_compute_subnetwork](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_subnetwork) - Defines subnet primary ranges, secondary ranges, and Private Google Access.
+- [Terraform Registry: google_compute_router_nat](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_router_nat) - Defines Cloud NAT configuration through Terraform.

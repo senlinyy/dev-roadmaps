@@ -30,7 +30,7 @@ The Orders platform team already has a private bucket module and a load balancer
 
 *Composable modules stay small and independent. The root layer shows how the service pieces connect.*
 
-The root configuration becomes the place where infrastructure is assembled. The network module returns subnet IDs. The database module returns an endpoint. The compute module receives both values and returns a target group ARN. The load balancer module receives that target group ARN and exposes a DNS name. Each module has a narrow job, and the root shows the whole story.
+The root configuration is the place where infrastructure is assembled. The network module returns subnet IDs. The database module returns an endpoint. The compute module receives both values and returns a target group ARN. The load balancer module receives that target group ARN and exposes a DNS name. Each module has a narrow job, and the root shows the whole story.
 
 This design helps the team grow the platform. A batch processing service can reuse the network and database modules while skipping the load balancer. A public API can reuse the load balancer and monitoring modules while choosing its own database pattern. Composability gives teams reusable parts rather than one giant preset.
 
@@ -39,7 +39,7 @@ This design helps the team grow the platform. A batch processing service can reu
 
 A strong module should be easy to describe in one plain phrase: "creates a private S3 bucket," "creates a VPC and subnets," "creates an application load balancer," or "creates an RDS database." That short phrase matters because it tells callers what kind of responsibility they are accepting.
 
-The common mistake is a module called `application_stack` that creates everything: network, database, compute, DNS, monitoring, alarms, dashboards, and IAM roles. It feels convenient during the first project because one module call creates the whole stack. It becomes painful when the next project wants the database and compute pattern but already has its own network. The giant module forces callers to accept decisions outside their needs.
+The common mistake is a module called `application_stack` that creates everything: network, database, compute, DNS, monitoring, alarms, dashboards, and IAM roles. It feels convenient during the first project because one module call creates the whole stack. It causes pain when the next project wants the database and compute pattern but already has its own network. The giant module forces callers to accept decisions outside their needs.
 
 A focused module gives callers a better contract. A database module can own the RDS instance, subnet group, parameter group, and database security group because those resources change together. DNS records for the application might belong in a separate DNS module because DNS ownership and release timing often differ from database changes.
 
@@ -80,7 +80,7 @@ module "load_balancer" {
 
 Security group rules that connect compute to the database often live in the root configuration or a small network-security module. That keeps the database module focused on the database and keeps the compute module focused on runtime capacity. The root can then review connection policy as wiring instead of hiding it inside either module.
 
-That kind of review becomes possible because the modules are small. Reviewers can see which module owns which decision and where the wiring creates risk.
+That kind of review is possible because the modules are small. Reviewers can see which module owns which decision and where the wiring creates risk.
 
 ## Avoiding Leaky Modules
 <!-- section-summary: A leaky module hides a real dependency instead of declaring it as an input. -->
@@ -154,7 +154,7 @@ output "autoscaling_group_name" {
 }
 ```
 
-Too many outputs can become a trap. If a module exposes every internal resource attribute, callers will eventually depend on details the module author wanted to keep private. A later cleanup then becomes a breaking change. The safer pattern is to expose the values another module or operator genuinely needs and add new outputs only when a real caller has a real use case.
+Too many outputs can create a trap. If a module exposes every internal resource attribute, callers will eventually depend on details the module author wanted to keep private. A later cleanup then creates a breaking change. The safer pattern is to expose the values another module or operator genuinely needs and add new outputs only when a real caller has a real use case.
 
 This is how mature module libraries stay maintainable. The public interface grows slowly, and the internals can improve quickly.
 

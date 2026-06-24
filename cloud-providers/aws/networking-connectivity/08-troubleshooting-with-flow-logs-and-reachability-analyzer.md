@@ -62,7 +62,7 @@ A **packet five-tuple** is the set of five values that identify a network flow:
 
 ![Five-tuple first infographic showing source IP, source port, destination IP, destination port, protocol, hostname resolution, and a reminder that DNS answers come before route checks](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-flow-logs-reachability-analyzer/five-tuple-first.png)
 
-*A timeout becomes testable when the team names the exact flow. The five-tuple plus the DNS answer tells every later tool which route, rule, and log record to inspect.*
+*A timeout is testable after the team names the exact flow. The five-tuple plus the DNS answer tells every later tool which route, rule, and log record to inspect.*
 
 The five-tuple matters because route tables mostly care about destination IPs, security groups and NACLs care about IPs and ports, and Flow Logs record these values. A vague report like "app times out when calling inventory" turns into something testable when it says: source `10.20.12.45`, destination `10.40.8.20`, TCP destination port `443`.
 

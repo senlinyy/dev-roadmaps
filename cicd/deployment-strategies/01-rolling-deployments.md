@@ -22,7 +22,7 @@ aliases:
 ## The Release Problem
 <!-- section-summary: A rolling deployment protects the service by replacing a small part of the fleet at a time. -->
 
-Imagine we run the checkout API for an online store. Ten application containers serve traffic behind a load balancer. Version `2026.06.13.1` works well, and we want to ship version `2026.06.13.2` with a new discount calculation. The risky move would be stopping all ten old containers, starting ten new containers, and hoping the new version becomes healthy before users notice.
+Imagine we run the checkout API for an online store. Ten application containers serve traffic behind a load balancer. Version `2026.06.13.1` works well, and we want to ship version `2026.06.13.2` with a new discount calculation. The risky move would be stopping all ten old containers, starting ten new containers, and hoping the new version passes health checks before users notice.
 
 That style creates a very simple failure. During the gap, the load balancer has no healthy targets. Every checkout request waits, retries, or fails. Even if the gap lasts one minute, that one minute can create failed payments, support tickets, and a very loud incident channel.
 
@@ -215,7 +215,7 @@ Let's replay the checkout API release from start to finish.
 
 The team builds one image for version `2026.06.13.2` and pushes it to the registry. The deployment updates the service from that immutable image. Kubernetes or ECS starts a small wave of new instances while the old version continues to serve users.
 
-The platform waits for each new instance to pass readiness. The load balancer sends traffic only after the new instance becomes healthy. The rollout controller keeps at least the configured healthy count available. If the cluster needs twelve containers during the release, the team has already planned enough CPU, memory, database connections, and load balancer capacity for that short overlap.
+The platform waits for each new instance to pass readiness. The load balancer sends traffic only after the new instance is healthy. The rollout controller keeps at least the configured healthy count available. If the cluster needs twelve containers during the release, the team has already planned enough CPU, memory, database connections, and load balancer capacity for that short overlap.
 
 The pipeline watches rollout status, target health, error rate, latency, and a checkout smoke test. If the new version fails startup, readiness, or user-facing checks, the pipeline stops the release and uses the platform rollback mechanism while the old version can still carry traffic.
 

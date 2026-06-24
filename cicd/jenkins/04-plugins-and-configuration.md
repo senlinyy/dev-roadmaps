@@ -11,7 +11,7 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Controller Configuration Becomes a Risk](#why-controller-configuration-becomes-a-risk)
+1. [Why Controller Configuration Turns Risky](#why-controller-configuration-turns-risky)
 2. [Version Pinning with plugins.txt](#version-pinning-with-pluginstxt)
 3. [Anatomy of jenkins.yaml](#anatomy-of-jenkinsyaml)
 4. [Dependency Hell](#dependency-hell)
@@ -20,8 +20,8 @@ aliases:
 7. [Putting It All Together](#putting-it-all-together)
 8. [What's Next](#whats-next)
 
-## Why Controller Configuration Becomes a Risk
-<!-- section-summary: A Jenkins controller becomes risky when plugins, security settings, credentials references, and agent definitions live only as manual UI state. -->
+## Why Controller Configuration Turns Risky
+<!-- section-summary: A Jenkins controller turns risky when plugins, security settings, credentials references, and agent definitions live only as manual UI state. -->
 
 A Jenkins controller has two kinds of operational state. The first kind is runtime state, such as build history, queued work, logs, and workspaces. The second kind is configuration state, such as installed plugins, security realm, authorization strategy, global tools, cloud agents, credentials references, and system messages. Runtime state helps you understand what happened. Configuration state decides what the controller can do next.
 
@@ -68,6 +68,19 @@ ENV CASC_JENKINS_CONFIG=/usr/share/jenkins/ref/jenkins.yaml
 This gives Summit Retail a controller image that carries the intended plugin binaries and the intended configuration file. The running container still writes operational state to `$JENKINS_HOME`, but the controller image documents how the software and configuration were produced.
 
 Pinning top-level plugins is only the first layer. Plugins have dependencies, and those dependencies also have versions. The plugin manager resolves that tree during the build. Real teams keep the build output as evidence, because the resolved dependency tree matters when a later upgrade changes a plugin that nobody wrote directly in `plugins.txt`.
+
+A staging smoke run should prove both startup and configuration before production uses the image. One practical flow is to build the image, boot it with staging secrets, check that the login page responds, then run a harmless pipeline that needs a configured agent label.
+
+```bash
+docker build -t summit-jenkins:lts-2026-06 .
+docker run -d --name summit-jenkins-smoke -p 8080:8080 \
+  -e SUMMIT_ADMIN_PASSWORD=example-staging-password \
+  summit-jenkins:lts-2026-06
+curl -fsS http://localhost:8080/login >/dev/null
+docker rm -f summit-jenkins-smoke
+```
+
+The exact smoke job depends on the installation, but the result should answer three questions: did Jenkins boot, did JCasC apply, and can one representative pipeline reach the agent and tools it expects?
 
 ## Anatomy of jenkins.yaml
 <!-- section-summary: jenkins.yaml describes controller settings in YAML, including system settings, tools, plugins, credentials references, and access control. -->

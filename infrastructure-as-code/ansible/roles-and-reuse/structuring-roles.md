@@ -32,7 +32,7 @@ aliases:
 
 An **Ansible role** is a conventional directory layout for reusable automation. It can hold tasks, defaults, variables, templates, static files, handlers, metadata, and argument validation. A role gives related work one home so playbooks can call it by name.
 
-This becomes useful when a playbook grows past a few tasks. In the previous articles, the orders platform gained directories, templates, copied files, partial edits, handlers, health checks, and rollout behavior. Keeping all of that in one long playbook works for the first version, and repeated reuse turns it into a maintenance problem when staging, production, and disaster-recovery environments need the same service setup.
+This helps when a playbook grows past a few tasks. In the previous articles, the orders platform gained directories, templates, copied files, partial edits, handlers, health checks, and rollout behavior. Keeping all of that in one long playbook works for the first version, and repeated reuse turns it into a maintenance problem when staging, production, and disaster-recovery environments need the same service setup.
 
 A role gives the playbook a cleaner job. The playbook decides which hosts receive the automation and which environment values apply. The role owns how the service is installed, configured, restarted, and checked.
 
@@ -115,7 +115,7 @@ These defaults should be safe and boring. A default port, service name, and conf
 
 Variable names should carry the role prefix, such as `orders_api_`. That lowers the chance of collisions when several roles run in one play. It also makes diffs clear because a variable name tells the reader which role owns it.
 
-`defaults/main.yml` is the friendly public interface. Callers should feel safe overriding those values from inventory or a play. `vars/main.yml` has higher precedence and should be used sparingly for internal constants that callers normally should not change. If a production setting lives in `vars/main.yml`, the role becomes harder to reuse because inventory can no longer override it in the normal way.
+`defaults/main.yml` is the friendly public interface. Callers should feel safe overriding those values from inventory or a play. `vars/main.yml` has higher precedence and should be used sparingly for internal constants that callers normally should not change. If a production setting lives in `vars/main.yml`, the role is harder to reuse because inventory can no longer override it in the normal way.
 
 ## Validating Inputs Early
 <!-- section-summary: Role argument validation and assert tasks catch missing or unsafe values near the start of a run. -->
@@ -220,7 +220,7 @@ The matching handlers live beside the role:
     state: reloaded
 ```
 
-This is the payoff of role structure. A reviewer can open `roles/orders_api` and see the service files, templates, handlers, defaults, and validation in one place. The role becomes the service contract.
+This is the payoff of role structure. A reviewer can open `roles/orders_api` and see the service files, templates, handlers, defaults, and validation in one place. The role acts as the service contract.
 
 ## Calling the Role from Playbooks
 <!-- section-summary: A playbook selects hosts and passes environment-specific values into the role. -->
@@ -269,6 +269,8 @@ ansible -i inventories/staging orders_web -m ansible.builtin.command -a "systemc
 ansible -i inventories/staging orders_web -m ansible.builtin.command -a "nginx -t"
 ```
 
+Role-interface changes need one extra check. When `defaults/main.yml` or `meta/argument_specs.yml` changes, run a staging play with only the role's normal caller values and another run with a deliberately missing required value. The normal run proves existing inventories still satisfy the role. The missing-value run proves the role fails at the boundary with a clear message instead of failing later inside a template or handler.
+
 In CI, teams often run syntax checks for every changed playbook and use Molecule or a similar role test harness for roles that deserve deeper coverage. The important point for a beginner is the workflow: validate structure, preview changes, run in staging, inspect the service, then promote the same role change to production.
 
 For a role that is shared across teams, a lightweight CI job can also run `ansible-lint` and a Molecule scenario against a disposable container or VM image. `ansible-lint` catches common role and task quality problems, while Molecule proves the role can converge and then run again with no surprise changes. Those tools do not replace staging, but they catch many role mistakes before the first real host is involved.
@@ -293,7 +295,7 @@ When roles are shared across repositories or teams, version them deliberately. A
 
 The orders API automation now has a reusable boundary. Defaults describe the role interface. Argument specs and asserts catch bad inputs early. Tasks manage packages, users, directories, templates, files, and health checks. Handlers reload systemd, restart the app, and reload Nginx after the right changed tasks.
 
-The playbook becomes much smaller. It selects the `orders_web` hosts, sets `serial`, and calls `orders_api`. Inventory provides staging or production values. Reviews become more focused because service-specific changes land inside one role directory.
+The playbook stays much smaller. It selects the `orders_web` hosts, sets `serial`, and calls `orders_api`. Inventory provides staging or production values. Reviews stay more focused because service-specific changes land inside one role directory.
 
 Reuse still has timing choices. Sometimes Ansible should load content before the run starts. Sometimes the current host, loop item, or runtime result should choose the content during the run. Imports, includes, and collections cover that next layer.
 

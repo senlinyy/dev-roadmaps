@@ -1,7 +1,7 @@
 ---
 title: "Helm Charts"
 description: "Read and build Helm charts that render predictable Kubernetes manifests for an application."
-overview: "A Helm chart is a packaged set of Kubernetes templates plus metadata. This article shows how `devpolaris-orders-api` becomes a chart while keeping the rendered Deployment and Service easy to inspect."
+overview: "A Helm chart is a packaged set of Kubernetes templates plus metadata. This article packages `devpolaris-orders-api` as a chart while keeping the rendered Deployment and Service easy to inspect."
 tags: ["helm", "charts", "templates", "kubernetes"]
 order: 2
 id: article-containers-orchestration-kubernetes-packaging-helm-charts
@@ -444,7 +444,7 @@ This review style catches chart surprises before the release. If a template chan
 
 ## What's Next
 
-Helm gives the orders API team a structured package with templates, values, helpers, checks, dependencies, and review evidence. The module continues by comparing this approach with Kustomize overlays, then later returns to a larger design question: how teams keep templates useful without letting them spread into a confusing second application.
+Helm gives the orders API team a structured package with templates, values, helpers, checks, dependencies, and review evidence. The next article stays inside Helm and focuses on values: the inputs that choose image tags, replicas, resources, configuration, and routing for each environment.
 
 ---
 

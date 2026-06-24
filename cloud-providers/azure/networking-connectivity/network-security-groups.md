@@ -35,6 +35,8 @@ That placement gives packets a possible path. It still leaves an important secur
 
 A **Network Security Group**, usually shortened to **NSG**, answers that packet permission question. An NSG is Azure's basic stateful packet filtering firewall for resources in a virtual network. It uses rules to allow or deny inbound and outbound traffic based on the packet's source, destination, port, protocol, and direction.
 
+If you know AWS, an NSG sits between the habits of security groups and network ACLs. It is stateful like a security group, but it uses ordered allow and deny rules and can attach at subnet or network-interface level, so always check the association point and rule priority during troubleshooting.
+
 Here is the path we will keep using through the article. Users reach the public entry layer first, the entry layer forwards approved HTTPS traffic to the Orders API, and the API calls the database through a private endpoint. The NSGs sit on subnet and network interface boundaries so each new flow has to match the rule list before it reaches the workload.
 
 ![Azure NSG packet path through public entry, Orders API, and SQL private endpoint](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-packet-path.png)
@@ -202,9 +204,11 @@ This detail can make incident response feel confusing. Someone changes a rule an
 
 An **Application Security Group**, usually shortened to **ASG**, is a named group of network interfaces that represent an application role. Instead of writing an NSG rule from `10.30.2.20` to `10.30.3.40`, the team can write a rule from `asg-orders-api` to `asg-orders-worker`. The rule then follows the role as VM instances scale, move, or receive new private IP addresses.
 
+This name can confuse AWS readers because an Azure ASG is neither an AWS Auto Scaling group nor an AWS security group. In Azure, the ASG is a role label for network interfaces that you reference inside NSG rules; the NSG still owns the allow and deny decision.
+
 This helps the Orders team because production IPs change more often than intent. The API might move from one VM scale set instance to another, or a worker tier might add capacity during a release. The rule should keep saying "orders API can reach orders worker on the approved port" while humans stay out of routine IP address edits.
 
-The shape becomes much easier to review when the rule uses role names. The table now describes application intent instead of a temporary set of private IP addresses:
+Role names make the shape easier to review. The table now describes application intent instead of a temporary set of private IP addresses:
 
 | Role | ASG name | Members |
 |---|---|---|

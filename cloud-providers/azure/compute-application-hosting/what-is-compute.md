@@ -1,7 +1,7 @@
 ---
 title: "What Is Compute"
 description: "Choose an Azure compute service by matching the workload shape to the amount of runtime ownership the team wants."
-overview: "Compute is where application code becomes a running process. This article builds a practical Azure compute map across Virtual Machines, App Service, Container Apps, Functions, and AKS so a beginner can choose by workload shape, ownership, scaling behavior, and production evidence."
+overview: "Compute runs application code as a process. This article builds a practical Azure compute map across Virtual Machines, App Service, Container Apps, Functions, and AKS so a beginner can choose by workload shape, ownership, scaling behavior, and production evidence."
 tags: ["azure", "compute", "app-service", "container-apps", "functions", "aks"]
 order: 1
 id: article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model
@@ -75,13 +75,13 @@ The Orders system has several shapes at the same time. The public API receives H
 
 Here is the beginner map for those shapes. The service names matter, but the shape explains why one service feels natural for a workload and another service creates extra operating work.
 
-| Workload shape | Simple definition | Azure service that often fits |
-|---|---|---|
-| **Server-shaped** | The software needs a full operating system, custom packages, persistent server behavior, or direct admin control. | **Azure Virtual Machines** |
-| **Web-app-shaped** | The software is a normal web app or API that can run inside a managed web hosting platform. | **Azure App Service** |
-| **Container-shaped** | The team deploys container images and wants managed ingress, revisions, scaling, and Azure-managed platform operations. | **Azure Container Apps** |
-| **Event-shaped** | The code runs after a trigger such as HTTP, a timer, a queue message, a blob upload, or a database event. | **Azure Functions** |
-| **Platform-shaped** | The organization needs Kubernetes APIs, shared cluster policy, custom controllers, or deep container platform control. | **Azure Kubernetes Service** |
+| Workload shape | Simple definition | Azure service that often fits | AWS reader anchor |
+|---|---|---|---|
+| **Server-shaped** | The software needs a full operating system, custom packages, persistent server behavior, or direct admin control. | **Azure Virtual Machines** | Amazon EC2 |
+| **Web-app-shaped** | The software is a normal web app or API that can run inside a managed web hosting platform. | **Azure App Service** | Elastic Beanstalk or App Runner |
+| **Container-shaped** | The team deploys container images and wants managed ingress, revisions, scaling, and Azure-managed platform operations. | **Azure Container Apps** | Amazon ECS on Fargate or App Runner |
+| **Event-shaped** | The code runs after a trigger such as HTTP, a timer, a queue message, a blob upload, or a database event. | **Azure Functions** | AWS Lambda |
+| **Platform-shaped** | The organization needs Kubernetes APIs, shared cluster policy, custom controllers, or deep container platform control. | **Azure Kubernetes Service** | Amazon EKS |
 
 This table also explains why a real system can use more than one compute service. The Orders team can run the public API on App Service, a queue worker on Container Apps, a receipt sender on Functions, and a legacy daemon on a VM. The architecture stays easier to operate because each part gets the runtime that matches how it behaves in production.
 
@@ -226,7 +226,7 @@ Functions works best when the unit of work starts from an event and finishes cle
 
 The beginner split is **control plane** versus **node pools**. The control plane is the Kubernetes management layer that accepts API requests, stores desired state, and schedules work. Node pools are groups of VM-backed worker nodes that run the actual pods. Azure helps operate the managed Kubernetes service, while the team still owns cluster configuration, workload manifests, node capacity choices, networking, identity integration, upgrade planning, and application reliability.
 
-For the Orders system, AKS becomes interesting when the company has many services and a platform team that wants Kubernetes-native operations. They might need custom ingress controllers, admission policies, service mesh behavior, shared Helm charts, strict namespace quotas, Kubernetes operators, or a standard cluster platform used by many teams. Those needs justify the extra operating surface because Kubernetes gives the platform team powerful shared controls.
+For the Orders system, AKS is interesting when the company has many services and a platform team that wants Kubernetes-native operations. They might need custom ingress controllers, admission policies, service mesh behavior, shared Helm charts, strict namespace quotas, Kubernetes operators, or a standard cluster platform used by many teams. Those needs justify the extra operating surface because Kubernetes gives the platform team powerful shared controls.
 
 AKS now has different operating experiences, including more managed defaults in AKS Automatic and deeper configuration control in AKS Standard. That distinction matters because "AKS" can mean a fairly guided managed experience or a more configurable cluster platform. The team should still ask the same basic question: which Kubernetes features do we need enough to operate them?
 

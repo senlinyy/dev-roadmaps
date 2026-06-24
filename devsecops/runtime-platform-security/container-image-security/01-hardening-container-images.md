@@ -49,7 +49,7 @@ Here is the path we will take. Each row names the image-hardening choice first, 
 
 ![Image hardening path infographic showing payments-api moving through trusted base, pinned digest, multi-stage build, non-root user, clean secrets, and read-only readiness before the private registry](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/image-hardening-path.png)
 
-*The image-hardening path is easiest to review as a pre-registry gate: the team removes risky defaults before the image becomes a shared release artifact.*
+*The image-hardening path is easiest to review as a pre-registry gate: the team removes risky defaults before the image is a shared release artifact.*
 
 The rest of the article walks through those steps with the same `payments-api` example. We will use Dockerfile snippets and terminal commands, and each command will connect back to what a small production team would actually check.
 

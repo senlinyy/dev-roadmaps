@@ -33,7 +33,9 @@ aliases:
 
 **Azure Kubernetes Service**, usually shortened to **AKS**, is Azure's managed Kubernetes service. Kubernetes is a platform for running containers across many machines, keeping the desired number of application copies alive, restarting failed containers, connecting services through stable names, and rolling out new versions through declarative objects.
 
-Think about a small commerce team. At first, the team has one container called `orders-api`, and Azure Container Apps runs it just fine. A few months later, the system has `orders-api`, `inventory-api`, `payments-worker`, `receipt-worker`, a background fraud check, a private admin API, and a platform team that wants the same deployment pattern across every service. The team also wants service discovery, internal routing, custom traffic rules, workload identity, separate worker capacity, and Kubernetes tools like Helm, KEDA, and policy controllers. That is the point where AKS becomes a real platform choice because the team now wants Kubernetes as the shared operating layer.
+If you know Amazon EKS, AKS fills the same managed Kubernetes job in Azure. Node pools are the everyday Azure place to think about worker capacity, similar to managed node groups, while the surrounding Azure pieces include Microsoft Entra integration, Azure networking, Azure Monitor, and managed identities.
+
+Think about a small commerce team. At first, the team has one container called `orders-api`, and Azure Container Apps runs it just fine. A few months later, the system has `orders-api`, `inventory-api`, `payments-worker`, `receipt-worker`, a background fraud check, a private admin API, and a platform team that wants the same deployment pattern across every service. The team also wants service discovery, internal routing, custom traffic rules, workload identity, separate worker capacity, and Kubernetes tools like Helm, KEDA, and policy controllers. That is the point where AKS is a real platform choice because the team now wants Kubernetes as the shared operating layer.
 
 AKS gives you a Kubernetes cluster, but Azure owns the most painful control plane work. Azure creates and operates the Kubernetes API server, scheduler, controller manager, cloud controller manager, and backing state store. Your team still owns the application shape inside the cluster: container images, manifests, namespaces, node pool design, resource requests, network exposure, identity, monitoring, upgrades, and rollout safety.
 
@@ -300,6 +302,8 @@ Applications inside AKS often need to call other Azure services. `orders-api` ma
 
 Workload identity lets a Kubernetes service account map to a Microsoft Entra application or managed identity. The AKS cluster acts as an OpenID Connect issuer. Microsoft Entra validates the projected service account token and exchanges it for a Microsoft Entra token that the workload can use with Azure SDKs. The pod receives temporary identity-based access, and long-lived Azure secrets stay out of YAML.
 
+AWS readers can anchor this to the same goal as IRSA or EKS Pod Identity: a pod receives cloud access through a Kubernetes service account and short-lived credentials instead of a stored key. In AKS, the trust path goes through Microsoft Entra and Azure RBAC or service-specific data-plane permissions.
+
 ```yaml
 apiVersion: v1
 kind: ServiceAccount
@@ -348,7 +352,7 @@ Some workloads need a **flat network** shape where pods receive IPs from an Azur
 
 Older AKS material often talks about **kubenet**. Current Microsoft Learn AKS networking guidance marks kubenet as legacy, and Microsoft has announced kubenet retirement for AKS on March 31, 2028. Fresh designs should evaluate Azure CNI paths, while existing kubenet clusters need migration planning.
 
-Network policy is the next layer after IP planning. A service name makes one workload reachable, but a network policy can restrict which pods may call it. For example, the platform team may allow `orders-api` to call `inventory-api` while blocking random test pods from reaching the same service. This is where Kubernetes networking becomes part of security design alongside routing.
+Network policy is the next layer after IP planning. A service name makes one workload reachable, but a network policy can restrict which pods may call it. For example, the platform team may allow `orders-api` to call `inventory-api` while blocking random test pods from reaching the same service. This is where Kubernetes networking joins security design alongside routing.
 
 Private access to Azure resources adds another layer. If `orders-api` calls Azure SQL through a private endpoint, the cluster needs DNS and network routes that resolve the database hostname to the private address and allow traffic from the node or pod network. A workload identity token proves who the pod is, and the network path proves the request can physically reach the service.
 

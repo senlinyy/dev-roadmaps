@@ -65,7 +65,7 @@ The orders bill is still high, though. The next step is finding the expensive ar
 ## Cost Analysis
 <!-- section-summary: Cost Analysis turns one large Azure number into grouped views by scope, service, resource, tag, and date. -->
 
-**Cost Analysis** is the place where the team slices Azure spend into useful views. A **scope** is the boundary you are looking at, such as a billing account, management group, subscription, or resource group. The scope matters because a company may have shared platform subscriptions, product subscriptions, sandbox subscriptions, and one-off test resource groups. A bill increase only becomes actionable after the team knows which boundary contains it.
+**Cost Analysis** is the place where the team slices Azure spend into useful views. A **scope** is the boundary you are looking at, such as a billing account, management group, subscription, or resource group. The scope matters because a company may have shared platform subscriptions, product subscriptions, sandbox subscriptions, and one-off test resource groups. A bill increase is actionable only after the team knows which boundary contains it.
 
 For the orders service, the team starts at the subscription scope and compares the current month against the previous month. The first grouping is **service name**, because that separates broad Azure product families. The chart shows that Virtual Machines stayed flat, Azure SQL grew a little, and Log Analytics grew a lot. That tells the team the increase probably comes from monitoring data instead of compute.
 
@@ -115,7 +115,7 @@ Content-Type: application/json
 }
 ```
 
-The query asks Azure for month-to-date usage cost, grouped by resource group, filtered to resources tagged with `service=orders-api`. The result rows usually include cost, the grouping value, usage date, and currency. The exact report design changes by scope and API version, but the idea stays the same: cost work becomes repeatable when the team can ask the same grouped question every month.
+The query asks Azure for month-to-date usage cost, grouped by resource group, filtered to resources tagged with `service=orders-api`. The result rows usually include cost, the grouping value, usage date, and currency. The exact report design changes by scope and API version, but the idea stays the same: cost work is repeatable when the team can ask the same grouped question every month.
 
 Cost Analysis also has limits that beginners often miss. Some charges have no deployed resource behind them, such as purchases or marketplace charges. Some resource types leave tags out of usage data. Resource tags show in Cost Management only after cost data refreshes. A tag applied today affects future refreshed data rather than last month's history. That is why a clean cost process needs tags long before the bill review.
 
@@ -163,6 +163,17 @@ The resource group tag set gives the team a useful boundary, but there is an imp
 That distinction matters during the orders investigation. If `law-orders-prod` has `service=orders-api` and `owner=commerce-platform`, the budget and monthly report can route the increase to the right team. If the workspace has no tags, the finance report may show the charge as untagged, and the platform team has to inspect resource names and deployment history by hand.
 
 **Azure Policy** is the usual way to keep tags consistent. Azure Policy is a governance service that evaluates resource configuration against rules. For tags, a policy can audit missing tags, deny a deployment that lacks required tags, or use the `modify` effect to add or update tags during create or update operations. A common production pattern is to require `service`, `env`, and `owner` on resources, then use policy remediation to repair older resources where possible.
+
+The practical check is a tag audit the service owner can run without opening every resource page. This query lists the resources that Cost Management should be able to group under the orders service after billing data refreshes.
+
+```bash
+az resource list \
+  --tag service=orders-api \
+  --query "[].{name:name,type:type,resourceGroup:resourceGroup,env:tags.env,owner:tags.owner}" \
+  --output table
+```
+
+The output tells the team where tag values are used. `service` groups spend by workload. `env` separates production from staging. `owner` gives the alert or review a destination. If a costly workspace or storage account is missing from this list, the monthly report may put its cost in an untagged bucket even though the resource name looks obvious to humans.
 
 :::expand[Pitfall: Resource Group Tags Alone]{kind="pitfall"}
 Many teams start with a clean resource group naming scheme and assume cost allocation is solved. The names look helpful: `rg-orders-prod`, `rg-orders-staging`, and `rg-payments-prod`. Then the bill arrives and the untagged bucket is still large.
@@ -215,6 +226,8 @@ Now the team has an alert loop. The next question is what to do with the recomme
 
 **Azure Advisor** helps with this work by finding idle and underutilized resources and showing cost recommendations. Advisor can point at virtual machines, virtual machine scale sets, reservations, App Service plans, SQL resources, and other services depending on the recommendation type. It is useful because it turns platform telemetry into a candidate list. It saves the team from manually hunting through every resource.
 
+AWS teams often do this first-pass review with Compute Optimizer and Trusted Advisor recommendations. Azure Advisor plays that candidate-list role in Azure, and the service owner still needs workload context before resizing, stopping, or deleting anything.
+
 Advisor is still the beginning of the decision. A resource can look idle for good reasons. A virtual machine might run a month-end settlement job for two hours and sit quiet for the rest of the month. A database might have low average CPU but strict latency needs during checkout peaks. A standby environment might look wasteful until the day the primary region has a serious issue. The recommendation says, "this deserves review." The owner decides after checking workload context.
 
 For the orders bill, Advisor flags a Standard `D8s_v5` worker VM with low average CPU. Cost Analysis shows the worker belongs to `rg-orders-prod`. Tags show `owner=commerce-platform`. Metrics show CPU is low most days, but the queue dashboard shows heavy use during Friday refund processing. Deployment notes show the worker runs a weekly reconciliation process that finance depends on. The team has three choices:
@@ -237,6 +250,17 @@ A safe right-sizing review usually combines four kinds of evidence:
 | Service promise | The article before this one classified orders as `tier-1`. | How careful the review needs to be. |
 
 Right-sizing works best as a measured change. For a production database, the team looks at CPU, memory, DTU or vCore pressure, IOPS, lock waits, connection count, latency, and business traffic windows. For a VM, the team looks at CPU, memory, disk, network, scheduled jobs, and scaling behavior. For logs, the team looks at ingestion by table, retention, diagnostic settings, and whether the data supports security, debugging, compliance, or product analytics.
+
+For the Log Analytics spike in this article, the owner can pair the cost view with a workspace query. The query below complements Cost Analysis because it shows telemetry ingestion by table rather than invoice cost. It shows which data tables grew after release `v2.4`.
+
+```kusto
+Usage
+| where TimeGenerated > ago(14d)
+| summarize IngestedGB = sum(Quantity) / 1024 by DataType, bin(TimeGenerated, 1d)
+| order by TimeGenerated asc, IngestedGB desc
+```
+
+That signal gives the right person something concrete to fix. If `AppTraces` jumped, the app team reviews logging level and repeated exception messages. If `AzureDiagnostics` jumped, the platform team reviews diagnostic settings on chatty resources. If the increase belongs to a security table, the team checks the security requirement before lowering retention or filtering data.
 
 Now the team can tune with context. There is one more practical habit: looking for the cost leaks that appear again and again in Azure accounts.
 

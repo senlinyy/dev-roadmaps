@@ -20,9 +20,10 @@ aliases:
 5. [Stateful Return Traffic](#stateful-return-traffic)
 6. [Targets: Tags and Service Accounts](#targets-tags-and-service-accounts)
 7. [Firewall Policies for Shared Guardrails](#firewall-policies-for-shared-guardrails)
-8. [Logging and Troubleshooting](#logging-and-troubleshooting)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+8. [gcloud and Terraform Firewall Baseline](#gcloud-and-terraform-firewall-baseline)
+9. [Verification Commands and Troubleshooting](#verification-commands-and-troubleshooting)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## Firewall Rules as Packet Decisions
 <!-- section-summary: A firewall rule is an access decision for packets that enter or leave VM interfaces in a VPC network. -->
@@ -176,12 +177,166 @@ For the food delivery company, a central platform team might create a folder-lev
 
 This layered design also affects troubleshooting. When a packet is denied, the denied decision might come from a hierarchical policy, a global network firewall policy, or a VPC firewall rule. Logs and testing tools help find the actual layer.
 
-## Logging and Troubleshooting
-<!-- section-summary: Firewall logging and Connectivity Tests help teams prove which rule or network step controls a packet path. -->
+## gcloud and Terraform Firewall Baseline
+<!-- section-summary: A practical firewall baseline turns the web, API, database, and admin paths into reviewed rules with clear priorities and logging. -->
+
+Now turn the food delivery packet story into actual configuration. The team has one custom-mode VPC called `food-prod-vpc`. The web tier runs as `web-prod@food-prod.iam.gserviceaccount.com`, the API tier runs as `api-prod@food-prod.iam.gserviceaccount.com`, and the database private address is `10.40.0.15`.
+
+The first rule blocks direct internet SSH and RDP. This is a guardrail rule, so it uses a low priority number and logging:
+
+```bash
+gcloud compute firewall-rules create deny-ingress-admin-from-internet \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --direction=INGRESS \
+  --priority=100 \
+  --deny=tcp:22,tcp:3389 \
+  --source-ranges=0.0.0.0/0 \
+  --enable-logging
+```
+
+The next rule allows the expected application path. The source and target are service accounts, so the rule follows workload identity instead of VM names or IP addresses:
+
+```bash
+gcloud compute firewall-rules create allow-ingress-api-from-web-tcp-8080 \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --direction=INGRESS \
+  --priority=800 \
+  --allow=tcp:8080 \
+  --source-service-accounts=web-prod@food-prod.iam.gserviceaccount.com \
+  --target-service-accounts=api-prod@food-prod.iam.gserviceaccount.com \
+  --enable-logging
+```
+
+If the team restricts egress, the API tier also needs a database path:
+
+```bash
+gcloud compute firewall-rules create allow-egress-api-to-db-tcp-5432 \
+  --project=food-prod \
+  --network=food-prod-vpc \
+  --direction=EGRESS \
+  --priority=900 \
+  --allow=tcp:5432 \
+  --destination-ranges=10.40.0.15/32 \
+  --target-service-accounts=api-prod@food-prod.iam.gserviceaccount.com \
+  --enable-logging
+```
+
+In a real production repo, the same rules usually live in Terraform. Terraform gives review, history, plan output, and rollback through the infrastructure workflow:
+
+```hcl
+resource "google_compute_firewall" "deny_ingress_admin_from_internet" {
+  project   = var.project_id
+  name      = "deny-ingress-admin-from-internet"
+  network   = google_compute_network.food_prod.self_link
+  direction = "INGRESS"
+  priority  = 100
+
+  source_ranges = ["0.0.0.0/0"]
+
+  deny {
+    protocol = "tcp"
+    ports    = ["22", "3389"]
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+}
+
+resource "google_compute_firewall" "allow_ingress_api_from_web" {
+  project   = var.project_id
+  name      = "allow-ingress-api-from-web-tcp-8080"
+  network   = google_compute_network.food_prod.self_link
+  direction = "INGRESS"
+  priority  = 800
+
+  source_service_accounts = [
+    "web-prod@${var.project_id}.iam.gserviceaccount.com"
+  ]
+
+  target_service_accounts = [
+    "api-prod@${var.project_id}.iam.gserviceaccount.com"
+  ]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+}
+
+resource "google_compute_firewall" "allow_egress_api_to_db" {
+  project   = var.project_id
+  name      = "allow-egress-api-to-db-tcp-5432"
+  network   = google_compute_network.food_prod.self_link
+  direction = "EGRESS"
+  priority  = 900
+
+  destination_ranges = ["10.40.0.15/32"]
+
+  target_service_accounts = [
+    "api-prod@${var.project_id}.iam.gserviceaccount.com"
+  ]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["5432"]
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+}
+```
+
+The important production habit is that each rule name reads like the sentence the team says during review: allow ingress to API from web on TCP `8080`, allow egress from API to database on TCP `5432`, and deny internet admin ports. The priority numbers, service accounts, ports, and logging settings should all match that sentence.
+
+## Verification Commands and Troubleshooting
+<!-- section-summary: Firewall logging, rule listing, Connectivity Tests, and flow evidence help teams prove which rule or network step controls a packet path. -->
 
 Firewall rules can have logging enabled. **Firewall Rules Logging** records information about connections that match a rule. This helps answer practical questions like "Did the API allow rule match?" and "Which deny rule blocked the packet?" Unique priorities and clear rule names make those logs far easier to read.
 
 Good rule names explain direction, target, source, and port. A name like `allow-ingress-api-from-web-tcp-8080` carries more operational value than `api-rule-1`. During an incident, the person reading logs gets the rule's purpose from the name before opening the full configuration.
+
+The first verification command lists the rule set in the order humans usually review it:
+
+```bash
+gcloud compute firewall-rules list \
+  --project=food-prod \
+  --filter='network~food-prod-vpc' \
+  --sort-by=priority \
+  --format='table(name,direction,priority,disabled,allowed,denied,sourceRanges,destinationRanges,targetServiceAccounts)'
+```
+
+The second command describes one rule when the team needs exact fields:
+
+```bash
+gcloud compute firewall-rules describe allow-ingress-api-from-web-tcp-8080 \
+  --project=food-prod \
+  --format=yaml
+```
+
+The third check creates a Connectivity Test for the expected web-to-API path. The instance URIs and IP addresses should come from the actual incident or deployment evidence:
+
+```bash
+gcloud network-management connectivity-tests create web-to-api-8080 \
+  --project=food-prod \
+  --source-instance=projects/food-prod/zones/us-central1-a/instances/web-1 \
+  --source-ip-address=10.20.10.15 \
+  --destination-instance=projects/food-prod/zones/us-central1-a/instances/api-1 \
+  --destination-ip-address=10.20.20.9 \
+  --destination-port=8080 \
+  --protocol=TCP
+
+gcloud network-management connectivity-tests describe web-to-api-8080 \
+  --project=food-prod \
+  --format=yaml
+```
 
 Google Cloud also provides **Connectivity Tests** in Network Intelligence Center. Connectivity Tests can analyze the expected forwarding path for traffic between endpoints, such as a VM, GKE cluster, load balancer forwarding rule, or internet IP address. For some paths, it can also run live data plane analysis. This is useful when the route exists, but the packet still fails because a firewall rule, policy, or next hop blocks the path.
 
@@ -223,5 +378,9 @@ From here, the roadmap can move into DNS, certificates, load balancers, public e
 **References**
 
 - [Google Cloud: VPC firewall rules](https://docs.cloud.google.com/firewall/docs/firewalls) - Documents firewall rule direction, priority, actions, implied rules, default network rules, targets, stateful behavior, and logging.
+- [Google Cloud: Use VPC firewall rules](https://docs.cloud.google.com/firewall/docs/using-firewalls) - Shows how to create, update, list, and manage VPC firewall rules with the Google Cloud CLI.
+- [Google Cloud SDK: gcloud compute firewall-rules create](https://docs.cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/create) - Documents current flags for allow and deny rules, source ranges, source service accounts, target service accounts, priorities, and logging.
 - [Google Cloud: Hierarchical firewall policies](https://docs.cloud.google.com/firewall/docs/firewall-policies) - Explains organization and folder-level firewall policies, inheritance, delegation, and shared guardrail use cases.
 - [Google Cloud: Connectivity Tests overview](https://docs.cloud.google.com/network-intelligence-center/docs/connectivity-tests/concepts/overview) - Describes configuration analysis and packet path simulation for troubleshooting connectivity.
+- [Google Cloud SDK: gcloud network-management connectivity-tests create](https://docs.cloud.google.com/sdk/gcloud/reference/network-management/connectivity-tests/create) - Documents current CLI fields for source, destination, port, protocol, and cross-project Connectivity Tests.
+- [Terraform Registry: google_compute_firewall](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_firewall) - Defines the Terraform resource shape for VPC firewall rules, service account targets, allow and deny blocks, and logging configuration.

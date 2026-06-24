@@ -30,12 +30,14 @@ aliases:
 
 **Azure App Service** is Azure's managed hosting platform for HTTP applications such as web apps, REST APIs, and mobile back ends. Managed hosting means Azure operates the underlying server fleet, front-end routing layer, operating system patching, platform runtime, TLS support, and scaling machinery. Your team brings the application code or container image, then configures how that application starts, what settings it receives, how it authenticates to other Azure services, and how operators prove that it is healthy.
 
+For AWS readers, the closest anchors are Elastic Beanstalk for managed web-app hosting and App Runner for a simpler managed app runtime. The Azure detail to notice is the **App Service plan**, because it is the regional worker capacity and pricing boundary that one or more Web Apps can share.
+
 We will follow one production example through the whole article. The Orders team runs `app-orders-api-prod`, a Node.js API that receives checkout requests, reads secrets from Key Vault, writes order records to Azure SQL, stores receipt PDFs in Blob Storage, and ships a new version every week. A virtual machine could run that API too, but the team would then own the operating system, web server setup, process supervisor, patching routine, and most of the release wiring. App Service lets the team work at the web application layer while Azure handles the platform layer.
 
 The managed part does a lot, but it leaves real production choices in your hands. The team still decides the App Service plan size, whether several apps share compute, which app settings belong to production, which identity can read which secret, how a staging slot gets warmed before a swap, which network paths are public or private, how many instances should run, and which logs prove a release is safe. Those choices are the practical App Service story.
 
 ## The App Service Shape
-<!-- section-summary: A production App Service app becomes understandable when the team names the plan, web app, settings, identity, slots, network paths, scale rules, and health evidence separately. -->
+<!-- section-summary: A production App Service app needs separate names for the plan, web app, settings, identity, slots, network paths, scale rules, and health evidence. -->
 
 Before we zoom into individual features, it helps to name the pieces in the order you usually meet them during a real deployment. The App Service plan gives the app CPU and memory. The Web App resource tells Azure what to run on that capacity. Settings, identity, slots, networking, scale, and health checks then turn that runnable app into something a team can operate with evidence.
 
@@ -157,6 +159,37 @@ Here is the kind of app settings shape the Orders team might keep with its deplo
 
 The table behind that JSON tells a useful production story. Database host and password differ by environment, so they stay with the slot. A feature flag that should move with the release can swap with the code. This small distinction prevents a very real failure: the new code reaches production but talks to the staging database because the setting moved with the wrong thing.
 
+The same idea can be applied from the Azure CLI during a release. The first command writes the production values to the production slot and marks the database settings as slot-sticky. The second command writes staging values to the staging slot. The values are used by the Node.js process as environment variables after App Service restarts the app.
+
+```bash
+az webapp config appsettings set \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --slot-settings ORDERS_DB_HOST=sql-orders-prod.database.windows.net \
+                  ORDERS_DB_PASSWORD='@Microsoft.KeyVault(SecretUri=https://kv-orders-prod.vault.azure.net/secrets/orders-db-password/)' \
+  --settings FEATURE_CHECKOUT_V2=true
+
+az webapp config appsettings set \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --slot staging \
+  --slot-settings ORDERS_DB_HOST=sql-orders-staging.database.windows.net \
+                  ORDERS_DB_PASSWORD='@Microsoft.KeyVault(SecretUri=https://kv-orders-staging.vault.azure.net/secrets/orders-db-password/)' \
+  --settings FEATURE_CHECKOUT_V2=true
+```
+
+After the pipeline applies the settings, the operator verifies the shape rather than printing secret values into a ticket. App Service redacts setting values in command output, so the check focuses on names and the slot-sticky flag.
+
+```bash
+az webapp config appsettings list \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --query "[].{name:name,slotSetting:slotSetting}" \
+  --output table
+```
+
+The healthy result shows `ORDERS_DB_HOST` and `ORDERS_DB_PASSWORD` as slot settings, while `FEATURE_CHECKOUT_V2` can move with the release when that is the intended behavior. That small check catches the common mistake where a database value exists, but it follows the code during a swap instead of staying with the environment.
+
 Settings explain what the process knows. The next question is how the process proves who it is when it calls Key Vault, Storage, SQL, or another Azure service. That is where managed identity enters the story.
 
 ## Managed Identity
@@ -211,6 +244,25 @@ The safest slot story treats staging as a real runtime and a validation target. 
 *A slot release is safest when the new code warms in staging, health and logs are checked, sticky settings stay with the environment, and the swap moves traffic only after the candidate is ready.*
 
 Slots share the plan workers, so they still need capacity planning. A heavy staging load test can compete with production when both slots live in the same plan. For high-risk releases, teams often run smoke tests that prove startup and key paths while keeping the staging slot from becoming a second production-scale traffic source.
+
+Here is the practical release sequence the Orders team can put in a runbook. The slot creation step gives the deployment a live target. The warmup and health checks prove the candidate before traffic moves. The swap happens after those validation steps.
+
+```bash
+az webapp deployment slot create \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --slot staging
+
+curl --fail https://app-orders-api-prod-staging.azurewebsites.net/healthz
+
+az webapp deployment slot swap \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --slot staging \
+  --target-slot production
+```
+
+The values here become operational evidence. `staging` is the release target, `/healthz` is the health contract, and `production` is the traffic target after validation. If `/healthz` fails, the team fixes the staging candidate and leaves production untouched.
 
 Slots solve release movement. Networking decides who can reach the app and what the app can reach, so that is the next piece.
 
@@ -360,7 +412,7 @@ resource stickySettings 'Microsoft.Web/sites/config@2022-03-01' = {
 
 When something breaks, this same structure gives the team a troubleshooting path. A deployment that fails to start points to the Web App runtime, package, startup command, or settings. A `403` from Key Vault points to managed identity and target authorization. A private database timeout points to outbound networking, DNS, or firewall rules. A slow sale-day checkout points to plan metrics, scale rules, database limits, and application traces.
 
-App Service is beginner-friendly because it removes a lot of server work. It becomes production-ready when the team can explain each part of the runtime: where the compute lives, what app profile runs, which settings arrive, which identity calls dependencies, how releases move, which paths are public or private, how scale behaves, and which evidence proves the app is healthy.
+App Service is beginner-friendly because it removes a lot of server work. A production-ready App Service setup explains each part of the runtime: where the compute lives, what app profile runs, which settings arrive, which identity calls dependencies, how releases move, which paths are public or private, how scale behaves, and which evidence proves the app is healthy.
 
 ![Production App Service checklist showing capacity, runtime, configuration, access, network, and operations evidence around the production Orders API](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/production-app-service-checklist.png)
 
@@ -368,7 +420,7 @@ App Service is beginner-friendly because it removes a lot of server work. It bec
 
 ## What's Next
 
-The next article moves from App Service to Azure Container Apps. App Service is a strong fit when a web app or API matches the supported runtime and App Service release model. Container Apps becomes interesting when the team wants container-first revisions, event-driven scale rules, sidecars, and a managed environment that feels closer to modern container platforms while avoiding full Kubernetes cluster responsibility.
+The next article moves from App Service to Azure Container Apps. App Service is a strong fit when a web app or API matches the supported runtime and App Service release model. Container Apps is interesting when the team wants container-first revisions, event-driven scale rules, sidecars, and a managed environment that feels closer to modern container platforms while avoiding full Kubernetes cluster responsibility.
 
 ---
 

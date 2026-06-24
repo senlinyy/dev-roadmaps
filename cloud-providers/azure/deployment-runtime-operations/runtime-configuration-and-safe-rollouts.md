@@ -53,6 +53,8 @@ This article has two connected halves. First, we talk about **app settings**, **
 
 **Runtime configuration** is the set of values your application receives from the hosting platform while it runs. These values usually include environment variables, app settings, connection strings, feature flags, service endpoints, secret references, telemetry connection strings, and sometimes platform settings such as scale or probes.
 
+AWS readers can treat this as the same runtime-value habit used with environment variables in Lambda, ECS, Elastic Beanstalk, or App Runner. Azure app settings are the platform-managed place where many of those values live for App Service, Functions, and similar runtimes.
+
 The important idea is that runtime configuration changes behavior while the team reuses the same artifact. The same container image can run in staging with a staging database and in production with a production database. The same App Service package can run with a feature flag off in production and on in a staging slot. The code stays the same, while the runtime values decide which outside systems the code reaches.
 
 For `devpolaris-orders-api`, the candidate image contains the receipt retry code. These runtime values decide what the code actually does, so the release owner should read them with the same care as the image digest:
@@ -167,6 +169,8 @@ A feature flag is a runtime decision point. The code contains both paths, and th
 
 Azure App Configuration is one Azure-native place to store feature flags, and many teams use a broader flag platform such as LaunchDarkly, Unleash, ConfigCat, or a homegrown service. **OpenFeature** is the industry-standard API layer that can sit between application code and the flag provider, so the application code asks for a flag value without being tightly coupled to one vendor. The important release habit is the same across providers: the flag key, default value, rollout rule, owner, and rollback action should be visible before production traffic moves.
 
+Azure App Configuration sits in the same operating space as AWS AppConfig, sometimes with nearby values stored in Systems Manager Parameter Store. The important habit is provider-neutral: flags and config changes need owners, defaults, rollout rules, and rollback actions.
+
 Here is how the orders API can read a flag through OpenFeature. The provider setup happens during application startup, and the request handler asks for the flag with a safe default. If the flag provider is unavailable, the default keeps receipt retry off rather than surprising production traffic.
 
 ```js
@@ -226,6 +230,8 @@ Feature flags and traffic splitting solve different rollout problems. Traffic sp
 <!-- section-summary: Key Vault references let an app setting point to a secret while the runtime identity retrieves the value. -->
 
 **Azure Key Vault** stores secrets, keys, and certificates. A **Key Vault reference** is an app setting value that points to a Key Vault secret instead of storing the secret value directly in the app configuration. App Service and Azure Functions can resolve these references at runtime by using the app's managed identity. Container Apps can also reference Key Vault secrets through its secrets configuration when a managed identity has permission to read the secret.
+
+AWS readers can compare the secret-store role to Secrets Manager or SSM Parameter Store, with the app runtime receiving permission through its cloud identity. In Azure, that identity is usually a managed identity with Key Vault access.
 
 This is useful because secret ownership moves away from the app setting itself. The app setting can say "use this secret in Key Vault," while the actual secret value stays in the vault. People reviewing a release can see which secret the app targets while the secret value stays hidden.
 
@@ -290,7 +296,7 @@ Secret mistakes often look like application bugs at first. A container starts bu
 Once settings and secrets have real release risk, the team needs a rollback plan for configuration by itself. That plan should exist before the team starts changing traffic.
 
 ## How To Wire Secrets Into A Runtime
-<!-- section-summary: Secret wiring becomes concrete when the release owner sets the secret reference, maps it into the app, and verifies the app can read it. -->
+<!-- section-summary: Secret wiring is concrete after the release owner sets the secret reference, maps it into the app, and verifies the app can read it. -->
 
 For App Service, a Key Vault reference is just an app setting value with special syntax. The release owner sets the app setting to the secret URI, and the app's managed identity must have permission to read that secret.
 
@@ -350,7 +356,7 @@ This plan separates values that changed from values that stayed stable. During a
 
 Configuration rollback also needs runtime awareness. In App Service, restoring an app setting can restart the app. In Container Apps, a setting inside the revision template may create a new revision, while an application-scope secret change may require restart or a new consuming revision for running containers. In both cases, the team should expect a short period where old and new runtime behavior can overlap.
 
-After settings have a rollback path, the team can name the actual candidate version that will receive traffic. That candidate name becomes the bridge between configuration review and rollout control.
+After settings have a rollback path, the team can name the actual candidate version that will receive traffic. That candidate name bridges configuration review and rollout control.
 
 ## How To Restore Config
 <!-- section-summary: Restoring config means putting the previous value back in the same runtime surface and checking that the app actually uses it. -->
@@ -534,6 +540,8 @@ The important part is the decision rule attached to each step. A traffic percent
 Traffic splitting has a real production tradeoff. A 10 percent canary reduces blast radius, but it also means some users see the candidate while others see the stable version. If the release changes API responses, database writes, cache keys, or message formats, the team must confirm old and new versions can run side by side. For the orders API, `v30` and `v31` both need to understand the same order records and receipt storage layout while traffic is split.
 
 Many Azure teams run this same idea through Kubernetes tooling on AKS. Helm or Kustomize often packages the manifests, while Argo Rollouts, Flagger, ingress controllers, or a service mesh can drive canary and blue-green behavior. App Service slots and Container Apps revision weights remain useful in the same family of controls. The release principle is portable: prepare a candidate, expose it gradually, watch agreed signals, and keep the recovery move ready in the platform that actually routes traffic.
+
+On AWS, teams may run this same rollout pattern through CodeDeploy, Lambda aliases, ECS deployment settings, or ALB weighted target groups. The shared idea is gradual exposure with a ready path back, while the platform-specific command changes.
 
 Traffic splitting gives the team control over exposure. The rollback shape tells the team how to recover from each exposure level.
 

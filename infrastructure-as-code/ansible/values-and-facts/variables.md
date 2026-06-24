@@ -199,6 +199,15 @@ A canary check with check and diff mode shows how variables will affect rendered
 ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com --check --diff
 ```
 
+After the real canary run, verify one rendered non-secret value on the host. This catches cases where the inventory value looked correct but the template used a different variable name.
+
+```bash
+ansible -i inventories/prod/hosts.yml orders-web-01.example.com \
+  -m ansible.builtin.command \
+  -a "grep '^listen_port:' /etc/orders-api/config.yml" \
+  --become
+```
+
 For temporary debugging, a tagged debug task can show a non-secret value during a controlled run. The tag keeps this output out of normal deploys.
 
 ```yaml

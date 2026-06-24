@@ -92,6 +92,23 @@ The item can carry extra attributes for future workflows, but those attributes d
 
 This is the production lesson: write the real reads and writes before choosing keys. If the team cannot name the access patterns, DynamoDB design turns into guessing. If the access patterns are clear, DynamoDB can be very predictable.
 
+The first table command should match those access patterns instead of a generic table shape. This example creates the Maple Market app-state table with a composite primary key, on-demand capacity, and point-in-time recovery enabled after creation:
+
+```bash
+aws dynamodb create-table \
+  --table-name maple-prod-app-state \
+  --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --deletion-protection-enabled
+
+aws dynamodb update-continuous-backups \
+  --table-name maple-prod-app-state \
+  --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+```
+
+The command makes two production choices visible. `PAY_PER_REQUEST` fits a new workload with uncertain traffic, while deletion protection and PITR reduce the chance that a bad operator action or application bug permanently removes table data.
+
 ## Conditional Writes and Idempotency
 <!-- section-summary: Conditional writes let DynamoDB protect workflows from duplicate requests and unsafe overwrites. -->
 
@@ -116,6 +133,17 @@ The service can create an idempotency item with a condition that the item does n
 ```
 
 If the item already exists, DynamoDB rejects the write with a conditional check failure. The service can then read the existing item and return the already-created result or wait for the first request to finish. That is much safer than checking first and writing later because a check-then-write sequence can race under concurrent requests.
+
+The same conditional write is visible from the AWS CLI. A payment worker can use this shape during a smoke test before the application code owns the call:
+
+```bash
+aws dynamodb put-item \
+  --table-name maple-prod-app-state \
+  --item file://idempotency-item.json \
+  --condition-expression 'attribute_not_exists(pk)'
+```
+
+The expected duplicate-request signal is `ConditionalCheckFailedException`. For idempotency paths, responders should treat that error as a business conflict signal first. It often means the protection worked and a repeated request returned the existing payment result. The application logs should label that case clearly so responders can separate healthy duplicate suppression from unexpected write failures.
 
 DynamoDB also supports transactions for cases where multiple items need coordinated changes. Transactions are useful, but they should stay tied to clear access patterns and measured needs. If most of the application needs broad relational transactions and flexible joins, the data may belong in RDS or Aurora instead. For key-based concurrency barriers, DynamoDB conditional writes are often a clean fit.
 
@@ -152,6 +180,39 @@ Read consistency also matters. DynamoDB can serve eventually consistent reads fo
 The main observability signals include throttled requests, consumed read and write capacity, successful request latency, system errors, user errors, hot partition symptoms, stream iterator age, conditional check failures, and account-level limits. Conditional check failures can be healthy if they represent duplicate payment requests being blocked, so alarms should separate expected business conflicts from unexpected failures.
 
 A practical DynamoDB launch review includes one load test. Maple Market can generate traffic with realistic key distribution, not only random UUIDs. Random keys can make a bad design look good because they spread perfectly. Production traffic often has popular customers, hot products, repeated sessions, and launch spikes. The test data should include those shapes.
+
+The basic operating signals can be pulled from CloudWatch before and after that load test:
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name ReadThrottleEvents \
+  --dimensions Name=TableName,Value=maple-prod-app-state \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T11:00:00Z \
+  --period 60 \
+  --statistics Sum
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name WriteThrottleEvents \
+  --dimensions Name=TableName,Value=maple-prod-app-state \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T11:00:00Z \
+  --period 60 \
+  --statistics Sum
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/DynamoDB \
+  --metric-name SuccessfulRequestLatency \
+  --dimensions Name=TableName,Value=maple-prod-app-state Name=Operation,Value=GetItem \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T11:00:00Z \
+  --period 60 \
+  --statistics Average Maximum
+```
+
+If throttles rise while total traffic stays modest, the team should look at key distribution before adding capacity. If `GetItem` latency rises only for one access path, the item size, key heat, or downstream application behavior may be the real problem.
 
 ## Production Table Checklist
 <!-- section-summary: DynamoDB production reviews should check access patterns, key heat, indexes, recovery, expiry, security, and cost. -->

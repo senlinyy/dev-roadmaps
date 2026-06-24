@@ -37,11 +37,13 @@ In the previous article, we talked about **Microsoft Entra ID** as the place whe
 
 Azure RBAC is Azure's authorization system for Azure resources. In beginner-friendly words, it is the system that connects a known caller to a permission bundle at a specific Azure boundary. A support engineer can inspect a resource group, a deployment pipeline can update one web app, and a running API can write files to one storage account because Azure RBAC has records that say those exact jobs are allowed.
 
+For AWS readers, Azure RBAC fills the same authorization job that IAM policies and roles often fill for AWS resources. The Azure detail to notice is the **role assignment**: a principal receives a role at a management group, subscription, resource group, or resource scope, while AWS designs often combine account boundaries, identity policies, resource policies, and role trust.
+
 We can read almost every Azure RBAC problem through four pieces: **principal**, **role**, **scope**, and **action**. The principal is who or what asks for access. The role is the permission bundle. The scope is where that role applies. The action is the operation Azure receives, such as reading a resource, updating an app setting, creating a role assignment, or writing a blob.
 
 ![Azure RBAC four fact decision map showing principal, role, scope, and action meeting at an access check](/content-assets/articles/article-cloud-providers-azure-identity-security-what-is-azure-rbac/rbac-decision-four-facts.png)
 
-*Azure RBAC becomes easier to review when the request names the principal, role, scope, and action instead of asking for broad Azure access.*
+*A good Azure RBAC review names the principal, role, scope, and action instead of asking for broad Azure access.*
 
 Let's follow one Orders production system through the whole article. Maya is an engineer who investigates incidents. `spn-orders-deploy-prod` is the deployment identity that ships the app. `mi-orders-api-prod` is the managed identity used by the running API. These callers all belong to the same story, but they need different access because their jobs are different. The deployment identity gives us a useful first example because a denied deployment usually names the caller, action, and target resource right in the error.
 
@@ -119,7 +121,7 @@ The role assignment cares about the object ID. The client ID may appear in token
 }
 ```
 
-Now the reviewer knows the exact caller, so the next question becomes permission-shaped: which role contains the action the caller needs? That takes us from identity records into role definitions.
+Now the reviewer knows the exact caller, so the next question is permission-shaped: which role contains the action the caller needs? That takes us from identity records into role definitions.
 
 ## Role Definitions
 <!-- section-summary: A role definition is the reusable permission bundle that lists allowed Azure management actions and, for supported services, data actions. -->
@@ -247,7 +249,7 @@ Evaluation gives us the mechanics. Least privilege gives us the review habit bef
 ## Least Privilege Review
 <!-- section-summary: Least privilege starts from the job, action, principal, and target scope, then chooses the narrowest role assignment that supports the workflow. -->
 
-**Least privilege** means giving the access required for the job and avoiding extra reach. In Azure RBAC, least privilege becomes a concrete review because every request can name a principal, an action, a role, and a scope.
+**Least privilege** means giving the access required for the job and avoiding extra reach. In Azure RBAC, least privilege is a concrete review because every request can name a principal, an action, a role, and a scope.
 
 The Orders API gives us a good example. A broad ticket might say, "Give the API Contributor on production so exports work." That request would let the API change many resources that have nothing to do with writing export files. A better version says, "Grant `mi-orders-api-prod` `Storage Blob Data Contributor` on the export storage account so it can write monthly export blobs."
 

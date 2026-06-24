@@ -43,6 +43,8 @@ For this first Azure foundations article, the story is one app: `orders-api-prod
 
 Azure placement has several layers, and each layer answers a different production question. A **tenant** answers which identity directory the company trusts. A **subscription** answers which billing, quota, access, and governance boundary owns the resources. A **resource group** answers which resources share a lifecycle. A **scope** answers where permissions and policies apply. A **region** answers which geographic Azure location hosts the service. An **availability zone** answers how the workload survives a failure inside one supported region.
 
+If you have used AWS before, the rough shape is familiar, but the boundaries land in different places. A Microsoft Entra tenant is the identity directory Azure subscriptions trust, a subscription plays the same broad operating role as an AWS account, and management groups fill the governance grouping role that AWS Organizations organizational units often fill.
+
 The Orders API gives us a concrete target for each layer. The table below names the placement choice and the part of Azure behavior that choice controls.
 
 | Layer | Orders choice | What the choice controls |
@@ -79,6 +81,8 @@ So the tenant names the people and software. The next layer gives those known ca
 <!-- section-summary: An Azure subscription is the main production boundary for billing, quota, resource ownership, Azure RBAC, Azure Policy, and environment isolation. -->
 
 An **Azure subscription** is the container where Azure resources, billing records, quotas, access assignments, policies, and provider registrations meet. It is the first place most engineers feel Azure as an operating system for cloud work. If the tenant answers who the caller is, the subscription answers which Azure resource estate that caller is trying to manage.
+
+For AWS readers, treat a subscription as the closest everyday match to an AWS account for resource ownership, billing visibility, quotas, and isolation. Azure Policy at a management group or subscription scope gives governance guardrails that feel similar to AWS service control policies, while Azure RBAC role assignments still decide which known principals can act inside the allowed boundary.
 
 For the Orders team, one shared subscription would create messy operations. Development load tests could consume quota needed by production. A broad Contributor assignment for a test environment could accidentally reach production resources. Monthly cost reports would mix experiments, staging, and real customer traffic into the same bill. Production policy rules would slow down harmless development experiments, while loose development rules would put production at risk.
 
@@ -293,7 +297,7 @@ The team chooses the shape before resources drift. Azure gives a lot of freedom 
 The placement review turns that freedom into a map the team can explain. If an incident starts at 2 a.m., the on-call engineer can see the tenant, subscription, resource group, scope, region, and zone plan, then work from a known design instead of hunting through portal pages.
 
 ## Putting It All Together
-<!-- section-summary: Azure placement becomes practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path. -->
+<!-- section-summary: Azure placement is practical when the team connects identity, resource ownership, governance, geography, and resilience as one deployment path. -->
 
 The Orders API now has a clear Azure home. The `devpolaris.com` Microsoft Entra tenant stores the people and software identities. The `sub-orders-prod` subscription owns the production resources, cost, quota, policies, and provider registrations. The app and data resource groups split release-heavy resources from long-lived state.
 

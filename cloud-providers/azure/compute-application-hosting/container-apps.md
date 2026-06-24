@@ -1,7 +1,7 @@
 ---
 title: "Container Apps"
 description: "Run containerized Azure services by understanding environments, container apps, images, revisions, ingress, scale rules, secrets, identity, Dapr, and logs."
-overview: "Azure Container Apps runs container images on a managed Azure platform. This article explains the core pieces a beginner needs before a container becomes a reliable production service."
+overview: "Azure Container Apps runs container images on a managed Azure platform. This article explains the core pieces a beginner needs before a container can run as a reliable production service."
 tags: ["azure", "container-apps", "containers", "revisions", "scale"]
 order: 3
 id: article-cloud-providers-azure-compute-application-hosting-azure-container-apps
@@ -31,6 +31,8 @@ aliases:
 
 **Azure Container Apps** is a managed Azure service for running containerized applications. A containerized application is an application packaged as a container image, usually built from a Dockerfile, with the code, runtime, libraries, and startup command in one deployable artifact. Container Apps gives that image a place to run without asking the team to operate a Kubernetes cluster as the main daily surface.
 
+For AWS readers, Container Apps sits near the same day-to-day problem space as ECS services or tasks on Fargate, and sometimes near App Runner for HTTP container apps. The Azure detail to notice is the **revision**, because revisions and traffic weights are the release surface operators use for canaries and rollback.
+
 We will keep one production example in our hands for the whole article. The team runs `devpolaris-orders`, an ecommerce backend in `rg-devpolaris-orders-prod`. The system has `ca-orders-api-prod`, a public HTTP API that receives checkout requests, and `ca-orders-worker-prod`, a background worker that reads messages from an Azure Storage Queue after each order is created.
 
 Those two services are useful because they show the two common Container Apps shapes. The API needs a public HTTPS entry point, one warm replica during normal hours, safe releases, and logs tied to each revision. The worker needs no public endpoint, can scale down to zero while the queue is empty, and needs a managed identity so it can read queue messages and write receipt files without a stored password.
@@ -56,7 +58,7 @@ The important beginner idea is that Container Apps gives containers a managed pr
 
 *The runtime shape keeps the API, worker, queue, identity, storage, and logs connected inside one managed environment.*
 
-This is the bridge between the App Service article and the Functions article. App Service works well for a traditional web app or API that fits a managed web-hosting model. Container Apps becomes useful when the team wants container-first releases, worker processes, scale rules based on events, and optional sidecars while keeping the platform smaller than a full Kubernetes operating model.
+This is the bridge between the App Service article and the Functions article. App Service works well for a traditional web app or API that fits a managed web-hosting model. Container Apps helps when the team wants container-first releases, worker processes, scale rules based on events, and optional sidecars while keeping the platform smaller than a full Kubernetes operating model.
 
 ## Managed Environments
 <!-- section-summary: A managed environment is the shared Container Apps boundary for related apps, networking, logging, workload profiles, and isolation decisions. -->
@@ -113,7 +115,7 @@ az containerapp create \
 
 This command tells Azure the runtime contract. The app needs to start from that image, bind to port `8080`, emit useful logs, and survive normal container restarts. Azure can add replicas up to the maximum, but each replica can only work if the container process starts correctly and listens where ingress sends traffic.
 
-That last sentence becomes a common production story. A team can deploy a perfectly built image and still get `502` or `503` symptoms because the app listens on `3000` while Container Apps sends traffic to `8080`. The platform cannot guess the port from application code, so the target port becomes one of the first facts to check during a failed release.
+That last sentence describes a common production story. A team can deploy a perfectly built image and still get `502` or `503` symptoms because the app listens on `3000` while Container Apps sends traffic to `8080`. The platform cannot guess the port from application code, so the target port is one of the first facts to check during a failed release.
 
 The container app definition tells Azure what to run. The image tells Azure exactly which build to pull and start. That is where release evidence begins.
 
@@ -124,7 +126,7 @@ A **container image** is the packaged application artifact. It includes the appl
 
 For the Orders API, the registry is Azure Container Registry at `acrorders.azurecr.io`. The build pipeline creates an image after tests pass, pushes it to the registry, and deploys that image to Container Apps. The build pipeline handles source compilation and image creation before deployment, and the running service starts the artifact the team already built.
 
-The tag matters because it becomes release evidence. A tag like `2026-06-11.1` or a Git commit SHA tells the team which build is expected to run. A tag like `latest` can point to a different build later, which makes incidents confusing because the deployment record and the registry state can drift apart.
+The tag matters because it is release evidence. A tag like `2026-06-11.1` or a Git commit SHA tells the team which build is expected to run. A tag like `latest` can point to a different build later, which makes incidents confusing because the deployment record and the registry state can drift apart.
 
 ```bash
 GIT_SHA=$(git rev-parse --short HEAD)
@@ -156,7 +158,7 @@ az containerapp update \
   --image acrorders.azurecr.io/orders-api:2026-06-11.2
 ```
 
-Revision mode controls how many revisions can actively run. **Single revision mode** keeps the app on one active revision at a time. Azure keeps the old revision serving traffic until the new one becomes ready, then moves traffic to the new revision. This mode works well for simple services where each release replaces the previous one.
+Revision mode controls how many revisions can actively run. **Single revision mode** keeps the app on one active revision at a time. Azure keeps the old revision serving traffic until the new one is ready, then moves traffic to the new revision. This mode works well for simple services where each release replaces the previous one.
 
 **Multiple revision mode** allows more than one revision to run at the same time. This is useful for canary releases, blue-green releases, A/B tests, and direct testing through revision labels. The Orders team can send 90 percent of traffic to the stable revision and 10 percent to the candidate revision while they watch errors, latency, checkout conversion, and logs.
 
@@ -317,14 +319,14 @@ Compared with App Service, Container Apps gives the team a more container-native
 
 Compared with Azure Functions, Container Apps keeps the long-running container shape. The app owns its process and listens for HTTP, processes queue messages, or runs worker code as a container. Functions fit event-started units of work where triggers, bindings, invocation behavior, and function hosting plans are the main design language.
 
-Compared with AKS, Container Apps removes a large amount of cluster ownership from the team's daily work. Azure carries the Kubernetes node pool, ingress controller, pod spec, service mesh, cluster upgrade, and custom controller concerns away from the team's normal operating surface. AKS becomes the stronger fit when the organization truly needs Kubernetes APIs, deep platform customization, shared cluster policy, or custom controller patterns.
+Compared with AKS, Container Apps removes a large amount of cluster ownership from the team's daily work. Azure carries the Kubernetes node pool, ingress controller, pod spec, service mesh, cluster upgrade, and custom controller concerns away from the team's normal operating surface. AKS is the stronger fit when the organization truly needs Kubernetes APIs, deep platform customization, shared cluster policy, or custom controller patterns.
 
 The Orders team can make a reasonable first production choice with Container Apps because the service shape is clear. The API is a containerized HTTP service with simple ingress and revision needs. The worker is a containerized background processor with queue-based scale behavior. The team wants image-based releases and managed scale without building a Kubernetes platform team first.
 
 The service can outgrow that first choice in several directions. A simple API can move to App Service if the team wants a more standard web-app host. A short event handler can move to Functions if the function trigger model fits better. A large platform with many custom Kubernetes requirements can move to AKS. The decision stays grounded in workload shape, operations evidence, and the amount of platform control the team is ready to own.
 
 ## Putting It All Together
-<!-- section-summary: Container Apps becomes understandable when the team can explain the environment, app, image, revision, ingress, scale, identity, and logs for one workload. -->
+<!-- section-summary: A Container Apps workload is understandable when the team can explain the environment, app, image, revision, ingress, scale, identity, and logs. -->
 
 Azure Container Apps turns a container image into a managed Azure service. The managed environment gives related apps a shared boundary for networking, logs, and platform settings. The container app defines one workload. Replicas are the running copies. Images come from registries. Revisions preserve versioned runtime snapshots. Ingress controls reachability and target ports. Scale rules decide replica counts. Secrets and managed identity handle access. Logs and metrics give operators evidence.
 

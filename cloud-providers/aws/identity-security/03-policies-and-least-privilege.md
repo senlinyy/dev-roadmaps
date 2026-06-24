@@ -45,7 +45,7 @@ A concrete production workflow makes this easier to follow. A payments applicati
 
 The function runs with an IAM role named `ReceiptExportRole`. The role gives the function an AWS identity, and the policies attached to that role describe what the function may do. If the policy grants broad S3 access, the function can touch more receipt data than it needs. If the policy misses one required action, the export job fails with `AccessDenied`.
 
-Policies turn a vague sentence like "the receipt job needs S3 access" into a specific authorization decision. The rest of this article follows that receipt export until the policy becomes narrow, testable, and understandable during an incident.
+Policies turn a vague sentence like "the receipt job needs S3 access" into a specific authorization decision. The rest of this article follows that receipt export until the policy is narrow, testable, and understandable during an incident.
 
 ![Receipt export request flowing through principal, action, resource, and context facts into an IAM policy allow or deny decision](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/request-policy-decision.png)
 
@@ -419,7 +419,7 @@ The final design has several policy layers. Each one has a different job. The la
 
 This is the practical version of least privilege. The policy can stay plain and readable. It needs to match the work, name the right resources, include the conditions that matter, and leave a reviewer able to explain why each permission exists.
 
-Policy design also connects directly to operations. CloudTrail shows which requests happened. Access Analyzer can help generate policy drafts from observed activity. Last accessed information can show permissions that have gone stale. `AccessDenied` debugging becomes a path through caller, action, resource, context, and policy layer.
+Policy design also connects directly to operations. CloudTrail shows which requests happened. Access Analyzer can help generate policy drafts from observed activity. Last accessed information can show permissions that have gone stale. `AccessDenied` debugging follows a path through caller, action, resource, context, and policy layer.
 
 ![Six-tile least privilege policy map covering caller, action, resource, condition, ceiling, and evidence, with ReceiptExportRole connected to S3 exports and a KMS key](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/least-privilege-policy-map.png)
 

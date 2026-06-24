@@ -93,6 +93,8 @@ An artifact matters, and runtime context completes the story. The same image can
 
 Azure is the runtime platform in this module, but a production release is usually wider than Azure. A real team often builds the artifact in **GitHub Actions** or **Azure DevOps**, deploys infrastructure through **Terraform** or **Bicep**, authenticates the pipeline through **OIDC** instead of stored cloud passwords, reads rollout flags from a feature flag system, emits telemetry through **OpenTelemetry**, and sends alerts into an on-call workflow.
 
+For AWS readers, the surrounding toolchain has familiar shapes. Azure Container Registry plays the image-registry role that ECR often plays, Azure DevOps or GitHub Actions can sit where CodePipeline and CodeBuild often sit, and Bicep sits in the same infrastructure-as-code conversation as CloudFormation or CDK.
+
 Let us connect that to the orders API. Azure Container Apps runs the container. Azure SQL stores orders. Azure Storage stores receipts. That is the Azure side. The release still depends on several industry-standard pieces around it: the GitHub Actions workflow builds and pushes the image, Terraform owns the Container Apps environment and role assignments, Azure Container Registry stores the image digest, OpenTelemetry instrumentation adds trace and revision fields, and the incident tool notifies the platform API on-call if checkout failures cross the rollback rule.
 
 Here is what a real release packet might include:
@@ -128,6 +130,8 @@ release_packet:
 
 This is closer to how production feels. Azure gives the runtime controls, but the release owner still needs the pipeline run, Terraform plan, image digest, flag state, trace dimensions, and on-call decision rule. If one of those pieces is missing, the Azure portal may look healthy while the team still lacks the evidence needed to release safely.
 
+The monitoring and audit pieces have AWS parallels too. Application Insights and Azure Monitor support the release health view that AWS teams often build with CloudWatch and X-Ray, while Azure Activity log records cloud control-plane changes in the space AWS teams usually associate with CloudTrail.
+
 This also explains why the rest of the article keeps asking for records instead of only commands. The release record is the place where Azure state and industry-standard delivery evidence meet.
 
 ## Runtime
@@ -159,7 +163,7 @@ This record gives the team a real place to look. If someone opens Application In
 The runtime also decides which Azure features are available during release. App Service gives slots, warm-up, sticky settings, health check, log stream, and easy restarts. Container Apps gives revisions, labels, traffic weights, KEDA-based scale rules, replicas, and revision activation. AKS gives deployments, replicas, probes, services, ingress, and controller-driven rollout behavior. A good release record names the runtime because the recovery path depends on it. Once the runtime starts the candidate, the pipeline and infrastructure explain how that runtime was changed.
 
 ## How To Inspect Runtime State
-<!-- section-summary: Runtime state becomes practical when the release owner can query the current revision, slot, traffic, and settings before touching production. -->
+<!-- section-summary: Runtime state is practical when the release owner can query the current revision, slot, traffic, and settings before touching production. -->
 
 The practical first move in a release is usually inspection. The release owner wants to answer three questions before changing anything: which version is running, where is traffic going, and which settings will the running app read. The exact commands depend on the runtime, so let us keep the orders API in Container Apps first.
 
@@ -333,7 +337,7 @@ The rollback plan connects recovery to user protection. The release record conne
 ## How Rollback Happens In Azure
 <!-- section-summary: Azure rollback usually means moving traffic, swapping a slot back, or restoring a setting, and each action has a concrete command. -->
 
-Rollback becomes much less fuzzy when the release record names the runtime. For Container Apps, the rollback is usually a traffic command. In our orders API release, the candidate is `orders-api--v31` and the stable revision is `orders-api--v30`. If the watch window crosses the rollback rule, the release owner sends all traffic back to `v30`.
+Rollback is clearer when the release record names the runtime. For Container Apps, the rollback is usually a traffic command. In our orders API release, the candidate is `orders-api--v31` and the stable revision is `orders-api--v30`. If the watch window crosses the rollback rule, the release owner sends all traffic back to `v30`.
 
 ```bash
 az containerapp ingress traffic set \

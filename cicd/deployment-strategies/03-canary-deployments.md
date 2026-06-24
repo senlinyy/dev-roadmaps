@@ -220,7 +220,7 @@ During the first watch window, the deployment system compares canary and baselin
 
 If the canary passes, the controller increases traffic to 5%, then 25%, then 50%, then 100%, with pauses between steps. If a gate fails, the controller sends traffic back to stable and marks the release failed. The release owner can debug the canary with logs, traces, and metrics tied to the canary version.
 
-Canary deployments shine when the main risk appears under real production behavior. They need more observability discipline than rolling or blue-green, because the release decision depends on measured signals. Without clear labels, thresholds, and rollback behavior, a canary becomes a slow full rollout with a nicer name.
+Canary deployments shine when the main risk appears under real production behavior. They need more observability discipline than rolling or blue-green, because the release decision depends on measured signals. Without clear labels, thresholds, and rollback behavior, a canary acts like a slow full rollout with a nicer name.
 
 ![Canary release summary showing small slice, measure, pass, increase, fail, and rollback to zero percent](/content-assets/articles/article-cicd-deployment-strategies-canary-deployments/canary-release-summary.png)
 

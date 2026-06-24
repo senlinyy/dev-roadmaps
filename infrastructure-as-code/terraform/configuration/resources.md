@@ -1,7 +1,7 @@
 ---
 title: "Resources"
 description: "Understand how resource blocks work in Terraform, how they map to real cloud infrastructure, how their lifecycle works, and how Terraform decides what to do with them."
-overview: "Every piece of real infrastructure in Terraform, a server, a database, a network, a storage bucket, is declared as a resource block. This article explains the full lifecycle of a resource: how Terraform creates it, how it decides when to update it versus replace it, and what gets stored in state after it exists."
+overview: "A resource block is the Terraform configuration for one managed infrastructure object. This article shows resource syntax, where variables and locals are consumed, how resource attributes feed other resources and outputs, and how those values appear in plan output."
 tags: ["resources", "lifecycle", "configuration", "terraform", "hcl"]
 order: 2
 id: article-iac-terraform-config-resources
@@ -10,257 +10,203 @@ id: article-iac-terraform-config-resources
 ## Table of Contents
 
 1. [What a Resource Is](#what-a-resource-is)
-2. [The Structure of a Resource Block](#the-structure-of-a-resource-block)
-3. [How Terraform Reads a Resource Block](#how-terraform-reads-a-resource-block)
-4. [Required vs Optional Attributes](#required-vs-optional-attributes)
-5. [Computed Attributes: Values You Cannot Know in Advance](#computed-attributes-values-you-cannot-know-in-advance)
-6. [The Resource Lifecycle](#the-resource-lifecycle)
-7. [When Terraform Updates In Place vs Replaces](#when-terraform-updates-in-place-vs-replaces)
-8. [Nested Blocks Inside Resources](#nested-blocks-inside-resources)
-9. [Referencing One Resource From Another](#referencing-one-resource-from-another)
-10. [Resources and the State File](#resources-and-the-state-file)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+2. [The Resource Block Shape](#the-resource-block-shape)
+3. [Variables and Locals Feeding Resources](#variables-and-locals-feeding-resources)
+4. [Resource Attributes Feeding Other Resources](#resource-attributes-feeding-other-resources)
+5. [Plan Output for Create, Update, and Replace](#plan-output-for-create-update-and-replace)
+6. [Resources and State](#resources-and-state)
+7. [Putting It All Together](#putting-it-all-together)
 
 ## What a Resource Is
+<!-- section-summary: A Terraform resource is a managed object declaration that Terraform binds to a real infrastructure object through state. -->
 
-A Terraform resource is a managed object declaration that binds a local Terraform address to a real infrastructure object through a provider.
+A **resource** is Terraform's declaration for a real infrastructure object it manages. An S3 bucket, EC2 instance, VPC subnet, IAM role, database, DNS record, and Kubernetes namespace can all be resources when a provider supports them.
 
-A resource in Terraform is the fundamental unit of infrastructure. Every real thing that will exist in your cloud account, an EC2 instance, an S3 bucket, a VPC, a database, a DNS record, a security group, is represented by a resource block in your configuration.
+The resource block has two identities. Terraform has a local address such as `aws_s3_bucket.logs`. The provider has a real object ID such as the bucket name `dp-billing-prod-logs` or an ARN. Terraform state connects those two identities after apply.
 
-When Terraform applies your configuration, it looks at each resource block and asks: does this thing already exist? If not, it creates it. If it already exists, does it match what the block describes? If not, it updates it. This is the core job Terraform does, over and over, for every resource in your configuration.
+This is the big difference between resources and data sources. A resource is lifecycle ownership. Terraform can create it, update it, replace it, destroy it, and store its attributes in state. A data source is a read-only lookup.
 
-The word "resource" is used deliberately. It is the same thing as a "resource" in the AWS sense, a piece of infrastructure that has a unique identifier, that costs money to run (usually), and that has a set of attributes you can configure. An EC2 instance is a resource. An IAM role is a resource. A CloudWatch alarm is a resource. Everything that you would create, configure, and eventually delete is a resource.
+## The Resource Block Shape
+<!-- section-summary: A resource block names the provider resource type, local Terraform name, and arguments that configure the real object. -->
 
-## The Structure of a Resource Block
-
-A resource block starts with the keyword `resource`, followed by the resource type in quotes and the resource name in quotes, then a pair of braces containing the resource's attributes:
+Here is a basic resource in `main.tf`:
 
 ```hcl
-resource "aws_instance" "app_server" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t3.small"
-  subnet_id     = aws_subnet.web.id
+resource "aws_s3_bucket" "logs" {
+  bucket = "dp-billing-prod-logs"
 
   tags = {
-    Name        = "app-server"
-    environment = "production"
+    service     = "billing"
+    environment = "prod"
+    managed_by  = "terraform"
   }
 }
 ```
 
-The first string, `"aws_instance"`, is the resource type. It tells Terraform which provider this resource belongs to (the `aws` prefix identifies the AWS provider) and which specific resource it is (`instance`). Every resource type corresponds to a specific kind of real infrastructure that the provider knows how to create.
-
-The second string, `"app_server"`, is the resource name. This name exists only inside your Terraform configuration, it is not the name that appears in AWS. It is how you refer to this specific resource from other places in your configuration. Two different resource blocks can never have the same combination of type and name.
-
-Together, the type and name form the resource's address: `aws_instance.app_server`. This address is how the resource appears in plan output, in the state file, and in error messages.
-
-## How Terraform Reads a Resource Block
-
-When Terraform reads a resource block, it does not run any code or make any API calls. It is just building a picture.
-
-Terraform reads all the `.tf` files in your working directory. As it reads each resource block, it records the resource's type, name, and all of its attribute values. If an attribute value is a reference to another resource, like `aws_subnet.web.id`, Terraform notes the dependency: this resource depends on `aws_subnet.web`, because it needs that resource's `id` attribute.
-
-After reading all the files, Terraform has a complete in-memory graph: all the resources that should exist, with all their attributes and all the dependencies between them. This graph is what gets turned into a plan.
-
-It is worth understanding that at this point, Terraform has not contacted AWS at all. Reading and parsing the configuration files is a purely local operation. The first network call happens during `terraform plan`, when Terraform contacts AWS to check what currently exists.
-
-## Required vs Optional Attributes
-
-Resource blocks have attributes, the settings that describe how the resource should be configured. Some attributes are required: Terraform cannot proceed without a value for them. Others are optional: if you do not specify them, the provider uses a default value.
-
-For a simple `aws_instance`, you usually provide both `ami` (the operating system image) and `instance_type` (the hardware size). The AWS provider also supports launch templates, so those values are not unconditional requirements in every possible EC2 instance configuration. The beginner rule is: read the provider documentation for the exact combination you are using, because a value can be required in the simple case and supplied indirectly in an advanced case.
-
-The `tags` attribute is optional. If you do not include a `tags` block, the EC2 instance is created with no tags. The provider defines a default (no tags) and uses it if you do not specify otherwise.
-
-Optional attributes with defaults can still be important for security and compliance. S3 is a good example: modern S3 buckets default toward blocked public access and ACLs are disabled by the Bucket owner enforced Object Ownership setting for new buckets. Older examples often used `acl = "private"` directly on `aws_s3_bucket`, but current Terraform configurations should model bucket ownership, public access blocks, policies, and separate ACL resources only when ACLs are deliberately required.
-
-Some attributes are only meaningful in combination with others. You might need to set `multi_az = true` on an RDS instance, which then also requires you to not set `availability_zone` (because multi-AZ means AWS chooses the zones, not you). The provider documentation lists all attributes, which ones are required, which are optional, which ones conflict, and which ones are only valid under certain conditions.
-
-## Computed Attributes: Values You Cannot Know in Advance
-
-Not all of a resource's attributes come from your configuration. Many are assigned by the cloud provider when the resource is created, and you cannot know them beforehand.
-
-When you create an EC2 instance, AWS assigns it an instance ID (like `i-0a1b2c3d4e5f6789`), a private IP address, and optionally a public IP address. You did not specify any of these, AWS chose them. These are called computed attributes.
-
-In the plan output, computed attributes appear as `(known after apply)`:
-
-```
-+ aws_instance.app_server
-    + ami           = "ami-0c55b159cbfafe1f0"
-    + instance_type = "t3.small"
-    + id            = (known after apply)
-    + private_ip    = (known after apply)
-    + public_ip     = (known after apply)
-```
-
-After the apply completes, Terraform stores all of these attributes, including the computed ones, in the state file. That is how a different resource can reference `aws_instance.app_server.private_ip` later: the value was stored in state after the first apply and is available to any subsequent plan or apply.
-
-Computed attributes create an interesting constraint: if resource B needs to know resource A's ID, and A's ID is only known after A is created, then B cannot be created at the same time as A. Terraform detects this dependency automatically and creates A first, then uses A's ID (read from the state file) when creating B.
-
-## The Resource Lifecycle
-
-Every resource in Terraform goes through the same lifecycle stages: Create, Read, Update, Delete. These correspond to the four basic API operations that every cloud provider supports.
-
-![Terraform resources move through create, read, update, replace, and destroy decisions.](/content-assets/articles/article-iac-terraform-config-resources/resource-lifecycle.png)
-
-*A resource block becomes a managed object whose lifecycle Terraform tracks through state and provider responses.*
-
-**Create** happens when a resource exists in your configuration but does not yet exist in the cloud. Terraform calls the provider's Create function, which makes the API call to build the resource and returns all of the resource's initial attributes. Terraform stores those attributes in the state file.
-
-**Read** happens at the start of every `terraform plan`. For each resource in the state file, Terraform calls the provider's Read function, which makes an API call to check whether the resource still exists and what its current attributes are. This is the refresh step. If the Read function returns that the resource no longer exists (someone deleted it outside of Terraform), Terraform marks it as gone and plans to recreate it.
-
-**Update** happens when a resource exists in the cloud but its current attributes do not match what your configuration describes. If you changed the instance type from `t3.small` to `t3.medium`, the Read step sees `t3.small` in AWS, your configuration says `t3.medium`, and the plan proposes an update. Terraform calls the provider's Update function, which makes the API call to change the attribute.
-
-**Delete** happens when a resource exists in the cloud (and in the state file) but is no longer in your configuration. If you remove a resource block from your configuration, the next plan proposes to delete it. Terraform calls the provider's Delete function to remove the real resource and removes its record from the state file.
-
-## When Terraform Updates In Place vs Replaces
-
-Not all attribute changes can be made by modifying an existing resource. Some attributes are set at creation time and cannot be changed afterward. These are called ForceNew attributes in the provider documentation.
-
-![Terraform compares an attribute diff with provider rules before choosing update in place or replacement.](/content-assets/articles/article-iac-terraform-config-resources/update-replace-decision.png)
-
-*Some changes can patch an object, while others require Terraform to create a new object and retire the old one.*
-
-For EC2 instances, the availability zone is a ForceNew attribute. Once an instance is created in `us-east-1a`, you cannot move it to `us-east-1b`. The only way to change the availability zone is to destroy the instance and create a new one in the correct zone.
-
-When you change a ForceNew attribute in your configuration, Terraform plans a replacement instead of an update. The plan output shows `-/+` instead of `~`, and includes a note about which attribute forced the replacement:
-
-```
-# aws_instance.app_server must be replaced
--/+ resource "aws_instance" "app_server" {
-    ~ availability_zone = "us-east-1a" -> "us-east-1b" # forces replacement
-  }
-```
-
-Replacements can cause downtime by default. Terraform normally destroys the old resource first, then creates the new one. During the time between destruction and creation, the resource does not exist. For a running server or database, this can be a service interruption.
-
-The `lifecycle { create_before_destroy = true }` setting reverses the Terraform replacement order: Terraform creates the new resource first, then destroys the old one. This removes the destroy-before-create gap, but load balancer health checks and traffic handoff still need to be designed separately. This technique is covered in more depth in the lifecycle and zero-downtime articles.
-
-The distinction between in-place update and replacement is one of the most important things to look for in a plan before confirming apply. Always check whether any `-/+` replacements are present and whether they will cause disruption.
-
-## Nested Blocks Inside Resources
-
-Some resource attributes are not simple values like strings or numbers, they are blocks that contain their own attributes. These are called nested blocks.
-
-An EC2 instance's root block device configuration is a nested block:
+`resource` is the block type. `"aws_s3_bucket"` is the provider resource type. `"logs"` is the local Terraform name. Together they form the address:
 
 ```hcl
-resource "aws_instance" "app_server" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t3.small"
-
-  root_block_device {
-    volume_size = 50
-    volume_type = "gp3"
-    encrypted   = true
-  }
-}
+aws_s3_bucket.logs
 ```
 
-The `root_block_device` block sits inside the `aws_instance` block and has its own attributes. This represents the configuration for the EC2 instance's operating system disk, the size in gigabytes, the type of storage, and whether the disk is encrypted.
+The arguments inside the block configure the real bucket. The provider decides which arguments exist, which ones are required, which ones are optional, and which ones force replacement when they change.
 
-A security group uses nested blocks for its inbound and outbound rules:
+Real modules usually avoid hardcoded values in resources. They use variables and locals so the same module can serve multiple environments.
+
+## Variables and Locals Feeding Resources
+<!-- section-summary: Resource arguments often consume variables and locals so names, tags, sizes, and settings stay consistent across environments. -->
+
+In `variables.tf`, the module declares caller inputs:
 
 ```hcl
-resource "aws_security_group" "web" {
-  name   = "web-security-group"
-  vpc_id = aws_vpc.main.id
+variable "environment" {
+  type = string
+}
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+variable "service_name" {
+  type = string
+}
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+variable "extra_tags" {
+  type    = map(string)
+  default = {}
 }
 ```
 
-There are two separate `ingress` blocks, one for port 443 (HTTPS) and one for port 80 (HTTP). Terraform supports having multiple copies of the same nested block type inside a resource. Each copy represents a separate rule.
-
-Understanding which parts of a resource configuration are inline attributes and which are nested blocks comes from reading the provider documentation. The documentation for each resource type lists every attribute and block, which are required, which are optional, and what each one does.
-
-## Referencing One Resource From Another
-
-The whole reason you give resources names is so you can reference them from other resources. When one resource needs an attribute from another, a subnet needs a VPC ID, a server needs a subnet ID, a security group needs to reference a VPC, you use a resource reference.
-
-The syntax is `<resource_type>.<resource_name>.<attribute>`:
+In `locals.tf`, it shapes those inputs:
 
 ```hcl
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
-}
+locals {
+  bucket_name = "dp-${var.service_name}-${var.environment}-logs"
 
-resource "aws_subnet" "web" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = "10.0.1.0/24"
-}
-
-resource "aws_instance" "app_server" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t3.small"
-  subnet_id     = aws_subnet.web.id
-
-  vpc_security_group_ids = [aws_security_group.web.id]
+  tags = merge(
+    {
+      service     = var.service_name
+      environment = var.environment
+      managed_by  = "terraform"
+    },
+    var.extra_tags
+  )
 }
 ```
 
-`aws_vpc.main.id` means: the `id` attribute of the `aws_vpc` resource named `main`. `aws_subnet.web.id` means: the `id` attribute of the `aws_subnet` resource named `web`. These references tell Terraform that these resources are related and must be created in a specific order: the VPC first, then the subnet (which needs the VPC's `id`), then the server (which needs the subnet's `id`).
+In `main.tf`, the resource consumes the local values:
 
-Terraform detects these dependencies automatically by scanning for resource references in attribute values. You do not need to tell Terraform "create the VPC before the subnet." Terraform figures it out from the reference. This is one of the most convenient aspects of the declarative approach.
+```hcl
+resource "aws_s3_bucket" "logs" {
+  bucket = local.bucket_name
+  tags   = local.tags
+}
+```
 
-## Resources and the State File
+The path is clear. Variables feed locals. Locals feed resource arguments. The plan shows the final evaluated values.
 
-After `terraform apply` completes, the state file contains a record for every resource that was created. The record includes:
+```hcl
+  # aws_s3_bucket.logs will be created
+  + resource "aws_s3_bucket" "logs" {
+      + bucket = "dp-billing-prod-logs"
+      + tags   = {
+          + "environment" = "prod"
+          + "managed_by"  = "terraform"
+          + "owner"       = "platform"
+          + "service"     = "billing"
+        }
+    }
+```
 
-- The resource type and name (the address, like `aws_instance.app_server`)
-- The provider that manages it
-- The real cloud identifier assigned by the provider (like the EC2 instance ID `i-0a1b2c3d4e5f6789`)
-- Every attribute of the resource, both the ones you specified in your configuration and the computed ones that the provider assigned
+## Resource Attributes Feeding Other Resources
+<!-- section-summary: Resource attributes can be consumed by other resources, which gives Terraform both a value and a dependency. -->
 
-This record is what Terraform uses in subsequent plans. When you run `terraform plan` tomorrow, Terraform reads the state file, sees `aws_instance.app_server` with ID `i-0a1b2c3d4e5f6789`, and calls AWS to check whether that instance still exists and what its current attributes are. It then compares those current attributes against your configuration.
+Resources also produce attributes. Some come from configuration, such as the bucket name. Some come from the provider after creation, such as the final ARN or ID.
 
-The state file's record of computed attributes is also what makes resource references work across applies. The first `terraform apply` creates the VPC and stores its `id` in state. The second time you reference `aws_vpc.main.id` in another resource, Terraform reads the `id` from state, it does not need to call AWS again to find it.
+Another resource can consume those attributes:
 
-Without the state file, Terraform could not track the connection between your configuration and the real cloud resources. The state file is what gives Terraform the ability to update and delete resources it created, rather than just creating new ones every time.
+```hcl
+resource "aws_s3_bucket_public_access_block" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+output "log_bucket_arn" {
+  description = "ARN used by IAM policies that read billing logs."
+  value       = aws_s3_bucket.logs.arn
+}
+```
+
+`aws_s3_bucket_public_access_block.logs.bucket` consumes `aws_s3_bucket.logs.id`. The output consumes `aws_s3_bucket.logs.arn`. Terraform reads those references as dependencies, so the access block and output wait for the bucket values.
+
+The plan shows which values are already known:
+
+```hcl
+  # aws_s3_bucket_public_access_block.logs will be created
+  + resource "aws_s3_bucket_public_access_block" "logs" {
+      + bucket                  = (known after apply)
+      + block_public_acls       = true
+      + block_public_policy     = true
+      + ignore_public_acls      = true
+      + restrict_public_buckets = true
+    }
+
+Changes to Outputs:
+  + log_bucket_arn = (known after apply)
+```
+
+`bucket` and `log_bucket_arn` are known after apply because they depend on provider-returned attributes from the bucket.
+
+## Plan Output for Create, Update, and Replace
+<!-- section-summary: The plan tells you whether Terraform will create, update in place, replace, or destroy a resource. -->
+
+Terraform uses symbols to show actions. A `+` means create. A `~` means update in place. A `-/+` means replace. A `-` means destroy.
+
+If a tag changes, the bucket can usually update in place:
+
+```hcl
+  # aws_s3_bucket.logs will be updated in-place
+  ~ resource "aws_s3_bucket" "logs" {
+      ~ tags = {
+          + "cost_center" = "finops-42"
+            "environment" = "prod"
+            "managed_by"  = "terraform"
+            "service"     = "billing"
+        }
+    }
+```
+
+If an argument cannot be changed in place, Terraform plans a replacement:
+
+```hcl
+  # aws_instance.app must be replaced
+-/+ resource "aws_instance" "app" {
+      ~ availability_zone = "us-east-1a" -> "us-east-1b"
+    }
+```
+
+Replacement deserves careful review because it can mean downtime, data movement, new names, or dependency changes. Some replacements are safe when the system has load balancer health checks and `create_before_destroy`. Others need a migration plan.
+
+:::expand[Provider schemas decide update or replace]{kind="design"}
+Terraform Core compares configuration, state, and refreshed provider data. The provider schema tells Terraform which attributes can update in place and which changes require replacement. Cloud APIs create this constraint. Some APIs let you patch a field. Other fields are fixed at creation time.
+
+This is why the same kind of change can behave differently across resources. A tag update is often in-place. A storage engine change for a database may require replacement. A subnet change for a server may require replacement because the provider cannot move the object between subnets directly.
+
+The plan is the source of truth for the proposed action. Always check action symbols and replacement notes before apply.
+:::
+
+## Resources and State
+<!-- section-summary: After apply, state records the provider object attributes that belong to each Terraform resource address. -->
+
+After apply, Terraform stores resource attributes in state. That state record lets the next plan know that `aws_s3_bucket.logs` already manages `dp-billing-prod-logs`.
+
+If someone deletes the bucket outside Terraform, the next refreshed plan can detect that the state record points to a missing object and propose recreation. If someone changes tags in the console, the next plan can detect drift and propose an update unless lifecycle rules ignore that attribute.
+
+State also explains why resource address changes matter. Renaming `aws_s3_bucket.logs` to `aws_s3_bucket.service_logs` changes Terraform's address. Use a `moved` block when the real object should keep being managed under the new address.
 
 ## Putting It All Together
+<!-- section-summary: Resource review means tracing input values into resource arguments, resource attributes into dependencies, and plan actions into state changes. -->
 
-A resource block is a declaration of intent: "I want this specific piece of infrastructure to exist, configured exactly like this." Terraform reads all the resource blocks in your configuration, figures out the correct creation order from the dependencies between them, and makes reality match what you declared.
+A resource block is where Terraform takes ownership. Variables and locals feed resource arguments. Resource attributes feed other resources and outputs. The plan shows whether Terraform will create, update, replace, or destroy the managed object.
 
-The lifecycle is straightforward: Create when a resource is new, Read to check the current state, Update when settings change, Delete when the block is removed. Whether an update happens in place or requires replacement depends on which attributes changed and whether those attributes can be modified after creation.
-
-After every apply, the state file captures the full set of attributes for each resource, both what you configured and what the cloud provider assigned. That stored state is what enables Terraform to plan correctly on the next run, detecting changes and knowing which real cloud resources correspond to which configuration blocks.
-
-## What's Next
-
-Resources are the main things you create. But sometimes you need to look up information about things that already exist, a VPC managed by another team, an AMI published by a software vendor, a certificate stored in AWS Certificate Manager. Data sources are the read-only counterpart to resources, and the next article covers how they work.
-
-![A six-part summary infographic for Terraform resources covering resource blocks, arguments, computed values, lifecycle, references, and state.](/content-assets/articles/article-iac-terraform-config-resources/resources-summary.png)
-
-*Use this summary as the resource checklist before interpreting a plan diff.*
-
-
----
-
-**References**
-
-- [Resources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/resources), Full reference for the resource block syntax, meta-arguments, and lifecycle behavior.
-- [Resource Behavior (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/resources/behavior), Detailed explanation of how Terraform creates, reads, updates, and deletes resources.
-- [AWS Provider Resource Documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs), The full catalog of every AWS resource type, with attribute lists, examples, and ForceNew annotations.
-- [AWS EC2 Instance Resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/instance), Current AWS provider reference for `aws_instance` arguments and launch template behavior.
-- [Controlling Ownership of Objects and Disabling ACLs (AWS Documentation)](https://docs.aws.amazon.com/AmazonS3/latest/userguide/about-object-ownership.html), AWS explanation of modern S3 Object Ownership defaults.
+For official reference, use Terraform's docs for [resources](https://developer.hashicorp.com/terraform/language/resources), [resource block syntax](https://developer.hashicorp.com/terraform/language/resources/syntax), [references to values](https://developer.hashicorp.com/terraform/language/expressions/references), and [`terraform plan`](https://developer.hashicorp.com/terraform/cli/commands/plan).

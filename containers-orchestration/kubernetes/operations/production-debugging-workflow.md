@@ -344,7 +344,7 @@ For daily operations, keep this checklist close to the on-call runbook:
 
 ![Incident fix loop showing evidence first, mitigation, proving the fix, safe rollback, preserved evidence, and prevention work](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/incident-fix-loop.png)
 
-*The fix loop shows that recovery and learning are connected. Evidence guides mitigation, validation proves recovery, and the incident note becomes prevention work after service returns.*
+*The fix loop shows that recovery and learning are connected. Evidence guides mitigation, validation proves recovery, and the incident note creates prevention work after service returns.*
 
 That workflow gives junior responders a way to help without guessing. It also gives senior responders a shared structure for decisions under pressure. The real skill is moving from one small proof to the next until the team knows what changed, what failed, what restored service, and what will stop the same failure from returning.
 

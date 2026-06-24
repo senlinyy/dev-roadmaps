@@ -39,7 +39,7 @@ This workflow gives production runs a visible shape. Ansible can target many hos
 ## Prepare the Automation Repo
 <!-- section-summary: The repo should tell the operator which inventory, config, dependencies, and playbook version the run will use. -->
 
-The first safety check happens before Ansible touches a host. The team should know which Git commit they are running, which inventory they are using, which collections are installed, and which config file Ansible will read. A production incident becomes much easier to understand when the run points to a commit and a job record instead of a private working tree.
+The first safety check happens before Ansible touches a host. The team should know which Git commit they are running, which inventory they are using, which collections are installed, and which config file Ansible will read. A production incident is much easier to understand when the run points to a commit and a job record instead of a private working tree.
 
 For a small orders repo, the structure might look like this. The important part is the separation between playbooks, inventories, environment variables, roles, templates, and handlers. The example below uses that split.
 

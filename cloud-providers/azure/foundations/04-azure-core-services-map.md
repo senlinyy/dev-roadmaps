@@ -46,7 +46,20 @@ That gives us the structure for the whole article:
 | **Cost ownership** | Which team, service, and environment created this spend? | Resource groups, tags, Cost Management, budgets |
 | **Recovery** | Which data and workloads can be restored after failure or deletion? | Azure Backup, database restore features, storage redundancy, soft delete |
 
-This map should stay close to the system people operate today. A map with future services, unclear owners, and half-finished guesses looks impressive in a diagram tool, then becomes painful during an incident. A useful first map is small, named, and tied to real resource IDs, tags, logs, and deployment records.
+If you know AWS, use this as a first translation layer. The job is the stable part; the Azure scope, identity model, and runtime boundary are the details to check before you design or troubleshoot.
+
+| Application job | Familiar AWS anchor | Azure detail to notice |
+|---|---|---|
+| **Traffic entry** | Route 53, CloudFront, ALB, NLB, AWS WAF | Front Door is the global HTTP edge, Application Gateway is regional layer 7, and Azure Load Balancer is lower-level load balancing. |
+| **Compute runtime** | EC2, Elastic Beanstalk, App Runner, ECS/Fargate, Lambda, EKS | Azure choices range from VMs to App Service, Container Apps, Functions, and AKS, with different release and scaling surfaces. |
+| **Persistent state** | RDS/Aurora, S3, DynamoDB, EBS | Azure SQL, Blob Storage, Cosmos DB, and Managed Disks each match a different data contract. |
+| **Access and secrets** | IAM, IAM Identity Center, Secrets Manager, KMS | Microsoft Entra ID, Azure RBAC, managed identities, and Key Vault split identity, authorization, and secret storage across Azure scopes. |
+| **Signals** | CloudWatch, CloudWatch Logs Insights, X-Ray, CloudTrail | Azure Monitor, Log Analytics, Application Insights, and Activity Log cover the operating evidence path. |
+| **Release path** | ECR, CodePipeline, CodeBuild, CodeDeploy, Lambda aliases, ECS deployments | Azure Container Registry, slots, revisions, and traffic weights provide Azure-native rollout handles. |
+| **Cost ownership** | Cost Explorer, AWS Budgets, cost allocation tags | Cost Management, budgets, resource groups, and tags turn Azure spend into owner-aware views. |
+| **Recovery** | AWS Backup, EBS snapshots, S3 Versioning/Object Lock, RDS PITR | Azure Backup, database PITR, Blob versioning, soft delete, snapshots, and redundancy form the recovery map. |
+
+This map should stay close to the system people operate today. A map with future services, unclear owners, and half-finished guesses looks impressive in a diagram tool, then causes pain during an incident. A useful first map is small, named, and tied to real resource IDs, tags, logs, and deployment records.
 
 The rest of the article uses one application so the sections connect naturally. We will keep coming back to the same Orders API and follow the request path through the service families as one connected system.
 
@@ -82,7 +95,7 @@ As the app grows, other entry services earn a place when their specific job appe
 | **API Management** | An API gateway and API product layer. It applies policies such as quotas, subscriptions, token checks, transformations, and developer access. | Partner apps call Orders through a managed API product with request limits and versioned policies. |
 | **Runtime ingress** | The entry feature built into a hosting service such as Container Apps or App Service. It exposes the app directly through the runtime's supported endpoint. | The first release exposes the Container App through HTTPS ingress while the team proves product demand. |
 
-The important habit is matching the entry service to the job. A hostname alone points toward DNS. Global edge routing and WAF point toward Front Door. Regional HTTP routing and private backend health point toward Application Gateway. API products, quotas, and caller policy point toward API Management. A small first release can stay on runtime ingress until one of those jobs becomes real.
+The important habit is matching the entry service to the job. A hostname alone points toward DNS. Global edge routing and WAF point toward Front Door. Regional HTTP routing and private backend health point toward Application Gateway. API products, quotas, and caller policy point toward API Management. A small first release can stay on runtime ingress until one of those jobs is real.
 
 Traffic connects naturally to compute because entry services hand accepted requests to a runtime. Once the request passes the public entry layer, Azure needs a place that can start the Orders API process, keep it healthy, scale it, and expose logs.
 
@@ -103,7 +116,7 @@ Azure offers several compute shapes, and each one gives a different amount of co
 | **Azure Functions** | Event-driven compute for small units of code triggered by HTTP, timers, queues, events, and other bindings. | Event handlers, scheduled jobs, queue processors, and workflows that fit function-style execution. |
 | **Azure Kubernetes Service** | Managed Kubernetes control plane with worker nodes, Kubernetes objects, cluster networking, ingress controllers, and platform extensions. | Teams that need Kubernetes APIs, custom controllers, service mesh patterns, cluster-level policies, or shared platform control. |
 
-For `devpolaris-orders-api`, the service map can begin with Container Apps because the app is one containerized HTTP API with logs, database access, secrets, and a small on-call team. AKS becomes a serious option later when the team needs Kubernetes-level platform features, shared cluster networking, custom controllers, or deep multi-service orchestration. More control can be useful, and it also adds platform work that someone must operate.
+For `devpolaris-orders-api`, the service map can begin with Container Apps because the app is one containerized HTTP API with logs, database access, secrets, and a small on-call team. AKS is a serious option later when the team needs Kubernetes-level platform features, shared cluster networking, custom controllers, or deep multi-service orchestration. More control can be useful, and it also adds platform work that someone must operate.
 
 Container Apps has a few concepts worth naming because they show up during real incidents:
 

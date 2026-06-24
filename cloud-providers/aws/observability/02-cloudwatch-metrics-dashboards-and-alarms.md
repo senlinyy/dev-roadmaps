@@ -431,7 +431,7 @@ The production checklist is:
 
 ![CloudWatch metric response flow from datapoints through statistic, threshold, alarm state, SNS route, and runbook action](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/from-metric-to-response.png)
 
-*The summary image connects metric design to incident response. A number only becomes useful when the alarm state reaches the right route and the runbook action is clear.*
+*The summary image connects metric design to incident response. A number helps only after the alarm state reaches the right route and the runbook action is clear.*
 
 ## What's Next
 <!-- section-summary: The following observability work adds deeper log and trace practices so metrics can lead into exact evidence. -->

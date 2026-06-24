@@ -115,7 +115,7 @@ In the orders fleet, a vendor monitoring agent still points at the old metrics g
   notify: Restart vendor agent
 ```
 
-This pattern matches the old endpoint only. The dots are escaped because a dot in a regex means any character. The replacement is the new endpoint, and the task becomes `ok` after the old value disappears.
+This pattern matches the old endpoint only. The dots are escaped because a dot in a regex means any character. The replacement is the new endpoint, and the task reports `ok` after the old value disappears.
 
 Broad regex patterns create production surprises. A pattern like `metrics.*9090` could touch comments, examples, or unrelated URLs. A precise pattern includes the exact old value, and a staging diff shows every line that will change before production.
 

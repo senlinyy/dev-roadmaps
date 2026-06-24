@@ -40,6 +40,8 @@ Here is the situation for this article. The Orders API starts failing during che
 
 Azure gives Maya several pieces of identity evidence. A **resource name** is the human-friendly label, such as `kv-orders-prod`. A **resource ID** is the full ARM path that points to one exact object. A **resource type** tells her which Azure provider owns the API surface, such as `Microsoft.KeyVault/vaults`. **Tags** hold searchable business metadata such as service, team, environment, and cost center. **Locks** add control-plane protection against accidental deletion or broad configuration changes.
 
+For AWS readers, a resource ID fills the same "exact target" job that an ARN often fills in AWS evidence, although the syntax follows Azure Resource Manager path segments. An Azure resource group also has stronger lifecycle meaning than many AWS Resource Groups, because deleting the Azure resource group deletes the resources inside it.
+
 Those pieces work together, and each one answers a different question. The table below gives the first version of the checklist Maya will use through the rest of the article.
 
 | Evidence | Beginner definition | Orders example |
@@ -80,6 +82,8 @@ This gives Maya a first pass during an incident. If an alert says `kv-orders-pro
 
 A **resource ID** is the full management path for one Azure object. It is the address ARM uses when a tool asks for a specific resource. A friendly name can repeat in different places, but the resource ID includes the subscription, resource group, provider namespace, resource type, and resource name, so it points at one exact target.
 
+If you are coming from AWS, put resource IDs in the same incident notes where you would put ARNs for IAM, CloudTrail, or deployment review. The Azure detail to notice is the resource group segment, because it names both an organization boundary and a deletion boundary for that resource.
+
 The Orders production Key Vault has a resource ID like this:
 
 ```
@@ -88,7 +92,7 @@ The Orders production Key Vault has a resource ID like this:
 
 That path reads left to right. The subscription segment names the production Azure estate. The resource group segment names the lifecycle container. The provider segment names the Azure API family. The `vaults` segment names the resource kind inside Key Vault. The final segment names this particular vault.
 
-Here is the same path split into the pieces Maya checks during the incident. Each segment narrows the target until the short name becomes one exact Azure object.
+Here is the same path split into the pieces Maya checks during the incident. Each segment narrows the target until the short name points to one exact Azure object.
 
 | Segment | Meaning | Orders value |
 |---|---|---|
@@ -202,6 +206,8 @@ So far, Maya can recognize the resource by name, prove the exact target by ID, a
 <!-- section-summary: Tags are key-value metadata that make resources searchable by owner, service, environment, cost, and operational purpose. -->
 
 A **tag** is a key-value metadata pair attached to a subscription, resource group, or resource. Tags help humans and tools group resources by business meaning. In the Orders environment, `service=orders-api`, `env=prod`, and `team=commerce-platform` tell finance, support, security, and automation which application a resource belongs to.
+
+Tags serve the same broad ownership and cost-reporting job as AWS tags. Azure tag names are case-insensitive for operations while preserving the casing you typed, so teams should standardize the spelling early instead of letting `Service`, `service`, and `SERVICE` drift across templates.
 
 Tags answer questions that resource names carry poorly. A name can show a short workload and environment, but it has strict length and character rules. Tags can hold owner, cost center, data class, support contact, deployment tool, expiration date, and change policy. A good name helps someone recognize a resource, and a good tag set helps the whole organization search, report, and govern it.
 

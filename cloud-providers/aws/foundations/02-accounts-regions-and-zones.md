@@ -21,8 +21,9 @@ aliases:
 7. [VPCs and Subnets](#vpcs-and-subnets)
 8. [Multi-AZ Placement](#multi-az-placement)
 9. [Global, Regional, and Zonal Resources](#global-regional-and-zonal-resources)
-10. [A Placement Review Checklist](#a-placement-review-checklist)
-11. [References](#references)
+10. [Placement Evidence Bundle](#placement-evidence-bundle)
+11. [A Placement Review Checklist](#a-placement-review-checklist)
+12. [References](#references)
 
 ## Why Placement Has Coordinates
 <!-- section-summary: AWS placement has logical coordinates and physical coordinates, and both shape security, latency, resilience, cost, and operations. -->
@@ -302,6 +303,52 @@ Here is the placement cheat sheet for the ecommerce app:
 | EC2 instance or EBS volume | Zonal | What replaces it if the zone fails? |
 
 Scope also affects CLI habits. If a command returns nothing, the first question is often "am I looking in the right account and Region?" A developer can have valid credentials and still query an empty Region. Global services make that feel inconsistent at first because IAM may show data without a workload Region while EC2 or RDS needs the correct Region.
+
+## Placement Evidence Bundle
+<!-- section-summary: A placement review should capture account, Region, AZ, subnet, and service placement evidence before production traffic depends on the design. -->
+
+By this point, the team has several placement ideas: account ownership, Organizations guardrails, Region choice, AZ IDs, subnet tiers, multi-AZ services, and resource scope. A production review works best when those ideas become one evidence bundle.
+
+For the `storefront-prod` app, the bundle can start with identity and Region:
+
+```bash
+aws sts get-caller-identity \
+  --query '{Account:Account,Arn:Arn}'
+
+aws configure get region
+```
+
+Then the reviewer checks the network and zone spread:
+
+```bash
+aws ec2 describe-subnets \
+  --filters Name=tag:Application,Values=storefront Name=tag:Environment,Values=prod \
+  --query 'Subnets[].{SubnetId:SubnetId,Name:Tags[?Key==`Name`].Value|[0],AzName:AvailabilityZone,AzId:AvailabilityZoneId,Cidr:CidrBlock,PublicIp:MapPublicIpOnLaunch}' \
+  --output table
+
+aws ec2 describe-route-tables \
+  --filters Name=tag:Application,Values=storefront Name=tag:Environment,Values=prod \
+  --query 'RouteTables[].{RouteTableId:RouteTableId,Associations:Associations[].SubnetId,Routes:Routes[].{Destination:DestinationCidrBlock,Gateway:GatewayId,Nat:NatGatewayId}}'
+```
+
+Finally, the reviewer checks whether the customer path actually spans more than one zone:
+
+```bash
+aws elbv2 describe-load-balancers \
+  --names storefront-prod \
+  --query 'LoadBalancers[].AvailabilityZones[].{ZoneName:ZoneName,SubnetId:SubnetId}'
+
+aws ecs describe-services \
+  --cluster storefront-prod \
+  --services storefront-api \
+  --query 'services[].networkConfiguration.awsvpcConfiguration.subnets'
+
+aws rds describe-db-instances \
+  --db-instance-identifier storefront-prod \
+  --query 'DBInstances[].{MultiAZ:MultiAZ,AvailabilityZone:AvailabilityZone,SecondaryAZ:SecondaryAvailabilityZone}'
+```
+
+That bundle gives the design review real evidence. The account command shows the boundary. The Region command shows the target geography. The subnet output shows AZ IDs and public or private placement. The load balancer, ECS, and RDS commands show whether the actual request path has multi-AZ coverage. A beginner can walk through the output and explain where the application lives before approving traffic.
 
 The final step is turning all of this into a checklist a beginner can use during design review.
 
