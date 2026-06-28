@@ -9,7 +9,7 @@ id: article-containers-orchestration-kubernetes-networking-dns-inside-the-cluste
 
 ## Table of Contents
 
-1. [The Path This Article Follows](#the-path-this-article-follows)
+1. [Start with One Service Name](#start-with-one-service-name)
 2. [Why Cluster DNS Exists](#why-cluster-dns-exists)
 3. [Service DNS Names Have Pieces](#service-dns-names-have-pieces)
 4. [The Pod Resolver Expands Short Names](#the-pod-resolver-expands-short-names)
@@ -21,20 +21,20 @@ id: article-containers-orchestration-kubernetes-networking-dns-inside-the-cluste
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
 
-## The Path This Article Follows
-<!-- section-summary: Cluster DNS sits at the front of an in-cluster request path, before Services, EndpointSlices, network policy, and application health. -->
+## Start with One Service Name
+<!-- section-summary: Cluster DNS lets an app carry a stable Service name while Kubernetes turns that name into an address. -->
 
-Let's keep one request path in our heads the whole time. The `devpolaris-web` Pods run in the `web` namespace, and they need to call the `devpolaris-orders-api` Service in the `orders` namespace. A customer clicks "Place order," the web app makes an HTTP call, and the first thing the runtime needs is an address for the name in its config.
+Start with one app setting. The `devpolaris-web` Pods need to call the orders API, so their config can say `http://devpolaris-orders-api.orders`. That value is readable for a human, but the runtime still needs an IP address before it can open a network connection.
 
-That path has several pieces, and each piece answers a different question. **Cluster DNS** answers the name lookup. The **Service** gives the stable Kubernetes traffic contract. **EndpointSlices** list the ready backend Pod addresses. **NetworkPolicy** may allow or block the connection. The application still has to listen on the expected port and return a useful response.
+**Cluster DNS** is the in-cluster name lookup system that answers that first question. The web Pod asks for the Service name, DNS returns the Service address, and then the normal Kubernetes Service path can continue toward ready backend Pods. Later checks may involve endpoints, policy, ports, and application health, but DNS is the first proof: can the name turn into an address?
 
-Here is the full chain we will follow. Each arrow is a place where a real incident can leave evidence.
+Here is the request path we will build toward. The first part is DNS, and the later parts only make sense after the name lookup succeeds.
 
 ![Kubernetes cluster DNS request path from devpolaris-web through Pod resolver, kube-dns Service, CoreDNS Pods, Service record, ClusterIP answer, EndpointSlices, and orders API Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/cluster-dns-request-path.png)
 
 *DNS proves the name lookup first. The Service, EndpointSlices, policy, and application response still need their own proof after the address comes back.*
 
-The useful habit is to keep those pieces separate during a real incident. If the name fails, DNS needs attention. If the name resolves and the Service has no endpoints, the selector, Pod labels, or readiness need attention. If the name resolves and endpoints exist, the next checks move toward policy, ports, and application behavior.
+The useful habit is to keep the pieces separate during a real incident. If the name fails, DNS needs attention. If the name resolves and the Service has no endpoints, the selector, Pod labels, or readiness need attention. If the name resolves and endpoints exist, the next checks move toward policy, ports, and application behavior.
 
 ## Why Cluster DNS Exists
 <!-- section-summary: Kubernetes DNS lets applications use stable Service names while Pods and endpoint IPs change during normal operations. -->
@@ -45,7 +45,17 @@ The reason this exists is ordinary Kubernetes movement. A rollout replaces Pods.
 
 A **Service** gives the orders API a stable in-cluster identity. For a normal ClusterIP Service, Kubernetes creates a Service IP and publishes a DNS record for the Service name. The app calls the name, DNS returns the Service IP, and the Service sends traffic to ready backend Pods.
 
-Here is the Service our web app depends on. The selector is the piece that connects the stable Service name to the actual orders API Pods.
+Start from the value the application should carry. The web app needs the orders API name, not a Pod IP:
+
+```yaml
+env:
+  - name: ORDERS_API_BASE_URL
+    value: http://devpolaris-orders-api.orders
+```
+
+That value has two concrete parts. `devpolaris-orders-api` is the Service name, and `orders` is the namespace. A web Pod in the `web` namespace needs both parts because the target Service lives in a different namespace.
+
+The Service behind that name can stay small. The selector connects the stable Service name to the actual orders API Pods:
 
 ```yaml
 apiVersion: v1
@@ -60,14 +70,6 @@ spec:
     - name: http
       port: 80
       targetPort: 3000
-```
-
-The web Deployment should store the Service name rather than a Pod IP. The namespace appears in the value because the caller runs in `web` and the target Service lives in `orders`.
-
-```yaml
-env:
-  - name: ORDERS_API_BASE_URL
-    value: http://devpolaris-orders-api.orders
 ```
 
 That short namespace-qualified name is enough for normal in-cluster calls. The fully qualified form, `http://devpolaris-orders-api.orders.svc.cluster.local`, carries the same destination with every DNS piece written out.
@@ -197,7 +199,7 @@ Now we have the first half of the request path. The app asks for a name, the Pod
 
 A successful DNS lookup answers one question: "Can this caller resolve this Service name?" The next proofs cover whether the Service has ready Pods, whether a NetworkPolicy allows the connection, and whether the app process is listening on the right port. Production debugging gets much clearer when those proofs stay separate.
 
-For the web-to-orders path, the first proof is the lookup from the caller namespace. This command matters because a lookup from another namespace can tell a different story.
+For the web-to-orders path, the first proof is the lookup from the caller namespace. A lookup from another namespace can use a different search path and a different egress policy, so it can tell a different story.
 
 ```bash
 kubectl -n web exec deploy/devpolaris-web -- nslookup devpolaris-orders-api.orders

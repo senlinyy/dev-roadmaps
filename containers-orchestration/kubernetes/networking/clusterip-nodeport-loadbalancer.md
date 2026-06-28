@@ -61,33 +61,24 @@ The port fields also matter because they describe two different sides of the con
 | **clusterIP** | The virtual IP inside the cluster for the Service | `10.96.42.18` |
 | **status.loadBalancer** | The address a load balancer implementation reports back | `203.0.113.42` or a cloud hostname |
 
-Here is the shape we will use for the backend Pods. The Deployment gives each Pod the same label, and the container listens on a named port called `http`.
+Start with the backend identity rather than the full Deployment. The orders Pods need a stable label so every Service type can find the same backends:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: orders
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
+template:
+  metadata:
+    labels:
       app.kubernetes.io/name: orders-api
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: orders-api
-    spec:
-      containers:
-        - name: orders-api
-          image: ghcr.io/devpolaris/orders-api:2026.06.14
-          ports:
-            - name: http
-              containerPort: 8080
 ```
 
-The named `targetPort` gives the Service a small bit of flexibility. The Service can expose port `80` to clients, while the Pods listen on container port `8080`. Later, if the application moves its HTTP listener to `8081`, the team can update the Pod port named `http` and keep the Service port stable for clients. That stable client contract is the heart of the Service, and the type decides where that contract appears.
+The container also names its HTTP port. A named port lets the Service point at `http` instead of hardcoding `8080` everywhere:
+
+```yaml
+ports:
+  - name: http
+    containerPort: 8080
+```
+
+The Deployment still has replicas, a selector, an image, probes, and rollout settings in a real manifest. For this article, the label and the named port are the pieces every Service type reuses. The Service can expose port `80` to clients, while the Pods listen on container port `8080`. Later, if the application moves its HTTP listener to `8081`, the team can update the Pod port named `http` and keep the Service port stable for clients. That stable client contract is the heart of the Service, and the type decides where that contract appears.
 
 ## ClusterIP for Private Calls
 <!-- section-summary: ClusterIP is the default Service type and the usual choice for backend application calls inside the cluster. -->
@@ -96,25 +87,36 @@ The named `targetPort` gives the Service a small bit of flexibility. The Service
 
 For `orders-api`, ClusterIP is the normal starting point. The caller, `checkout-web`, already runs inside Kubernetes. A private cluster address gives it everything it needs, while the orders backend stays away from node-level and cloud load balancer exposure.
 
+The smallest useful Service shell names the Service and keeps the type private:
+
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: orders-api
   namespace: orders
-  labels:
-    app.kubernetes.io/name: orders-api
-    app.kubernetes.io/part-of: checkout
 spec:
   type: ClusterIP
+```
+
+Then add the selector that finds the orders Pods:
+
+```yaml
   selector:
     app.kubernetes.io/name: orders-api
+```
+
+Then add the caller-facing port and the backend port:
+
+```yaml
   ports:
     - name: http
       protocol: TCP
       port: 80
       targetPort: http
 ```
+
+Those three pieces make the complete ClusterIP Service: stable name, private audience, selected Pods, and port mapping. The caller sees `orders-api.orders:80`; the selected Pods receive traffic on their named `http` port.
 
 Inside the `orders` namespace, a client can use `http://orders-api`. From another namespace, a client should qualify the name as `orders-api.orders` or use the full name `orders-api.orders.svc.cluster.local`. That namespace part matters in real clusters because many teams reuse simple Service names such as `api`, `web`, or `worker` in different namespaces.
 
@@ -149,25 +151,19 @@ Most backend Services in production stay here. Public HTTP traffic often reaches
 
 Imagine the platform team runs a small bare-metal cluster in a training lab. There is no cloud load balancer integration. A network appliance can reach the Kubernetes worker nodes and forward traffic to a fixed node port. In that world, NodePort gives the appliance something stable to target.
 
+The Service type is the main new field. The selector and normal Service port stay familiar, and `nodePort` adds the node-facing port:
+
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: orders-api-nodeport
-  namespace: orders
-spec:
-  type: NodePort
-  selector:
-    app.kubernetes.io/name: orders-api
-  ports:
-    - name: http
-      protocol: TCP
-      port: 80
-      targetPort: http
-      nodePort: 31080
+type: NodePort
+ports:
+  - name: http
+    port: 80
+    targetPort: http
+    nodePort: 31080
 ```
 
-The Service now has two useful addresses. Pods inside the cluster can still call `http://orders-api-nodeport.orders:80`. Clients that can route to a worker node can call `http://<node-ip>:31080`.
+In the full Service, that snippet sits under `spec` beside the same selector used by the ClusterIP example. The Service now has two useful addresses. Pods inside the cluster can still call `http://orders-api-nodeport.orders:80`. Clients that can route to a worker node can call `http://<node-ip>:31080`.
+
 
 ```bash
 kubectl -n orders get svc orders-api-nodeport
@@ -237,7 +233,7 @@ NAME                TYPE           CLUSTER-IP     EXTERNAL-IP                   
 orders-api-public   LoadBalancer   10.96.10.44    a1b2c3d4.us-east-1.elb.amazonaws.com   80:31872/TCP   3m
 ```
 
-The `PORT(S)` column often still shows a node port because many LoadBalancer implementations start by creating NodePort behavior, then point the external load balancer at that node port. Some implementations can route directly to Pods and can use `spec.allocateLoadBalancerNodePorts: false`, depending on the provider. This is why a LoadBalancer review still needs to understand the cluster's implementation.
+The `PORT(S)` column often still shows a node port because many LoadBalancer implementations start by creating NodePort behavior, then point the external load balancer at that node port. Some implementations can route directly to Pods and can use `spec.allocateLoadBalancerNodePorts: false`, depending on the provider. A LoadBalancer review should always name the cluster's implementation so reviewers know whether node ports, direct Pod routing, or provider-specific health checks are involved.
 
 LoadBalancer fits best when the Service itself represents a network entry point. Common examples include an Ingress controller Service, a Gateway controller Service, a private TCP endpoint for systems outside the cluster, or a public layer 4 service where TCP or UDP routing belongs directly at the Service.
 
@@ -256,26 +252,13 @@ LoadBalancer also brings cloud and platform details into the Service review. The
 
 The three types are easier to reason about as layers around the same Service contract. ClusterIP gives the stable internal Service address. NodePort keeps that and adds a static port on nodes. LoadBalancer usually keeps those pieces and asks outside infrastructure to forward traffic into the Service path.
 
-```mermaid
-flowchart TB
-    subgraph ClusterIPPath[ClusterIP]
-      PodClient[Pod client] --> ServiceDNS[orders-api.orders:80]
-      ServiceDNS --> ClusterIP[Cluster IP]
-      ClusterIP --> ReadyPods[Ready orders-api Pods]
-    end
+Read the stack in this order:
 
-    subgraph NodePortPath[NodePort]
-      NodeClient[Node-network client] --> NodeIP[Node IP:31080]
-      NodeIP --> NodeService[Service routing]
-      NodeService --> ReadyPods
-    end
-
-    subgraph LoadBalancerPath[LoadBalancer]
-      ExternalClient[External client] --> ExternalLB[Load balancer address]
-      ExternalLB --> ProviderPath[Provider path: node port or direct pod routing]
-      ProviderPath --> ReadyPods
-    end
-```
+| Service type | Caller path | Shared dependency |
+|---|---|---|
+| ClusterIP | Pod client -> Service DNS -> ClusterIP | Ready Pods selected by the Service |
+| NodePort | Node-network client -> node IP and static port -> Service routing | Ready Pods selected by the Service |
+| LoadBalancer | External client -> load balancer address -> provider path | Ready Pods selected by the Service |
 
 This layered view helps during design reviews. A request to "make it LoadBalancer" usually means the team wants an address outside the cluster. That request still depends on the Service selector, the target port, Pod readiness, NetworkPolicy, node health, provider health checks, and firewall rules. The external address adds front-door reachability, while selector, readiness, and target port still decide whether any request reaches a healthy Pod.
 

@@ -43,25 +43,8 @@ The generated Cloud Run URL still matters during development and debugging. It p
 
 Here is the path we will build in words first. A browser asks DNS for `checkout.devpolaris.com`. DNS returns the load balancer's public IP address. The browser connects over HTTPS. The load balancer presents the certificate, accepts the request, reads the host and path, selects a backend service through the URL map, and sends the request to a serverless NEG that points at Cloud Run.
 
-```mermaid
-flowchart LR
-    Browser["Browser<br/>checkout.devpolaris.com"]
-    DNS["Cloud DNS<br/>A or AAAA record"]
-    IP["Global public IP"]
-    LB["External Application Load Balancer<br/>HTTPS frontend"]
-    Map["URL map<br/>host and path rules"]
-    Backend["Backend service"]
-    NEG["Serverless NEG"]
-    Run["Cloud Run<br/>checkout-api"]
-
-    Browser --> DNS
-    DNS --> IP
-    Browser --> LB
-    LB --> Map
-    Map --> Backend
-    Backend --> NEG
-    NEG --> Run
-```
+![A generated infographic showing a public request path from DNS name to global IP, HTTPS frontend, URL map, and Cloud Run backend.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/public-request-path.png)
+*A public service path has several named layers, so an outage can be DNS, TLS, routing, backend delivery, or application behavior.*
 
 That path starts with the name people type and automation calls. So we start with DNS.
 
@@ -116,6 +99,12 @@ gcloud compute addresses describe checkout-public-ip \
   --format="get(address)"
 ```
 
+The first command reserves the stable global address. The certificate command asks Google Cloud to provision a managed certificate for the domain. The final describe command returns the address that DNS should publish:
+
+```console
+203.0.113.10
+```
+
 After that, your DNS record points `checkout.devpolaris.com` to the address from the last command. Certificate provisioning can take time. During that window, `PROVISIONING` usually means Google Cloud is still validating and issuing the certificate. A good review checks both DNS and certificate state before blaming the application backend.
 
 Now the name and HTTPS pieces exist. The next piece is the managed proxy that receives the request.
@@ -168,6 +157,9 @@ pathMatchers:
         service: backendBuckets/checkout-assets
 ```
 
+![A generated infographic showing host and path rules choosing separate backend services and a default backend.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/url-map-routing.png)
+*The URL map keeps one public host while routing different paths to different backend services or buckets.*
+
 The public contract is clean: one host, a few paths, and clear routing. The private implementation can change behind each backend service. This is why the load balancer is often owned by a platform or networking team while application teams own the Cloud Run services behind it.
 
 At this point, the load balancer knows that `/api/v2/*` should go to `checkout-api-v2`. It still needs a Google Cloud object that can represent a serverless service as a backend. That object is the serverless NEG.
@@ -188,6 +180,14 @@ gcloud compute network-endpoint-groups create checkout-api-neg \
   --cloud-run-service=checkout-api
 ```
 
+`--network-endpoint-type=serverless` tells the NEG to represent a managed serverless target rather than VM IP endpoints. `--cloud-run-service=checkout-api` binds the NEG to the named regional service. The create operation should finish with a target link for a regional NEG:
+
+```yaml
+operationType: insert
+status: DONE
+targetLink: projects/devpolaris-prod/regions/us-central1/networkEndpointGroups/checkout-api-neg
+```
+
 Then the backend service attaches that serverless NEG:
 
 ```bash
@@ -200,6 +200,8 @@ gcloud compute backend-services add-backend checkout-api-backend \
   --network-endpoint-group=checkout-api-neg \
   --network-endpoint-group-region=us-central1
 ```
+
+`--load-balancing-scheme=EXTERNAL_MANAGED` selects the modern external Application Load Balancer scheme. The add-backend command connects the global backend service to the regional serverless NEG, so region names need to match the Cloud Run service region.
 
 Serverless NEGs can also use URL masks for some designs. A URL mask is a template that lets one serverless NEG map parts of the URL to multiple serverless resources that share a common URL pattern. That can help when many services follow a predictable naming pattern. For a beginner setup, one serverless NEG per important Cloud Run backend is usually easier to review and debug.
 
@@ -227,7 +229,26 @@ gcloud compute ssl-certificates describe checkout-cert \
   --format="yaml(name,managed.status,managed.domainStatus)"
 ```
 
+Healthy DNS and certificate evidence should look like this:
+
+```console
+checkout.devpolaris.com. 300 IN A 203.0.113.10
+```
+
+```yaml
+name: checkout-cert
+managed:
+  status: ACTIVE
+  domainStatus:
+    checkout.devpolaris.com: ACTIVE
+```
+
+If DNS still returns an old IP, fix the record before changing the load balancer. If the certificate shows `PROVISIONING`, check DNS, domain authorization, CAA records, and whether the HTTPS frontend uses the reserved IP.
+
 Next comes **load balancer evidence**. Load balancer request logs tell you whether the public entry layer received the request, which backend service it selected, and which status code it returned. If load balancer logs show a request while Cloud Run logs stay empty, the failure sits between the load balancer backend choice and the serverless handoff. If Cloud Run logs show the request and the application returns a 500, the public entry path did its job and the application needs attention.
+
+![A generated infographic showing DNS answers, certificate state, load balancer logs, and service logs as separate public-entry evidence.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/public-entry-evidence.png)
+*Evidence follows the same order as the request: name, certificate, load balancer decision, then service logs.*
 
 The last access check is **bypass protection**. Cloud Run services have ingress settings that can stop users from calling the generated `run.app` URL directly. For a public service that should only receive internet traffic through the load balancer, teams commonly set Cloud Run ingress to `internal-and-cloud-load-balancing`. With that setting, internet clients can reach the service through the external Application Load Balancer, while direct internet calls to the generated `run.app` URL are rejected.
 

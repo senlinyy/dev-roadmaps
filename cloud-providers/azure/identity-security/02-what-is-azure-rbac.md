@@ -140,6 +140,29 @@ Other roles match service jobs more directly. **Website Contributor** fits many 
 | Read secret values at runtime | Key Vault Secrets User | `kv-orders-prod` |
 | Manage role assignments for a platform team | Role Based Access Control Administrator | production management group or subscription |
 
+When a request names a role, the reviewer should inspect what that role actually contains. This read-only command asks Azure for the action list behind a built-in role.
+
+```bash
+az role definition list \
+  --name "Website Contributor" \
+  --query "[0].{roleName:roleName, actions:permissions[0].actions, dataActions:permissions[0].dataActions}"
+```
+
+The output should show management actions for web resources and an empty data-action list. That tells the reviewer this role can help with App Service configuration work, while a blob or Key Vault data request needs a different role.
+
+```json
+{
+  "roleName": "Website Contributor",
+  "actions": [
+    "Microsoft.Web/*",
+    "Microsoft.Insights/alertRules/*",
+    "Microsoft.Authorization/*/read",
+    "Microsoft.Resources/deployments/*"
+  ],
+  "dataActions": []
+}
+```
+
 A custom role helps when the built-in role grants more than the job needs. The Orders deployment pipeline might need to read the App Service, read configuration, and write configuration, while delete operations, networking changes, and access-management actions stay outside the deployment job. A custom role can list the narrow App Service actions the pipeline needs, and `AssignableScopes` can say where that custom role can be assigned. A simplified custom role for this deployment case can keep the action list close to the actual App Service configuration job.
 
 ```json
@@ -226,6 +249,27 @@ That command uses the object ID because the assignment should target the exact m
 ```
 
 This record gives one workload identity one storage data role at one storage account. If the API later needs to read secret values from Key Vault, the team creates another role assignment with a Key Vault role at the vault scope. Each access path gets its own reason, role, and boundary.
+
+The same assignment should be easy to find later. Listing by principal ID and narrowing the output to the role and scope gives a small evidence record for access review.
+
+```bash
+az role assignment list \
+  --assignee 9b7e2a10-3333-6666-cccc-3456789abcde \
+  --include-inherited \
+  --query "[].{role:roleDefinitionName, principalType:principalType, scope:scope}"
+```
+
+A focused output lets the reviewer compare real assignments with the original request. The returned scope also reveals inherited access because a subscription or resource-group assignment can appear while the reviewer is checking one child resource. If the storage role appears at subscription scope, the team should ask why the API needs every storage account in the subscription instead of the Orders export account.
+
+```json
+[
+  {
+    "role": "Storage Blob Data Contributor",
+    "principalType": "ServicePrincipal",
+    "scope": "/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
+  }
+]
+```
 
 Creating role assignments also requires permission. A caller needs access such as `Microsoft.Authorization/roleAssignments/write`, usually through Owner, User Access Administrator, or Role Based Access Control Administrator at the relevant scope. That power deserves extra care because someone who can grant access can change who reaches production. After the team creates assignments, Azure has to evaluate them on every request.
 

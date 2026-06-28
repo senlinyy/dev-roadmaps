@@ -260,6 +260,17 @@ az role assignment create \
 
 That command has the same RBAC shape from the previous article. The principal is `principal-mi-orders-api-prod`. The role is `Key Vault Secrets User`. The scope is the production vault. The result is one access grant for one workload identity at one target.
 
+The useful output is the assignment record. The reviewer should save the principal ID, role name, and vault scope together because those three fields prove the exact secret-read grant.
+
+```json
+{
+  "principalId": "principal-mi-orders-api-prod",
+  "principalType": "ServicePrincipal",
+  "roleDefinitionName": "Key Vault Secrets User",
+  "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-prod"
+}
+```
+
 Blob access is a separate grant because the target service and operation are different:
 
 ```bash
@@ -267,6 +278,17 @@ az role assignment create \
   --assignee principal-mi-orders-api-prod \
   --role "Storage Blob Data Contributor" \
   --scope /subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports
+```
+
+A matching output should point at the storage account or container scope, not the whole subscription. That difference matters because blob write access at subscription scope would cover every storage account under that subscription.
+
+```json
+{
+  "principalId": "principal-mi-orders-api-prod",
+  "principalType": "ServicePrincipal",
+  "roleDefinitionName": "Storage Blob Data Contributor",
+  "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
+}
 ```
 
 A successful Key Vault read proves one access path: secret read at the vault. A blob write needs its own role assignment at the storage scope. One identity can have several role assignments, and each assignment has its own reason. This is why access review should list identity, role, scope, and purpose for every target.
@@ -302,6 +324,27 @@ A simplified federated credential shape for the Orders production deploy might l
 ```
 
 That credential says which GitHub workload Microsoft Entra ID should trust for this identity. The Azure RBAC assignment still belongs to the deployment identity. The repository rule and environment protection decide whether GitHub can issue the matching token. Microsoft Entra ID checks the federated credential. Azure RBAC checks the deployment action and scope.
+
+In a real setup, the federated credential is created on the application or user-assigned managed identity that the pipeline will use. For an application-backed service principal, the command points at the app registration object and passes the issuer, subject, and audience from a small JSON file.
+
+```bash
+az ad app federated-credential create \
+  --id client-orders-deploy-prod \
+  --parameters github-orders-prod-credential.json
+```
+
+The output should echo the trust values. A reviewer can compare `issuer` with the external provider, `subject` with the exact repository and environment, and `audiences` with the Azure token exchange audience.
+
+```json
+{
+  "name": "github-orders-prod",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:devpolaris/orders-api:environment:production",
+  "audiences": [
+    "api://AzureADTokenExchange"
+  ]
+}
+```
 
 This gives the Orders team a secretless CI/CD path. The GitHub workflow can use OIDC token exchange for this flow, so review moves to the federated credential, GitHub environment protections, the deployment identity, and Azure RBAC assignments. The long-lived client secret leaves the workflow, which reduces the places the team has to inspect during a deployment credential incident.
 
@@ -341,6 +384,18 @@ az containerapp identity show \
 ```
 
 The useful output should connect the running app to `mi-orders-api-prod` and show the client ID or principal ID. An app with no attached identity lacks the managed identity token path. An app with a different attached identity points the team toward a role assignment mismatch.
+
+```json
+{
+  "type": "UserAssigned",
+  "userAssignedIdentities": {
+    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
+      "clientId": "client-mi-orders-api-prod",
+      "principalId": "principal-mi-orders-api-prod"
+    }
+  }
+}
+```
 
 The next evidence record is the managed identity object itself:
 

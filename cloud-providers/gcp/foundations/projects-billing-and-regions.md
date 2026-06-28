@@ -28,9 +28,14 @@ aliases:
 ## The Placement Questions
 <!-- section-summary: A GCP workload needs clear answers for ownership, billing, service activation, capacity, and location before resources are created. -->
 
-The previous GCP foundation article gave us a service map. Our sample checkout API uses **Cloud Run** for the HTTP service, **Cloud SQL** for relational data, **Secret Manager** for credentials, **Artifact Registry** for container images, **Cloud Build** for builds, and **Cloud Logging** plus **Cloud Monitoring** for operations. That map tells us what kinds of services we plan to use.
+The previous GCP foundation article gave us a service map. Our sample checkout API uses Cloud Run for the HTTP service, Cloud SQL for relational data, Secret Manager for credentials, Artifact Registry for container images, Cloud Build for builds, and Cloud Logging plus Cloud Monitoring for operations. That map tells us what kinds of services we plan to use.
 
-The next job is placement. Placement means deciding where the workload lives inside Google Cloud, who owns that space, who pays for it, which service APIs are allowed to run there, how much capacity the project can consume, and which geographic location the workload uses. A team can choose the right compute service and still have a broken production setup if these placement choices stay vague.
+Now the team needs to place the workload. **Placement** means deciding where the workload lives inside Google Cloud, who owns that space, who pays for it, which service APIs can run there, how much capacity the project can consume, and which geographic location the workload uses. A team can choose the right compute service and still have a broken production setup if these placement choices stay vague.
+
+Think about the local version of the app for a moment. On a laptop, the checkout API lives in one folder, uses one local database, reads one `.env` file, and writes logs to one terminal. In GCP, the equivalent boundaries are more explicit. The app lives in a project, under a folder, linked to a billing account, with enabled APIs, quotas, and regions.
+
+![Workload placement coordinates](/content-assets/articles/article-cloud-providers-gcp-foundations-organizations-folders-projects-billing-accounts/workload-placement-coordinates.png)
+*A production workload needs several coordinates before the first resource exists: project, folder, billing, APIs, quota, and region.*
 
 For the checkout API, the team needs answers to a small set of concrete questions. Each answer gives a reviewer one practical coordinate for the production setup.
 
@@ -43,7 +48,7 @@ For the checkout API, the team needs answers to a small set of concrete question
 | How much can the project consume? | **Quotas and system limits** | Cloud Run instances, database capacity, build rate |
 | Where should the workload run? | **Region and zone** | Primary region `us-central1`, database HA across zones |
 
-Those ideas connect tightly. The project gives the workload a boundary. The organization and folders place that boundary under company controls. The billing link lets paid services run. API enablement opens the specific service doors. Quotas define capacity guardrails. Regions and zones place the actual runtime near users and inside chosen failure domains. We start with projects because almost every practical GCP conversation eventually asks, "Which project are we talking about?"
+Those ideas connect tightly. The project gives the workload a boundary. The organization and folders place that boundary under company controls. The billing link lets paid services run. API enablement opens the specific service doors. Quotas define capacity guardrails. Regions and zones place the actual runtime near users and inside chosen failure domains.
 
 ## Projects
 <!-- section-summary: A project is the main GCP workspace for resources, APIs, IAM policies, quotas, logs, billing links, and cleanup. -->
@@ -54,7 +59,7 @@ The checkout API should have separate projects for separate environments. A prod
 
 Every project has three names that show up in different places. The **project ID** is the unique ID humans and tools usually type, such as `devpolaris-checkout-prod`. The **project number** is a numeric identifier that Google Cloud assigns and many service agents use behind the scenes. The **project name** is a mutable display name in the console, such as `Checkout API Production`.
 
-That distinction matters in production. A service account email often includes the project ID, while Google-managed service agents often include the project number. A beginner may grant IAM access to the wrong principal because the project ID and project number both appear in logs, APIs, and generated identities. The placement record should capture both.
+This command creates the production project under a parent folder, then reads back the project number. `--name` sets the display name, while `--folder` places the project under the company hierarchy. In many teams, Terraform or a project vending workflow runs this instead of a person typing it directly.
 
 ```bash
 gcloud projects create devpolaris-checkout-prod \
@@ -62,10 +67,21 @@ gcloud projects create devpolaris-checkout-prod \
   --folder=123456789012
 
 gcloud projects describe devpolaris-checkout-prod \
-  --format="value(projectNumber)"
+  --format="yaml(projectId,projectNumber,name,parent)"
 ```
 
-The project also affects daily command safety. The `gcloud` CLI can use an active default project from local configuration, and many commands accept an explicit `--project` flag. A developer who has access to staging and production should treat the active project as change evidence, because creating a database in staging and creating a database in production are very different actions.
+Useful output should show the ID the team will type, the number service agents may use, and the parent folder. A mismatch here is worth fixing before resources are created.
+
+```yaml
+projectId: devpolaris-checkout-prod
+projectNumber: '918273645012'
+name: Checkout API Production
+parent:
+  id: '123456789012'
+  type: folder
+```
+
+The project also affects daily command safety. The `gcloud` CLI can use an active default project from local configuration, and many commands accept an explicit `--project` flag. A developer who has access to staging and production should treat the active project as change evidence.
 
 ```bash
 gcloud config get-value project
@@ -75,7 +91,16 @@ gcloud run services list \
   --region=us-central1
 ```
 
-In a mature team, project creation usually happens through Terraform, an internal project vending tool, or a platform request. The workflow sets the project ID, parent folder, labels, initial IAM groups, billing link, required APIs, log routing, budget alert, and contacts. A project is small enough for one workload team to understand, but important enough that security, finance, and platform teams should review it.
+The first output tells you the local default. The second output proves which services are in production because the command names the project and region explicitly.
+
+```console
+devpolaris-checkout-stg
+
+SERVICE       REGION       URL                                      LAST DEPLOYED BY
+checkout-api  us-central1  https://checkout-api-uc.a.run.app        deployer@example.com
+```
+
+The default project above is staging, while the list command targets production. That contrast is the whole point: production commands should carry their target in the command, especially when the same engineer can touch multiple environments.
 
 The project gives the checkout API its working boundary. The next question is where that boundary sits inside the company.
 
@@ -86,28 +111,29 @@ An **organization resource** is the company root in Google Cloud. It usually com
 
 For DevPolaris, the checkout API might sit under a production applications folder. The staging and development projects might sit under a non-production folder. That structure lets the company apply stricter rules to production without slowing every sandbox in the same way.
 
-```mermaid
-flowchart TD
-    Org["Organization: devpolaris.example"] --> Prod["Folder: production"]
-    Org --> NonProd["Folder: non-production"]
-    Prod --> Apps["Folder: applications"]
-    Apps --> CheckoutProd["Project: devpolaris-checkout-prod"]
-    NonProd --> CheckoutStg["Project: devpolaris-checkout-stg"]
-    NonProd --> CheckoutDev["Project: devpolaris-checkout-dev"]
-    Billing["Cloud Billing account: prod-apps"] -. "pays for" .-> CheckoutProd
-```
+![Hierarchy and billing path](/content-assets/articles/article-cloud-providers-gcp-foundations-organizations-folders-projects-billing-accounts/hierarchy-billing-path.png)
+*Folders explain which inherited controls can affect the project, while the billing account explains who pays for usage inside it.*
 
 Folders matter because policies can be inherited. IAM roles granted at an organization or folder can flow down to projects. Organization policies can also flow down and restrict how resources may be configured. For example, a production folder might restrict allowed resource locations, block public IP addresses on VMs, limit external sharing, or require specific security settings.
 
-This is a common production surprise. A developer can have strong permissions inside `devpolaris-checkout-prod` and still see a deployment fail because a policy inherited from the production folder rejects the resource shape. The project IAM page may look fine, while the real answer sits one or two levels above the project.
+This is a common production surprise. A developer can have strong permissions inside `devpolaris-checkout-prod` and still see a deployment fail because a policy inherited from the production folder rejects the resource shape. The project IAM page may look fine, while the real answer sits above the project.
+
+This command reads the parent chain for the project. It is a read-only command, so it is safe during access and deployment reviews.
 
 ```bash
 gcloud projects get-ancestors devpolaris-checkout-prod
 ```
 
-That command gives the parent chain for the project. During an access or deployment review, the parent chain tells the team which folder and organization policies may apply. The important habit is to review the project together with its ancestors, because the effective behavior comes from the full path.
+Useful output should show the project, its parent folder, and the organization. The IDs are the coordinates a platform engineer needs when checking inherited policies.
 
-Now the checkout API has a project and a parent folder. The next question is financial: which billing account pays for this workload, and who can control that link? That financial choice can block or approve the first real deployment.
+```console
+ID              TYPE
+devpolaris-checkout-prod  project
+123456789012   folder
+987654321098   organization
+```
+
+Now the checkout API has a project and a parent folder. The next question is financial: which billing account pays for this workload, and who can control that link?
 
 ## Billing Accounts
 <!-- section-summary: A Cloud Billing account defines who pays, while the project records which billing account funds its usage. -->
@@ -115,6 +141,8 @@ Now the checkout API has a project and a parent folder. The next question is fin
 A **Cloud Billing account** is the Google Cloud resource that defines who pays for a set of linked projects. It tracks charges and savings for usage in those projects, has its own IAM roles, and connects to a Google payments profile for invoices and payment instruments. The project owns the workload resources, while the billing account pays for their usage.
 
 For the checkout API, finance might own a production application billing account. Platform automation links `devpolaris-checkout-prod` to that billing account during project setup. From that point, Cloud Run requests, Cloud SQL storage, Artifact Registry storage, Cloud Build minutes, logs, metrics, and network charges from the project accrue under that billing account.
+
+These commands list billing accounts the caller can see, link the project to the approved account, then describe the link. `--billing-account` uses the billing account ID, and the project ID is the workload boundary receiving the link.
 
 ```bash
 gcloud billing accounts list
@@ -125,9 +153,18 @@ gcloud billing projects link devpolaris-checkout-prod \
 gcloud billing projects describe devpolaris-checkout-prod
 ```
 
-Billing has a separate permission boundary from the project. A developer may have permission to deploy Cloud Run services in the project without permission to link the project to a billing account. A finance or platform engineer may have billing account permissions without daily access to application resources. That split is healthy because the person who deploys code and the person who controls payment usually need different access.
+Healthy output should show `billingEnabled: true` and the expected billing account name. If billing is disabled, paid services may fail even when IAM and APIs look correct.
 
-Budgets belong in this conversation too. A **budget** tracks spend for a billing account or a scoped set of projects and sends alerts at configured thresholds. A budget gives the team an early warning system, while hard spend control needs additional governance, quota review, and incident processes.
+```yaml
+billingAccountName: billingAccounts/0X0X0X-0X0X0X-0X0X0X
+billingEnabled: true
+name: projects/devpolaris-checkout-prod/billingInfo
+projectId: devpolaris-checkout-prod
+```
+
+Billing has a separate permission boundary from the project. A developer may have permission to deploy Cloud Run services in the project without permission to link the project to a billing account. A finance or platform engineer may have billing account permissions without daily access to application resources. That split is healthy because payment control and application change control are different jobs.
+
+Budgets belong in this conversation too. A **budget** tracks spend for a billing account or a scoped set of projects and sends alerts at configured thresholds. A budget gives the team an early warning system, while strict spend control needs additional governance, quota review, and incident processes.
 
 For checkout production, a budget might alert at 50%, 90%, and 100% of the monthly target. The alert should go to the workload owner, platform on-call, and finance contact. If a bad deployment suddenly creates too many logs or build retries, the budget alert gives the team a cost signal before the monthly invoice delivers the first clue.
 
@@ -136,9 +173,11 @@ The billing link lets paid services run and gives finance a place to see cost. G
 ## Enabled APIs Open the Service Gates
 <!-- section-summary: Google Cloud service APIs must be enabled per project before deployments can create or use many managed services. -->
 
-An **enabled API** is a project-level switch that allows a Google Cloud service API to be used in that project. Many GCP products have an API name ending in `googleapis.com`, such as `run.googleapis.com` for Cloud Run and `sqladmin.googleapis.com` for Cloud SQL administration. A disabled API gives the project a clear setup error when deployment tries to create or operate that service through the normal API path.
+An **enabled API** is a project-level switch that allows a Google Cloud service API to be used in that project. Many GCP products have an API name ending in `googleapis.com`, such as `run.googleapis.com` for Cloud Run and `sqladmin.googleapis.com` for Cloud SQL administration. A disabled API gives the project a setup error when deployment tries to create or operate that service through the normal API path.
 
 The checkout API needs a short API list before the first deployment. Cloud Run needs the Cloud Run API. Cloud SQL needs the Cloud SQL Admin API. Secret Manager needs the Secret Manager API. Artifact Registry needs the Artifact Registry API. Cloud Build, Logging, and Monitoring need their own APIs for the build and operations path.
+
+The enable command is a mutating setup command. The verification command is read-only and should be part of the project setup evidence. `--project` keeps the API gate tied to the intended production project.
 
 ```bash
 gcloud services enable \
@@ -153,7 +192,18 @@ gcloud services enable \
 
 gcloud services list \
   --enabled \
-  --project=devpolaris-checkout-prod
+  --project=devpolaris-checkout-prod \
+  --filter="name:(run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com)"
+```
+
+Useful output should list the service names and titles. If a required API is missing, the later deploy can fail with an API-disabled error even though the command syntax is correct.
+
+```console
+NAME                              TITLE
+artifactregistry.googleapis.com   Artifact Registry API
+run.googleapis.com                Cloud Run Admin API
+secretmanager.googleapis.com      Secret Manager API
+sqladmin.googleapis.com           Cloud SQL Admin API
 ```
 
 API enablement should live in the same setup workflow as project creation. A one-off manual click in the console can rescue a demo, but it creates drift in production. Terraform, a project vending tool, or a platform pipeline gives every new project the same approved API list and makes later changes reviewable.
@@ -179,7 +229,7 @@ For checkout production, quota review starts from the expected launch shape. The
 | Networking resources | Are there enough IP addresses, load balancer resources, and connector capacity? | Regional resource count and expected growth |
 | Logging and monitoring | Can logs, metrics, and alert policies handle expected traffic? | Log volume estimate and retention choice |
 
-System limits sit next to quotas. A **system limit** is a fixed product constraint set by product design, such as a maximum field size or a product-specific design limit. Quota planning asks, "Do we have enough allowance?" System-limit planning asks, "Does this design fit inside the product shape?"
+System limits sit next to quotas. A **system limit** is a fixed product constraint set by product design, such as a maximum field size or a product-specific design limit. Quota planning asks whether the project has enough allowance. System-limit planning asks whether the design fits inside the product shape.
 
 The Google Cloud console has an IAM & Admin page called **Quotas & System Limits** that shows current usage, values, filters by service, and usage charts. For production planning, the review record should include the quota name, service, location, current value, current usage, planned peak, and whether an adjustment request is already approved. That record gives launch day a clean answer when a `RESOURCE_EXHAUSTED` error appears.
 
@@ -213,6 +263,11 @@ Regions and zones connect cost, latency, compliance, and reliability. Now we can
 <!-- section-summary: A placement plan records the project, hierarchy, billing, APIs, quotas, regions, owners, and review evidence before production launch. -->
 
 The checkout API placement plan is the working agreement between application, platform, security, finance, and operations. It takes the service map and adds the GCP coordinates needed for a real deployment. The exact tool can be Terraform, an internal project vending form, a pull request template, or a release checklist, but the same facts should appear every time.
+
+![Placement plan before launch](/content-assets/articles/article-cloud-providers-gcp-foundations-organizations-folders-projects-billing-accounts/placement-plan-checklist.png)
+*A launch review should prove that project setup, API gates, quota evidence, owner contacts, budget alerts, and region choices are already recorded.*
+
+The YAML below is a simplified record, not a complete Terraform module. It shows what the team should capture before production resources multiply. The fields under `project`, `billing`, `apis`, and `location` are stable setup facts. The `quota_review` and `required_reviews` fields are launch evidence that may change as traffic and requirements grow.
 
 ```yaml
 workload: checkout-api
@@ -257,7 +312,7 @@ required_reviews:
   - on-call and owner contacts
 ```
 
-This kind of record prevents the common production scramble. A deployment failure can be checked against the API list, parent policies, quotas, and region decision. A cost spike can be traced to the project, labels, billing account, and budget alert. An access request can name the project, folder, and owner instead of asking someone to search the whole organization.
+This record is used by humans and automation. A deployment failure can be checked against the API list, parent policies, quotas, and region decision. A cost spike can be traced to the project, labels, billing account, and budget alert. An access request can name the project, folder, and owner instead of asking someone to search the whole organization.
 
 The important point is that GCP placement is one connected decision. The project is the workload boundary, the folder path gives inherited controls, the billing account pays, enabled APIs define the service surface, quotas set the capacity ceiling, and regions and zones place the runtime. A strong production setup records all of those facts before the first customer request arrives.
 

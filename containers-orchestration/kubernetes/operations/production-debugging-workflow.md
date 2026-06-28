@@ -23,9 +23,11 @@ id: article-containers-orchestration-kubernetes-operations-production-debugging-
 ## Turn the Alert Into a Symptom
 <!-- section-summary: A useful debugging flow turns a noisy alert into one concrete user symptom, scope, and request example. -->
 
-Production debugging in Kubernetes starts under pressure. An alert fires, people join a call, and somebody wants to run the first command they remember. The safer move is to turn the alert into a concrete **symptom** before changing the cluster.
+Production debugging in Kubernetes starts with a noisy alert and a short clock. The alert says checkout 5xx rate is high, people join a call, and somebody wants to run the first command they remember. The first useful move is to turn that alert into a concrete **symptom** before changing the cluster.
 
-Use our same production service: `devpolaris-orders-api` in the `orders` namespace. The alert says checkout 5xx rate is high. A useful symptom is more specific: checkout requests to `POST /orders/checkout` return `503` for some users in the EU production cluster, starting around 10:05 UTC.
+Use our same production service: `devpolaris-orders-api` in the `orders` namespace. A useful symptom is more specific than the alert: checkout requests to `POST /orders/checkout` return `503` for some users in the EU production cluster, starting around 10:05 UTC.
+
+A symptom names the user-visible failure, the affected route, the scope, and a start time. For this incident, the concrete symptom is: `POST /orders/checkout` returns `503` in the EU production cluster after 10:05 UTC. That is much easier to investigate than "Kubernetes is broken" or "the API is down."
 
 Capture one request if you can. Add a request ID so the same request can be found in ingress logs, application logs, and traces.
 

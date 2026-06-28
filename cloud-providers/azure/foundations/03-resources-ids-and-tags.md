@@ -86,9 +86,7 @@ If you are coming from AWS, put resource IDs in the same incident notes where yo
 
 The Orders production Key Vault has a resource ID like this:
 
-```
-/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod
-```
+`/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod`
 
 That path reads left to right. The subscription segment names the production Azure estate. The resource group segment names the lifecycle container. The provider segment names the Azure API family. The `vaults` segment names the resource kind inside Key Vault. The final segment names this particular vault.
 
@@ -101,6 +99,10 @@ Here is the same path split into the pieces Maya checks during the incident. Eac
 | `/providers/{providerNamespace}` | The resource provider namespace that serves the API | `Microsoft.KeyVault` |
 | `/{resourceType}` | The resource kind inside the provider | `vaults` |
 | `/{resourceName}` | The short name of this resource | `kv-orders-prod` |
+
+![Resource ID route showing a request narrowing from subscription to resource group, provider, type, name, and exact resource](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-id-route.png)
+
+*The resource ID route shows why a short name is only the start. The full path keeps narrowing the request until Azure has one exact resource.*
 
 This is the value that belongs in exact automation. A deployment script, incident record, dashboard tile, role assignment review, and deletion request should carry the resource ID when the change affects a specific resource. The short name helps a human recognize the object, while the ID tells Azure which object the human means.
 
@@ -200,6 +202,8 @@ If the provider needs registration, the platform team can register the namespace
 az provider register --namespace "Microsoft.KeyVault"
 ```
 
+Provider registration can take a little time. After running it, the team reruns the previous `az provider show` query and waits for `registrationState` to read `Registered` before depending on that provider in a deployment.
+
 So far, Maya can recognize the resource by name, prove the exact target by ID, and understand the provider type that owns the API. The next problem is ownership at scale. A company can have thousands of resources, and names alone make cost reports, inventories, and automation hard to trust. That is where tags come in.
 
 ## Tags
@@ -233,6 +237,29 @@ az group create \
   --tags service=orders-api env=prod team=commerce-platform cost-center=checkout-billing
 ```
 
+After the create call, Maya can read the tags back with the same query shape used earlier:
+
+```bash
+az group show \
+  --name "rg-orders-app-prod-uksouth" \
+  --query "{name:name,tags:tags}" \
+  --output json
+```
+
+The output should show the ownership tags the team expects:
+
+```json
+{
+  "name": "rg-orders-app-prod-uksouth",
+  "tags": {
+    "cost-center": "checkout-billing",
+    "env": "prod",
+    "service": "orders-api",
+    "team": "commerce-platform"
+  }
+}
+```
+
 For an existing resource, a merge operation can add a tag while keeping the existing set:
 
 ```bash
@@ -242,11 +269,37 @@ az tag update \
   --tags data-class=restricted-customer managed-by=bicep
 ```
 
+The important flag is `--operation Merge`. It adds or updates the named tag keys while keeping other tag keys in place. Afterward, a focused read proves the resource now carries the new metadata:
+
+```bash
+az resource show \
+  --ids "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod" \
+  --query "{name:name,tags:tags}" \
+  --output json
+```
+
+```json
+{
+  "name": "kv-orders-prod",
+  "tags": {
+    "data-class": "restricted-customer",
+    "env": "prod",
+    "managed-by": "bicep",
+    "service": "orders-api",
+    "team": "commerce-platform"
+  }
+}
+```
+
 Tags have important limits. Microsoft documents a maximum of 50 tag name-value pairs on each resource, resource group, and subscription. Tag names are case-insensitive for operations, while tag values are case-sensitive. Tag names also have character restrictions, and some resource types have extra tag behavior that the team needs to check during design.
 
 Tags are plain-text metadata, so secrets and personal data have no place there. A tag value can appear in cost reports, deployment history, exported templates, commands, monitoring logs, and third-party inventory tools. A tag such as `owner=orders-oncall` is useful, while a tag containing an email address, password, connection string, customer identifier, or private token creates avoidable exposure.
 
 Tag inheritance is another common beginner trap. Azure stores tags on the subscription, resource group, or resource where the tag was applied. A tag on `rg-orders-data-prod-uksouth` stays on the resource group record, and child resources need their own tags through the deployment template, pipeline, Azure Policy, or reporting configuration. Cost Management has reporting features that can inherit tags for usage attribution, but that reporting behavior is separate from the actual tag set stored on each child resource.
+
+![Tag inheritance trap showing a resource group tag that does not automatically appear on virtual machine, storage account, and SQL database resources, followed by directly applied tags and audit checks](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/tag-inheritance-trap-gpt.png)
+
+*The tag inheritance trap is a common source of bad cost and inventory reports. Put required tags on the resources themselves through templates, policy, or pipeline checks.*
 
 This is why the Orders team's Bicep and Terraform modules keep common tags in one variable and pass them to every resource. That way the resource group, vault, storage account, database, private endpoint, and diagnostics all carry the same `service`, `env`, `team`, and `cost-center` values. The result is boring in the best way: every inventory query returns the same ownership story.
 
@@ -286,6 +339,14 @@ az lock list \
   --output table
 ```
 
+The lock list gives change reviewers a quick view of the protection already in place:
+
+```console
+Name                        Level         Notes
+--------------------------  ------------  -------------------------------------------------
+prevent-orders-data-delete  CanNotDelete  Production Orders data resources require review before deletion.
+```
+
 A lock is also a resource with its own ID under `Microsoft.Authorization/locks`. Creating or deleting locks requires permissions such as `Microsoft.Authorization/locks/*`, which Owner and User Access Administrator roles include. That permission model matters because removing a lock is itself a serious control-plane action, and production teams usually route it through a reviewed change.
 
 Now Maya has the pieces: name, ID, provider type, tags, and locks. The last step is a habit that turns those pieces into safe operations. Before any change, the team collects evidence and looks for conflicts.
@@ -320,10 +381,10 @@ Then Maya lists candidate Orders resources by tags and projects only the fields 
 ```bash
 az resource list \
   --query "[?tags.service=='orders-api' && tags.env=='prod'].{name:name,type:type,resourceGroup:resourceGroup,location:location,id:id}" \
-  --output table
+  --output json
 ```
 
-The table gives her a clean inventory:
+The result gives her a clean inventory:
 
 ```json
 [
@@ -365,6 +426,10 @@ The evidence packet can stay small. It needs to answer the operational questions
 | Tags | Which service, environment, and team own the object? | Name says prod while `env` tag says staging |
 | Lock state | Which management operations are intentionally blocked? | Delete request has no lock review for production data |
 | Recent activity | Who or what changed it recently? | A deployment pipeline changed tags outside the normal release |
+
+![Resource safety checklist showing exact ID, provider, tags, delete lock, read lock, and audit-first review steps](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-safety-checklist.png)
+
+*The safety checklist turns the article into a pre-change habit: prove the exact ID, provider type, tags, lock state, and audit evidence before touching production.*
 
 This habit keeps automation honest. A cleanup job might start with all resources tagged `env=dev`, but one resource could have `service=orders-api` and a production-looking resource ID because someone copied the wrong tag. A safe job checks multiple fields together and treats disagreement as evidence that the target needs review.
 

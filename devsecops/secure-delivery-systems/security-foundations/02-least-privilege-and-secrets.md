@@ -1,7 +1,7 @@
 ---
 title: "Least Privilege and Secrets"
-description: "Limit permissions for people, workloads, and pipelines, and replace static shared secrets with scoped, short-lived access."
-overview: "Follow one delivery pipeline as it moves from shared deployment keys to SSO, workload identities, secret managers, rotation plans, repository protections, and OIDC-based CI/CD access."
+description: "Learn how delivery teams limit access for people, services, and CI jobs while moving long-lived secrets into scoped, rotated, and short-lived paths."
+overview: "Start with a simple delivery-locker key story, then follow ParcelPulse as it separates human access, workload identities, CI/CD OIDC sessions, secret storage, rotation, repository protections, verification, and leaked-secret response."
 tags: ["devsecops", "least-privilege", "secrets", "oidc"]
 order: 2
 id: article-devsecops-security-foundations-least-privilege
@@ -19,79 +19,112 @@ aliases:
 
 ## Table of Contents
 
-1. [The Production Story](#the-production-story)
-2. [Least Privilege](#least-privilege)
-3. [Static Shared Secrets](#static-shared-secrets)
-4. [Scoped Access For People](#scoped-access-for-people)
-5. [Scoped Access For Workloads](#scoped-access-for-workloads)
-6. [Keep Secrets Out Of Code And Builds](#keep-secrets-out-of-code-and-builds)
-7. [Secret Managers](#secret-managers)
-8. [Rotation](#rotation)
-9. [Repository And Environment Protections](#repository-and-environment-protections)
-10. [CI/CD OIDC Federation](#cicd-oidc-federation)
-11. [Static Key Versus OIDC Session](#static-key-versus-oidc-session)
-12. [Leaked Secret Incident Response](#leaked-secret-incident-response)
-13. [Putting It All Together](#putting-it-all-together)
+1. [A Simple Key Story](#a-simple-key-story)
+2. [The ParcelPulse Delivery Path](#the-parcelpulse-delivery-path)
+3. [Least Privilege Starts With One Job](#least-privilege-starts-with-one-job)
+4. [Static Shared Secrets](#static-shared-secrets)
+5. [Scope Human Access](#scope-human-access)
+6. [Scope Workload Access](#scope-workload-access)
+7. [Keep Secrets Out of Code and Builds](#keep-secrets-out-of-code-and-builds)
+8. [Store Secrets in a Secret Manager](#store-secrets-in-a-secret-manager)
+9. [Rotate Secrets With a Real Cutover Plan](#rotate-secrets-with-a-real-cutover-plan)
+10. [Protect Repositories and Environments](#protect-repositories-and-environments)
+11. [Use OIDC for CI/CD Cloud Access](#use-oidc-for-cicd-cloud-access)
+12. [Verify Access and Secret Use](#verify-access-and-secret-use)
+13. [Respond to a Leaked Secret](#respond-to-a-leaked-secret)
+14. [Put It All Together](#put-it-all-together)
+15. [References](#references)
 
-## The Production Story
-<!-- section-summary: We will use one realistic delivery pipeline so every permission and secret has a concrete job. -->
+## A Simple Key Story
+<!-- section-summary: Least privilege is easiest to understand as a key that opens one needed locker, rather than every door in the building. -->
 
-Let's stay with one production system through the whole article. The company is called ParcelPulse. It runs a delivery tracking product for small shops. Customers upload shipping labels, warehouse staff scan packages, and shoppers see delivery status in a web app. The engineering team has one main API, one PostgreSQL database, one object storage bucket for label PDFs, and one GitHub Actions pipeline that builds and deploys the API to production.
+Imagine a delivery employee named Lena. Her job is simple: put one parcel into locker 42 at the front of an apartment building. The building manager has two choices. They can give Lena a master key for the lobby, mailroom, maintenance room, every apartment hallway, and every locker. Or they can give her a small access card that opens the front delivery area and locker 42 for the next ten minutes.
 
-The production path has several callers. A person like Mia, a backend engineer, needs to read logs and deploy approved releases. The API container needs to read the database password and write label PDFs into one bucket. The CI/CD pipeline needs to push a container image and update the production service. A coverage uploader runs during tests and sends test coverage to a vendor. Each caller has a real job, and each job needs a different amount of access.
+The second choice is the safer design. Lena can finish the delivery, and a lost access card has a small blast radius. Whoever finds it can open one locker for a short time. They cannot enter every part of the building or come back next month.
 
-That is the structure of this article. We will first define **least privilege**, then look at the common shortcut: one long-lived deployment key placed in the pipeline. From there, we will separate access for **people**, **workloads**, and **pipelines**, then we will handle the secret lifecycle: storage, rotation, repository protections, OIDC federation, and incident response after a leak.
+That is the beginner version of **least privilege**. An identity receives only the access it needs for one job, in the place where the job happens, for the time the job needs. For ParcelPulse, the delivery employee maps to a person, a running service, or a CI/CD job. The locker maps to one resource such as a log group, database secret, container registry repository, object-storage prefix, or production deployment environment.
 
-Here are the pieces we will connect:
+Here is the same key story translated into delivery work:
 
-| Piece | Simple definition | ParcelPulse example |
+| Simple story | DevSecOps version | ParcelPulse example |
 |---|---|---|
-| **Principal** | The identity making a request | Mia, the API container, or the GitHub Actions job |
-| **Permission** | The action the identity can take | `s3:PutObject`, `logs:FilterLogEvents`, or `ecs:UpdateService` |
-| **Scope** | The boundary around that permission | One bucket, one branch, one environment, one role session |
-| **Secret** | A sensitive value that proves identity or unlocks access | Database password, API key, cloud access key, signing key |
-| **Session** | A temporary access window | A one-hour deployment role session for one workflow run |
+| Lena has a named badge | The caller has an identity | Mia signs in through SSO, the API runs as `parcelpulse-api-prod`, the workflow runs as `github-actions-prod-deploy` |
+| The badge opens one locker | The policy allows one job | Read API logs, read one database secret, push one image, update one service |
+| The badge expires | The session has a short lifetime | SSO session, ECS task credentials, GitHub Actions OIDC role session |
+| The badge has an access log | The platform records usage | CloudTrail, GitHub audit log, secret manager access events, deployment records |
 
-The key idea is simple, but the implementation touches many places. A secure delivery system needs access that matches the caller, the task, the environment, and the time window. A developer reading logs, an API container reading a database password, and a deployment job updating production should never share the same credential.
+Secrets enter this story when a key can be copied. A database password, API token, private key, and cloud access key are all values that unlock something. If the value lives in a repository, workflow log, Docker layer, shared spreadsheet, or laptop shell history, the team has to assume it can travel. Least privilege limits what the value can do, and good secret management limits where the value lives, who can read it, how long it works, and how quickly the team can rotate it.
 
-## Least Privilege
-<!-- section-summary: Least privilege means every person, workload, and pipeline gets the minimum access needed for its assigned task. -->
+The rest of this article keeps that one locker story attached to a real production path.
 
-**Least privilege** means granting the minimum access needed to complete an assigned task. NIST defines the principle around restricting users and processes to the minimum privileges they need. In plain DevOps terms, a caller should have enough access to do its real work and no extra access for unrelated systems.
+## The ParcelPulse Delivery Path
+<!-- section-summary: One realistic ParcelPulse release gives every permission and secret a concrete caller, resource, and purpose. -->
 
-For ParcelPulse, Mia needs to inspect API logs during an incident. She does not need the production database password for that. The API container needs to read the database password at startup. It does not need permission to create new IAM users. The deployment pipeline needs to update the production ECS service after approval. It does not need read access to every customer label in object storage.
+ParcelPulse runs a delivery tracking product for small shops. Customers upload shipping labels, warehouse staff scan parcels, and shoppers check delivery status in a web app. The main service is `parcelpulse-api`, which stores label metadata in PostgreSQL, writes label PDFs to object storage, and deploys through GitHub Actions into an AWS ECS service.
 
-You can think about least privilege with four questions:
+The production path has several callers:
 
-| Question | What you are narrowing | Example answer |
+| Caller | Job | Access it needs |
 |---|---|---|
-| **Who is calling?** | The identity | `parcelpulse-api-prod`, `github-actions-prod-deploy`, or Mia through SSO |
-| **What action is needed?** | The API operation | Read logs, fetch one secret, push one image, update one service |
-| **Which resource is allowed?** | The target | One log group, one secret ARN, one registry repository, one ECS service |
-| **What context must be true?** | The condition | Main branch, production environment approval, MFA, one repository claim |
+| Mia, backend engineer | Investigate an API incident | Read production logs and service status |
+| `parcelpulse-api-prod` ECS task | Run the API in production | Read one database secret and write label PDFs to one bucket prefix |
+| `github-actions-prod-deploy` workflow | Deploy a reviewed release | Push one container image and update one ECS service |
+| Coverage uploader job | Send test coverage to a vendor | Use one vendor upload token |
+| Release manager | Approve the production deployment | Approve the GitHub `production` environment |
 
-This table matters because broad access often enters through one fuzzy phrase: "the pipeline needs AWS access." That phrase hides the caller, the action, the resource, and the conditions. A real policy needs all four. The pipeline may need `ecr:PutImage` for one repository and `ecs:UpdateService` for one service, while a separate migration job may need database migration access for a short window.
+Those callers should never share one credential. Mia reading logs, the API fetching a database password, and a workflow updating ECS are different jobs. A shared cloud key for all of them would look convenient on the first day and painful during the first leak.
 
-Real teams rarely produce perfect least-privilege policies on day one. They usually start with a working permission set in a low-risk account, run the normal workflow, inspect actual usage, and then reduce the policy. On AWS, CloudTrail records API calls, and IAM Access Analyzer can generate a policy template from recent activity. That generated policy still needs human review, but it gives the reviewer evidence instead of guesses.
+We will build the access model in layers:
 
-For ParcelPulse, the platform team can keep an access worksheet in the pull request that introduces a new deployment role:
+| Layer | Production question | Control |
+|---|---|---|
+| People | Which named humans can inspect or approve production work? | SSO, groups, MFA, temporary sessions, environment reviewers |
+| Workloads | Which running services can call cloud APIs? | Runtime identities such as ECS task roles, managed identities, or service accounts |
+| Pipelines | Which CI jobs can publish and deploy? | GitHub Environments, branch rules, OIDC federation, scoped cloud roles |
+| Secrets | Where do sensitive values live and how do they rotate? | Secret manager, naming, tags, audit logs, rotation runbooks |
+| Verification | How do we prove the access is narrow and used as expected? | Policy review, CLI checks, audit logs, access reviews, incident records |
+
+This order gives us a clean path. First we define least privilege, then we look at the shared-secret shortcut that many teams start with. After that, we replace the shortcut with separate access paths for people, workloads, pipelines, and the few secrets that still need to exist.
+
+## Least Privilege Starts With One Job
+<!-- section-summary: Least privilege means the policy names the caller, action, resource, and context for one specific job. -->
+
+**Least privilege** means an identity gets only the actions it needs for one job. NIST defines least privilege around restricting users and processes to the minimum access needed to perform authorized work. In plain delivery terms, a caller should have enough access to finish the task in front of it, with no extra access to unrelated data, systems, or administrative controls.
+
+For ParcelPulse, the deployment job can push one image and update one service. It should not read customer label PDFs, change billing permissions, create IAM users, or fetch the production database password. The API can read its own database secret and write label PDFs. It should not update the ECS service that runs it. Mia can read production logs. She should not carry a shared production access key in her laptop profile.
+
+A useful least-privilege review asks four questions:
+
+| Question | What the team writes down | ParcelPulse example |
+|---|---|---|
+| **Who is calling?** | The principal or identity | `github-actions-prod-deploy` |
+| **What action is needed?** | The API operations | `ecr:PutImage`, `ecs:UpdateService` |
+| **Which resource is allowed?** | The resource boundary | One ECR repository and one ECS service |
+| **What context must be true?** | Conditions around branch, environment, time, MFA, or repository claim | GitHub `production` environment from `parcelpulse/api` |
+
+Teams often say "the pipeline needs AWS access" during early setup. That phrase hides all four questions. A better first policy sentence is: "The GitHub Actions deployment job for `parcelpulse/api` may push the `parcelpulse-api` image and update the `parcelpulse-api` service after the `production` environment approval." That sentence gives the policy author the caller, action, resource, and context.
+
+Here is the smallest useful access worksheet for ParcelPulse:
 
 | Caller | Needed actions | Resource scope | Time scope | Owner |
 |---|---|---|---|---|
-| `github-actions-prod-deploy` | Push image, update ECS service | `parcelpulse-api` ECR repo and `parcelpulse-prod` ECS service | One workflow job | Platform team |
-| `parcelpulse-api-prod` | Read DB secret, write labels | One Secrets Manager secret and `labels/prod/*` bucket prefix | Runtime task session | API team |
+| `github-actions-prod-deploy` | Push image, update ECS service | `parcelpulse-api` ECR repo and `parcelpulse-prod/parcelpulse-api` ECS service | One workflow job | Platform team |
+| `parcelpulse-api-prod` | Read DB secret, write labels | One Secrets Manager secret and `parcelpulse-labels-prod/labels/*` | ECS task session | API team |
 | `release-managers` | Approve production deployment | GitHub `production` environment | Human approval session | Engineering manager |
+| `coverage-uploader` | Upload coverage report | Vendor coverage project token | One CI job | Developer experience team |
 
-This is a practical habit, not paperwork for its own sake. The table gives the team a place to ask, "Does the coverage uploader need the cloud key?" The answer should be no. The uploader sends coverage to the vendor, so it should receive only the vendor token it needs, and only in the job that sends coverage.
+This worksheet is practical. It gives the reviewer a place to ask whether the coverage uploader needs a cloud key. It does not. The uploader sends a report to a vendor, so it receives only the vendor token in the job that sends coverage.
 
-The next section shows why this separation matters. ParcelPulse starts with a single static cloud key in the pipeline because that is quick. The shortcut works, and then it quietly creates a large blast radius.
+Real teams rarely create perfect policies on the first try. A normal production path is to start with a narrow design, test it in a lower environment, inspect actual API calls, and reduce or adjust the policy. On AWS, CloudTrail records many API calls, and IAM Access Analyzer can generate a policy from recent access activity. The generated policy still needs human review, but it gives the team evidence from real usage.
+
+Now we can look at the shortcut ParcelPulse wants to retire: one static shared key in the deployment pipeline.
 
 ## Static Shared Secrets
-<!-- section-summary: Static shared secrets keep working until someone revokes them, so one leak can expose many jobs and environments. -->
+<!-- section-summary: Static shared secrets are copied credentials that keep working until the team revokes or rotates them. -->
 
-A **static secret** is a sensitive value that stays valid until someone changes or revokes it. A cloud access key, database password, personal access token, SSH private key, and webhook signing secret can all be static secrets. A **shared secret** means more than one person, job, service, or machine uses the same value. Shared secrets make incidents harder because the team cannot quickly tell who used the value or where every copy lives.
+A **static secret** is a sensitive value that stays valid across runs until someone changes or revokes it. A cloud access key, database password, personal access token, SSH private key, webhook signing secret, and vendor API token can all be static secrets. A **shared secret** is a value used by more than one person, job, service, or machine.
 
-ParcelPulse takes the common early shortcut. The team creates an IAM user called `parcelpulse-ci`, gives it permission to deploy, creates an access key, and stores the key in GitHub Actions repository secrets. The deployment workflow reads those values every time it runs:
+ParcelPulse starts with a common early setup. The team creates an IAM user called `parcelpulse-ci`, creates an access key, stores the key in GitHub repository secrets, and lets the deployment job export the key into the runner environment:
 
 ```yaml
 name: deploy-api
@@ -103,36 +136,34 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - run: ./scripts/build-and-deploy.sh
 ```
 
-This setup is convenient on the first day because the script can call AWS. The problem appears as the workflow grows. The same job may install dependencies, run tests, upload coverage, build a container, scan the image, and deploy. Every step in that job runs in the same runner environment, so the key sits near many pieces of code that do not need production deployment access.
+The YAML is easy to understand. The workflow runs after a push to `main`, the job receives two repository secrets as environment variables, and the deploy script can call AWS. The same simplicity creates the risk. Every step in that job runs near a long-lived production cloud credential. Dependency install scripts, test tools, coverage uploaders, build scripts, and third-party actions all share the same runner environment unless the workflow separates them.
 
-The risk also lasts too long. An AWS access key for an IAM user can work for months or years. If someone copies it into a local terminal, a Docker layer, a debug log, or a third-party action, the key keeps working from outside GitHub until the team deactivates it. GitHub may mask the exact value in logs, but masking log output does not stop code in the workflow from sending the value somewhere else.
-
-The 2021 Codecov Bash Uploader incident is a good real-world warning. Codecov's post-mortem says an attacker extracted a Google Cloud Storage service account HMAC key from an intermediate layer in a public self-hosted Docker image, used it to modify the Bash Uploader, and the malicious uploader extracted environment variables from customer CI environments. The painful part for customers came from the same idea ParcelPulse is facing: CI environments often hold powerful secrets, and build tools run close to those secrets.
+The 2021 Codecov Bash Uploader incident is a useful warning. Codecov's post-mortem says an attacker extracted a Google Cloud Storage service account HMAC key from a public Docker image layer, modified the Bash Uploader, and the malicious uploader collected environment variables from customer CI environments. The lesson maps directly to ParcelPulse: CI jobs often hold powerful secrets, and build tools run close to those secrets.
 
 ![Static key versus scoped sessions infographic comparing one long-lived CI secret with separate people, workload, and pipeline sessions](/content-assets/articles/article-devsecops-security-foundations-least-privilege/static-key-vs-scoped-sessions.png)
 
 *One shared key spreads risk across many jobs, while separate scoped sessions keep people, workloads, and pipelines on their own access paths.*
 
-After a CI secret leaks, the hard questions arrive immediately. Which jobs had the secret? Which third-party tools ran beside it? Did a forked pull request touch the workflow? Did the secret appear in a container image layer? Did someone reuse the same cloud key in another repository? These questions take time because static shared secrets spread into places that are hard to inventory.
+After a shared key leaks, the team has to answer several hard questions. Which workflows had the key? Which actions ran beside it? Did any forked pull request touch a privileged path? Did the value land in a Docker layer, debug log, cache, or artifact? Did someone reuse the key in another repository?
 
-Least privilege turns those questions into design requirements. People need scoped human access. Workloads need scoped runtime access. Pipelines need short-lived deployment sessions. Secret values that must exist need storage, rotation, and audit trails. Let's separate those paths one by one.
+The clean design moves away from the master-key pattern. People use named human access. Workloads use runtime identities. Pipelines use short-lived deployment sessions. Secret values that still exist live in a secret manager with owners, rotation, and audit records.
 
-## Scoped Access For People
-<!-- section-summary: Human access should flow through workforce identity, groups, MFA, and role sessions instead of shared production keys. -->
+## Scope Human Access
+<!-- section-summary: Human access should flow through named accounts, groups, MFA, and expiring sessions. -->
 
-**Human access** means access used by real people: developers, operators, release managers, auditors, and support engineers. People need to sign in, investigate issues, approve changes, and sometimes run emergency actions. They should use named accounts through a workforce identity system, so the team can answer who accessed production and why.
+**Human access** means access used by real people: developers, operators, release managers, auditors, and support engineers. People need to sign in, investigate issues, approve changes, and sometimes perform emergency actions. Production access should point back to named workforce identities so the team can answer who did what.
 
-ParcelPulse uses a company identity provider such as Okta, Microsoft Entra ID, Google Workspace, or another SSO source. The cloud account trusts that identity provider, and engineers receive access through groups. Mia belongs to `parcelpulse-developers`, which can read development resources and production logs. The release lead belongs to `parcelpulse-release-managers`, which can approve production deployments. A small on-call group can request short emergency access during incidents.
+ParcelPulse uses a company identity provider such as Okta, Microsoft Entra ID, Google Workspace, or another SSO source. Engineers sign in with MFA, and cloud access comes from groups. Mia belongs to `parcelpulse-developers`, which can read production API logs and ECS service status. Release managers belong to `parcelpulse-release-managers`, which can approve GitHub `production` deployments. A small on-call group can request break-glass access during incidents.
 
 The practical pattern has three layers:
 
@@ -140,11 +171,11 @@ The practical pattern has three layers:
 |---|---|---|
 | **Identity** | Who the person is | SSO account with MFA |
 | **Group** | What job the person has | Developer, release manager, on-call |
-| **Session** | How long access lasts | CLI or console session with an expiration |
+| **Session** | How long access lasts | CLI or console session with expiration |
 
-For AWS, this usually means IAM Identity Center or another federation path into AWS roles. For Azure, it means Entra ID groups and Azure RBAC assignments. For Google Cloud, it means IAM bindings for groups from Cloud Identity or Google Workspace. The names change by provider, but the security shape stays the same: people authenticate to the company directory, receive temporary access, and avoid long-lived personal cloud keys for daily work.
+For AWS, this usually means IAM Identity Center or another federation path into AWS roles. For Azure, it means Entra ID groups and Azure RBAC assignments. For Google Cloud, it means IAM bindings for groups from Cloud Identity or Google Workspace. The product names differ, and the shape stays familiar: people authenticate to the company directory, receive temporary access, and leave long-lived personal cloud keys out of daily work.
 
-Mia's normal production access can stay narrow. She needs to read logs and inspect service status, so a policy can grant CloudWatch log read actions for the API log group and ECS read actions for the cluster. She does not need database write access, object storage delete access, or IAM administration.
+Mia's read-only production role can start small:
 
 ```json
 {
@@ -175,30 +206,69 @@ Mia's normal production access can stay narrow. She needs to read logs and inspe
 }
 ```
 
-The ECS read actions show one normal production compromise. Some cloud APIs still need broad resource patterns for list or describe calls, depending on the service. Least privilege still helps because the policy grants read-only ECS visibility instead of production mutation. The team can add conditions and account-level guardrails where the provider supports them.
+The `logs:*` actions give Mia read access to one API log group. The ECS actions let her inspect service and task state. Some AWS read APIs require broader resource patterns for list and describe calls, so the team keeps the action list read-only and adds account-level guardrails where the service supports them.
 
-For local CLI work, Mia should use temporary credentials from the identity system:
+Mia signs in through SSO and checks her session identity before reading logs:
 
 ```bash
 aws sso login --profile parcelpulse-prod-readonly
+
+aws sts get-caller-identity \
+  --profile parcelpulse-prod-readonly
+```
+
+`aws sso login` opens the SSO login flow for the named CLI profile. `aws sts get-caller-identity` prints the account and assumed-role identity that the AWS CLI is using. The `--profile` flag keeps this check attached to Mia's read-only production profile.
+
+Example output:
+
+```json
+{
+  "UserId": "AROAXAMPLEID:maya.chen",
+  "Account": "123456789012",
+  "Arn": "arn:aws:sts::123456789012:assumed-role/parcelpulse-prod-readonly/maya.chen"
+}
+```
+
+Now Mia can query the logs:
+
+```bash
 aws logs filter-log-events \
   --profile parcelpulse-prod-readonly \
   --log-group-name /ecs/parcelpulse-api-prod \
-  --filter-pattern "ERROR"
+  --filter-pattern "ERROR" \
+  --max-items 3
 ```
 
-This gives ParcelPulse named human access, MFA, session expiration, and centralized offboarding. When Mia leaves the company, disabling her workforce identity stops new sessions. The team does not need to hunt through repositories for a shared production key she might have copied six months earlier.
+`--log-group-name` selects the API log group. `--filter-pattern "ERROR"` narrows the output to error events. `--max-items 3` keeps the terminal output small during an investigation.
 
-Human access is now cleaner, but the production API still needs machine access. That is the next caller.
+Example output, shortened:
 
-## Scoped Access For Workloads
-<!-- section-summary: Workloads should use runtime identities such as roles, managed identities, or service accounts instead of embedded cloud keys. -->
+```json
+{
+  "events": [
+    {
+      "logStreamName": "ecs/parcelpulse-api/4d2a",
+      "timestamp": 1782190903120,
+      "message": "ERROR failed to write label pdf: AccessDenied"
+    }
+  ]
+}
+```
 
-A **workload** is running software that needs to call another system. An API container, batch job, Kubernetes pod, VM, serverless function, and database migration job are all workloads. A **workload identity** gives that software its own identity at runtime, so the application can call cloud APIs without storing a static cloud key in the image or repository.
+This gives ParcelPulse named human access, session expiration, and audit records. If Mia changes teams, removing her from the group stops new sessions. The team avoids a search through repositories for a copied production key.
 
-ParcelPulse runs the API as an ECS service. The API needs two production permissions. It must read the database password from AWS Secrets Manager, and it must write label PDFs to one S3 bucket prefix. It does not need permission to list every bucket, read billing data, or change IAM policies.
+Human access is cleaner now. The production API still needs machine access while it runs, so we move to workload identity.
 
-In ECS, the API uses a **task role** named `parcelpulse-api-prod`. The task role grants permissions to the application code running inside the container. This differs from the **task execution role**, which ECS uses to pull images and fetch secrets for container startup. That split matters because the application should receive only the permissions it needs while running.
+## Scope Workload Access
+<!-- section-summary: Workloads should receive runtime identities with policies that match the service's job. -->
+
+A **workload** is running software that needs to call another system. An API container, batch job, Kubernetes pod, VM, serverless function, and database migration job are workloads. A **workload identity** gives that software its own identity at runtime, so application code can call cloud APIs without a static cloud key in the repository or container image.
+
+ParcelPulse runs `parcelpulse-api` as an ECS service. The API has two production cloud jobs. It reads the PostgreSQL credential from AWS Secrets Manager, and it writes label PDFs into one S3 bucket prefix. It does not administer IAM, read billing data, delete every object in the bucket, or update the ECS service that runs it.
+
+In ECS, the API uses a **task role** named `parcelpulse-api-prod`. The task role grants permissions to the application code inside the container. ECS also has a **task execution role**, which ECS uses for platform work such as pulling images and fetching configured secrets at startup. Keeping those roles separate helps the application receive only the permissions it needs while running.
+
+Here is the first workload policy:
 
 ```json
 {
@@ -223,22 +293,22 @@ In ECS, the API uses a **task role** named `parcelpulse-api-prod`. The task role
 }
 ```
 
-Behind the scenes, AWS vends temporary credentials to the ECS task. The AWS SDK inside the container can find those credentials through the container runtime credential endpoint. The app code does not need an `AWS_ACCESS_KEY_ID` baked into the image, and the session expires automatically. If the container stops, that runtime identity path stops with it.
+`ReadDatabaseSecret` grants one action for one secret name pattern. `WriteShippingLabels` grants object access only under `labels/*` in the production labels bucket. The policy avoids bucket administration and account-wide secret reads.
 
-The same idea appears across platforms. An EC2 instance uses an instance profile. A Lambda function uses an execution role. A Kubernetes pod can use a Kubernetes service account plus cloud workload identity federation, such as IAM Roles for Service Accounts on EKS, Workload Identity Federation on GKE, or Microsoft Entra Workload ID on AKS. A VM on Azure can use a managed identity. A Google Cloud workload can use a service account without downloading a JSON key when the platform can attach the identity directly.
+Behind the scenes, AWS provides temporary credentials to the ECS task through the container credential endpoint. The AWS SDK can use those credentials automatically. The image stays free of `AWS_ACCESS_KEY_ID`, and the task session expires when the platform refreshes or stops it.
 
-The practical rule for ParcelPulse is: put the cloud identity on the workload runtime, then make the policy match the workload's job. The API gets `GetSecretValue` for one secret and object access for one bucket prefix. The nightly report job gets read access to a reporting replica and write access to one report bucket. The migration job gets database migration credentials during a release window, then the team removes or disables that path.
+The same design appears in other platforms. An EC2 instance can use an instance profile. A Lambda function uses an execution role. Azure workloads can use managed identities. Google Cloud workloads can use attached service accounts. Kubernetes clusters can connect pod service accounts to cloud identities through systems such as IAM Roles for Service Accounts on EKS, Microsoft Entra Workload ID on AKS, or Workload Identity Federation on GKE.
 
-This solves the cloud key problem for the running application. The application still needs secrets like database passwords and vendor tokens, so the next step is handling secret values without scattering them through code, build logs, and images.
+The next question is where the API gets values such as the database password and webhook signing secret. Runtime identity handles cloud authorization. Secret management handles sensitive values that still exist.
 
-## Keep Secrets Out Of Code And Builds
-<!-- section-summary: Secrets should stay out of source code, image layers, logs, and general build environments. -->
+## Keep Secrets Out of Code and Builds
+<!-- section-summary: Secrets should stay out of repositories, image layers, generic build environments, and logs. -->
 
-A **secret** is any value that grants access or proves identity. Database passwords, API tokens, private keys, OAuth client secrets, signing keys, webhook secrets, and cloud access keys all count. The safest secret is the one the team can avoid creating. When a secret must exist, the team should store it in a controlled system and expose it only to the caller that needs it.
+A **secret** is any value that grants access or proves identity. Database passwords, API tokens, private keys, OAuth client secrets, signing keys, webhook secrets, and cloud access keys all count. The safest secret is the one the team can avoid creating. When a secret has to exist, the team should expose it only to the caller that needs it.
 
-ParcelPulse has a few secret types. The API uses a PostgreSQL password. The coverage uploader uses a vendor upload token. The deployment workflow may need a container registry login. The app signs webhook payloads with a signing secret. Each value has a different owner, use case, and rotation plan.
+ParcelPulse has several secret types. The API uses a PostgreSQL password. The coverage uploader uses a vendor upload token. The app signs webhook payloads. The deployment workflow uses OIDC for cloud access and therefore removes the static AWS deployment key from GitHub.
 
-The first practical habit is to keep real values out of the repository. A `.env.example` file should show variable names and harmless sample values, while `.env`, `.env.local`, and downloaded credentials stay ignored:
+The first practical habit is a harmless example file:
 
 ```bash
 # .env.example
@@ -246,6 +316,8 @@ DATABASE_URL=postgres://app_user:example-password@localhost:5432/parcelpulse
 COVERAGE_UPLOAD_TOKEN=example-token
 WEBHOOK_SIGNING_SECRET=example-secret
 ```
+
+The matching ignore rules keep local real values out of Git:
 
 ```bash
 # .gitignore
@@ -257,7 +329,11 @@ WEBHOOK_SIGNING_SECRET=example-secret
 service-account*.json
 ```
 
-The second habit is to avoid build-time leaks. A Docker image keeps layer history and metadata. Docker's own guidance warns against using `ARG` or `ENV` for secrets in a Dockerfile because those values can persist in the final image or metadata. If ParcelPulse needs a private package token during build, Docker BuildKit secret mounts provide the token only to the build instruction that needs it.
+The `.env.example` file teaches developers which variables exist. The `.gitignore` rules keep local environment files, private keys, and downloaded service-account files outside normal commits. Secret scanning and push protection give another layer, but the repository should still make the safe path obvious.
+
+Builds need the same care. Docker's guidance warns against using `ARG` or `ENV` for secrets because those values can persist in image metadata or build history. If ParcelPulse needs a private package token during build, Docker BuildKit secret mounts can provide the token only to the build instruction that needs it.
+
+Here is a small Dockerfile skeleton:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -275,11 +351,13 @@ COPY . .
 RUN npm run build
 ```
 
-The matching GitHub Actions build step can pass the secret to Docker without placing it in the Dockerfile:
+The `--mount=type=secret` option gives this one `RUN` instruction access to `NPM_TOKEN`. The token stays out of the Dockerfile and out of a permanent `ENV` line. The command also removes the temporary npm config entry before the layer finishes.
+
+The GitHub Actions build step passes the token into BuildKit:
 
 ```yaml
 - name: Build image
-  uses: docker/build-push-action@v7
+  uses: docker/build-push-action@v6
   env:
     NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
   with:
@@ -290,18 +368,16 @@ The matching GitHub Actions build step can pass the secret to Docker without pla
       npm_token=NPM_TOKEN
 ```
 
-This still uses a secret, so the team should keep the token narrow. The package token should read only the package scope needed by the build. It should not have permission to publish packages, manage organization settings, or read unrelated private packages. Least privilege applies to vendor tokens just like it applies to cloud roles.
+`secret-envs` maps the workflow environment variable `NPM_TOKEN` to the BuildKit secret id `npm_token`. The token should read only the package scope needed by the build. It should have no package publishing rights, no organization administration rights, and no access to unrelated private packages.
 
-The third habit treats logs as a leak surface. ParcelPulse keeps environment dumps out of logs and keeps `set -x` away from secret-handling shell commands because it echoes commands and expanded values. The team chooses tools that accept secrets through files, standard input, or native secret integrations. In CI, jobs that need secrets stay separate from jobs that process untrusted code, because the runner is a powerful place.
+The third habit treats logs as a leak surface. ParcelPulse keeps environment dumps out of CI logs, avoids shell tracing around secret-handling commands, and separates jobs that run untrusted code from jobs that receive production credentials. At this point, secrets stay out of code and image layers. They still need a controlled home.
 
-At this point, secrets stay out of code and image layers, but they still need a home. That home is a secret manager.
+## Store Secrets in a Secret Manager
+<!-- section-summary: A secret manager centralizes storage, identity-based access, audit logs, and rotation metadata. -->
 
-## Secret Managers
-<!-- section-summary: A secret manager centralizes storage, access control, audit, and retrieval for sensitive values. -->
+A **secret manager** is a service for storing, retrieving, auditing, and rotating sensitive values. Examples include AWS Secrets Manager, Azure Key Vault, Google Secret Manager, HashiCorp Vault, Doppler, 1Password Secrets Automation, and CyberArk Conjur. The product choice depends on the environment. The job is steady: keep secrets out of random files and put access behind identity, policy, logs, and lifecycle controls.
 
-A **secret manager** is a service for storing, retrieving, auditing, and rotating sensitive values. Examples include AWS Secrets Manager, Azure Key Vault, Google Secret Manager, HashiCorp Vault, Doppler, 1Password Secrets Automation, and CyberArk Conjur. The product choice depends on the environment, but the job stays the same: keep secrets out of random files and put access behind identity, policy, logging, and lifecycle controls.
-
-ParcelPulse stores the production database credential in AWS Secrets Manager under the name `prod/parcelpulse/api/postgres`. The secret value contains structured JSON, so the application can read the username, password, host, and database name together:
+ParcelPulse stores the production database credential in AWS Secrets Manager under the name `prod/parcelpulse/api/postgres`. The secret value is JSON so the app can read the username, password, host, port, and database name together:
 
 ```json
 {
@@ -314,7 +390,7 @@ ParcelPulse stores the production database credential in AWS Secrets Manager und
 }
 ```
 
-The team can create the secret with the AWS CLI during infrastructure setup. In a real environment, the password should come from a generator or from the database provisioning workflow, and the shell history should never capture the real value.
+The team creates the secret during infrastructure setup:
 
 ```bash
 aws secretsmanager create-secret \
@@ -324,7 +400,19 @@ aws secretsmanager create-secret \
   --tags Key=service,Value=parcelpulse-api Key=environment,Value=prod Key=owner,Value=api-team
 ```
 
-The API can read the secret at startup through the AWS SDK. This Node.js example shows the shape without adding framework details:
+`--name` sets the stable lookup path. `--secret-string file://postgres-secret.json` reads the JSON value from a local file so the full value stays out of the terminal command line. `--tags` records owner, service, and environment metadata for inventory and incident response.
+
+Example output:
+
+```json
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/parcelpulse/api/postgres-a1b2c3",
+  "Name": "prod/parcelpulse/api/postgres",
+  "VersionId": "4d91b36f-9f2a-48ef-9b62-2c7718e0e51e"
+}
+```
+
+The API reads the secret at startup through the AWS SDK:
 
 ```js
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
@@ -346,9 +434,9 @@ export async function loadDatabaseConfig() {
 }
 ```
 
-There are two important production details here. First, the ECS task role must have `secretsmanager:GetSecretValue` for this one secret. The app does not need broad access to list or read every secret. Second, most applications should cache the secret value in memory for a reasonable period instead of calling the secret manager on every request. AWS recommends client-side caching for Secrets Manager because it improves speed and reduces cost.
+The app code names one secret. The ECS task role decides whether the app may read it. AWS also recommends client-side caching for Secrets Manager values, because caching improves speed and reduces cost for applications that would otherwise call the service on every request.
 
-Secret names also need structure. ParcelPulse uses this naming pattern:
+Secret names need structure. ParcelPulse uses this pattern:
 
 ```bash
 {environment}/{service}/{purpose}
@@ -363,34 +451,56 @@ prod/parcelpulse/webhook/signing
 prod/parcelpulse/coverage/upload-token
 ```
 
-The naming pattern helps reviews. A production workload should not read a development secret by accident. A frontend service should not read an API database password. A coverage uploader token should not sit beside cloud deployment credentials. Tags such as `owner`, `environment`, `rotation`, and `service` also make inventory and incident response faster.
+The naming pattern helps reviewers spot mistakes. A production workload reads production secrets. A frontend service avoids the API database credential. A coverage uploader token stays separate from cloud deployment credentials. Tags such as `owner`, `environment`, `rotation`, and `service` make inventory and incident response faster.
 
-Secret managers still leave one important risk. A workload with permission to read a secret can leak it through a bug, logs, command output, or a dependency compromise. The manager reduces sprawl and gives the team a control point. Rotation handles the next part of the lifecycle.
+The team can inspect metadata without printing the secret value:
+
+```bash
+aws secretsmanager describe-secret \
+  --secret-id prod/parcelpulse/api/postgres
+```
+
+`describe-secret` returns metadata such as ARN, tags, rotation settings, creation date, and last-changed date. It does not print the secret value.
+
+Example output, shortened:
+
+```json
+{
+  "Name": "prod/parcelpulse/api/postgres",
+  "RotationEnabled": true,
+  "LastChangedDate": "2026-06-15T08:12:44+00:00",
+  "Tags": [
+    { "Key": "service", "Value": "parcelpulse-api" },
+    { "Key": "environment", "Value": "prod" },
+    { "Key": "owner", "Value": "api-team" }
+  ]
+}
+```
 
 ![Secret manager rotation loop infographic showing store, grant, read, rotate, restart, revoke old, and audit around a central vault](/content-assets/articles/article-devsecops-security-foundations-least-privilege/secret-rotation-loop.png)
 
 *A secret manager gives the team one controlled place to store, grant, rotate, revoke, and audit sensitive values.*
 
-## Rotation
-<!-- section-summary: Rotation replaces old secret values with new ones, updates the target system, and removes the old value after consumers move. -->
+The secret manager gives ParcelPulse one control point. The next job is rotation, where the stored value and the system that trusts it both change in the right order.
 
-**Rotation** means replacing a secret value with a new value. Real rotation has two sides. The secret manager must store the new value, and the system that trusts the secret must accept the new value. If ParcelPulse changes the database password in Secrets Manager but never changes the PostgreSQL user's password, the application breaks. If the database accepts a new password but the app still reads the old one, the app breaks in the other direction.
+## Rotate Secrets With a Real Cutover Plan
+<!-- section-summary: Rotation changes the secret value, updates the system that trusts it, moves consumers, and removes the old value. -->
 
-AWS Secrets Manager describes rotation as updating credentials in both the secret and the database or service. That wording matters because a secret manager is the storage layer, while the database, API provider, or cloud account is the authority that accepts the credential. For database secrets, managed rotation may handle this. For custom vendor API tokens, the team may need a manual or scripted rotation process.
+**Rotation** means replacing an old secret value with a new value. Real rotation has two sides. The secret manager stores the new value, and the backing system accepts the new value. For a database password, PostgreSQL has to accept the new password and Secrets Manager has to store the same new password. For a vendor token, the vendor platform has to issue or accept the replacement token and the consuming job has to use it.
 
-ParcelPulse can rotate database credentials with a staged approach:
+ParcelPulse uses a staged plan:
 
-| Stage | What happens | Why it helps |
+| Stage | What happens | Evidence to keep |
 |---|---|---|
-| **Prepare** | Confirm owner, consumers, dashboards, and rollback path | The team knows who may break |
-| **Create new value** | Generate a new password or token | The new credential exists before cutover |
-| **Update authority** | Change the database password or vendor token | The target system accepts the new value |
-| **Update secret manager** | Store the new value under the same secret name | Consumers keep using the same lookup path |
-| **Restart or refresh consumers** | Roll ECS tasks or let the app refresh its cache | The app starts using the new value |
-| **Revoke old value** | Disable the old password or token | The leak window closes |
-| **Verify** | Check logs, metrics, and authentication failures | The team catches broken consumers |
+| **Prepare** | Confirm owner, consumers, dashboards, and rollback path | Rotation ticket and consumer list |
+| **Create new value** | Generate a new password or token | Secret manager version or vendor token ID |
+| **Update authority** | Change the database password or vendor token | Database audit event or vendor admin event |
+| **Update secret manager** | Store the new value under the same secret name | Secret version ID |
+| **Refresh consumers** | Restart ECS tasks or reload secret cache | Deployment or restart record |
+| **Revoke old value** | Disable the old password or token | Revocation event |
+| **Verify** | Check logs, metrics, and authentication failures | Query output and incident notes |
 
-For an AWS-managed database secret, the command may look like this after the rotation function or managed rotation option exists:
+For an AWS-managed database secret with rotation configured, the rotation request can look like this:
 
 ```bash
 aws secretsmanager rotate-secret \
@@ -398,7 +508,19 @@ aws secretsmanager rotate-secret \
   --rotation-rules AutomaticallyAfterDays=30
 ```
 
-For a manual emergency rotation, the team may put a new secret version after changing the database password:
+`--secret-id` selects the database secret. `--rotation-rules AutomaticallyAfterDays=30` records the desired automatic rotation interval. The secret still needs a valid rotation setup for the target database, such as a configured rotation function or managed rotation path.
+
+Example output:
+
+```json
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/parcelpulse/api/postgres-a1b2c3",
+  "Name": "prod/parcelpulse/api/postgres",
+  "VersionId": "77be9a0f-9449-4725-9f75-bb8f6c7f7c61"
+}
+```
+
+For a manual emergency rotation, the team may update the database password first, write a new secret version, and restart the service:
 
 ```bash
 aws secretsmanager put-secret-value \
@@ -411,30 +533,47 @@ aws ecs update-service \
   --force-new-deployment
 ```
 
-The `update-service` command forces new ECS tasks to start. Those tasks read the current secret value at startup. If the app caches secrets for a long time, the team needs a reload path or a restart plan. If the app uses connection pooling, the team should watch database login failures and connection errors during the rollout.
+`put-secret-value` writes a new version under the same secret name. `update-service --force-new-deployment` starts fresh ECS tasks even when the task definition did not change, so the new tasks read the current secret at startup.
 
-Rotation frequency should match risk and operational reality. A high-value production database credential may rotate automatically every 30 or 60 days. A vendor token with weak audit logs may rotate more often. A secret that supports dual active keys can rotate with no downtime: create key B, deploy consumers to use B, then revoke key A. A secret that allows only one active value needs a planned maintenance path or an application design that can tolerate quick restarts.
+Example output from the ECS update, shortened:
 
-Rotation also needs inventory. Codecov's post-mortem called out how hard questions around key metadata can be: when a key was generated, where it is used, and how to revoke it. ParcelPulse should record owner, purpose, environment, creation date, last rotation date, and consumers for every production secret. A secret with no owner is already an incident waiting to happen.
+```json
+{
+  "service": {
+    "serviceName": "parcelpulse-api",
+    "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/parcelpulse-prod",
+    "deployments": [
+      {
+        "status": "PRIMARY",
+        "rolloutState": "IN_PROGRESS"
+      }
+    ]
+  }
+}
+```
 
-Now secrets have a storage and rotation plan. The next risk sits around the repository and CI/CD environment, because that is where code, workflows, approvals, and secrets meet.
+Rotation frequency should match risk and operational reality. A production database credential may rotate automatically every 30 or 60 days. A vendor token with weak audit logs may rotate more often. A dual-key system can rotate smoothly by creating key B, moving consumers to B, then revoking key A. A single-active-secret system needs a planned restart or a design that can reload secrets quickly.
 
-## Repository And Environment Protections
-<!-- section-summary: Repository and environment protections keep privileged jobs away from unreviewed code and uncontrolled branches. -->
+Rotation also needs inventory. Each production secret should have owner, purpose, environment, creation date, last rotation date, consumers, and emergency contact. A secret with no owner will slow down every future incident.
 
-A CI/CD platform runs code with access to source, build artifacts, tokens, and deployment permissions. That makes the repository a security boundary. If anyone can change the deployment workflow, they may be able to change what production deploys or what secrets the job reads. If untrusted pull request code runs in a privileged job, the workflow can become a secret exfiltration path.
+Secrets now have a home and a lifecycle. The next risk sits around the repository and CI/CD environment, where code, workflow files, approvals, tokens, and deployment authority meet.
 
-ParcelPulse uses GitHub Actions, so the team should separate three kinds of workflows:
+## Protect Repositories and Environments
+<!-- section-summary: Repository and environment protections keep privileged jobs attached to trusted branches, reviewed workflows, and approved deployments. -->
+
+A CI/CD platform runs code with access to source, build artifacts, tokens, and deployment permissions. That makes the repository a security boundary. If someone can change the deployment workflow, they can change the path to production. If untrusted pull request code runs in a privileged job, it can become a secret exfiltration path.
+
+ParcelPulse separates three workflow types:
 
 | Workflow type | Example | Secret access |
 |---|---|---|
 | **Untrusted validation** | Tests for pull requests from forks | No production secrets |
-| **Trusted build** | Build and scan after merge to `main` | Read-only package or artifact secrets if needed |
+| **Trusted build** | Build and scan after merge to `main` | Narrow package or registry permissions |
 | **Privileged deploy** | Deploy from `main` to `production` after approval | Production deployment role through OIDC |
 
-GitHub already withholds most secrets from workflows triggered by forked repositories, with `GITHUB_TOKEN` as the special exception. That protection helps, but teams can still create dangerous workflows. GitHub's secure use guidance warns about `pull_request_target` and `workflow_run` when they check out or process untrusted pull request code in privileged contexts. ParcelPulse should keep those triggers away from production secrets unless the security team has reviewed the design.
+GitHub withholds most secrets from workflows triggered by forked repositories, with the special `GITHUB_TOKEN` behavior documented by GitHub. That helps, and workflow design still matters. GitHub's secure-use guidance calls out risks with privileged triggers such as `pull_request_target` and `workflow_run` when they process untrusted pull request code. ParcelPulse routes production deployment through a trusted branch and protected environment.
 
-The workflow should also limit the built-in `GITHUB_TOKEN`. GitHub Actions creates this token for workflow runs, and actions can access it through the `github.token` context. ParcelPulse should set explicit permissions instead of accepting broad defaults:
+The workflow sets explicit `GITHUB_TOKEN` permissions:
 
 ```yaml
 permissions:
@@ -442,7 +581,7 @@ permissions:
   packages: read
 ```
 
-The deployment job can request only the extra permissions it needs:
+The deployment job requests only the extra permission needed to obtain an OIDC token:
 
 ```yaml
 permissions:
@@ -450,44 +589,46 @@ permissions:
   id-token: write
 ```
 
-The `id-token: write` permission allows the workflow to request an OIDC token. Cloud access still comes from the provider trust rule, where the provider checks the token's claims and exchanges the token for a scoped cloud session. We will wire that up in the OIDC section.
+`contents: read` lets the workflow read repository content. `id-token: write` lets the job request a GitHub OIDC token. Cloud access still depends on the AWS trust policy, which checks the token claims before issuing a role session.
 
-GitHub Environments add another useful boundary. ParcelPulse can create a `production` environment, require reviewers, restrict deployment branches to `main`, and store any environment-specific variables or remaining secrets there. GitHub documents that environment secrets become available only to jobs that use the environment, and jobs can access those secrets only after configured protection rules pass.
+GitHub Environments add the production approval boundary:
 
 ```yaml
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - run: ./scripts/deploy.sh
 ```
 
-Repository protection also includes scanning. GitHub secret scanning can detect hardcoded credentials in repository history and related surfaces such as issues and pull requests. Push protection can block many supported secret patterns before they enter the repository. These tools shorten the time between mistake and response, while rotation remains the control that makes a leaked value stop working.
+The `environment: production` line attaches the job to GitHub's `production` environment. Environment protection rules can require reviewers, wait timers, deployment branch restrictions, and environment secrets. ParcelPulse uses it to keep production deployment behind review and branch rules.
 
-The core practice is to keep privileged deployment access attached to trusted code paths. Pull requests run tests without production secrets. Merged code builds in a controlled workflow. Production deployment waits for environment rules. The final improvement replaces the static deployment key with OIDC federation.
+Repository protection also includes secret scanning and push protection. Secret scanning detects supported credentials in repository content and related surfaces. Push protection can block many supported secrets before they enter the repository. These tools shorten the time between mistake and response, while rotation remains the control that makes a leaked value stop working.
 
-## CI/CD OIDC Federation
-<!-- section-summary: OIDC lets a CI/CD job exchange its signed workflow identity for a short-lived cloud session. -->
+The final improvement removes the long-lived deployment key by using OIDC federation.
 
-**OpenID Connect**, usually shortened to **OIDC**, is a standard way for one system to issue a signed identity token that another system can verify. In CI/CD, GitHub Actions can issue an OIDC token for a workflow job. The cloud provider checks that token, verifies claims such as repository, branch, workflow, and audience, then issues a short-lived cloud access token or role session.
+## Use OIDC for CI/CD Cloud Access
+<!-- section-summary: OIDC lets a trusted workflow exchange signed job identity for a short-lived cloud role session. -->
 
-**Federation** means one identity system trusts another identity system for a specific purpose. ParcelPulse leaves static AWS access keys out of GitHub. AWS trusts tokens from GitHub's OIDC issuer only when the token claims match the ParcelPulse repository and production deployment path. The trust rule replaces secret storage with a signed claim check.
+**OpenID Connect**, usually shortened to **OIDC**, is a standard way for one system to issue a signed identity token that another system can verify. In CI/CD, GitHub Actions can issue an OIDC token for a workflow job. AWS, Azure, Google Cloud, and other providers can verify that token and issue a short-lived cloud session when the token claims match a trust rule.
 
-Here is the flow in words:
+**Federation** means one identity system trusts another for a specific purpose. ParcelPulse leaves static AWS access keys out of GitHub. AWS trusts tokens from GitHub's OIDC issuer only when the claims match the ParcelPulse repository and production deployment environment.
 
-1. The deployment job starts on `main` and references the `production` environment.
+The flow is:
+
+1. The deployment job starts from `main` and references the `production` environment.
 2. GitHub creates a signed OIDC token for that job when the job requests one.
-3. The AWS IAM role trust policy checks the token issuer, audience, repository subject, and environment or branch claim.
+3. AWS IAM checks the token issuer, audience, repository subject, and environment subject.
 4. AWS STS exchanges the token for temporary role credentials.
-5. The workflow uses those credentials to push the image and update ECS.
-6. The credentials expire after the job's session window.
+5. The workflow uses the credentials to push the image and update ECS.
+6. The role session expires after the configured session window.
 
-The AWS side has two parts. First, the account has an OIDC provider for `https://token.actions.githubusercontent.com`. Second, the deployment role trusts that provider with conditions. This example trust policy limits access to one repository and the `production` environment subject format:
+The AWS role trust policy is the first important file:
 
 ```json
 {
@@ -510,9 +651,9 @@ The AWS side has two parts. First, the account has an OIDC provider for `https:/
 }
 ```
 
-AWS documentation recommends limiting the GitHub OIDC `sub` condition to specific organizations, repositories, or branches. It also warns that a trust policy without a narrow subject condition can allow workflows outside your control to assume the role. That warning is exactly why ParcelPulse ties the role to the repository and environment.
+`Principal.Federated` names GitHub's OIDC provider in the AWS account. `Action` allows web-identity role assumption. The `aud` condition expects AWS STS as the audience. The `sub` condition ties this role to the `parcelpulse/api` repository and the `production` environment subject. AWS and GitHub both document the importance of narrow subject conditions for GitHub OIDC roles.
 
-The role's permission policy grants deployment actions with narrow account reach. The exact actions vary by deployment design, and a simplified ECS deployment role may look like this:
+The role permission policy grants the deployment actions:
 
 ```json
 {
@@ -557,9 +698,9 @@ The role's permission policy grants deployment actions with narrow account reach
 }
 ```
 
-The `iam:PassRole` line deserves attention. Deployment systems often need to pass a task role or execution role to ECS, Lambda, or another service. A broad `iam:PassRole` permission can let a deployment job attach a more powerful role to a workload. ParcelPulse scopes it to the exact roles the API service may use and adds a condition for the ECS tasks service.
+`iam:PassRole` deserves special review. Deployment systems often pass task roles, execution roles, or service roles to cloud services. Broad pass-role access can let a deployment job attach a more powerful role to a workload. ParcelPulse scopes it to the exact ECS roles the API may use and adds a condition for the ECS tasks service.
 
-The GitHub Actions workflow then uses OIDC instead of static AWS keys:
+The GitHub Actions workflow then asks for the AWS role:
 
 ```yaml
 name: deploy-api
@@ -575,13 +716,13 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::123456789012:role/github-actions-prod-deploy
           aws-region: us-east-1
@@ -591,49 +732,127 @@ jobs:
         run: ./scripts/build-and-deploy.sh
 ```
 
-This pattern exists beyond AWS. GitHub documents OIDC setup for Azure through `azure/login`, and Microsoft Entra workload identity federation exchanges a GitHub token for an Azure access token after checking a trust relationship. GitHub also documents OIDC setup for Google Cloud, and Google Cloud Workload Identity Federation lets deployment pipelines authenticate without maintaining service account keys. The provider names differ, but the design stays consistent: CI job identity, trust conditions, short-lived token, scoped authorization.
+`role-to-assume` names the deployment role. `aws-region` configures the AWS SDK and CLI. `role-session-name` places the GitHub run ID into the AWS session name, which helps CloudTrail searches later.
 
-Now we can compare the original static key pipeline with the OIDC pipeline side by side.
+This same pattern works outside AWS. Microsoft Entra workload identity federation can exchange GitHub tokens for Microsoft identity platform access tokens. Google Cloud Workload Identity Federation can let deployment pipelines authenticate without downloaded service-account keys. The provider fields differ, but the pattern is the same: job identity, trust condition, short-lived token, scoped authorization.
 
-## Static Key Versus OIDC Session
-<!-- section-summary: A static key lives until revocation, while an OIDC role session is issued for one trusted job and expires automatically. -->
+![CI/CD OIDC infographic showing a workflow job exchanging an OIDC token through a trust policy for a short-lived role session and production deploy](/content-assets/articles/article-devsecops-security-foundations-least-privilege/oidc-deployment-session.png)
 
-ParcelPulse started with one static key because it made deployment work quickly. The key sat in repository secrets and the workflow exported it into the job environment. Every step in that job ran near a long-lived production credential. If the key leaked, the team had to revoke it, rotate any copies, inspect logs, and search every place the key might have traveled.
+*OIDC replaces stored cloud keys with a short-lived deployment session whose claims match the repository, branch, and production environment.*
 
-With OIDC, the workflow asks GitHub for a signed token during the deployment job. AWS checks the token claims and issues a role session for the deployment role. The workflow receives temporary credentials, uses them for the deployment, and then the session expires. GitHub's OIDC documentation describes the cloud provider issuing a short-lived access token that is valid for a single job and automatically expires.
+Now ParcelPulse has scoped people, workloads, pipelines, and secrets. The next question is verification: how does the team prove the setup is working as designed?
 
-Here is the comparison ParcelPulse should care about:
+## Verify Access and Secret Use
+<!-- section-summary: Verification checks the effective identity, policy boundary, secret metadata, and audit trail before a leak forces the issue. -->
 
-| Question | Static cloud key in pipeline | OIDC role session |
+Verification turns access design into evidence. ParcelPulse does not need a giant audit project to start. It needs a few repeatable checks that answer the same questions every release or access review: who can call production, which role did the workflow assume, which secret did the workload read, and did any old static key still show activity?
+
+The deployment workflow can print its AWS identity after OIDC configuration:
+
+```bash
+aws sts get-caller-identity
+```
+
+This command returns the AWS account and role session currently used by the job. It should show the `github-actions-prod-deploy` role and a session name containing the GitHub run ID.
+
+Example output:
+
+```json
+{
+  "UserId": "AROAXAMPLEID:parcelpulse-prod-8842119021",
+  "Account": "123456789012",
+  "Arn": "arn:aws:sts::123456789012:assumed-role/github-actions-prod-deploy/parcelpulse-prod-8842119021"
+}
+```
+
+CloudTrail can show role usage for the deployment window:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=Username,AttributeValue=parcelpulse-prod-8842119021 \
+  --start-time 2026-06-21T00:00:00Z \
+  --end-time 2026-06-21T23:59:59Z
+```
+
+`--lookup-attributes` filters the search to the session username. `--start-time` and `--end-time` set the investigation window. The output helps the team confirm the session performed expected deployment actions.
+
+Example output, shortened:
+
+```json
+{
+  "Events": [
+    {
+      "EventName": "PutImage",
+      "Username": "parcelpulse-prod-8842119021",
+      "EventTime": "2026-06-21T19:04:10+00:00"
+    },
+    {
+      "EventName": "UpdateService",
+      "Username": "parcelpulse-prod-8842119021",
+      "EventTime": "2026-06-21T19:06:02+00:00"
+    }
+  ]
+}
+```
+
+The secret inventory check looks for owner tags and rotation status:
+
+```bash
+aws secretsmanager describe-secret \
+  --secret-id prod/parcelpulse/api/postgres \
+  --query '{Name:Name,RotationEnabled:RotationEnabled,LastRotatedDate:LastRotatedDate,Tags:Tags}'
+```
+
+`--query` shapes the output so the reviewer sees only the fields needed for the access review: name, rotation status, last rotation date, and tags.
+
+Example output:
+
+```json
+{
+  "Name": "prod/parcelpulse/api/postgres",
+  "RotationEnabled": true,
+  "LastRotatedDate": "2026-06-15T08:12:44+00:00",
+  "Tags": [
+    { "Key": "owner", "Value": "api-team" },
+    { "Key": "environment", "Value": "prod" }
+  ]
+}
+```
+
+Access Analyzer can help reduce policies after normal use:
+
+```bash
+aws accessanalyzer start-policy-generation \
+  --policy-generation-details principalArn=arn:aws:iam::123456789012:role/github-actions-prod-deploy
+```
+
+`start-policy-generation` asks IAM Access Analyzer to build a suggested policy from CloudTrail activity for the named principal. The generated result is a starting point for review, and the team still checks whether the role needs every suggested action.
+
+Example output:
+
+```json
+{
+  "jobId": "b12f7f3a-3d8a-4f2d-a5da-2e7c4c4a6f41"
+}
+```
+
+These checks keep the access design honest. They also give the team better data when a secret leak happens.
+
+## Respond to a Leaked Secret
+<!-- section-summary: A leaked-secret response revokes the value first, then rotates, investigates, removes live copies, and hardens the design. -->
+
+A **leaked secret incident** starts when a sensitive value leaves its intended boundary. It might appear in a Git commit, CI log, container image layer, crash dump, support ticket, chat message, or third-party system. The first response goal is containment: make the value stop working.
+
+ParcelPulse finds an old AWS access key in a workflow log. The team treats the key as compromised, even though the log was private. Private logs can be downloaded, shared, cached, or copied by tools. The response follows a direct order:
+
+| Step | What ParcelPulse does | Evidence to keep |
 |---|---|---|
-| **Where is the credential stored?** | GitHub secret value holding a long-lived access key | No long-lived cloud credential in GitHub |
-| **Who can use it?** | Anyone or anything that obtains the key | Jobs whose OIDC claims satisfy the cloud trust policy |
-| **How long does it work?** | Until manual deactivation or deletion | Until the role session expires |
-| **How do you scope it?** | IAM policy on the key's user, plus careful secret placement | IAM role policy plus trust conditions for repo, branch, environment, and audience |
-| **What happens after leak?** | Revoke key and find every copy | Let current session expire, tighten trust or revoke role access, inspect role session logs |
-| **What does audit show?** | The same IAM user key across runs unless session naming adds context | Role session with workflow run details such as `role-session-name` |
-
-OIDC still needs surrounding controls. If an attacker can modify trusted workflow code on `main`, approve deployments, or change the cloud trust policy, they may still obtain a valid deployment session. That is why OIDC must pair with branch protections, environment approvals, minimal `GITHUB_TOKEN` permissions, pinned or trusted actions, and scoped cloud policies.
-
-The practical win is that OIDC removes a whole class of secret storage and rotation work. ParcelPulse removes `PROD_AWS_ACCESS_KEY_ID` and `PROD_AWS_SECRET_ACCESS_KEY` from GitHub. The static AWS deployment key disappears from the place where a third-party coverage action could read it. The cloud account issues a short-lived session only after the job proves it came from the expected repository and environment.
-
-This gives the team a much cleaner incident story. A static key leak creates a hunt for every copy. An OIDC session leak still matters, but the time window is short, and the trust policy gives the team a central place to tighten who can obtain the next session.
-
-## Leaked Secret Incident Response
-<!-- section-summary: A leaked secret response revokes the credential first, then investigates usage, rotates dependents, and prevents the same path from leaking again. -->
-
-A **leaked secret incident** starts when a sensitive value leaves its intended boundary. It might appear in a Git commit, CI log, container image layer, crash dump, support ticket, Slack message, or third-party system. The first response goal is containment. The team should make the leaked value stop working before spending too much time cleaning history.
-
-ParcelPulse finds a production AWS access key in an old workflow log. The team should treat the key as compromised, even if the log was private. Private logs can move, people can download them, and dependencies can copy environment values during a build. The response should follow a simple order.
-
-| Step | What ParcelPulse does | Why |
-|---|---|---|
-| **Identify** | Confirm the secret type, owner, scope, and environment | You need the right revocation path |
-| **Contain** | Disable or revoke the credential | A dead secret cannot make new requests |
-| **Rotate** | Replace any needed credential with a new value or OIDC path | Production keeps working safely |
-| **Investigate** | Review cloud audit logs, CI logs, repository history, and access patterns | The team learns whether someone used it |
-| **Eradicate** | Remove the secret from current code, images, variables, and docs | New leaks from the same copy stop |
-| **Harden** | Add scanning, protections, and a design change | The same leak path closes |
+| **Identify** | Confirm secret type, owner, scope, and environment | Incident ticket and secret inventory row |
+| **Contain** | Disable or revoke the credential | Cloud or vendor revocation event |
+| **Rotate** | Replace needed access with a new value or OIDC path | Rotation record |
+| **Investigate** | Review cloud audit logs, CI logs, repository history, and artifacts | Query results and timeline |
+| **Remove live copies** | Clean current branches, variables, images, docs, and tickets | Pull request or cleanup record |
+| **Harden** | Add scanning, protections, or a design change | Follow-up ticket and owner |
 
 For an AWS IAM user access key, containment can happen quickly:
 
@@ -644,7 +863,9 @@ aws iam update-access-key \
   --status Inactive
 ```
 
-After the team confirms production no longer depends on it, deletion removes the key:
+`--user-name` selects the IAM user that owns the key. `--access-key-id` names the leaked key. `--status Inactive` disables the key so it cannot make new AWS API requests. The command returns no output on success.
+
+After the team confirms production no longer depends on the key, deletion removes it:
 
 ```bash
 aws iam delete-access-key \
@@ -652,7 +873,9 @@ aws iam delete-access-key \
   --access-key-id AKIAEXAMPLEOLDKEY
 ```
 
-CloudTrail helps investigation. The team can look for API calls made by the access key during the suspected exposure window:
+This command also returns no output on success. The team keeps the CloudTrail event, incident ticket, or terminal transcript as evidence.
+
+CloudTrail helps investigation:
 
 ```bash
 aws cloudtrail lookup-events \
@@ -661,15 +884,23 @@ aws cloudtrail lookup-events \
   --end-time 2026-06-21T23:59:59Z
 ```
 
-This tells the team which API calls used that key, from which source IPs, and around which times. It does not prove safety by itself because logs can have limits, services vary in event detail, and an attacker may have made no calls yet. It gives evidence for the next decisions.
+`AttributeKey=AccessKeyId` searches for events made with the specific key. The time window should cover the suspected exposure period.
 
-For a GitHub repository secret, the team can update the value through the UI or CLI after generating a replacement at the source system:
+Example output, shortened:
 
-```bash
-gh secret set COVERAGE_UPLOAD_TOKEN --repo parcelpulse/api
+```json
+{
+  "Events": [
+    {
+      "EventName": "UpdateService",
+      "EventTime": "2026-06-18T17:12:03+00:00",
+      "Username": "parcelpulse-ci"
+    }
+  ]
+}
 ```
 
-For a Secrets Manager value, the team can write a new version and restart affected workloads:
+For a Secrets Manager value, the team writes a new version and restarts affected workloads:
 
 ```bash
 aws secretsmanager put-secret-value \
@@ -682,53 +913,50 @@ aws ecs update-service \
   --force-new-deployment
 ```
 
-History cleanup needs care. Removing a secret from Git history can reduce accidental rediscovery, but revocation comes first. GitHub's secret scanning guidance also says that after a leak, the affected credential should be rotated immediately, and history removal can be time-intensive. ParcelPulse should remove the secret from current branches and open pull requests, then decide whether full history rewriting is worth the disruption after the secret is dead.
+The first command creates a new version of the secret. The second starts fresh tasks so the API reads the replacement value. The team should watch database login failures, API error rates, and ECS rollout status during the change.
 
-The final incident step is design change. If the leaked value was a static deployment key, the fix should be OIDC federation plus a removed IAM user key. If the leak came from a Docker build argument, the fix should be BuildKit secret mounts and a CI scan for suspicious `ARG` or `ENV` names. If a vendor token leaked through a third-party action, the fix may be job separation: run the vendor action in a job that has only the vendor token and no cloud credentials.
+History cleanup needs care. GitHub's secret scanning guidance tells teams to rotate or revoke leaked credentials immediately. Removing a secret from Git history can reduce accidental rediscovery, and it can also disrupt forks, open branches, and commit references. ParcelPulse revokes first, cleans current branches and open pull requests, then decides whether deeper history rewriting is worth the coordination cost.
 
-Good incident response should leave the system with fewer secrets, narrower scopes, and shorter sessions. A response that only rotates the static deployment key leaves the old design in place. The cleaner fix removes the static deployment key from the design.
+The final incident step is design change. If the leaked value was a static deployment key, the fix is OIDC federation and a removed IAM user key. If the leak came from a Docker build argument, the fix is BuildKit secret mounts plus a review for suspicious `ARG` or `ENV` names. If a vendor token leaked through a third-party action, the fix may be job separation so that action receives only the vendor token.
 
-## Putting It All Together
-<!-- section-summary: A secure delivery system gives each caller a named identity, a narrow policy, a protected path, and a rotation or expiration plan. -->
+## Put It All Together
+<!-- section-summary: A secure delivery system gives every caller a named identity, narrow permissions, a protected path, and either rotation or expiration. -->
 
-ParcelPulse now has a better production delivery setup. People use SSO, MFA, groups, and temporary sessions. Mia can read logs without holding the production database password. Release managers approve deployments through a protected environment instead of sharing a cloud key.
+ParcelPulse now has a tighter delivery setup. People use SSO, MFA, groups, and temporary sessions. Mia can read production logs without holding the production database password. Release managers approve deployments through a protected GitHub environment.
 
-Workloads use runtime identities. The API container has the `parcelpulse-api-prod` task role, which can read one database secret and write to one label bucket prefix. The application reads secrets from a secret manager and caches them carefully. The container image stays free of static cloud keys.
+Workloads use runtime identities. The `parcelpulse-api-prod` task role can read one database secret and write to one label bucket prefix. The application reads secrets from a secret manager and caches them carefully. The container image stays free of static cloud keys.
 
-Pipelines use OIDC federation. The GitHub Actions deployment job requests an OIDC token, AWS verifies the repository and environment claims, and STS issues a short-lived deployment role session. The role can push one image and update one service. A coverage uploader never receives production cloud credentials because it runs in a separate job with only the vendor token it needs.
+Pipelines use OIDC federation. The GitHub Actions deployment job requests an OIDC token, AWS verifies the repository and environment claims, and STS issues a short-lived deployment role session. The role can push one image and update one service. The coverage uploader runs in its own job with only the vendor token it needs.
 
-Secrets that remain have owners and rotation paths. Database credentials live in AWS Secrets Manager. Vendor tokens live in GitHub environment secrets or a central secret manager depending on who consumes them. The team records purpose, owner, environment, creation date, last rotation, and consumers. Secret scanning and push protection help catch mistakes before they spread.
+Secrets that remain have owners and rotation paths. Database credentials live in AWS Secrets Manager. Vendor tokens live in GitHub environment secrets or a central secret manager depending on who consumes them. The team records purpose, owner, environment, creation date, last rotation, and consumers.
 
-If a secret leaks, the team follows a direct runbook: revoke first, rotate what production still needs, inspect audit logs, remove live copies, and harden the design. Static shared secrets turn that runbook into a wide search. Scoped sessions, workload identities, and OIDC make the same incident smaller and clearer.
+If a secret leaks, the runbook is clear: revoke first, rotate what production still needs, inspect audit logs, remove live copies, and harden the design. Static shared secrets turn that response into a wide search. Scoped sessions, workload identities, and OIDC make the same incident smaller and easier to reason through.
 
-Least privilege and secrets management belong together because permissions decide what a secret can do. A leaked read-only token for one coverage upload is a contained problem. A leaked long-lived cloud key that can deploy, read storage, and pass roles is a production incident. Secure delivery systems reduce both sides of the risk: fewer long-lived secrets, and much smaller permissions when credentials exist.
-
-![CI/CD OIDC infographic showing a workflow job exchanging an OIDC token through a trust policy for a short-lived role session and production deploy](/content-assets/articles/article-devsecops-security-foundations-least-privilege/oidc-deployment-session.png)
-
-*OIDC replaces stored cloud keys with a short-lived deployment session whose claims match the repository, branch, and production environment.*
+Least privilege and secrets management belong together. Permissions decide what a credential can do. Secret management decides where the credential lives, who can retrieve it, when it rotates, and how the team responds after exposure. The delivery-locker story still applies: one key, one job, one bounded place, one short access window, and a record of use.
 
 ---
 
-**References**
+## References
 
 - [NIST glossary: least privilege](https://csrc.nist.gov/glossary/term/least_privilege) - Defines least privilege as restricting users and processes to the minimum necessary access.
-- [Codecov April 2021 post-mortem](https://about.codecov.io/apr-2021-post-mortem/) - Explains the Bash Uploader compromise, extracted environment variables, key-management lessons, and Docker layer issue.
-- [GitHub Actions: OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Explains how GitHub Actions uses OIDC tokens and short-lived cloud credentials.
+- [NIST Secure Software Development Framework, SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - Official NIST SSDF publication for secure software development practices.
+- [Codecov April 2021 post-mortem](https://about.codecov.io/apr-2021-post-mortem/) - Explains the Bash Uploader compromise, extracted environment variables, and Docker layer key-management issue.
+- [GitHub Actions: OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Explains GitHub Actions OIDC tokens and short-lived cloud credentials.
 - [GitHub Actions: configuring OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) - Shows the AWS OIDC workflow pattern without long-lived AWS secrets.
-- [AWS IAM: create a role for OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - Documents GitHub OIDC trust policy conditions for repository, branch, and subject scoping.
+- [AWS IAM: create a role for OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - Documents OIDC trust policies and condition keys for federated roles.
 - [AWS IAM: temporary security credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Explains AWS STS temporary credentials and expiration behavior.
 - [GitHub Actions: using secrets in workflows](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets) - Documents workflow secret behavior, fork restrictions, and OIDC as an alternative for cloud credentials.
-- [GitHub Actions secure use reference](https://docs.github.com/en/actions/reference/security/secure-use) - Covers workflow hardening and risks around privileged triggers with untrusted code.
+- [GitHub Actions secure use reference](https://docs.github.com/en/actions/reference/security/secure-use) - Covers workflow hardening and privileged-trigger risks with untrusted code.
 - [GitHub Actions environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) - Documents environment protection rules, deployment branch restrictions, and environment secrets.
 - [GitHub secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning) - Describes detection, alerts, and remediation for leaked credentials.
 - [GitHub push protection](https://docs.github.com/en/code-security/concepts/secret-security/push-protection) - Describes blocking supported secrets before they enter a repository.
-- [AWS Secrets Manager rotation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) - Explains rotation as updating both the stored secret and the backing database or service.
+- [AWS Secrets Manager rotation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) - Explains rotation for stored secrets and backing services.
 - [AWS Secrets Manager: retrieve secrets](https://docs.aws.amazon.com/secretsmanager/latest/userguide/retrieving-secrets.html) - Covers retrieving secret values and CloudTrail logging for secret access.
 - [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Explains assigning IAM roles to ECS tasks so application code can call AWS services.
 - [Amazon ECS sensitive data guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/specifying-sensitive-data.html) - Covers Secrets Manager, Parameter Store, and sensitive data delivery to ECS containers.
 - [IAM Access Analyzer policy generation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-generation.html) - Documents generating fine-grained policies from CloudTrail access activity.
 - [Docker build secrets](https://docs.docker.com/build/building/secrets/) - Documents BuildKit secret mounts for build-time sensitive values.
-- [Docker build check: secrets in ARG or ENV](https://docs.docker.com/reference/build-checks/secrets-used-in-arg-or-env/) - Explains why Dockerfile `ARG` and `ENV` are inappropriate for secrets.
-- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) - Gives general guidance for centralized storage, provisioning, auditing, rotation, and management of secrets.
+- [Docker build check: secrets in ARG or ENV](https://docs.docker.com/reference/build-checks/secrets-used-in-arg-or-env/) - Explains why Dockerfile `ARG` and `ENV` instructions should avoid secrets.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) - Gives general guidance for centralized storage, auditing, rotation, and lifecycle management of secrets.
 - [Microsoft Entra workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) - Describes exchanging external workload tokens such as GitHub Actions OIDC tokens for Microsoft identity platform access tokens.
 - [Google Cloud Workload Identity Federation for deployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines) - Documents pipeline authentication to Google Cloud without maintaining service account keys.

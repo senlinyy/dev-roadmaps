@@ -104,7 +104,35 @@ resource applicationInsightsComponent 'Microsoft.Insights/components@2020-02-02'
 }
 ```
 
-This creates the monitoring resource and links it to the workspace. The application still needs instrumentation. For most code-based server-side apps, Microsoft recommends the Azure Monitor OpenTelemetry Distro. In plain English, the distro is the package that plugs into your runtime, collects telemetry in the OpenTelemetry format, and exports it to Azure Monitor.
+This creates the monitoring resource and links it to the workspace. After deployment, the important check is that the component points at the production workspace:
+
+| Resource | Expected value |
+|---|---|
+| Application Insights component | `appi-devpolaris-orders-prod` |
+| Workspace resource ID | `/subscriptions/.../workspaces/law-devpolaris-prod` |
+| Application type | `web` |
+
+The read-back command should prove the workspace link after deployment:
+
+```bash
+az monitor app-insights component show \
+  --app appi-devpolaris-orders-prod \
+  --resource-group rg-devpolaris-observability-prod \
+  --query "{name:name,workspace:workspaceResourceId,appType:applicationType}" \
+  --output json
+```
+
+Example output:
+
+```json
+{
+  "appType": "web",
+  "name": "appi-devpolaris-orders-prod",
+  "workspace": "/subscriptions/.../resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.OperationalInsights/workspaces/law-devpolaris-prod"
+}
+```
+
+If the workspace link points at `law-devpolaris-dev`, production queries will appear empty in the place the incident team expects to use. The application still needs instrumentation. For most code-based server-side apps, Microsoft recommends the Azure Monitor OpenTelemetry Distro. In plain English, the distro is the package that plugs into your runtime, collects telemetry in the OpenTelemetry format, and exports it to Azure Monitor.
 
 For the Orders API, the runtime setting might look like this:
 
@@ -116,7 +144,7 @@ The exact app setting depends on the hosting service. App Service, Azure Functio
 
 ![Application Insights telemetry path from an Orders API through OpenTelemetry instrumentation, an Application Insights component, Log Analytics tables, and KQL portal views](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/telemetry-path.png)
 
-*The useful path is not just app to dashboard. Instrumentation sends runtime evidence into an Application Insights component, the workspace stores typed tables, and KQL or portal views turn those rows into answers.*
+*The useful path includes instrumentation, an Application Insights component, workspace-backed tables, KQL, and portal views. Each part has a job in the investigation.*
 
 Once telemetry starts flowing, the first row most backend teams inspect is the request row.
 
@@ -127,7 +155,7 @@ A **request** is one incoming operation handled by the application. For a web AP
 
 The request row gives the first shape of the incident. It tells the team what route ran, when it started, how long it took, whether the app counted it as successful, which result code the app returned, and which application role produced the row. For `devpolaris-orders-api`, the request row for the failed checkout might say `Name = POST /checkout`, `ResultCode = 500`, `DurationMs = 1840`, `Success = false`, and `OperationId = checkout-5001`.
 
-Here is a first query an engineer might run during the support ticket:
+Here is a first query an engineer might run during the support request:
 
 ```kusto
 AppRequests
@@ -136,6 +164,13 @@ AppRequests
 | project TimeGenerated, AppRoleName, OperationId, Name, ResultCode, DurationMs, Success
 | order by TimeGenerated desc
 ```
+
+This query filters the route first because support often gives the user-facing action before it gives an operation ID. The expected output should quickly show whether failures cluster around one time window or release:
+
+| TimeGenerated | AppRoleName | OperationId | Name | ResultCode | DurationMs | Success |
+|---|---|---|---|---|---|---|
+| `2026-06-11T09:42:12.005Z` | `devpolaris-orders-api` | `checkout-5001` | `POST /checkout` | `500` | `1840` | `false` |
+| `2026-06-11T09:41:48.331Z` | `devpolaris-orders-api` | `checkout-4998` | `POST /checkout` | `200` | `312` | `true` |
 
 The important beginner habit is to keep the request row as the entry point, because it gives the team the operation ID that connects the rest of the evidence. If support already gives `checkout-5001`, the team can start with that ID. If support gives only a time window and a route, the request table often helps find the right operation.
 
@@ -219,7 +254,7 @@ This connects to the wider tracing world. **Distributed tracing** follows work a
 
 This is where AWS and Azure teams can share a lot of vocabulary. OpenTelemetry trace IDs, spans, service names, and dependency targets can travel across providers even when the backend view is Application Insights, X-Ray, or another observability platform.
 
-A common production setup carries both platform correlation and business correlation. Application Insights might use `OperationId = checkout-5001`, while the app logs also carry `correlationId = corr-checkout-5001` and `orderId = ord-8147`. The operation ID connects telemetry rows. The business IDs help the team connect telemetry to support tickets, database records, customer communication, and audit trails.
+A common production setup carries both platform correlation and business correlation. Application Insights might use `OperationId = checkout-5001`, while the app logs also carry `correlationId = corr-checkout-5001` and `orderId = ord-8147`. The operation ID connects telemetry rows. The business IDs help the team connect telemetry to support requests, database records, customer communication, and audit trails.
 
 The safest habit is to keep these identifiers consistent and visible:
 
@@ -274,7 +309,7 @@ The result should read like a timeline:
 
 *The operation ID is the thread through the incident. The request shows the user-facing failure, traces explain the app's checkpoints, dependencies show the slow SQL call, and the exception names the code failure.*
 
-This is the moment Application Insights earns its keep. The team can explain the failed checkout without guessing from CPU graphs or reading a thousand unrelated log lines. The request failed, payment authorization succeeded, the SQL order write timed out, the app threw a SQL timeout exception, and the receipt write never ran.
+This is the moment Application Insights earns its keep. The team can explain the failed checkout from telemetry rows instead of CPU graphs or a thousand unrelated log lines. The request failed, payment authorization succeeded, the SQL order write timed out, the app threw a SQL timeout exception, and the receipt write never ran.
 
 That timeline works well for one operation. During a wider incident, the team also needs to see patterns across routes, dependencies, and services. Application Insights gives portal views for that wider shape.
 
@@ -375,7 +410,7 @@ For the Orders API, the production telemetry contract might say:
 | Noise policy | Filter routine health probes and verbose request bodies |
 | Review path | Application Map, Failures, Performance, KQL timeline |
 
-With that contract in place, a future incident has a known path. The team does not have to invent observability during the outage. They follow the telemetry that the app already emits.
+With that contract in place, a future incident has a known path. The team follows the telemetry that the app already emits during the outage.
 
 ## Validate the Telemetry Path
 <!-- section-summary: After instrumentation is deployed, a small smoke test should prove that requests, dependencies, traces, exceptions, and operation IDs reach the workspace. -->
@@ -389,7 +424,13 @@ AppRequests
 | summarize requests = count(), failures = countif(Success == false), latest = max(TimeGenerated)
 ```
 
-That query confirms the request table and app role. The next check proves dependency tracking, because checkout is only useful if the SQL, storage, payment, and messaging calls appear as related evidence.
+That query confirms the request table and app role. A healthy staging smoke test might return this shape:
+
+| requests | failures | latest |
+|---|---|---|
+| `12` | `1` | `2026-06-11T09:58:44.238Z` |
+
+The next check proves dependency tracking, because checkout is only useful if the SQL, storage, payment, and messaging calls appear as related evidence.
 
 ```kusto
 AppDependencies
@@ -398,6 +439,14 @@ AppDependencies
 | summarize calls = count(), failedCalls = countif(Success == false) by DependencyType, Target
 | order by failedCalls desc, calls desc
 ```
+
+The dependency result should show the systems the checkout path actually uses:
+
+| DependencyType | Target | calls | failedCalls |
+|---|---|---|---|
+| `SQL` | `orders-db-prod.database.windows.net` | `12` | `1` |
+| `HTTP` | `payments.example.com` | `12` | `0` |
+| `Blob` | `stordersprod.blob.core.windows.net` | `11` | `0` |
 
 The team should also validate one correlated timeline. Pick a recent operation ID from `AppRequests`, then query requests, dependencies, exceptions, and traces together. If dependencies appear with a different operation ID, or traces miss the custom properties the incident process expects, the setup needs a fix before the next release.
 
@@ -415,6 +464,8 @@ union AppRequests, AppDependencies, AppExceptions, AppTraces
 | order by TimeGenerated asc
 ```
 
+The timeline output should include at least one request row and the dependency rows that belong to the same `OperationId`. A result with only an `AppRequests` row usually means dependency instrumentation started too late, a client library is unsupported, or a custom worker path needs manual spans.
+
 A practical release gate can be small: one successful checkout, one controlled validation failure, one dependency call, one trace with `releaseVersion`, and one operation timeline that links the rows. That gate catches broken connection strings, missing role names, noisy health probes, and lost correlation while the team still has deployment context fresh in their heads.
 
 ## Putting It All Together
@@ -422,7 +473,7 @@ A practical release gate can be small: one successful checkout, one controlled v
 
 Let's walk the full incident one last time. A customer reports that checkout failed at 09:42 UTC. Support finds operation ID `checkout-5001` and sends it to engineering. The Orders API reports telemetry to `appi-devpolaris-orders-prod`, and the component stores queryable rows in `law-devpolaris-prod`.
 
-The engineer starts with `AppRequests` and confirms `POST /checkout` returned `500` after 1840 ms. The request row gives the app role, route, result code, duration, success flag, and operation ID. That gives the team the entry point into the rest of the operation.
+The engineer opens `AppRequests` and confirms `POST /checkout` returned `500` after 1840 ms. The request row gives the app role, route, result code, duration, success flag, and operation ID. That gives the team the entry point into the rest of the operation.
 
 Next, the engineer queries `AppDependencies` for the same operation ID. Payment authorization succeeded in 210 ms, while the Azure SQL order insert timed out after 1500 ms. That moves the incident from a vague checkout failure to a specific failed dependency call.
 
@@ -430,7 +481,7 @@ Then the engineer checks `AppExceptions` and `AppTraces`. The exception shows a 
 
 Finally, the engineer checks Application Map and Performance views. The SQL connector from `devpolaris-orders-api` has elevated duration and failure rate since release `2026.06.11.2`. The team now has the release, route, dependency, exception, and operation timeline needed for a rollback or narrow database fix.
 
-That is the beginner win. Application Insights helps the team explain what happened inside the app without guessing from platform health alone. Requests tell the user-facing result, dependencies show outbound calls, exceptions show code failures, traces add human context, correlation connects the rows, maps show the wider service shape, and sampling plus privacy rules keep the telemetry useful in production.
+That is the beginner win. Application Insights helps the team explain what happened inside the app from application telemetry and platform health together. Requests tell the user-facing result, dependencies show outbound calls, exceptions show code failures, traces add human context, correlation connects the rows, maps show the wider service shape, and sampling plus privacy rules keep the telemetry useful in production.
 
 ![Application Insights operating loop showing instrumentation, collection, correlation, querying, mapping, cost control, and the four signal types combining into one incident story](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/application-insights-operating-loop.png)
 

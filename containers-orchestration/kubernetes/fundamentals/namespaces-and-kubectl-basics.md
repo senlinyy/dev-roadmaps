@@ -9,7 +9,7 @@ id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kube
 
 ## Table of Contents
 
-1. [The Work We Are Operating](#the-work-we-are-operating)
+1. [One Command Needs a Target](#one-command-needs-a-target)
 2. [Namespaces](#namespaces)
 3. [Application Namespaces and System Namespaces](#application-namespaces-and-system-namespaces)
 4. [kubectl](#kubectl)
@@ -22,21 +22,37 @@ id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kube
 11. [A Daily Operations Routine](#a-daily-operations-routine)
 12. [Putting It All Together](#putting-it-all-together)
 
-## The Work We Are Operating
-<!-- section-summary: This article follows one production-like platform so every kubectl command has a clear purpose. -->
+## One Command Needs a Target
+<!-- section-summary: kubectl is useful only when the command clearly names the cluster, namespace, and resource it should read or change. -->
 
-We are going to follow a **Customer Notification Platform** through the whole article. The platform has a `notification-api` that accepts customer requests, a `worker` that sends email and SMS jobs, a database dependency that stores notification preferences and delivery status, live traffic from customer-facing systems, and a rollout process that moves new versions through staging and production.
+**kubectl** is the command-line client for the Kubernetes API. For example, `kubectl get pods` asks Kubernetes for Pod objects and prints a table. The short command hides a safety question: where is this request pointed?
 
-That scenario matters because `kubectl` commands only make sense when you know what question you are asking. During a rollout, the question might be "did the new `notification-api` ReplicaSet receive traffic yet?" During an incident, the question might be "are the worker Pods crashing because the database connection string changed?" During a routine shift, the question might be "which namespace holds production right now?"
+A Kubernetes command usually needs three target pieces. The **context** chooses the cluster and identity from your kubeconfig. The **namespace** chooses the named scope inside that cluster. The **resource name** chooses the object, such as the `notification-api` Deployment.
 
-This article connects the pieces in the order a real operator usually needs them. First we give resources a place with **namespaces**. Then we talk to the cluster through **kubectl**. After that, **kubeconfig contexts** keep kubectl pointed at the right cluster and namespace. Then we read objects, logs, events, rollout status, and structured output in a way that works for both humans and scripts.
+Here is the same read command with the target made visible:
+
+```bash
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+```
+
+That command says: use the `notifications-prod` context, read inside the `notifications-prod` namespace, and ask for the `notification-api` Deployment. A staging command would use a staging context and staging namespace, even if the Deployment name stays the same.
+
+We are going to follow a **Customer Notification Platform** through the whole article. The platform has a `notification-api` that accepts customer requests, a `notification-worker` that sends email and SMS jobs, a database dependency that stores notification preferences and delivery status, live traffic from customer-facing systems, and a rollout process that moves new versions through staging and production.
+
+This article connects the pieces in the order an operator usually needs them. First we give resources a place with **namespaces**. Then we talk to the cluster through **kubectl**. After that, **kubeconfig contexts** keep kubectl pointed at the right cluster and namespace. Then we read objects, logs, events, rollout status, and structured output in a way that works for both humans and scripts.
 
 ## Namespaces
 <!-- section-summary: A namespace gives many Kubernetes resources a named scope inside one cluster, which lets teams reuse names across environments. -->
 
 A **namespace** is a named scope inside one Kubernetes cluster. Many Kubernetes resources, including Pods, Deployments, Services, ConfigMaps, and Secrets, live inside a namespace. The resource name must stay unique inside that namespace, while another namespace can use the same name for a separate resource.
 
-For our Customer Notification Platform, that means staging and production can both have a Deployment named `notification-api`. Kubernetes can keep them separate because the full location includes the namespace. The production Deployment lives at `notifications-prod/notification-api`, and the staging Deployment lives at `notifications-staging/notification-api`.
+For our Customer Notification Platform, staging and production can both have a Deployment named `notification-api`. Kubernetes can keep them separate because the full location includes the namespace. The production Deployment lives at `notifications-prod/notification-api`, and the staging Deployment lives at `notifications-staging/notification-api`.
+
+![Namespace scope map showing staging and production namespaces with separate notification-api Deployments, Services, ConfigMaps, and Secrets](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/namespace-scope-map.png)
+
+*The namespace map shows the same application names safely repeated in staging and production because each object has a namespace boundary.*
 
 A small namespace manifest looks like this. The labels give platform tooling a simple way to group the namespace by application and environment.
 
@@ -160,6 +176,10 @@ A **kubeconfig** file is a local configuration file that kubectl uses to find cl
 
 A **context** is a named entry inside kubeconfig. It groups three things: a cluster, a user, and an optional namespace. For example, a `notifications-prod` context can point at the production cluster, use the production operator identity, and default to the `notifications-prod` namespace.
 
+![Kubeconfig context target map showing kubectl selecting a context, cluster, user identity, namespace, and API server request](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubeconfig-context-target.png)
+
+*The context map shows why a kubectl command needs a visible target: context chooses the cluster and identity, while the namespace chooses the resource scope.*
+
 A context list might look like this. The table shows the current profile, the cluster behind each profile, the user identity, and the default namespace.
 
 ```bash
@@ -257,6 +277,10 @@ With a safe command shape in hand, we can start reading the actual objects that 
 **Reading a resource** means asking the API server for the current stored object and its status fields. For a Deployment, that includes desired replicas, available replicas, selector labels, rollout conditions, and the Pod template used for new Pods. For a Service, that includes ports, selectors, and the stable virtual IP or load balancer details.
 
 In the Customer Notification Platform, the first read during a production incident should usually start at the Deployment level. The Deployment tells us whether Kubernetes has enough available replicas before we spend time on individual Pods.
+
+![kubectl evidence path showing an operator moving from Deployment status to Pods, logs, events, Service selectors, and structured JSON output](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubectl-evidence-path.png)
+
+*The evidence path keeps kubectl investigation ordered: start with the workload, then narrow into Pods, logs, events, Services, and structured output.*
 
 ```bash
 kubectl get deployment notification-api \

@@ -79,6 +79,16 @@ az sql db show \
 
 The `fqdn` value is what the app uses as `Server=` in the connection string. `publicNetworkAccess` tells the network reviewer whether public access is still allowed at the logical server. `tier`, `sku`, and `capacity` tell the application owner which performance and cost shape the database is actually using, because the name `orders` alone says nothing about the service tier.
 
+The expected output should line up with the release record. A private production database might show this shape:
+
+| Check | Healthy value |
+| --- | --- |
+| Server `fqdn` | `sql-orders-prod.database.windows.net` |
+| Server `publicNetworkAccess` | `Disabled` when the app uses private access |
+| Database `tier` | `GeneralPurpose`, `BusinessCritical`, or the approved tier |
+| Database `sku` | The SKU from the capacity review, such as `GP_Gen5_4` |
+| Database `zoneRedundant` | `true` only where the chosen tier and region support that design |
+
 ## Tables, Keys, and Constraints
 <!-- section-summary: Tables store the facts, while keys and constraints keep relationships valid even when bugs, retries, or scripts try to write bad data. -->
 
@@ -288,6 +298,27 @@ az sql db restore \
 ```
 
 The first command checks whether the short-term retention window can even cover the incident time. The second command creates `orders-restore-1404` as a new target. The recovery team then grants access to the reviewer identity, compares affected rows, and decides whether to point an app at the restored database or copy a small repaired data set back into the active database.
+
+The healthy result is a separate database that the team can inspect without overwriting production. The restore command should return a database name like `orders-restore-1404`, a status that moves toward `Online`, and the same logical server unless the runbook intentionally restores somewhere else. If the retention command returns fewer days than the incident age, the team should stop and choose another recovery source instead of running a restore that cannot reach the target timestamp.
+
+The read-back check confirms that the restored database exists as a separate target:
+
+```bash
+az sql db show \
+  --resource-group rg-orders-prod-weu \
+  --server sql-orders-prod \
+  --name orders-restore-1404 \
+  --query "{name:name,status:status,creationDate:creationDate,currentServiceObjectiveName:currentServiceObjectiveName}" \
+  --output table
+```
+
+Example output:
+
+```console
+Name                 Status    CreationDate          CurrentServiceObjectiveName
+-------------------  --------  --------------------  ---------------------------
+orders-restore-1404  Online    2026-06-11T14:19:31Z  GP_Gen5_4
+```
 
 ## Putting It All Together
 <!-- section-summary: A healthy Azure SQL design connects relational modeling, secure access, capacity, migrations, and recovery into one production habit. -->

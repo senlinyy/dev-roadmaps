@@ -22,11 +22,13 @@ id: article-containers-orchestration-kubernetes-operations-metrics-and-autoscali
 ## Scaling Starts With a Measured Signal
 <!-- section-summary: Autoscaling works only when the metric represents the real capacity limit that users are hitting. -->
 
-Scaling sounds simple from a distance. Traffic goes up, add more Pods. Traffic goes down, remove Pods. In production, the hard part is choosing the signal that tells Kubernetes when more Pods will actually help.
+The first sign is a graph spike. Checkout p95 latency jumps from 180ms to 900ms during lunch traffic, while the Pods are still `Running` and the Deployment still shows all replicas available. The team needs to know whether adding Pods will help users or whether the bottleneck sits somewhere else.
 
-The running service is still **devpolaris-orders-api** in the `orders` namespace. It receives checkout requests, writes to PostgreSQL, and publishes order events to a queue. During a lunch traffic spike, p95 latency rises from 180ms to 900ms. The team needs to know whether more API Pods will reduce that latency or just put more pressure on the database and queue.
+The running service is still **devpolaris-orders-api** in the `orders` namespace. It receives checkout requests, writes to PostgreSQL, and publishes order events to a queue. The team needs to know whether more API Pods will reduce the latency or add pressure to the database and queue.
 
 A **metric** is a measured number about the system. CPU usage, memory usage, request rate, error count, queue depth, database wait time, and p95 latency are all metrics. An **autoscaler** is a controller that changes capacity based on selected metrics. In Kubernetes, the most common application autoscaler is the **HorizontalPodAutoscaler**, usually called HPA.
+
+Here is the concrete example. If each orders API Pod requests `500m` CPU and the Pods are using around `450m` while latency rises, HPA may add replicas and spread the CPU work. If the graph shows PostgreSQL lock waits and queue publishing delays, adding API Pods can push more work into an already slow dependency. The metric has to match the actual limit.
 
 **Horizontal scaling** means adding or removing Pods. **Vertical scaling** means changing CPU or memory for a Pod. **Cluster scaling** means adding or removing nodes. These tools can work together, but they answer different questions. HPA can ask for more orders API Pods, but it cannot create node capacity by itself unless a cluster autoscaler is also running.
 
@@ -90,7 +92,7 @@ devpolaris-orders-api-7c96df7d7c-q94r7   438m         390Mi
 
 If those Pods request `500m` CPU each, they are using roughly 84 to 93 percent of requested CPU. That is useful pressure evidence, especially if request latency rises at the same time and the database looks healthy.
 
-Node metrics answer a different question: can the cluster place more Pods if HPA asks for them? This matters because a replica recommendation still has to fit somewhere:
+Node metrics answer a different question: can the cluster place more Pods if HPA asks for them? A replica recommendation still needs available node capacity:
 
 ```bash
 $ kubectl top nodes

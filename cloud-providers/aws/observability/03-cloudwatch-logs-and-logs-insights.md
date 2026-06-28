@@ -113,6 +113,7 @@ Notice the shape of the event. It has stable names and normal data types, so lat
 
 *This hierarchy shows the practical search path. Start at the service log group, then use streams and events only after the query finds the right runtime and request.*
 
+
 ## Getting Logs into the Right Group
 <!-- section-summary: Lambda, ECS, EC2, and advanced container routes all need explicit logging paths so every runtime sends evidence to the group the team will query. -->
 
@@ -127,6 +128,24 @@ aws lambda update-function-configuration \
   --function-name fraud-check-prod \
   --logging-config LogGroup=/application/prod/checkout-fraud-check,LogFormat=JSON,ApplicationLogLevel=INFO,SystemLogLevel=WARN
 ```
+
+The response includes the function configuration. The important part for logging is the `LoggingConfig` block:
+
+```json
+{
+  "FunctionName": "fraud-check-prod",
+  "LastModified": "2026-06-13T09:52:18.000+0000",
+  "State": "Active",
+  "LoggingConfig": {
+    "LogFormat": "JSON",
+    "ApplicationLogLevel": "INFO",
+    "SystemLogLevel": "WARN",
+    "LogGroup": "/application/prod/checkout-fraud-check"
+  }
+}
+```
+
+This confirms three operational details. Application logs will use JSON, noisy platform logs below `WARN` will stay out of the stream, and responders should query `/application/prod/checkout-fraud-check` for this function instead of the default `/aws/lambda/fraud-check-prod` group.
 
 For **Amazon ECS**, the common first path is the `awslogs` log driver. A log driver is the container runtime component that takes stdout and stderr from the container and ships them somewhere else. In Fargate tasks, `awslogs-group`, `awslogs-region`, and `awslogs-stream-prefix` tell ECS where to send each container's output.
 
@@ -181,7 +200,7 @@ CloudWatch Logs Insights automatically creates system fields that start with `@`
 
 This is the difference between hunting and querying. A plain text line might say `payment failed for req-7f3a8c after 8420ms`, which forces the team to parse text every time. A JSON event lets the team ask for `requestId = "req-7f3a8c"` or `durationMs > 8000` without guessing the sentence format.
 
-For Lambda, AWS recommends JSON log format unless existing tooling depends on plain text. Lambda can capture application logs as structured JSON for supported runtimes when you use the built-in logging methods. Python functions can also use the standard `logging` library, and the output can become structured JSON after you enable the JSON log format.
+For Lambda, AWS recommends JSON log format unless existing tooling depends on plain text. Lambda can capture application logs as structured JSON for supported runtimes when you use the built-in logging methods. Python functions can also use the standard `logging` library, and the output can use structured JSON after you enable the JSON log format.
 
 ```python
 import logging
@@ -228,7 +247,7 @@ There is one practical trap with JSON logs. CloudWatch Logs Insights can discove
 
 During the checkout incident, the first query should find the exact failures. The team selects the checkout API log group, narrows the time picker to the alarm window, and filters for error logs on the checkout route.
 
-```
+```sql
 fields @timestamp, requestId, traceId, route, statusCode, durationMs, errorType, message
 | filter service = "checkout-api"
 | filter route = "POST /checkout" and level = "ERROR"
@@ -238,20 +257,91 @@ fields @timestamp, requestId, traceId, route, statusCode, durationMs, errorType,
 
 This query gives the incident channel a concrete list of failed requests. `fields` chooses the columns to display, `filter` narrows the event set, `sort` puts the newest evidence first, and `limit` keeps the result readable. The team can copy one `requestId` or `traceId` into the next query.
 
+From the CLI, Logs Insights runs asynchronously. Save the query above in `checkout-errors.query`, start it against the alarm window, then fetch the result:
+
+```bash
+aws logs start-query \
+  --log-group-name /aws/ecs/prod/checkout-api \
+  --start-time 1781345700 \
+  --end-time 1781346600 \
+  --query-string file://checkout-errors.query
+```
+
+The first response gives a query ID:
+
+```json
+{
+  "queryId": "12345678-90ab-cdef-1234-567890abcdef"
+}
+```
+
+Use that ID to read the finished result:
+
+```bash
+aws logs get-query-results \
+  --query-id 12345678-90ab-cdef-1234-567890abcdef
+```
+
+Example output:
+
+```json
+{
+  "status": "Complete",
+  "results": [
+    [
+      {"field": "@timestamp", "value": "2026-06-13 10:15:22.481"},
+      {"field": "requestId", "value": "req-7f3a8c"},
+      {"field": "traceId", "value": "1-666c182a-4f7d9b2e9a1d5c67b8142a10"},
+      {"field": "route", "value": "POST /checkout"},
+      {"field": "statusCode", "value": "502"},
+      {"field": "durationMs", "value": "8420"},
+      {"field": "errorType", "value": "PaymentGatewayTimeout"},
+      {"field": "message", "value": "Payment authorization timed out after provider retry"}
+    ]
+  ],
+  "statistics": {
+    "recordsMatched": 18,
+    "recordsScanned": 14320,
+    "bytesScanned": 9384221
+  }
+}
+```
+
+`status: Complete` means the query finished. `recordsMatched` tells the team how many events met the filters, and `bytesScanned` shows the query cost shape. The first result gives a request ID and trace ID that can move the investigation into related logs and traces.
+
+After one trace ID appears, the next query should widen across related log groups while staying tied to that request:
+
+```sql
+fields @timestamp, service, requestId, traceId, spanId, message
+| filter traceId = "1-667af5a1-4b8c2c6d1c9f7b4a6d2e9f01"
+| sort @timestamp asc
+| limit 100
+```
+
+This query works best when API Gateway, ECS, Lambda, and workers all write the same trace field name. If one service logs `trace_id` and another logs `xrayTraceId`, the incident turns into field translation work before the team can follow the request.
+
 The next question is scale. One failed request may be a customer-specific issue, while hundreds of similar failures point to a dependency or release problem. The `stats` command turns matching events into counts and percentiles.
 
-```
+```sql
 fields @timestamp, errorType, durationMs, statusCode
 | filter service = "checkout-api" and route = "POST /checkout"
 | stats count(*) as requests, pct(durationMs, 95) as p95Ms, avg(durationMs) as avgMs by bin(5m), statusCode, errorType
 | sort bin(5m) desc
 ```
 
-This shows whether failures cluster around one error type and whether latency rose before the errors. The `bin(5m)` function groups events into five-minute windows. The percentile gives the team a better view of slow customer experience than an average alone.
+Example result:
+
+| bin(5m) | statusCode | errorType | requests | p95Ms | avgMs |
+|---|---:|---|---:|---:|---:|
+| 2026-06-13 10:15:00 | 502 | PaymentGatewayTimeout | 18 | 8420 | 7890 |
+| 2026-06-13 10:10:00 | 200 |  | 942 | 430 | 218 |
+| 2026-06-13 10:05:00 | 200 |  | 901 | 415 | 204 |
+
+This shows whether failures cluster around one error type and whether latency rose before the errors. In the example, the `PaymentGatewayTimeout` group appears only in the latest five-minute bucket, and the p95 value is far above the healthy window. The `bin(5m)` function groups events into five-minute windows. The percentile gives the team a better view of slow customer experience than an average alone.
 
 Legacy logs may arrive as text. The `parse` command can extract fields from a known pattern so the team can still group and count the data. This is useful during migrations, but it is a bridge toward structured logs rather than the final standard.
 
-```
+```sql
 parse @message "level=* requestId=* provider=* status=* durationMs=*" as level, requestId, provider, status, durationMs
 | filter level = "ERROR" and provider = "acme-pay"
 | stats count(*) as errors, avg(durationMs) as avgMs by status
@@ -263,6 +353,7 @@ Logs Insights also has commands for pattern analysis, anomaly detection, compari
 ![Logs Insights workflow showing log group selection, time window, field filtering, stats, and trace follow-up](/content-assets/articles/article-cloud-iac-observability-logs-traces/logs-insights-workflow.png)
 
 *The workflow keeps query cost and noise down. A good search narrows the log groups and time window before it starts grouping errors or opening traces.*
+
 
 ## Query Cost and Field Indexes
 <!-- section-summary: Logs Insights charges by scanned data, so teams control cost with narrow time ranges, focused log groups, and field indexes for common equality searches. -->
@@ -279,9 +370,11 @@ aws logs put-index-policy \
   --policy-document '{"Fields":["requestId","traceId","errorType"]}'
 ```
 
+This command configures future indexing for the selected fields on that log group. Old events keep their original index state, so the benefit appears only for events ingested after the policy is active. A team should add common indexes before the log group reaches production traffic.
+
 After the index exists, the team can use normal equality filters for indexed fields, and CloudWatch Logs can attempt to reduce the scan work. For very large searches across many log groups, the `filterIndex` command tells Logs Insights to try to scan only log groups that are indexed on the field and have seen the requested value.
 
-```
+```sql
 fields @timestamp, requestId, traceId, errorType, message
 | filterIndex requestId = "req-7f3a8c"
 | sort @timestamp asc
@@ -306,6 +399,30 @@ aws logs put-metric-filter \
 
 This filter emits one metric value for each matching event and a default value of `0` for periods where logs are ingested but no matching event appears. That default helps CloudWatch avoid spotty metrics during normal traffic. If no logs arrive during a minute, CloudWatch has no event stream to evaluate, so no default value appears for that minute.
 
+The command writes filter configuration and usually returns no response body. Verify the setup by describing the filter:
+
+```bash
+aws logs describe-metric-filters \
+  --log-group-name /aws/ecs/prod/checkout-api \
+  --filter-name-prefix PaymentGatewayTimeouts \
+  --query 'metricFilters[].{Name:filterName,Pattern:filterPattern,Metric:metricTransformations[0].metricName,Namespace:metricTransformations[0].metricNamespace}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Name": "PaymentGatewayTimeouts",
+    "Pattern": "{ $.level = \"ERROR\" && $.errorType = \"PaymentGatewayTimeout\" }",
+    "Metric": "PaymentGatewayTimeouts",
+    "Namespace": "App/Checkout"
+  }
+]
+```
+
+This output confirms that the filter is attached to the expected log group and writes the expected custom metric. The next check is the metric itself after matching logs arrive.
+
 Metric filters also support dimensions for JSON and space-delimited events. A dimension is a name-value label on a metric, and each unique dimension value creates a separate metric series. Dimensions are useful for small stable sets such as `service`, `environment`, or `errorType`.
 
 High-cardinality dimensions can create surprise cost. AWS warns against dimensions such as `requestId` or `IPAddress` because each unique value is a separate custom metric. CloudWatch Logs may disable a metric filter if the configured dimensions generate 1,000 different name-value pairs within one hour.
@@ -324,6 +441,28 @@ aws logs put-retention-policy \
   --log-group-name /aws/ecs/prod/checkout-api \
   --retention-in-days 30
 ```
+
+`--log-group-name` selects the log group, and `--retention-in-days 30` tells CloudWatch Logs to delete events after 30 days. A follow-up `describe-log-groups` check should show the retention value on the same log group.
+
+```bash
+aws logs describe-log-groups \
+  --log-group-name-prefix /aws/ecs/prod/checkout-api \
+  --query 'logGroups[].{Name:logGroupName,Retention:retentionInDays,StoredBytes:storedBytes}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Name": "/aws/ecs/prod/checkout-api",
+    "Retention": 30,
+    "StoredBytes": 73400320
+  }
+]
+```
+
+`Retention: 30` confirms the lifecycle rule. `StoredBytes` gives a quick sense of current storage size, which helps the team decide whether debug logging, retention, or archive policy needs review.
 
 The team can also set retention and log class in infrastructure as code. The class choice is important because the log group class is fixed after the log group is created.
 
@@ -379,6 +518,7 @@ This is the production habit to build. Logs serve as structured evidence, stored
 ![Log control plane showing retention, log class, field index, metric filter, and subscription around a log group](/content-assets/articles/article-cloud-iac-observability-logs-traces/log-control-plane.png)
 
 *The summary image groups the controls that keep logs useful over time: retention, class, indexes, filters, and subscriptions all belong to the log group design.*
+
 
 ## What's Next
 <!-- section-summary: The next article follows a single request across services with X-Ray and OpenTelemetry so logs can connect to a full trace. -->

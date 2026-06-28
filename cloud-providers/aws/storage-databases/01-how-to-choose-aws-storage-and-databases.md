@@ -15,174 +15,159 @@ aliases:
   - cloud-providers/aws/storage-databases/choosing-the-right-data-service.md
   - cloud-providers/aws/storage-databases/how-to-choose-aws-storage-and-databases.md
 ---
-
 ## Table of Contents
 
-1. [The Data Choice Starts With the Job](#the-data-choice-starts-with-the-job)
-2. [Objects, Records, Items, Disks, and Shared Files](#objects-records-items-disks-and-shared-files)
-3. [Ownership, Access, and Boundaries](#ownership-access-and-boundaries)
-4. [Change Patterns and Consistency](#change-patterns-and-consistency)
-5. [Backup, Movement, and Analytics Plans](#backup-movement-and-analytics-plans)
-6. [A Practical Selection Checklist](#a-practical-selection-checklist)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [Start With the Shape of the Data](#start-with-the-shape-of-the-data)
+2. [Rows That Need Transactions](#rows-that-need-transactions)
+3. [Files That Need Object Storage](#files-that-need-object-storage)
+4. [One Server Disk](#one-server-disk)
+5. [Shared Files](#shared-files)
+6. [Key Lookups at High Scale](#key-lookups-at-high-scale)
+7. [Movement and Recovery](#movement-and-recovery)
+8. [A Practical Decision Checklist](#a-practical-decision-checklist)
+9. [References](#references)
 
-## The Data Choice Starts With the Job
+## Start With the Shape of the Data
 <!-- section-summary: AWS storage choices start with what the application needs the data to do during normal work. -->
 
-AWS gives you many places to put data because the word **data** covers a lot of different jobs. A receipt PDF, a checkout order, a login session, a database disk, a shared design file, and a nightly export all need different behavior. They may all matter to the same application, but they do not behave the same way when code reads them, updates them, shares them, protects them, or moves them.
+Imagine a small online store called Maple Market. A customer checks out, uploads a return photo, and later asks support to find the order. The app has several kinds of data before AWS service names enter the conversation.
 
-Let's use one running example for the whole module. Maple Market is a small online shop. Customers upload product photos, place orders, download invoices, and return later to see their order history. The warehouse team uses a shared operations file. Finance exports sales reports each night. The company also has an old on-premises database that needs to move into AWS over time.
+The order rows need transactions because payment, inventory, and order status must agree. The return photo is a whole file that the app stores and retrieves by name. A search server may need a local disk for an index. A group of web servers may need shared files. A shopping cart may need fast key lookups. A migration needs a safe copy plan.
 
-If Maple Market puts every piece of state into one database, the database receives work it should never own, such as storing large image files. If the team puts every file into S3, the checkout system loses the transaction rules it needs for orders and payments. If the team writes uploads to a container's local disk, those files disappear during a deploy or scale-in event. The right choice comes from the job the data performs.
+AWS has many storage and database services because production data behaves in different ways. Start with the behavior, then choose the service.
 
-The first question is simple: **what does the application need to do with this data every day?** After that, the service choice starts to make sense. Whole files usually point to S3. Structured business records usually point to RDS or Aurora. High-volume key lookups often point to DynamoDB. Host-mounted storage points to EBS, EFS, or FSx. Moving large sets of existing data points to tools like DataSync, DMS, Transfer Family, S3 Batch Operations, and sometimes physical transfer options.
+A useful first pass is to write three operations in plain language. "Customer uploads a return photo." "Customer places an order." "Support opens an order history." Each operation tells you how the data is addressed, changed, shared, and recovered. The AWS service name comes after that behavior is clear.
 
-![AWS storage and database services mapped to object, SQL, key lookup, disk, shared file, and movement data shapes](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-service-map.png)
+We will name services only enough to place each job in the right family. The later articles go deeper into bucket policies, database creation choices, DynamoDB keys, and migration runbooks.
 
-*The first useful split is the data shape. The service name comes after the job is clear.*
+| Job the application needs | Data shape | AWS service family that usually fits | Simple Maple Market example |
+| --- | --- | --- | --- |
+| Save related business records that must agree | Rows and transactions | RDS or Aurora | Checkout writes an order, payment, and inventory reservation together |
+| Store and retrieve whole files | Objects | S3 | Customer uploads a return photo and support opens it later |
+| Give one server a normal disk | Block storage | EBS | Search node stores a local index directory |
+| Let many clients use normal file paths | Shared filesystem | EFS or FSx | Legacy web servers share `/mnt/uploads` during migration |
+| Read and update by a known key at high scale | Key-value or document item | DynamoDB | Cart service loads the active cart by customer ID |
+| Copy data safely between places | Movement workflow | DataSync, DMS, Transfer Family, or S3 tools | Old product photos and orders move into AWS before cutover |
 
-## Objects, Records, Items, Disks, and Shared Files
+![The data-shape map links rows, objects, disks, shared files, key-value access, and movement jobs to the AWS services that usually fit them](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-service-map.png)
+
+*The data-shape map links rows, objects, disks, shared files, key-value access, and movement jobs to the AWS services that usually fit them.*
+
+
+## Rows That Need Transactions
 <!-- section-summary: Each AWS data service maps to a data shape, so naming the shape helps narrow the service choice. -->
 
-The cleanest way to choose a service is to name the **data shape**. A data shape means the basic way the data is addressed and changed. The shape tells you whether the application wants a whole file, a row in a transaction, a key-based item, a block device, or a shared folder.
+Some data is made of related rows that must change together. In Maple Market, an order insert, payment authorization, inventory reservation, and ledger entry may need to succeed or fail as one unit. That is a **transaction**.
 
-**Object data** is a complete blob stored and fetched by name. In Maple Market, product photos, invoice PDFs, video clips, and nightly CSV exports are object data. The app usually writes the whole object, then reads the whole object later. Amazon S3 is the default AWS home for this shape because it gives you buckets, object keys, versioning, lifecycle rules, events, and access policies around whole files.
+Relational databases fit this shape. Amazon RDS runs familiar engines such as PostgreSQL, MySQL, MariaDB, SQL Server, and Oracle. Amazon Aurora is AWS's cloud-designed relational database engine with MySQL-compatible and PostgreSQL-compatible options.
 
-**Relational data** is structured business state with rules between records. Orders connect to order lines, payments, customers, refunds, and inventory reservations. A checkout flow needs transactions, constraints, indexes, and SQL queries. Amazon RDS and Amazon Aurora are the usual AWS homes for this shape because they run managed relational database engines while AWS handles much of the infrastructure work around backups, patching, and failover.
+A small checkout query might join tables:
 
-**Key-value or document data** is state that the application reads through known keys and access patterns. A shopping cart by `cartId`, an idempotency record by `requestId`, and a session by `sessionId` all fit this style. Amazon DynamoDB is the AWS home for very high-volume key-based access where the table design starts from known reads and writes instead of flexible ad hoc SQL.
-
-**Block storage** is a virtual disk attached to compute. An EC2 instance boot volume, a self-managed database disk, or a build server workspace may need a disk that the operating system formats and mounts. Amazon EBS handles this shape. The important boundary is that an EBS volume lives in one Availability Zone and attaches to compute in that zone.
-
-**Shared file storage** is a mounted filesystem that many clients can read and write through normal file paths. Linux workloads often use Amazon EFS for shared NFS file storage. Windows, high-performance computing, NetApp ONTAP, and OpenZFS workloads often use Amazon FSx because FSx provides managed filesystems with familiar enterprise protocols and performance profiles.
-
-Here is the practical service map Maple Market would start with. The table is a first design conversation, and the later sections add ownership, recovery, and movement details.
-
-| Data need | AWS service family | Example in production |
-|---|---|---|
-| Whole files and exports | S3 | Product photos, invoice PDFs, nightly reports |
-| SQL records and transactions | RDS or Aurora | Orders, payments, inventory, customers |
-| Key lookups at high scale | DynamoDB | Carts, sessions, idempotency keys |
-| Disk attached to one compute placement | EBS | EC2 boot volume, self-managed search index disk |
-| Shared Linux file paths | EFS | Shared uploads folder for legacy Linux workers |
-| Managed specialist filesystem | FSx | Windows SMB shares, Lustre scratch space, ONTAP volumes |
-| Data migration and movement | DataSync, DMS, Transfer Family, S3 tools | Data center file share copy, database migration, partner SFTP feed |
-
-Once the shape is clear, the next question is who owns and reaches the data. That question moves the discussion from product names into real production boundaries.
-
-## Ownership, Access, and Boundaries
-<!-- section-summary: The service choice also depends on which application, team, account, and network path owns the data. -->
-
-Storage design includes access design. **Ownership** means which team controls the data contract, which AWS account contains the resource, and which runtime can call it. **Access** means which IAM principal, network path, and service policy allow the read or write. These details matter because a storage service that looks perfect from a data-shape view can still create a messy production system if the boundary is wrong.
-
-For S3, the main boundary is the **bucket**. Maple Market might use one bucket for customer uploads and another bucket for finance exports because those objects have different permissions, lifecycle rules, and audit expectations. The application role can write product images, while the finance analytics role can read only the export prefix. Bucket policies, IAM policies, S3 Block Public Access, and encryption settings all become part of the storage design.
-
-For relational databases, the main boundary is often the **database endpoint inside a VPC**. Maple Market's order database should sit in private subnets, with security groups allowing traffic from the application service and migration tools. Human engineers should not connect with a shared password pasted into local config files. In a real setup, teams usually store database credentials in AWS Secrets Manager, rotate them when possible, and make applications fetch credentials at runtime through their task role.
-
-For DynamoDB, the main boundary is the **table and its key design**. An application role should get permission for only the table and indexes it uses. If one table contains carts, sessions, and idempotency records, the team needs a clear item naming convention and careful IAM conditions if different callers should touch different item families. Single-table designs can work well, but only when the team keeps the access contract written down.
-
-For EBS, EFS, and FSx, the boundary includes **placement and network reachability**. EBS follows Availability Zone placement. EFS and FSx mount through private network interfaces and security groups. A team must decide which subnets have mount targets, which security groups can reach NFS or SMB ports, and how backup policies apply to the filesystem.
-
-This is why a production storage decision should include more than a service name. A useful design note says: "the upload service writes objects under `uploads/raw/` in the customer media bucket through an ECS task role, S3 events trigger image processing, lifecycle rules expire abandoned temporary uploads, and CloudTrail data events are enabled for sensitive prefixes." That level of detail turns a service choice into an operating plan.
-
-![Three review layers around a Maple Market data choice: access, change behavior, and recovery](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/access-change-recovery-map.png)
-
-*A storage choice is ready for review only when access, change behavior, and recovery have names.*
-
-## Change Patterns and Consistency
-<!-- section-summary: How data changes over time decides whether the system needs transactions, conditional writes, versions, locks, or filesystem semantics. -->
-
-After shape and ownership, look at **change patterns**. A change pattern describes how often data changes, whether several facts must change together, and what readers expect while changes are happening. This part saves teams from choosing a service that stores the data but fights the workflow.
-
-S3 object changes work well for whole-file replacement. Maple Market can upload `invoices/2026/06/order-1004.pdf`, then read that object later. S3 versioning can keep older copies when the same key receives a new object or delete marker. Lifecycle rules can move older versions to cheaper storage or expire temporary uploads. S3 is a great place for objects, but it is a poor place to coordinate a checkout transaction that updates five related business records at once.
-
-Relational databases handle that checkout transaction because they support **ACID transactions**. ACID is the database promise that a group of changes can complete together with clear consistency rules. When Maple Market charges a payment, writes an order, reserves inventory, and records shipment details, RDS PostgreSQL or Aurora PostgreSQL can protect those related records with constraints and transactions. The team still needs good schema migrations and connection management, but the data model matches the job.
-
-DynamoDB handles fast keyed updates through primary keys, conditional writes, and streams. A conditional write lets Maple Market create an idempotency record only if the request ID does not already exist. That protects the payment workflow from double-submit problems. The table can handle high request volume, but the design must start from known access patterns such as "get cart by customer" or "check request by idempotency key."
-
-EBS, EFS, and FSx keep filesystem semantics for software that expects files and directories. A search index may need fast block writes on one instance, so EBS fits. A fleet of Linux workers may need a shared folder, so EFS fits. A Windows application may need SMB and Active Directory integration, so FSx for Windows File Server fits. The service choice follows the filesystem behavior the application already expects.
-
-When a storage decision feels unclear, write three sample operations in plain language. For Maple Market, that might be "customer uploads a product photo," "customer places an order," and "finance exports yesterday's orders." Then name the required write behavior for each operation. Whole-file write points to S3. Multi-record transaction points to RDS or Aurora. Known-key update points to DynamoDB. Mounted file path points to EBS, EFS, or FSx.
-
-## Backup, Movement, and Analytics Plans
-<!-- section-summary: Production storage choices need a plan for recovery copies, migration paths, and downstream data use from the start. -->
-
-A storage service also needs an operating plan around **recovery**, **movement**, and **analytics**. Teams often postpone these topics until the first incident or reporting request, and then the storage design suddenly needs changes at the worst possible time.
-
-Recovery starts with the question: **what historical copy exists if a bad write happens?** S3 versioning can keep older object versions. RDS and Aurora automated backups support point-in-time restore inside a retention window. DynamoDB has point-in-time recovery and on-demand backups. EBS has snapshots. EFS and FSx can integrate with AWS Backup depending on the filesystem type and configuration. High availability protects uptime, while historical recovery protects against bad writes, deletes, and application bugs.
-
-Movement starts with the question: **how will this data enter, leave, or move between systems?** Maple Market may import old product records from an on-premises database into Aurora using AWS Database Migration Service. It may copy a file share into EFS with AWS DataSync. It may receive partner files through AWS Transfer Family into S3. It may copy millions of S3 objects to a new prefix with S3 Batch Operations. Each path has its own identity, logging, retry, validation, and rollback story.
-
-Analytics starts with the question: **who needs to read the data after the application writes it?** Finance may query order exports in S3 through Athena after AWS Glue catalogs the files. Operations may stream DynamoDB changes into Lambda or Kinesis. Product teams may copy RDS data into a warehouse. The production pattern is usually to keep the application service stable, then create controlled export or replication paths for downstream readers instead of letting every analytics user connect to the primary production database.
-
-These plans do not need to be huge on day one. A simple checklist helps: enable the right backup control, tag resources with owner and environment, write the restore steps, log data movement jobs, and test a small restore before a real incident. That is the difference between "we store it somewhere" and "we can operate this data safely."
-
-## A Practical Selection Checklist
-<!-- section-summary: A short checklist turns a vague service choice into a reviewable production decision. -->
-
-Before Maple Market creates a bucket, table, database, or filesystem, the team can review the choice with a short checklist. The checklist keeps the conversation concrete and helps junior engineers see why one service fits better than another.
-
-| Question | What a good answer names |
-|---|---|
-| What is the data shape? | Object, SQL record, key-value item, block disk, shared file, migration stream |
-| Who writes it? | Application role, human operator, partner system, migration tool |
-| Who reads it? | Application, analytics job, customer download path, operations team |
-| How does it change? | Whole-file replacement, transaction, conditional update, mounted file write |
-| What consistency does it need? | Transaction rules, read-after-write needs, version recovery, file locks |
-| Where does it live? | Region, Availability Zone, VPC subnet, account, bucket, table, database |
-| How is access controlled? | IAM role, resource policy, security group, endpoint, secret rotation |
-| How is it backed up? | Versioning, PITR, snapshots, AWS Backup plan, restore drill |
-| How does it move? | DataSync, DMS, Transfer Family, S3 replication, export job |
-| How is cost controlled? | Lifecycle rules, capacity mode, storage class, retention window, cleanup job |
-
-Here is how the checklist might read for a real feature. This kind of note gives every reviewer the same concrete object to inspect.
-
-```markdown
-Feature: Customer invoice downloads
-Shape: Whole PDF files
-Service: S3
-Writer: invoice-worker ECS task role
-Reader: customer portal through short-lived presigned URLs
-Access: bucket policy blocks public access; application role can put and get only invoice prefixes
-Recovery: versioning enabled; lifecycle expires noncurrent versions after approved retention
-Movement: nightly finance export copies metadata into analytics bucket
-Cost: lifecycle moves older invoices to a cheaper storage class after normal support window
+```sql
+select o.id, o.status, p.status as payment_status, sum(oi.quantity) as items
+from orders o
+join payments p on p.order_id = o.id
+join order_items oi on oi.order_id = o.id
+where o.id = 'ord_123'
+group by o.id, o.status, p.status;
 ```
 
-That note gives reviewers something specific to inspect. Security can check access. Operations can check recovery. Finance can check lifecycle. Application engineers can check the upload and download path. A service name alone cannot do that.
+Choose a relational database when the application needs constraints, joins, flexible SQL queries, transactions, and mature reporting patterns. The team still owns schema design, indexes, query performance, migrations, and credentials.
 
-## Putting It All Together
-<!-- section-summary: The right AWS storage design splits data by behavior and gives each piece a clear owner, access path, and recovery story. -->
+The boundary around a relational database usually includes a private VPC endpoint, security groups, a credential path, backup retention, and a migration process. In production, "we use RDS" is only the start. A reviewable design says which app role connects, which subnet group hosts the database, how credentials are stored, which restore window the business needs, and how schema changes ship safely.
 
-Maple Market does not need one giant storage answer. It needs a few focused answers that match how the system works.
+## Files That Need Object Storage
+<!-- section-summary: Object storage fits whole files and blobs that applications store, retrieve, protect, and expire through an API. -->
 
-Product photos and invoice PDFs go to S3 because they are whole objects with object-level permissions, lifecycle rules, and event hooks. Checkout records go to RDS or Aurora because orders, payments, and inventory need transactions and SQL constraints. Carts, sessions, and idempotency keys go to DynamoDB when the app needs fast known-key access at high traffic. Host disks use EBS. Shared Linux paths use EFS. Windows shares, Lustre scratch storage, ONTAP, or OpenZFS workloads use FSx. Existing files and databases move through DataSync, DMS, Transfer Family, S3 replication, S3 Batch Operations, or a controlled export pipeline.
+A return photo has a different shape from an order row. The app usually saves the whole file, stores metadata about it, and retrieves it later by key. The unit of work is the object key and the complete object body. This points to **object storage**.
 
-The useful habit is to describe the data before choosing the product. Name the shape, owner, read path, write path, change pattern, recovery copy, movement path, and cost control. Once those facts are visible, AWS storage choices turn into normal engineering decisions instead of a long menu of service names.
+Amazon S3 stores objects in buckets. An object has bytes, a key, metadata, tags, and permissions. Maple Market might store return photos under keys like `returns/2026/06/ord_123/photo-1.jpg` and keep the order row in a relational database with the S3 key.
 
-![Storage decision checklist with data shape, owner, read/write path, access control, recovery copy, and movement path](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/storage-selection-summary.png)
+S3 is also common for logs, exports, backups, analytics files, data lake tables, static assets, and partner file drops. It has versioning, lifecycle rules, replication, encryption options, event notifications, and access policies. Choose it when the data is file-shaped and API access is natural.
 
-*The final decision should read like an operating checklist, not just a service label.*
+S3 design starts with ownership and prefixes. A customer upload bucket may separate `tmp/`, `returns/`, and `processed/` prefixes because each prefix has different lifecycle and processing rules. The database should keep the business relationship, such as which order owns which object key. S3 holds the bytes and object metadata; the application still owns the workflow state.
 
-## What's Next
-<!-- section-summary: The next article zooms into S3 because object storage is the first AWS storage service many applications need. -->
+## One Server Disk
+<!-- section-summary: Block storage fits one compute placement that needs a durable disk with normal operating system behavior. -->
 
-Now that the module has a selection path, we can zoom into the most common first service: Amazon S3. The next article follows buckets, objects, permissions, lifecycle rules, and production upload flows through one concrete file workflow.
+Some workloads expect a disk attached to one machine. A search index, a database engine you manage yourself, or a legacy app might write to a mounted filesystem and use normal operating system paths.
 
----
+Amazon EBS provides block volumes for EC2 instances. The operating system sees the volume like a disk. You format it, mount it, and put files on it. EBS volumes live in one Availability Zone, so the EC2 instance and volume need compatible placement.
 
-**References**
+Choose EBS when one compute placement needs durable block storage with configurable size and performance. Plan snapshots, encryption, monitoring, and restore tests because the disk often sits directly on a request path.
 
-- [Choosing an AWS storage service](https://docs.aws.amazon.com/decision-guides/latest/storage-on-aws-how-to-choose/choosing-aws-storage-service.html) - AWS decision guide for comparing object, file, block, cache, and data transfer storage choices.
-- [Choosing an AWS database service](https://docs.aws.amazon.com/databases-on-aws-how-to-choose/) - AWS decision guide for matching database services to access patterns, data models, and operational needs.
-- [Use a purpose-built data store](https://docs.aws.amazon.com/wellarchitected/latest/framework/perf_data_use_purpose_built_data_store.html) - Well-Architected guidance for selecting data stores based on workload requirements.
-- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html) - Defines S3 buckets, objects, keys, access policies, and object storage behavior.
-- [What is Amazon RDS?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html) - Describes managed relational database engines, DB instances, Multi-AZ deployments, and backups.
-- [What is Amazon Aurora?](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/CHAP_AuroraOverview.html) - Explains Aurora as a managed MySQL-compatible and PostgreSQL-compatible relational database engine.
-- [Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html) - Defines DynamoDB tables, items, attributes, and primary keys.
-- [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html) - Explains EBS block volumes and how they attach to EC2 instances.
-- [What is Amazon EFS?](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) - Describes EFS as elastic shared file storage for AWS compute and on-premises servers.
-- [Amazon FSx Documentation](https://docs.aws.amazon.com/fsx/) - Provides the official guides for FSx for Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
-- [AWS DataSync Documentation](https://docs.aws.amazon.com/datasync/) - Covers online file and object data movement to, from, and between AWS storage services.
-- [AWS Database Migration Service Documentation](https://docs.aws.amazon.com/dms/) - Covers migration and replication for databases, warehouses, NoSQL stores, and other data stores.
+EBS decisions include volume type, size, IOPS, throughput, encryption, snapshot policy, and instance placement. A search index disk may be safe to rebuild from S3 exports. A self-managed database disk may need a strict snapshot and restore plan. The service can look the same while the recovery requirement is very different.
+
+## Shared Files
+<!-- section-summary: Shared filesystem storage fits workloads where multiple compute resources need normal file paths at the same time. -->
+
+Some apps need shared files because their code expects normal file paths. A content management system may have multiple web servers reading and writing uploaded files. A data science team may run jobs that expect a shared POSIX filesystem. A Windows application may expect SMB shares.
+
+Amazon EFS provides managed NFS file storage for Linux clients and many AWS compute services. Amazon FSx provides managed filesystems for specific ecosystems, including Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
+
+Choose shared filesystems when multiple clients need normal file operations, locks, directory structures, and mounted paths. Review network access, mount targets, security groups, POSIX or Windows permissions, backups, and performance mode. Shared files solve a real need, but they also create shared operational responsibility.
+
+This is the place where many migrations pause. A legacy app may expect `/mnt/uploads` or `\\fileserver\reports`, and rewriting it to object storage might take months. EFS or FSx can be a practical bridge, as long as the team documents mount paths, identity, backup, and performance limits instead of treating the filesystem as magic shared state.
+
+## Key Lookups at High Scale
+<!-- section-summary: Key-value and document-shaped access fits workloads that know their read and write paths before table design starts. -->
+
+A shopping cart or session record may need fast lookup by customer ID. The app knows the access path: get cart by customer, update item quantity, expire old carts. It does not need joins across many tables for the hot path.
+
+Amazon DynamoDB fits known key-based access patterns at high scale. You design the table around partition keys, optional sort keys, and indexes that match exact reads and writes. The design work happens before creating the table because DynamoDB performs best when the app asks questions the table was built to answer.
+
+Choose DynamoDB when the access patterns are predictable, low-latency key lookups matter, and the data does not need relational joins. Plan conditional writes for duplicate requests, TTL for expiry, point-in-time recovery, streams for events, and hot-key monitoring.
+
+DynamoDB is especially strong for data that the app reads by known keys: cart by customer, session by token, idempotency record by request ID, feature state by tenant. It is a poor fit for a team that wants to ask arbitrary joins later without designing indexes. Write the access patterns before creating the table, because key design is the product design for this kind of data.
+
+## Movement and Recovery
+<!-- section-summary: Production storage choices need a plan for recovery copies, migration paths, and downstream data use from the start. -->
+
+A storage choice is incomplete without movement and recovery. Maple Market may import old product photos, migrate an old database, receive nightly partner files, export order data to analytics, and restore a deleted object or table after a mistake.
+
+For files, AWS DataSync can move file data between on-premises storage and AWS storage services. AWS Transfer Family can receive SFTP, FTPS, or FTP partner uploads into S3 or EFS. For databases, AWS Database Migration Service can help with full loads and change data capture for supported sources and targets. For large S3 object sets, S3 Batch Operations can apply changes at scale.
+
+Recovery needs concrete tests. RDS backups and point-in-time restore are useful only if the team has practiced restoring to a new instance. S3 versioning helps only if lifecycle rules keep the needed versions. DynamoDB point-in-time recovery helps only if the table restore process is part of the runbook.
+
+Movement also has security work. Temporary migration roles, firewall openings, database users, S3 staging buckets, and transfer agents should have removal dates. A migration that succeeds and leaves powerful temporary access behind has created a new production risk.
+
+![The access/change/recovery map shows why the right storage choice depends on who reads it, how it changes, and how it must recover](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/access-change-recovery-map.png)
+
+*The access/change/recovery map shows why the right storage choice depends on who reads it, how it changes, and how it must recover.*
+
+
+## A Practical Decision Checklist
+<!-- section-summary: A short checklist turns a vague service choice into a reviewable production decision. -->
+
+Use this checklist before picking a service:
+
+- What shape is the data: rows, object files, one disk, shared files, key-value items, or migration stream?
+- Who reads it, who writes it, and from which network path?
+- Does the app update small fields, whole objects, mounted files, or known keys?
+- Does it need transactions, joins, locks, versioning, or conditional writes?
+- What is the recovery target after delete, corruption, bad deploy, or Region issue?
+- How will data move into AWS, around AWS, and out to analytics or partners?
+- Which team owns schema, bucket policy, filesystem permissions, backups, and cost review?
+
+The right answer can include more than one service. Maple Market can use RDS for orders, S3 for return photos, EBS for a search node, EFS for shared uploads, DynamoDB for carts, and DataSync or DMS for migration. The key is to split data by behavior and give each piece an owner, access path, and recovery plan.
+
+A short design note can make this concrete:
+
+| Data | Service | Access path | Recovery plan |
+| --- | --- | --- | --- |
+| Orders and payments | RDS or Aurora | Private app security group to database security group | PITR restore drill and tested migrations |
+| Return photos | S3 | App role and presigned uploads to controlled prefixes | Versioning, lifecycle, and object restore check |
+| Active carts | DynamoDB | App role keyed by customer ID | PITR enabled and duplicate-write tests |
+| Legacy shared reports | FSx or EFS | Approved client security groups and filesystem permissions | Backup restore into a test mount |
+
+![The summary turns the article into a storage selection checklist for production review](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/storage-selection-summary.png)
+
+*The summary turns the article into a storage selection checklist for production review.*
+
+
+## References
+
+- [Amazon S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)
+- [Amazon RDS documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
+- [Amazon DynamoDB documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html)
+- [AWS Database Migration Service documentation](https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html)

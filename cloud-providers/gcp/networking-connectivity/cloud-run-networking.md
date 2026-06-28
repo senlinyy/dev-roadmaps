@@ -43,6 +43,9 @@ These three pieces are easiest to read separately:
 | Which identities may call the service? | **IAM / Cloud Run Invoker** | Only the load balancer identity, a scheduler job, or another service |
 | How does the service reach dependencies? | **Egress configuration** | Direct VPC egress to a private database subnet |
 
+![A generated infographic showing Cloud Run inbound ingress and IAM invocation as two separate request gates.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/ingress-iam-gates.png)
+*Inbound access has a network gate and an identity gate, so a request can reach Cloud Run and still fail authorization.*
+
 For the checkout API, the desired design might be: public users enter through `checkout.devpolaris.com`, direct calls to the generated `run.app` URL fail, authenticated internal jobs can invoke the service, and outbound database calls travel through the VPC. That design uses ingress, IAM, and egress together, but each piece still has its own job. Invocation comes first because public and private access are often confused with authentication.
 
 ## Public and Authenticated Invocation
@@ -94,6 +97,13 @@ gcloud run deploy checkout-api \
   --ingress=internal-and-cloud-load-balancing
 ```
 
+The important flag is `--ingress=internal-and-cloud-load-balancing`. It keeps the generated service URL from acting as a second internet entry path while still allowing the external Application Load Balancer path. A healthy deploy output should name the service URL and finish ready:
+
+```yaml
+Service [checkout-api] revision [checkout-api-00042-kvp] has been deployed and is serving 100 percent of traffic.
+URL: https://checkout-api-abc123-uc.a.run.app
+```
+
 For infrastructure as code, the same intent appears in the Cloud Run service configuration. The exact resource syntax depends on the provider version your repo uses, but the important value is the ingress annotation or field that maps to `internal-and-cloud-load-balancing`.
 
 ```yaml
@@ -137,6 +147,15 @@ gcloud run deploy checkout-api \
 
 The `--network` and `--subnet` values choose where egress traffic enters the VPC. The `--network-tags` value gives firewall rules something specific to target. The `--vpc-egress` value decides which destination traffic uses the VPC path.
 
+```yaml
+Service [checkout-api] revision [checkout-api-00043-vpc] has been deployed and is serving 100 percent of traffic.
+Traffic:
+  checkout-api-00043-vpc: 100%
+```
+
+![A generated infographic showing Cloud Run egress choices for public APIs, private VPC targets, Direct VPC egress, and connector paths.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/egress-route-choice.png)
+*Outbound design starts with the destination: public API calls, private IP calls, and centrally routed traffic can use different egress paths.*
+
 This setup gives the checkout API a VPC-aware outbound path while keeping the inbound story unchanged. Users still enter through the load balancer. The service still uses Cloud Run ingress settings and IAM for invocation. Direct VPC egress only affects packets that leave the service.
 
 There is an older alternate path that many existing systems still use, so it deserves its own section. Understanding that path helps during migrations because many production services were built before Direct VPC egress was the default recommendation.
@@ -159,6 +178,8 @@ gcloud run deploy checkout-api \
   --vpc-connector=checkout-connector \
   --vpc-egress=private-ranges-only
 ```
+
+`--vpc-connector` points at the connector resource that will carry outbound traffic. The same `--vpc-egress` choice still matters, because it decides whether only private ranges or all destinations use the connector path.
 
 For new Cloud Run services, teams should usually evaluate Direct VPC egress first. For existing services, a migration should compare latency, throughput, subnet IP capacity, firewall rules, tags, cost, and rollback steps. The best migration plan proves the new path with a canary revision before moving all traffic.
 
@@ -207,6 +228,21 @@ gcloud compute firewall-rules create allow-checkout-to-cache \
   --target-tags=checkout-api
 ```
 
+This rule is an egress rule, so it applies to packets leaving resources with the `checkout-api` network tag. The important fields are destination range, port, direction, and target tag. A matching describe output should show the same target tag that Cloud Run applied to the revision:
+
+```yaml
+allowed:
+- IPProtocol: tcp
+  ports:
+  - '6379'
+direction: EGRESS
+destinationRanges:
+- 10.20.3.0/24
+name: allow-checkout-to-cache
+targetTags:
+- checkout-api
+```
+
 Revision-level tags matter during rollouts. If a new revision deploys without the expected tag, the service may start, accept inbound traffic, and then fail only when it calls the private dependency. That failure can look like an application bug until someone checks the Cloud Run Networking tab or revision YAML.
 
 Good startup and debug evidence usually includes these checks:
@@ -220,6 +256,9 @@ Good startup and debug evidence usually includes these checks:
 | Application startup logs | Shows whether dependency checks fail before the service is ready |
 | Cloud Run request logs | Separates inbound delivery problems from outbound dependency problems |
 | VPC Flow Logs or firewall logs where enabled | Gives packet-level evidence for accepted or denied egress |
+
+![A generated infographic separating Cloud Run 403 IAM failures, blocked ingress, private IP timeouts, and DNS answer checks.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/cloud-run-debug-sides.png)
+*A `403`, a blocked direct URL, and a private dependency timeout point to different sides of the Cloud Run networking story.*
 
 For a container that checks its database or cache during startup, useful logs include the target hostname, the resolved family if your runtime exposes it safely, the connection timeout, and the dependency name. Secrets, tokens, and full connection strings should stay out of logs. A message such as `cache dependency check failed for redis.internal.devpolaris.com:6379 after 3000ms` gives the network team enough to start without exposing credentials.
 

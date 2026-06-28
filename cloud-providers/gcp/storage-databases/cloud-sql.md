@@ -49,6 +49,9 @@ Here is the simple path we will follow:
 
 So we start with the thing your team creates first: the Cloud SQL instance.
 
+![Cloud SQL checkout path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/cloud-sql-checkout-path.png)
+*The checkout path works because the API writes related order, item, and payment rows inside one transaction. Backups and read checks sit beside the path because the database is production state.*
+
 ## Instances, Engines, and First Setup
 <!-- section-summary: A Cloud SQL instance runs one managed database engine, and the first setup choices shape reliability, cost, and network access. -->
 
@@ -80,6 +83,28 @@ gcloud sql users set-password postgres \
 ```
 
 The exact tier and storage size depend on the workload. A production team usually chooses a conservative starting point, turns on query monitoring, watches CPU, memory, disk, connection count, lock waits, and slow queries, then resizes with evidence. The database tier costs real money, so guessing too high wastes budget, and guessing too low turns checkout into the first load test.
+
+The create command prints operation progress, but the useful evidence comes from `describe`. The read-back should show PostgreSQL 16, a regional instance, SSD storage, and the database IP posture the team expects.
+
+```bash
+gcloud sql instances describe orders-prod \
+  --format='yaml(name,databaseVersion,region,state,settings.tier,settings.availabilityType,settings.dataDiskType,settings.backupConfiguration.enabled,settings.ipConfiguration.ipv4Enabled)'
+```
+
+```yaml
+name: orders-prod
+databaseVersion: POSTGRES_16
+region: us-central1
+state: RUNNABLE
+settings:
+  tier: db-custom-2-7680
+  availabilityType: REGIONAL
+  dataDiskType: PD_SSD
+  backupConfiguration:
+    enabled: true
+  ipConfiguration:
+    ipv4Enabled: false
+```
 
 Terraform gives teams a better production path because the instance configuration goes through code review. This example keeps the important settings visible: PostgreSQL, regional availability, private networking, backups, PITR, and deletion protection.
 
@@ -138,6 +163,21 @@ resource "google_sql_database" "orders" {
 ```
 
 Notice what Terraform does for the team. It makes the private services range, private services access connection, instance settings, and database creation part of the same reviewed change. That reduces the chance that someone creates a public database in the console because they only needed to get a demo working.
+
+The Terraform is consumed by the platform pipeline. A review should inspect the generated plan for `ipv4_enabled = false`, `availability_type = "REGIONAL"`, `deletion_protection = true`, and backup settings before the change reaches production.
+
+```bash
+terraform plan -out=tfplan
+terraform show -no-color tfplan | sed -n '/google_sql_database_instance.orders/,/google_sql_database.orders/p'
+```
+
+```console
++ database_version   = "POSTGRES_16"
++ deletion_protection = true
++ availability_type  = "REGIONAL"
++ ipv4_enabled       = false
++ point_in_time_recovery_enabled = true
+```
 
 Instance setup gives us a running database. The next question is what shape the Orders API should put inside it.
 
@@ -283,6 +323,18 @@ gcloud sql instances patch orders-prod \
 
 The private services range needs enough room for Cloud SQL and other Google-managed services that may use the same private services access design. A tiny range can create future network work at the worst time, so teams usually reserve a larger range early and document who owns it.
 
+After the patch, verify the database has no public IP and has a private address. The `PRIMARY` private address is the one the application reaches through the VPC path.
+
+```bash
+gcloud sql instances describe orders-prod \
+  --format='table(name,ipAddresses[].type,ipAddresses[].ipAddress)'
+```
+
+```console
+NAME         TYPE     IP_ADDRESS
+orders-prod PRIVATE  10.52.0.6
+```
+
 Cloud SQL offers two broad connection styles. A **direct connection** uses the database endpoint directly, often over private IP with SSL/TLS configured by the team. A **Cloud SQL connector** means the Cloud SQL Auth Proxy or a language connector handles secure connection setup, IAM checks, and certificate handling for the application. Google recommends private IP for improved security unless the client has a specific public access requirement, and connectors help especially when the client uses public IP, dynamic egress addresses, or IAM database authentication.
 
 For local troubleshooting, the Cloud SQL Auth Proxy gives an engineer a safe short path to the instance:
@@ -327,7 +379,7 @@ Now the Orders API can reach the database securely. The next production issue ar
 ## Connection Pooling for Cloud Run and GKE
 <!-- section-summary: Relational databases have finite connection capacity, so elastic app platforms need small pools, scale limits, and sometimes a pooler. -->
 
-A **database connection** is a live session between an application process and the database engine. Each session consumes memory, file descriptors, scheduler work, and engine-specific resources. Cloud SQL also has connection limits that the application cannot exceed, so connection count is a real production capacity number, not just a driver detail.
+A **database connection** is a live session between an application process and the database engine. Each session consumes memory, file descriptors, scheduler work, and engine-specific resources. Cloud SQL also has connection limits that the application cannot exceed, so connection count is a real production capacity number, not a driver detail.
 
 Serverless and Kubernetes platforms can scale the Orders API faster than the database can accept new sessions. Imagine Cloud Run scales to 80 instances during a sale, and each instance opens a pool of 10 PostgreSQL connections. That one service can now try to hold 800 database sessions before workers, admin tools, migration jobs, and dashboards connect.
 
@@ -375,6 +427,18 @@ gcloud run services update orders-api \
 ```
 
 The right `--max-instances` value depends on request concurrency, database tier, query duration, and pool size. If the Orders API needs more throughput, the team can tune SQL, reduce transaction duration, add read paths that do not hit the primary, increase the database tier, introduce a pooler, or split workloads. Simply raising app scale can turn a database bottleneck into a wider outage.
+
+The read-back should show the Cloud Run cap because that cap is part of the database capacity plan. If the app pool maximum is five, `40` max instances means this one service can hold up to 200 database sessions.
+
+```bash
+gcloud run services describe orders-api \
+  --region=us-central1 \
+  --format='value(spec.template.metadata.annotations.autoscaling.knative.dev/maxScale)'
+```
+
+```console
+40
+```
 
 Cloud SQL for PostgreSQL also has **Managed Connection Pooling** for supported Enterprise Plus instances. It helps workloads with many short-lived connections or connection surges by pooling at transaction or session level. Transaction pooling can improve connection scaling, but it restricts some session-level SQL behavior, so teams should test features like prepared statements, session settings, advisory locks, and temporary tables before enabling it for a production workload.
 
@@ -440,6 +504,15 @@ VALIDATE CONSTRAINT orders_checkout_channel_known;
 
 This sequence gives reviewers more than a SQL file. It gives them an operational plan: deploy migration one, deploy app version one, run a measured backfill, validate the constraint, then remove fallback code later. It also gives rollback room. If the first app deploy has a bug, old code can still run because the column addition did not force an immediate contract.
 
+A migration runner should record output from the database. For the channel change, a healthy run shows the column added, a measured backfill count, and a validated constraint rather than a silent deploy.
+
+```console
+ALTER TABLE
+UPDATE 500
+ALTER TABLE
+ALTER TABLE
+```
+
 Indexes deserve the same care. A new query for the order history page may need an index on `(customer_id, created_at DESC)`. PostgreSQL can build an index concurrently so normal reads and writes can continue during the build, although the build takes longer and has its own rules.
 
 ```sql
@@ -448,6 +521,9 @@ ON orders (customer_id, created_at DESC);
 ```
 
 The Orders API now has a safer way to change shape while traffic keeps flowing. But even careful teams still delete rows by mistake, ship bugs, or lose a zone. That takes us to recovery.
+
+![Cloud SQL operating checks](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/cloud-sql-operating-checks.png)
+*A production Cloud SQL instance needs routine evidence: connection count, CPU and storage, slow queries, successful backups, PITR coverage, and a restore clone that someone has tested.*
 
 ## Backups, PITR, and High Availability
 <!-- section-summary: Backups recover from data mistakes, PITR recovers to a timestamp, and HA reduces downtime during zonal failure. -->
@@ -461,6 +537,22 @@ gcloud sql backups create \
   --instance=orders-prod
 ```
 
+The backup command returns an operation, and the follow-up list should show the backup type and status. Operators care about `SUCCESSFUL`, the backup ID, and the finish time because those values go into the migration record.
+
+```bash
+gcloud sql backups list \
+  --instance=orders-prod \
+  --limit=3 \
+  --format='table(id,type,status,windowStartTime)'
+```
+
+```console
+ID           TYPE       STATUS      WINDOW_START_TIME
+1718350200   ON_DEMAND  SUCCESSFUL  2026-06-14T09:30:14Z
+1718348400   AUTOMATED  SUCCESSFUL  2026-06-14T03:00:00Z
+1718262000   AUTOMATED  SUCCESSFUL  2026-06-13T03:00:00Z
+```
+
 Automated backups should already run on a schedule. The backup window should avoid the busiest checkout period where possible, and retention should match the business requirement. A store that needs to investigate payment disputes for weeks has a different retention need from a short-lived staging system.
 
 **Point-in-time recovery**, usually shortened to **PITR**, lets the team restore a primary Cloud SQL instance to a specific timestamp. This matters when the failure is logical instead of physical. If a bad admin script cancels every open order at 10:17 UTC, restoring yesterday's backup loses too much valid data. A PITR clone can restore to a timestamp just before the bad write.
@@ -469,6 +561,18 @@ Automated backups should already run on a schedule. The backup window should avo
 gcloud sql instances clone orders-prod \
   orders-prod-restore-20260614 \
   --point-in-time="2026-06-14T10:16:30Z"
+```
+
+The clone command creates a new instance, so the runbook should immediately verify that the clone is runnable before anyone queries it. The clone output gives the team a restore target where it can inspect data without changing production.
+
+```bash
+gcloud sql instances describe orders-prod-restore-20260614 \
+  --format='table(name,state,region,databaseVersion)'
+```
+
+```console
+NAME                         STATE     REGION       DATABASE_VERSION
+orders-prod-restore-20260614 RUNNABLE  us-central1  POSTGRES_16
 ```
 
 The recovery drill should not stop at creating the clone. The team needs to verify the data, decide whether to fail the application over to the restored instance, copy selected rows back, or rebuild affected records through an application repair job. A restore that no one has practiced is only a hope with a command attached to it.
@@ -506,6 +610,9 @@ Production teams usually write a short recovery runbook for each case:
 | Analyst needs production-like data | Restore backup into isolated instance | Mask sensitive fields before broad access |
 
 This is where Cloud SQL stops feeling like "just a database" and starts looking like an operational system. The SQL engine protects transactions, the network keeps traffic private, the pool protects capacity, migrations protect availability, and recovery tools protect the business when humans and infrastructure have a bad day.
+
+![Cloud SQL recovery flow](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/cloud-sql-recovery-flow.png)
+*A PITR drill should move from incident timestamp to clone, validation queries, and a deliberate repair or cutover decision. The clone is evidence, not the final decision by itself.*
 
 ## Putting It All Together
 <!-- section-summary: A production Cloud SQL design connects schema, access, pooling, migrations, and recovery into one operating path. -->

@@ -1,7 +1,7 @@
 ---
 title: "Admission Control and Policy Engines"
-description: "Block unsafe Kubernetes manifests at the API server boundary with admission policies and policy engines."
-overview: "Admission control is the last Kubernetes API checkpoint before a new or changed object lands in the cluster. This article shows how validating and mutating admission work, how ValidatingAdmissionPolicy uses CEL, how Kyverno and Gatekeeper fit in, and how teams roll policies from audit and warnings into enforcement."
+description: "Block risky Kubernetes manifests at the API server boundary with built-in admission, CEL policies, and policy engines."
+overview: "Follow a risky privileged pod manifest submitted to the API server. Then trace the request path, built-in admission, ValidatingAdmissionPolicy and CEL, server-side checks, exception design, Kyverno and Gatekeeper, audit-to-enforce rollout, ownership, and policy drift."
 tags: ["admission", "kubernetes", "policy", "cel", "gatekeeper", "kyverno"]
 order: 4
 id: article-devsecops-kubernetes-security-admission-control-and-policy-engines
@@ -32,13 +32,13 @@ aliases:
 ## Why Admission Control Exists
 <!-- section-summary: RBAC, pod hardening, and network policy reduce risk, and admission control stops unsafe objects before they enter the cluster. -->
 
-Imagine a production Kubernetes cluster that already has the earlier security layers in place. **RBAC** controls who can create workloads. **Pod hardening** tells teams which container settings they should avoid. **NetworkPolicy** limits which pods can talk to each other. The cluster already has several good guardrails.
+During an incident, an engineer submits a short-lived debug pod to the `payments-prod` namespace. The manifest sets `securityContext.privileged: true` because node-level troubleshooting sometimes needs extra access. RBAC allows the engineer to create pods in that namespace.
 
-Then an engineer creates a short-lived debug pod during an incident. The manifest sets `securityContext.privileged: true` because a blog post said privileged mode helps with node-level troubleshooting. RBAC allows the engineer to create pods in the namespace. Network policy will control traffic after the pod starts. Pod hardening guidance exists in a wiki page. None of those things automatically stops this risky manifest from reaching the API server.
+That request is now at the Kubernetes API server. NetworkPolicy will control traffic after the pod starts. Pod hardening guidance may exist in a template or wiki page. RBAC has already answered the permission question. The cluster still needs a place to inspect the actual object and reject the dangerous shape before Kubernetes stores it.
 
 That is the gap **admission control** fills. Admission control is the part of the Kubernetes API server that reviews create, update, delete, and connect requests after authentication and authorization. It can reject a request, add defaults, call external policy systems, or attach audit and warning information. In plain English, it checks the object at the door before Kubernetes stores it and lets controllers act on it.
 
-This matters because Kubernetes is very API driven. Most work begins as an API request: `kubectl apply`, a Helm release, a GitOps controller sync, a CI/CD deployment, or an operator creating another object. If a risky object reaches the API server and gets saved, the rest of the cluster starts responding to it. Schedulers place pods. Kubelets pull images. Controllers create dependent resources. Admission gives the platform team one central checkpoint before that chain begins.
+Kubernetes is API driven. Most work begins as an API request: `kubectl apply`, a Helm release, a GitOps controller sync, a CI/CD deployment, or an operator creating another object. If a risky object reaches the API server and gets saved, the rest of the cluster starts responding to it. Schedulers place pods. Kubelets pull images. Controllers create dependent resources. Admission gives the platform team one central checkpoint before that chain starts.
 
 The rest of this article follows one connected production scenario. A platform team wants to block privileged pods in normal application namespaces. They also need a controlled exception path for node troubleshooting tools, a way to test policies before they break deployments, and a way to decide whether native Kubernetes policy is enough or a policy engine is worth operating.
 
@@ -111,6 +111,32 @@ The **ValidatingAdmissionPolicy** defines what to match and what to check. It sa
 The **ValidatingAdmissionPolicyBinding** attaches that policy to actual admission requests. The binding can limit the policy to matching namespaces or objects, attach parameter objects, and choose `validationActions`. The main actions are `Audit`, `Warn`, and `Deny`. `Audit` records audit information, `Warn` returns a warning to the caller, and `Deny` blocks the request.
 
 That split helps with rollout. The platform team can define the privileged-pod policy once, then bind it in warn-and-audit mode first. After teams fix existing manifests and the warning stream looks clean, the binding can move to deny mode.
+
+The skeleton looks like this before we fill in the full privileged-container rule:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: policy-name-goes-here
+spec:
+  matchConstraints:
+    resourceRules:
+      - resources: ["pods"]
+        operations: ["CREATE", "UPDATE"]
+  validations:
+    - expression: "CEL expression goes here"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: policy-binding-name-goes-here
+spec:
+  policyName: policy-name-goes-here
+  validationActions: [Warn, Audit]
+```
+
+`matchConstraints` chooses which API requests the policy sees. `validations` holds the CEL checks. The binding names the policy and chooses whether the result warns, audits, or denies the request.
 
 VAP is a strong fit for rules that can be answered from the Kubernetes object itself. Blocking privileged pods, requiring labels, limiting host namespace usage, and checking image registry prefixes are good examples. A rule that needs external data, image signature verification, complex inventory lookups, or rich reporting usually belongs in a policy engine or another admission webhook.
 
@@ -227,7 +253,7 @@ spec:
           values: ["true"]
 ```
 
-This selector means the policy still applies to namespaces that lack the label. Only namespaces with the exact label value get excluded from this binding. That detail matters because the secure default should cover new namespaces automatically.
+This selector keeps the policy active for namespaces that lack the label. Only namespaces with the exact label value get excluded from this binding. New namespaces stay covered unless a platform-owned exception workflow adds the label deliberately.
 
 The namespace itself should carry enough information for review:
 
@@ -284,7 +310,7 @@ kubectl delete namespace policy-lab
 
 The pull request can attach `evidence-admission-deny.txt` and `evidence-safe-pod.yaml`. The first file shows the denial message that developers will see. The second file shows that ordinary pods still pass server-side admission.
 
-The `--validate=strict` flag asks kubectl and the server to reject unknown or duplicate fields when server-side field validation is available. That catches mistakes such as a misspelled field in the policy binding before the team trusts the rule.
+The `--validate=strict` flag asks kubectl and the API server to reject unknown or duplicate fields in clusters with server-side field validation. That catches mistakes such as a misspelled field in the policy binding before the team trusts the rule.
 
 After the policy is applied, Kubernetes records type-checking information for ValidatingAdmissionPolicy expressions in status. This check helps catch CEL expressions that do not line up with the matched resource type:
 
@@ -387,6 +413,7 @@ Admission control gives Kubernetes a strong boundary at the API server. Used wel
 
 - [Kubernetes: Admission Controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/) - Lists Kubernetes admission controllers and explains how admission controllers intercept API server requests after authentication and authorization.
 - [Kubernetes: Dynamic Admission Control](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/) - Explains mutating and validating admission webhooks and how the API server calls external admission services.
+- [Kubernetes: Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/) - Documents the built-in admission controller that applies Pod Security Standards through namespace labels.
 - [Kubernetes: ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/) - Documents ValidatingAdmissionPolicy, ValidatingAdmissionPolicyBinding, CEL variables, failure policy, and validation actions.
 - [Kubernetes: CEL in Kubernetes](https://kubernetes.io/docs/reference/using-api/cel/) - Describes how Kubernetes uses Common Expression Language for API validation and admission expressions.
 - [Kubernetes kubectl apply reference](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_apply/) - Documents `kubectl apply`, server-side dry-run, validation flags, and related apply behavior.

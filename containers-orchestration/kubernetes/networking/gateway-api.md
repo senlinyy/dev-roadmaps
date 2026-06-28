@@ -28,7 +28,7 @@ A DevPolaris web app calls `https://api.devpolaris.local/orders`. A user clicks 
 
 The platform networking team owns the public entry point. They care about the load balancer, the HTTPS listener, the certificate, the public hostname, and which namespaces can attach routes. The orders team owns the application route. They care that `/orders` goes to the right Service, the Service selects ready Pods, and a release can move traffic from stable to canary while other teams keep their routes unchanged.
 
-**Gateway API** is a family of Kubernetes APIs for service networking. It uses Kubernetes resources to describe how traffic enters the cluster, how listeners are exposed, and how protocol-specific routes send requests to Services. It comes through CustomResourceDefinitions, usually called CRDs, so the cluster also needs a Gateway API implementation that watches those resources and programs a real proxy, cloud load balancer, or data plane.
+**Gateway API** is a set of Kubernetes resources for describing this public-to-internal path. In plain English, a Gateway describes the listener at the edge, and an HTTPRoute describes which HTTP requests should go to which Service. The implementation details come later; the first idea is just public hostname, listener, route, Service, and ready Pods.
 
 The request path looks like this:
 
@@ -110,7 +110,7 @@ Now the class exists. The platform team can use it to create the shared listener
 
 A **Gateway** is the platform-owned entry point. In DevPolaris, the platform networking team creates a Gateway named `public-api` in the `platform-networking` namespace. It listens on HTTPS port `443`, accepts traffic for `api.devpolaris.local`, terminates TLS with a certificate Secret, and allows only approved namespaces to attach HTTPRoutes.
 
-Here is the Gateway:
+Start with the Gateway shell. This names the platform-owned entry point and the GatewayClass that should implement it:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -120,15 +120,30 @@ metadata:
   namespace: platform-networking
 spec:
   gatewayClassName: shared-public
+```
+
+Then add the listener. A **listener** is the port, protocol, and hostname the Gateway accepts. This one accepts HTTPS traffic for `api.devpolaris.local`:
+
+```yaml
   listeners:
     - name: https
       protocol: HTTPS
       port: 443
       hostname: api.devpolaris.local
+```
+
+Then add TLS termination. The certificate reference points to a Secret in the Gateway namespace:
+
+```yaml
       tls:
         mode: Terminate
         certificateRefs:
           - name: devpolaris-api-tls
+```
+
+Finally add the route attachment rule. It limits which namespaces can attach HTTPRoutes to this listener:
+
+```yaml
       allowedRoutes:
         namespaces:
           from: Selector
@@ -136,6 +151,8 @@ spec:
             matchLabels:
               shared-gateway: public-api
 ```
+
+In the complete Gateway, those listener, TLS, and attachment snippets live under the same `listeners` item.
 
 The listener has a name, and that name matters. Application Routes can point at the `https` listener with `sectionName: https`, which keeps the relationship precise when a Gateway has more than one listener. A public Gateway might have one HTTPS listener for `api.devpolaris.local` and another listener for `admin.devpolaris.local`, so names help routes attach to the intended place.
 
@@ -159,7 +176,7 @@ With the shared listener ready, the orders team can add the route for `/orders`.
 
 An **HTTPRoute** is the object application teams edit for HTTP routing. It names one or more parent Gateways, lists hostnames, defines matching rules, and forwards matching requests to backend Services. For the orders team, this is the normal place to review path changes, canary weights, header matches, redirects, or simple route ownership.
 
-Here is the route for the DevPolaris orders API:
+Start with the route shell. The orders team owns this object in the `orders` namespace:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -168,21 +185,38 @@ metadata:
   name: devpolaris-orders-api
   namespace: orders
 spec:
+```
+
+Then attach it to the platform Gateway listener. `sectionName: https` points at the named listener from the Gateway:
+
+```yaml
   parentRefs:
     - name: public-api
       namespace: platform-networking
       sectionName: https
   hostnames:
     - api.devpolaris.local
+```
+
+Then add the path match. A **PathPrefix** match means `/orders`, `/orders/123`, and `/orders/history` all belong to this route family:
+
+```yaml
   rules:
     - matches:
         - path:
             type: PathPrefix
             value: /orders
+```
+
+Finally add the backend Service. Matching requests go to the `devpolaris-orders-api` Service on port `80`:
+
+```yaml
       backendRefs:
         - name: devpolaris-orders-api
           port: 80
 ```
+
+In the complete HTTPRoute, those pieces sit together under `spec`.
 
 The route says that traffic for `api.devpolaris.local` with a path starting at `/orders` should go to the `devpolaris-orders-api` Service on port `80`. The parent reference points at the shared Gateway listener, and the backend reference points at a Service in the same `orders` namespace as the HTTPRoute.
 
@@ -213,25 +247,13 @@ Now the route exists. The next production concern is the encrypted edge and the 
 
 **TLS termination** means the Gateway receives HTTPS, presents the certificate, decrypts the request at the edge, and forwards the request onward according to the Route. In this DevPolaris setup, the platform team owns TLS because it owns the public listener and hostname. The orders team owns `/orders`; certificate Secret access stays with platform networking.
 
-The simple pattern keeps the TLS Secret in the same namespace as the Gateway:
+The simple pattern keeps the TLS Secret in the same namespace as the Gateway. The TLS part is the same listener snippet from the shared Gateway:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: public-api
-  namespace: platform-networking
-spec:
-  gatewayClassName: shared-public
-  listeners:
-    - name: https
-      protocol: HTTPS
-      port: 443
-      hostname: api.devpolaris.local
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: devpolaris-api-tls
+tls:
+  mode: Terminate
+  certificateRefs:
+    - name: devpolaris-api-tls
 ```
 
 In that shape, `platform-networking/devpolaris-api-tls` contains the certificate and private key. cert-manager can create and renew that Secret by watching annotations on the Gateway, depending on how the cluster team configures issuers. The rollout evidence should show both the Gateway status and the certificate Secret because a listener can exist while certificate automation still has work to do.
@@ -455,7 +477,7 @@ This rollout still needs the same evidence as the simple route. Both Services ne
 
 Some Gateway API features depend on the implementation and its conformance profile. Core matching and backend routing form the portable center, while details around timeouts, retries, header filters, mirroring, policy attachment, or vendor-specific behavior may vary. A production design review should name the installed implementation and confirm that it supports the fields the team plans to use.
 
-That matters because the YAML file is only the request. The controller status tells you whether the installed implementation accepted the request. The rollout process should always include both.
+The YAML file is only the request. The controller status tells you whether the installed implementation accepted the request, so the rollout process should always include both.
 
 ## Evidence to Keep in Pull Requests
 <!-- section-summary: Gateway API changes should keep platform evidence, application evidence, backend evidence, and one real request in the review. -->

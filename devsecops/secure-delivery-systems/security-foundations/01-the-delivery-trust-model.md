@@ -1,7 +1,7 @@
 ---
 title: "The Delivery Trust Model"
-description: "Understand how to prove code origin, review status, build identity, and artifact integrity across a delivery path."
-overview: "Follow one checkout service from pull request to Kubernetes and learn how commit SHA, reviews, workflow identity, image digest, attestations, deployment records, and runtime evidence prove what reached production."
+description: "Learn how DevSecOps verifies source, review, build, artifact, registry, deployment, and runtime evidence across a release path."
+overview: "Start with a simple restaurant analogy, then follow one checkout API release from source code to Kubernetes. You will see how commit SHAs, reviews, workflow identity, image digests, attestations, signatures, deployment gates, and runtime evidence connect into one trustable delivery story."
 tags: ["devsecops", "trust", "supply-chain", "provenance"]
 order: 1
 id: article-devsecops-security-foundations-security-mental-model-delivery-systems
@@ -19,104 +19,167 @@ aliases:
 
 ## Table of Contents
 
-1. [The Delivery Trust Path](#the-delivery-trust-path)
-2. [The Production Scenario](#the-production-scenario)
-3. [Code Origin](#code-origin)
-4. [Review Status](#review-status)
-5. [Build Identity](#build-identity)
-6. [Artifact Integrity](#artifact-integrity)
-7. [Registry Identity](#registry-identity)
-8. [Deployment Gates](#deployment-gates)
-9. [Runtime Provenance](#runtime-provenance)
-10. [Tracing One Release](#tracing-one-release)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [A Simple Rule for Delivery Trust](#a-simple-rule-for-delivery-trust)
+2. [The Restaurant Analogy](#the-restaurant-analogy)
+3. [The Release We Will Trace](#the-release-we-will-trace)
+4. [Step 1: Trust the Ingredients](#step-1-trust-the-ingredients)
+5. [Step 2: Trust the Chefs](#step-2-trust-the-chefs)
+6. [Step 3: Trust the Kitchen](#step-3-trust-the-kitchen)
+7. [Step 4: Seal the Delivery Box](#step-4-seal-the-delivery-box)
+8. [Step 5: Store the Box Safely](#step-5-store-the-box-safely)
+9. [Step 6: Check the Box at the Door](#step-6-check-the-box-at-the-door)
+10. [Step 7: Check the Plate on the Table](#step-7-check-the-plate-on-the-table)
+11. [Trace One Release End to End](#trace-one-release-end-to-end)
+12. [The Starter Checklist](#the-starter-checklist)
+13. [What's Next](#whats-next)
+14. [References](#references)
 
-## The Delivery Trust Path
-<!-- section-summary: A delivery trust model gives the team evidence for each handoff from source code to running production software. -->
+## A Simple Rule for Delivery Trust
+<!-- section-summary: Delivery trust means each release handoff gets verified before production accepts the software. -->
 
-A **delivery trust model** is the evidence path a team uses to answer a simple production question: which exact code is running, who changed it, who reviewed it, which system built it, which artifact came out of that build, which registry stored it, which gate approved it, and which runtime pulled it. The phrase sounds big, so let's make it practical right away. If a customer-facing service starts behaving strangely at 2:00 in the afternoon, the team should trace the running container back to a commit and a review record without guessing.
+The **delivery trust model** is a DevSecOps way of saying: do not trust a release only because it reached the final step. Verify the people, code, build system, artifact, registry, deployment gate, and runtime evidence along the way.
 
-This matters because modern software delivery has many handoffs. A developer writes code, Git stores a commit, a pull request collects review, a CI system builds an image, a registry stores that image, a deployment system moves it toward production, and a runtime like Kubernetes starts it. Every handoff can preserve evidence, lose evidence, or accept a weak shortcut. DevSecOps tries to keep the speed of automation while adding proof at the points where blind trust used to hide.
+The simplest version is this: every important handoff in software delivery should leave proof. A developer changes code. A reviewer approves it. A pipeline builds it. A registry stores the image. A deployment system promotes it. Kubernetes runs it. The delivery trust model asks each step to prove what it received, what it produced, and who or what made the decision.
 
-In this article, we will follow one service through that path. The path has seven proof points. **Code origin** answers where the change came from. **Review status** answers whether the right people and checks approved it. **Build identity** answers which automation built it. **Artifact integrity** answers which exact output came from the build. **Registry identity** answers where the artifact lives and who can publish there. **Deployment gates** answer why production accepted the artifact. **Runtime provenance** answers what the production platform actually started.
+For a beginner, this can sound bigger than it is. At the heart of the idea sits one practical production question:
 
-Official standards use similar language. NIST's Secure Software Development Framework, usually called **SSDF**, talks about protecting software from tampering, verifying release integrity, and keeping provenance data. **SLSA**, which stands for Supply-chain Levels for Software Artifacts, focuses on build integrity and provenance. **Sigstore** and **cosign** give teams practical signing and verification tools for container images and other artifacts. These are real industry building blocks, and we will keep them grounded in one normal release.
-
-![Delivery trust path infographic showing commit, review, build, digest, registry, deployment gate, and runtime connected by evidence cards](/content-assets/articles/article-devsecops-security-foundations-security-mental-model-delivery-systems/delivery-trust-path.png)
-
-*The delivery path keeps the same evidence attached as the artifact moves from source code to the running Kubernetes workload.*
-
-## The Production Scenario
-<!-- section-summary: One checkout service gives every later section a concrete release to trace from commit to runtime. -->
-
-Let's use a fictional company called Harbor Books. Harbor Books sells books online, and the most important service is `checkout-api`. That service receives the cart, validates coupons, confirms tax, and sends the payment request to a payment provider. If `checkout-api` ships a bad release, customers may see wrong totals or failed checkouts. If an attacker slips code into that release, the damage could reach payments, customer addresses, and the public brand.
-
-The team is shipping a coupon validation fix on June 21, 2026. Maya, an application engineer, opens a pull request called "Reject expired partner coupons." The final commit SHA is `7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20`. A **commit SHA** is the Git identifier for one exact snapshot of the repository. A short SHA like `7c1a2ef` is useful for humans, and the full SHA is the safest value for release records because it identifies the commit more precisely.
-
-The release uses GitHub Actions, GitHub Container Registry, and Kubernetes. The CI workflow builds an image named `ghcr.io/harborbooks/checkout-api`. The build produces this image digest:
-
-```bash
-sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
-```
-
-An **image digest** is a cryptographic identifier for the image content. The digest is the value the team wants in production records because a tag like `main` or `2026-06-21` can move later. The digest points to the content that the registry stored for that image at the time of the build.
-
-Here are the release facts we will keep using:
-
-| Evidence point | Example value |
+| Production question | Plain-English meaning |
 |---|---|
-| Repository | `github.com/harborbooks/checkout-api` |
-| Pull request | `#482` |
-| Commit SHA | `7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20` |
-| Workflow | `.github/workflows/release-checkout.yml` |
-| Workflow run | `9142337112` |
-| Image | `ghcr.io/harborbooks/checkout-api` |
-| Image digest | `sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6` |
-| Deployment record | `prod-2026-06-21.3` |
-| Runtime | Kubernetes namespace `checkout` |
+| Which code is running? | The team can name the exact commit. |
+| Who changed it? | The team can find the pull request and author. |
+| Who approved it? | The team can see review and branch-rule evidence. |
+| Which system built it? | The team can find the CI workflow and run. |
+| Which artifact came out? | The team can name the image digest or package hash. |
+| Who allowed deployment? | The team can see the gate, approval, and policy result. |
+| What is running now? | The team can compare runtime state with the release record. |
 
-The rest of the article asks one question at a time. First, can the team prove where Maya's code came from?
+This article keeps those questions attached to one story. We will start with an analogy, then map each part into real delivery work.
 
-## Code Origin
-<!-- section-summary: Code origin records the repository, commit, author, merge path, and signature evidence for the change entering the delivery path. -->
+## The Restaurant Analogy
+<!-- section-summary: A restaurant supply chain gives beginners a simple picture before we add DevSecOps terms. -->
 
-**Code origin** means the evidence that connects a production release to a real change in source control. In plain English, it answers, "Where did this code come from?" For Harbor Books, the answer should include the repository, branch, commit SHA, pull request, author, committer, and merge event. That gives the release team a source record before the build system ever starts.
+Imagine a high-security restaurant that promises customers safe food. The old security habit would be to inspect the final plate right before it leaves the kitchen. A food inspector tastes the finished meal, sees nothing obvious, and lets the waiter serve it.
 
-Git stores two useful names on a commit: the **author** and the **committer**. The author is the person who originally wrote the change. The committer is the person or system that put the commit into the repository history. In a normal pull request, Maya may be the author, and GitHub may create the final merge commit as the committer. Those fields are useful, and the team treats them as one part of the evidence.
+That final check helps, but it misses several ways the meal can go wrong. A spoiled ingredient may enter the kitchen. A person without permission may change the recipe. A dirty workstation may contaminate the food. A waiter may carry the correct dish to the wrong table. A customer may receive a plate that looks fine but came through a broken process.
 
-A production team usually adds stronger checks around that Git record. Signed commits or signed tags can prove that a commit or release tag came from a key or identity the team recognizes. Branch protection can require the change to enter through a pull request instead of direct pushes. Repository audit logs can show who merged the pull request. These controls work together: Git gives the object identity, GitHub gives hosted review and merge evidence, and signatures add cryptographic proof where the team chooses to require it.
+The safer restaurant checks the full path:
 
-Maya's team might inspect the source record like this during an incident:
+| Restaurant step | Simple security idea | DevSecOps version |
+|---|---|---|
+| Check the ingredients | Use safe parts | Review source code and dependencies |
+| Check the chefs | Allow trusted people to change recipes | Require identity, review, and ownership |
+| Check the kitchen | Keep the build area controlled | Secure the CI/CD runner and workflow |
+| Seal the delivery box | Stop tampering after cooking | Use digests, attestations, and signatures |
+| Store the box safely | Keep finished meals in a controlled place | Protect the artifact registry |
+| Check at the door | Verify the seal before serving | Use deployment gates |
+| Check the plate on the table | Confirm what the customer received | Compare runtime evidence with release records |
 
-```bash
-git rev-parse HEAD
-git show --show-signature --format=fuller 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
-git log --format='%H %an <%ae> %cn <%ce>' -1 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
+That is the spine of the delivery trust model. Security moves from one final inspection into a chain of smaller checks. Each check answers a specific question and leaves evidence for the next person or system.
+
+Now we can translate the restaurant into a real release.
+
+## The Release We Will Trace
+<!-- section-summary: One checkout API release gives every later concept a concrete place to land. -->
+
+Let's use a fictional company called Harbor Books. It sells books online, and its most important service is `checkout-api`. The service receives a cart, validates coupons, confirms tax, and sends payment requests to a payment provider.
+
+Maya, an application engineer, fixes a coupon bug. Expired partner coupons were still accepted in a narrow edge case. The change sounds small, but the service touches payments and customer orders, so Harbor Books wants proof before production runs the new version.
+
+Here is the first simple release record. It is intentionally small. We will add more pieces through the article:
+
+```yaml
+service: checkout-api
+repository: github.com/harborbooks/checkout-api
+pull_request: 482
+commit: 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
+environment: production
 ```
 
-The first command prints the current commit SHA. The second shows the commit metadata and signature status. The third prints the author and committer names in a compact form. In a production trace, the team wants the SHA in the deployment record to match the SHA in the pull request and the SHA in the build provenance.
+The important field for the rest of the article is the **commit SHA**. A commit SHA is Git's identifier for one exact snapshot of the repository. A branch name like `main` can point to different commits over time. A full commit SHA points to one commit.
 
-GitHub can also answer source questions from the hosted review record:
+The delivery trust model now asks a sequence of questions about that commit. Did it come from the expected repository? Did the right people review it? Did a trusted pipeline build it? Which image did the pipeline produce? Did production verify the image before deployment? Did Kubernetes actually run that image?
+
+The same three images in this article are still useful, but we will reach them gradually instead of starting with the whole delivery path at once.
+
+## Step 1: Trust the Ingredients
+<!-- section-summary: Source code and dependencies are the ingredients that enter the release before any build happens. -->
+
+In the restaurant story, ingredients are vegetables, meat, spices, and sauces. In a software release, the ingredients are **source code**, **configuration**, and **dependencies**.
+
+**Source code** is the code your team writes. **Dependencies** are packages your team imports from somewhere else, such as npm, PyPI, Maven Central, an internal package registry, or a shared company module. The delivery trust model checks both because production does not care whether risky code came from your own file or from a package you installed.
+
+For Harbor Books, Maya's source change lives in pull request `#482`. The first evidence question is plain:
+
+> Does this production release come from the expected repository and exact commit?
+
+An engineer can inspect the commit locally:
+
+```bash
+git show --show-signature --format=fuller 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
+```
+
+`git show` prints the commit. `--format=fuller` shows author and committer details. `--show-signature` asks Git to show signature verification information if the commit or tag has a signature.
+
+Example output:
+
+```bash
+commit 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
+Author:     Maya Chen <maya@harborbooks.example>
+Commit:     GitHub <noreply@github.com>
+Date:       Sun Jun 21 10:14:22 2026 +0000
+
+    Reject expired partner coupons
+```
+
+This output gives the team a starting point. It names the exact commit, the author, and the commit message. A signed commit or signed release tag can add stronger cryptographic proof, but the beginner habit is already clear: use the exact commit, not a moving branch name.
+
+Dependencies need the same kind of source thinking. Suppose Maya's pull request updates one package:
+
+```json
+{
+  "dependencies": {
+    "@harbor/coupon-rules": "2.4.1"
+  }
+}
+```
+
+That package name is only half the evidence. The team also wants the registry, the resolved version, and the lockfile hash. A private package such as `@harbor/coupon-rules` should come from Harbor Books' internal registry, not from a public registry with a similar name. Later articles in the software supply chain module go deeper into dependency confusion, lockfiles, SBOMs, and vulnerability reachability. Here, the main idea is simple: safe delivery starts with knowing what entered the release.
+
+Once the ingredients are clear, the next question is about people. Who was allowed to change the recipe?
+
+## Step 2: Trust the Chefs
+<!-- section-summary: Review evidence proves the change passed the expected people and branch rules before the build used it. -->
+
+In the restaurant, a chef should have permission to enter the kitchen and change the recipe. In software delivery, that maps to **identity**, **ownership**, and **review**.
+
+**Review status** means the change passed the team's merge rules before the build system used it. For `checkout-api`, the team wants a pull request, code-owner review, passing tests, security checks, and no direct push to the production branch.
+
+The pull request record can answer the first review question:
 
 ```bash
 gh pr view 482 \
   --repo harborbooks/checkout-api \
-  --json number,title,author,headRefOid,baseRefName,mergedAt,mergedBy,reviewDecision,statusCheckRollup
+  --json number,title,author,headRefOid,baseRefName,reviewDecision,statusCheckRollup
 ```
 
-That output gives the pull request number, title, author, head commit, base branch, merge time, merge actor, review decision, and status checks. The exact JSON shape may be more detailed than a beginner needs, so the practical point is this: a team should be able to show that production came from a known repository and a known commit that passed through the expected merge path.
+`gh pr view 482` reads pull request `#482`. `--repo` selects the repository. `--json` asks GitHub CLI for specific fields so the output can be stored or checked by automation.
 
-Code origin gives the first piece of the release story. The next question is whether the right people and automated checks agreed that this change could merge.
+Example output, shortened for readability:
 
-## Review Status
-<!-- section-summary: Review status proves the change passed required human approvals and automated checks before the build used it. -->
+```json
+{
+  "number": 482,
+  "title": "Reject expired partner coupons",
+  "author": { "login": "maya-chen" },
+  "headRefOid": "7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20",
+  "baseRefName": "main",
+  "reviewDecision": "APPROVED"
+}
+```
 
-**Review status** means the evidence that a change passed the team's merge rules. For Harbor Books, a coupon validation change needs at least one checkout maintainer review, passing unit tests, passing security checks, and no direct push to `main`. The review record matters because a good commit SHA alone only says which code changed. Review evidence adds the approvals, conversations, and required checks that make the merge trustworthy.
+The team checks that `headRefOid` matches the commit in the release record. If the pull request approved one commit and the pipeline built another, the release story has a gap.
 
-GitHub branch protection rules are a common way to enforce this. A protected branch can require a pull request before merging, require approvals, require status checks, require conversation resolution, require signed commits, and restrict who can push. Teams often start with the basics and tighten the rules as the service gets more important. For `checkout-api`, the production branch is important enough to require review and checks on every change.
-
-The Harbor Books repository has a `CODEOWNERS` file that routes sensitive paths to the right reviewers:
+Harbor Books also uses `CODEOWNERS` to route sensitive changes:
 
 ```
 /services/checkout-api/ @harborbooks/checkout-maintainers
@@ -125,31 +188,20 @@ The Harbor Books repository has a `CODEOWNERS` file that routes sensitive paths 
 /k8s/checkout/ @harborbooks/platform-security
 ```
 
-This file says changes under the checkout service need checkout maintainers. Payment-related code needs the payments security group. Workflow and Kubernetes deployment changes need platform security because those files control how code reaches production. That last detail is important in real teams. An attacker who can change the build workflow may change the release path even if the application code looks normal.
+This file is a simple ownership map. Checkout maintainers review checkout service changes. Payment security reviews payment-related code. Platform security reviews workflow and Kubernetes files because those files control the path to production.
 
-The protected branch for `main` can use rules like these:
+Branch protection turns that ownership map into a gate. A protected `main` branch can require pull request reviews, status checks, code-owner approval, conversation resolution, signed commits, merge queues, and restrictions on direct pushes. The exact settings depend on the platform, but the beginner idea is steady: production code should enter through a reviewed path.
 
-| Rule | Harbor Books setting | Why the team uses it |
-|---|---|---|
-| Pull request required | Enabled | Every production change gets a review record |
-| Required approvals | `2` | One reviewer can miss a risky change |
-| Code owner review | Enabled | Sensitive paths reach the right team |
-| Status checks | `unit-tests`, `container-scan`, `build-dry-run` | The same checks run before every merge |
-| Stale review dismissal | Enabled | A new commit needs fresh approval |
-| Direct pushes | Restricted | Release history goes through the same path |
+At this point, the release has trusted ingredients and trusted reviewers. Now the restaurant hands the recipe to the kitchen.
 
-During the June 21 release, Maya's PR has approvals from `@harborbooks/checkout-maintainers` and `@harborbooks/payments-security`. The status checks are green. The merge commit points to the same head SHA that the build later uses. This is the handoff from human review to automated build.
+## Step 3: Trust the Kitchen
+<!-- section-summary: Build identity names the automation that turned reviewed source into an artifact. -->
 
-Now the team has a known source change and a known review record. The next proof point asks which system built the production artifact.
+In the restaurant, the kitchen is the controlled place where ingredients turn into a meal. In DevSecOps, the kitchen is the **CI/CD pipeline**.
 
-## Build Identity
-<!-- section-summary: Build identity names the automation that created the artifact, including the workflow, runner, token issuer, and source commit. -->
+**CI/CD** means the automation that runs tests, builds packages, scans results, and moves software toward release. A **runner** is the machine that executes a CI/CD job. A build runner may download code, install dependencies, run tests, build a container image, request credentials, and publish artifacts. That makes the runner an important trust boundary.
 
-**Build identity** means the identity of the system that turns source code into an artifact. In our scenario, GitHub Actions builds the `checkout-api` container image. The evidence should show the workflow file, the workflow run ID, the repository, the branch or tag, the commit SHA, and the token identity used to publish the image. This matters because the build system has a powerful role: it can package code, attach metadata, sign artifacts, and push to the registry.
-
-CI/CD means continuous integration and continuous delivery. It is the automation that runs tests, builds packages, and moves changes toward release. Older pipelines often stored long-lived registry passwords or cloud access keys as CI secrets. Modern pipelines try to use **OIDC**, which stands for OpenID Connect. In this context, OIDC lets the CI job request a short-lived identity token that says, "This job came from this repository, this workflow, this branch, and this run." The registry or cloud provider can trust that token for a narrow action, such as pushing one image.
-
-A simplified Harbor Books workflow looks like this:
+For Harbor Books, GitHub Actions builds `checkout-api`. A beginner-friendly release workflow can start as a skeleton:
 
 ```yaml
 name: release-checkout
@@ -159,28 +211,36 @@ on:
     branches:
       - main
 
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: echo "build image here"
+      - name: Publish release evidence
+        run: echo "publish evidence here"
+```
+
+This skeleton has three teaching pieces. `on.push.branches` says the workflow runs after a change reaches `main`. `runs-on` chooses the runner image. The steps show the order: check out the reviewed code, build the artifact, then publish evidence.
+
+The production workflow adds permissions and real build steps:
+
+```yaml
 permissions:
   contents: read
+  packages: write
   id-token: write
   attestations: write
-  packages: write
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    environment: build
-
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: docker/build-push-action@v6
         id: build
         with:
@@ -192,59 +252,49 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
 ```
 
-The workflow checks out the exact commit that triggered the build. The permissions block gives the job only the token powers it needs: read source, request an OIDC token, write attestations, and publish packages. The image labels store the source repository and commit inside the image metadata. Those labels help humans during debugging, while the digest and provenance record carry stronger evidence.
+The `permissions` block limits the job token. `contents: read` lets the job read source. `packages: write` lets it publish the image. `id-token: write` lets the job request an OIDC token for keyless signing or cloud federation. `attestations: write` lets it publish artifact attestations.
 
-Build identity also includes the runner environment. GitHub-hosted runners are created fresh for jobs. Some companies use self-hosted runners for private networks or special hardware. Self-hosted runners need extra care because a compromised runner can affect the build output. Teams that use self-hosted runners usually isolate projects, patch runners often, avoid sharing runners between trust zones, and keep build logs and runner inventory for investigations.
+The checkout step uses `ref: ${{ github.sha }}` so the build uses the exact commit that triggered the workflow. The image label `org.opencontainers.image.revision` stores the commit SHA as image metadata, which helps humans connect an image back to source during debugging.
 
-At this point, Harbor Books knows the source and the builder. The next question is what exact artifact came out of that build.
+Now the kitchen has prepared the meal. The next question is how Harbor Books proves the box stayed sealed after the build finished.
 
-## Artifact Integrity
-<!-- section-summary: Artifact integrity ties the build output to a digest, signature, and provenance statement so the release uses the exact artifact that CI produced. -->
+## Step 4: Seal the Delivery Box
+<!-- section-summary: Artifact integrity ties the build output to a digest, attestation, and signature. -->
 
-An **artifact** is a file or package produced by the delivery process. A container image, a compiled binary, a Helm chart, a Java `.jar`, and a Terraform module can all be artifacts. **Artifact integrity** means the team can prove the artifact has the same content that the trusted build created. For `checkout-api`, the artifact is a container image, and the most important identifier is the image digest.
+In the restaurant story, the finished meal gets a tamper-evident seal before it leaves the kitchen. In software delivery, the seal starts with an **artifact digest**.
 
-A container tag is a friendly name. The tag `main`, `latest`, or `7c1a2ef` can point to an image. A digest is content-based. Docker and OCI registries use digests like `sha256:...` to identify image content. If the content changes, the digest changes. That is why production records should use the digest whenever possible.
+An **artifact** is a file or package produced by the delivery process. A container image, compiled binary, Helm chart, Java `.jar`, and Terraform module can all be artifacts. A **digest** is a content-based identifier. If the artifact content changes, the digest changes.
 
-The build step can expose the digest as an output:
-
-```yaml
-      - uses: docker/build-push-action@v6
-        id: build
-        with:
-          context: .
-          push: true
-          tags: ghcr.io/harborbooks/checkout-api:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/harborbooks/checkout-api
-            org.opencontainers.image.revision=${{ github.sha }}
-
-      - name: Capture image digest
-        run: |
-          echo "IMAGE=ghcr.io/harborbooks/checkout-api" >> "$GITHUB_ENV"
-          echo "DIGEST=${{ steps.build.outputs.digest }}" >> "$GITHUB_ENV"
-```
-
-Now the workflow can produce provenance and signing evidence. **Provenance** means information about how the artifact came to exist. In SLSA language, provenance usually includes the subject artifact, builder identity, build type, source materials, build parameters, and run details. A beginner can think of it as a build receipt that names the artifact and the process that created it.
-
-GitHub Artifact Attestations can create a provenance statement for the image:
-
-```yaml
-      - uses: actions/attest@v4
-        with:
-          subject-name: ghcr.io/harborbooks/checkout-api
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-```
-
-Sigstore cosign can sign the image digest with keyless signing:
+For `checkout-api`, the build produces a container image:
 
 ```bash
-cosign sign ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
 ```
 
-Keyless signing uses the workflow's OIDC identity and avoids storing a long-lived signing key as a secret. The signature certificate can include the GitHub workflow identity, such as the repository and workflow file. Later, a deployment gate can verify that the signature came from the expected workflow identity.
+The part after `@` is the digest. It gives production a stable object to verify. A tag such as `main`, `latest`, or `2026-06-21` is convenient for humans, but a tag can be moved to a different image. A digest names image content.
 
-Here is the verification shape Harbor Books wants before production:
+The workflow can attach provenance to that digest:
+
+```yaml
+- uses: actions/attest-build-provenance@v2
+  with:
+    subject-name: ghcr.io/harborbooks/checkout-api
+    subject-digest: ${{ steps.build.outputs.digest }}
+    push-to-registry: true
+```
+
+**Provenance** is a build receipt. It records information such as the artifact digest, source repository, commit, workflow, builder, and build run. SLSA uses provenance to describe how an artifact was produced. GitHub Artifact Attestations give GitHub Actions users a practical way to create and verify this kind of receipt.
+
+Harbor Books can also sign the image with cosign:
+
+```bash
+cosign sign \
+  ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+```
+
+`cosign sign` creates a signature for the image digest. With keyless signing, cosign uses the workflow's OIDC identity instead of a long-lived signing key stored as a secret. That is useful because the signature can say which workflow identity signed the digest.
+
+Example verification command:
 
 ```bash
 cosign verify \
@@ -253,58 +303,86 @@ cosign verify \
   ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
 ```
 
-This checks that the image digest has a signature tied to the expected GitHub Actions workflow identity and OIDC issuer. In a real pipeline, the same idea can run inside a release job, an admission controller, or a policy engine. The important part is the evidence chain: source commit, build run, image digest, provenance, and signature all point to the same release.
+`--certificate-identity` names the workflow identity Harbor Books trusts. `--certificate-oidc-issuer` names GitHub Actions as the OIDC issuer. The final argument is the exact image digest.
+
+Example output:
+
+```bash
+Verification for ghcr.io/harborbooks/checkout-api@sha256:9f3e6f...
+The following checks were performed:
+  - The cosign claims were validated
+  - The certificate was verified against Fulcio roots
+  - The certificate identity matched the expected workflow
+```
+
+The output tells the release system that the signature belongs to the expected workflow identity and the digest has not changed since signing.
 
 ![Artifact integrity gate infographic showing an image digest checked by attestation, signature, and trusted workflow before production deployment](/content-assets/articles/article-devsecops-security-foundations-security-mental-model-delivery-systems/artifact-integrity-gate.png)
 
-*The production gate should verify that attestation, signature, and workflow identity all point to the same image digest before rollout.*
+*The artifact gate checks the digest, provenance, and signature before production accepts the image.*
 
-The artifact now has an identity. The next section asks where that artifact lives and who gets to publish there.
+The sealed box now exists. The next step is storing it in a place production can trust.
 
-## Registry Identity
-<!-- section-summary: Registry identity protects the place where artifacts live, so production pulls from a known name, digest, and publishing path. -->
+## Step 5: Store the Box Safely
+<!-- section-summary: Registry identity protects the artifact storage location and publishing path. -->
 
-A **registry** is a storage service for artifacts. A container registry stores images, image tags, image manifests, signatures, and sometimes attestations. **Registry identity** means the release process uses a known registry host, repository name, image digest, and publisher identity. For Harbor Books, production should pull from `ghcr.io/harborbooks/checkout-api` by digest.
+In the restaurant, finished meals should sit in a controlled pickup area. In software delivery, finished artifacts usually sit in a **registry**.
 
-The registry is a trust boundary because production pulls from it. If many people and jobs can push to the same image name, the team has a weak point. Real teams usually restrict push access, use separate repositories or projects for different services, require CI identity for publishing, keep audit logs, and prefer immutable references in deployment files. Some registries also support tag immutability or retention rules, which help keep release history stable.
+A **container registry** stores container images, tags, manifests, digests, signatures, and sometimes attestations. Registry identity means the release process knows the registry host, organization, repository, digest, and publisher.
 
-The image reference for this release should look like this:
-
-```bash
-ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
-```
-
-That reference includes the registry host, namespace, image name, and digest. During release review, the team can inspect the registry record:
+For Harbor Books, the trusted image location is:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+ghcr.io/harborbooks/checkout-api
 ```
 
-After pulling the image for local investigation, an engineer can inspect source labels:
+That name breaks down into pieces:
+
+| Piece | Meaning |
+|---|---|
+| `ghcr.io` | The registry host |
+| `harborbooks` | The organization or namespace |
+| `checkout-api` | The image repository |
+| `sha256:9f3e...` | The content digest |
+
+The registry needs controls because production pulls from it. A weak registry setup lets too many people or jobs push to the same image name. A stronger setup separates push access from pull access, publishes only from CI, logs registry events, keeps old release digests, and uses immutable tags or digest-based deployment.
+
+An engineer can inspect the remote image record:
 
 ```bash
-docker pull ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
-docker inspect ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6 \
-  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+docker buildx imagetools inspect \
+  ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
 ```
 
-The label should print `7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20`. The team still relies on signatures, attestations, registry audit logs, and build records for stronger proof, because labels come from image metadata. Labels help connect the dots quickly during human debugging.
+`docker buildx imagetools inspect` reads image metadata from the registry. The digest reference makes the command inspect the exact artifact instead of whatever a tag points to today.
 
-Registry identity connects artifact integrity to deployment. The image exists at a trusted name, with a known digest, and with publishing controls around it. Now production needs a gate that checks those facts before anything rolls out.
+Example output, shortened:
 
-## Deployment Gates
-<!-- section-summary: Deployment gates make production acceptance depend on evidence such as review, digest, signature, attestation, and approval records. -->
+```bash
+Name:      ghcr.io/harborbooks/checkout-api@sha256:9f3e6f...
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+Platform:  linux/amd64
+```
 
-A **deployment gate** is a rule or approval step that decides whether an artifact may enter an environment. A simple gate might require one production approval. A stronger gate checks the artifact digest, verifies the signature, verifies the attestation, confirms the source branch, checks vulnerability policy, and records who approved the release. The gate turns delivery evidence into a production decision.
+The important check is the digest. The release record, registry record, attestation, signature, and deployment manifest should all point to the same value.
 
-For Harbor Books, production release `prod-2026-06-21.3` should record the source and artifact together:
+The artifact now sits in a controlled place. The next question is how production decides whether to accept it.
+
+## Step 6: Check the Box at the Door
+<!-- section-summary: Deployment gates verify the artifact and record the production decision. -->
+
+In the restaurant, a waiter checks the sealed box before serving it. In software delivery, a **deployment gate** checks whether an artifact may enter an environment.
+
+A simple deployment gate may ask for one human approval. A stronger gate verifies the image digest, signature, provenance, vulnerability policy, source branch, and deployment approver. The gate should record its decision so the team can revisit it during an incident or audit.
+
+Now the release record grows:
 
 ```yaml
 service: checkout-api
 environment: production
 commit: 7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20
 pull_request: 482
-workflow: .github/workflows/release-checkout.yml
 workflow_run: 9142337112
 image: ghcr.io/harborbooks/checkout-api
 digest: sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
@@ -315,9 +393,9 @@ approved_by:
   - lina.platform
 ```
 
-That record can live in a deployment system, a release repository, a change-management tool, or a signed release manifest. The format matters less than the facts. The release record gives responders a place to start when production behavior needs investigation.
+This record is the software version of the checked delivery box. It connects the source, build, artifact, verification result, and approval.
 
-The automated gate can verify the artifact before changing Kubernetes:
+A deployment job can verify the attestation before it updates Kubernetes:
 
 ```bash
 IMAGE="ghcr.io/harborbooks/checkout-api"
@@ -325,112 +403,141 @@ DIGEST="sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6"
 REF="${IMAGE}@${DIGEST}"
 
 gh attestation verify "oci://${REF}" \
-  -R harborbooks/checkout-api
+  --repo harborbooks/checkout-api
+```
 
-cosign verify \
-  --certificate-identity "https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/heads/main" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  "${REF}"
+`IMAGE` and `DIGEST` keep the reference readable. `REF` combines them into the exact image reference. `gh attestation verify` checks that an attestation exists for the artifact and that it can be traced to the expected repository.
 
-kubectl -n checkout set image deployment/checkout-api checkout-api="${REF}"
+Example output:
+
+```bash
+Loaded digest sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+✓ Verification succeeded
+sha256:9f3e6f... was attested by harborbooks/checkout-api
+```
+
+After verification, the job can update Kubernetes by digest:
+
+```bash
+kubectl -n checkout set image deployment/checkout-api \
+  checkout-api="${REF}"
+
 kubectl -n checkout annotate deployment/checkout-api \
   devpolaris.io/commit="7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20" \
   devpolaris.io/workflow-run="9142337112" \
   devpolaris.io/deployment-record="prod-2026-06-21.3"
 ```
 
-The first verification checks the provenance attestation. The second verifies the Sigstore signature identity. The deployment command uses the digest reference, and the annotation stores release context on the Kubernetes Deployment. These commands show the shape of a practical first version. Many teams later move the same checks into a policy controller or admission controller so every deployment path uses the same rules.
+`kubectl set image` changes the container image in the Deployment. The image value uses the digest reference. `kubectl annotate` stores release context on the Deployment so responders can find it without leaving the cluster.
 
-Deployment gates also need rollback behavior. A rollback should choose a previous known-good digest, verify its signature and attestation again, record a new deployment event, and update Kubernetes to that digest. A rollback that uses a floating tag can reintroduce uncertainty. A rollback that uses a recorded digest gives the team the same trace path as a forward release.
+Example output:
 
-Now production has accepted an artifact by digest. The final proof point checks what the runtime actually pulled and started.
+```bash
+deployment.apps/checkout-api image updated
+deployment.apps/checkout-api annotated
+```
 
-## Runtime Provenance
-<!-- section-summary: Runtime provenance compares the intended deployment record with the image and digest observed on running workloads. -->
+The door check is complete. The final proof comes from the running platform.
 
-**Runtime provenance** means evidence from the production platform about what is actually running. A deployment record says what should run. The runtime tells the team what the platform pulled and started. For `checkout-api`, Kubernetes can show the image configured on the Deployment and the image IDs reported by running Pods.
+## Step 7: Check the Plate on the Table
+<!-- section-summary: Runtime evidence proves which artifact the platform actually started. -->
 
-This is the moment where many teams find gaps. The release record says one digest, the Deployment template says another digest, and one old Pod may still be running from a previous rollout. Runtime checks catch those differences. They also help during incident response because responders can inspect production without rebuilding the story from memory.
+In the restaurant story, the last check confirms the plate at the table matches the sealed order. In production, **runtime evidence** confirms the platform actually runs the approved artifact.
 
-Harbor Books can check the Deployment image like this:
+A deployment record says what should run. Kubernetes can show what the Deployment asks for and what each Pod actually pulled. That comparison catches rollout gaps, stale Pods, emergency changes, and tag mistakes.
+
+First, check the Deployment image:
 
 ```bash
 kubectl -n checkout get deployment checkout-api \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="checkout-api")].image}{"\n"}'
 ```
 
-The expected output is the digest reference:
+`kubectl get deployment` reads the Deployment. `-n checkout` selects the namespace. The `jsonpath` expression prints only the image configured for the `checkout-api` container.
+
+Expected output:
 
 ```bash
 ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
 ```
 
-Then the team can inspect the running Pods:
+Then check the running Pods:
 
 ```bash
 kubectl -n checkout get pods -l app=checkout-api \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[?(@.name=="checkout-api")].imageID}{"\n"}{end}'
 ```
 
-The `imageID` field is useful because it comes from the container runtime after the image is pulled. Depending on the runtime, it may include a digest-form reference such as `ghcr.io/harborbooks/checkout-api@sha256:...` or a runtime-specific prefix. The team compares that digest with the deployment record.
+`-l app=checkout-api` selects only the Pods for the service. The `imageID` field comes from the container runtime after the image is pulled.
 
-The application can also expose a `/version` endpoint:
+Example output:
+
+```bash
+checkout-api-7f6c9c6f8b-4p9qx   ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+checkout-api-7f6c9c6f8b-m2t8v   ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+```
+
+Both Pods use the approved digest. If one Pod showed an older digest, the team would investigate rollout progress, stuck Pods, or manual changes. If every Pod uses the approved digest, the team can move the investigation into application behavior, feature flags, data, or external systems with more confidence.
+
+![Delivery trust path infographic showing commit, review, build, digest, registry, deployment gate, and runtime connected by evidence cards](/content-assets/articles/article-devsecops-security-foundations-security-mental-model-delivery-systems/delivery-trust-path.png)
+
+*The same identifiers move through source, review, build, artifact, registry, deployment, and runtime checks.*
+
+## Trace One Release End to End
+<!-- section-summary: A practical trace compares the same commit and digest across each delivery handoff. -->
+
+Now put the full story together. Sasha is on call. Support reports that expired coupons worked for a few customers after the June 21 release. Sasha needs to answer one first question: is production running Maya's approved fix?
+
+The trace starts with source and review:
+
+```bash
+gh pr view 482 \
+  --repo harborbooks/checkout-api \
+  --json number,title,headRefOid,reviewDecision,mergeCommit
+```
+
+The command asks for the PR number, title, reviewed commit, review decision, and merge commit.
+
+Example output:
 
 ```json
 {
-  "service": "checkout-api",
-  "commit": "7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20",
-  "imageDigest": "sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6",
-  "deploymentRecord": "prod-2026-06-21.3"
+  "number": 482,
+  "title": "Reject expired partner coupons",
+  "headRefOid": "7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20",
+  "reviewDecision": "APPROVED",
+  "mergeCommit": { "oid": "7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20" }
 }
 ```
 
-That endpoint helps support engineers and dashboards. The platform evidence remains the stronger record because Kubernetes and the registry observed the artifact directly. A good production setup keeps both: the app reports version information for quick triage, and the deployment platform records the digest, annotations, events, and Pod status for audit.
-
-Now we can trace the release from commit to runtime in one pass.
-
-## Tracing One Release
-<!-- section-summary: A practical trace follows the same identifiers through PR, build run, image digest, attestation, deployment record, and running Pods. -->
-
-Imagine Sasha is on call for Harbor Books. A support ticket says expired coupons worked for a few customers after the June 21 release. Sasha needs to answer whether production is running Maya's intended fix, an older image, or something unexpected. The trace uses the same few identifiers from the release.
-
-Sasha starts with the commit and pull request:
+Next, Sasha checks the build:
 
 ```bash
-COMMIT="7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20"
-
-gh pr list \
-  --repo harborbooks/checkout-api \
-  --state merged \
-  --search "${COMMIT}" \
-  --json number,title,author,mergedAt,mergedBy
-```
-
-The expected result points to PR `#482`, Maya as the author, and the expected merge actor. Sasha then checks the workflow run for the same commit:
-
-```bash
-gh run list \
-  --repo harborbooks/checkout-api \
-  --workflow release-checkout.yml \
-  --commit "${COMMIT}" \
-  --json databaseId,displayTitle,headSha,status,conclusion,createdAt
-
 gh run view 9142337112 \
   --repo harborbooks/checkout-api \
   --json headSha,event,workflowName,conclusion,url
 ```
 
-The build should have `headSha` equal to the commit SHA and `conclusion` equal to `success`. That connects review evidence to the build identity. Next, Sasha checks the artifact evidence:
+`headSha` should match the approved commit. `conclusion` should be `success`.
+
+Example output:
+
+```json
+{
+  "headSha": "7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20",
+  "event": "push",
+  "workflowName": "release-checkout",
+  "conclusion": "success"
+}
+```
+
+Then Sasha checks artifact proof:
 
 ```bash
-IMAGE="ghcr.io/harborbooks/checkout-api"
-DIGEST="sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6"
-REF="${IMAGE}@${DIGEST}"
-
-docker buildx imagetools inspect "${REF}"
+REF="ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6"
 
 gh attestation verify "oci://${REF}" \
-  -R harborbooks/checkout-api
+  --repo harborbooks/checkout-api
 
 cosign verify \
   --certificate-identity "https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/heads/main" \
@@ -438,81 +545,74 @@ cosign verify \
   "${REF}"
 ```
 
-Those checks connect the image digest to the expected build provenance and signature identity. Finally, Sasha checks production:
+The first check verifies the build attestation. The second verifies the signature identity. Both commands use the same digest reference.
+
+Finally, Sasha checks production:
 
 ```bash
 kubectl -n checkout get deployment checkout-api \
   -o jsonpath='{.metadata.annotations.devpolaris\.io/deployment-record}{"\n"}{.spec.template.spec.containers[?(@.name=="checkout-api")].image}{"\n"}'
-
-kubectl -n checkout get pods -l app=checkout-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[?(@.name=="checkout-api")].imageID}{"\n"}{end}'
 ```
 
-The first command should print `prod-2026-06-21.3` and the digest reference. The second should show every running `checkout-api` Pod using the same digest. If one Pod shows an older digest, Sasha has a rollout problem. If every Pod shows the expected digest, Sasha can move the investigation into application behavior, data, feature flags, or partner coupon configuration with much more confidence.
+Expected output:
 
-This trace is the practical heart of the delivery trust model. It uses a few stable identifiers and checks them at every handoff:
+```bash
+prod-2026-06-21.3
+ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
+```
 
-| Step | Evidence Sasha checks | Expected match |
+That is the delivery trust model in action. It does not solve the coupon bug by itself. It tells Sasha that production is running the approved artifact from the expected source and build. That answer narrows the investigation.
+
+| Step | Evidence | Good answer |
 |---|---|---|
-| Source | Pull request `#482` | Head SHA equals `7c1a2ef...` |
-| Review | Branch protection and approvals | Required reviewers and checks passed |
-| Build | Workflow run `9142337112` | `headSha` equals `7c1a2ef...` |
-| Artifact | Image digest | Digest equals `sha256:9f3e...` |
-| Provenance | Attestation | Subject digest equals the image digest |
-| Signature | cosign verification | Certificate identity equals the release workflow |
-| Deployment | Production record | Commit and digest match the release |
-| Runtime | Kubernetes Pod image IDs | Running Pods use the same digest |
+| Source | Pull request and commit | PR `#482` points to commit `7c1a2ef...` |
+| Review | Branch rules and reviews | Required approval and checks passed |
+| Build | Workflow run | Run `9142337112` built the same commit |
+| Artifact | Digest | Image digest is `sha256:9f3e...` |
+| Provenance | Attestation | Attestation subject matches the digest |
+| Signature | cosign verification | Expected workflow identity signed it |
+| Deployment | Release record | Production accepted the same digest |
+| Runtime | Pod image IDs | Running Pods use the same digest |
 
-The trace also shows why delivery security needs several records. Source control, CI, registry, signing, deployment, and runtime records all contribute one part of the answer.
+## The Starter Checklist
+<!-- section-summary: A first delivery trust implementation records a small set of identifiers and verifies them at each handoff. -->
 
-## Putting It All Together
-<!-- section-summary: A useful delivery trust model keeps a small set of stable identifiers and verifies them at every production handoff. -->
+A useful delivery trust model does not have to start as a huge platform project. A team can begin by recording the same few identifiers everywhere: commit SHA, pull request number, workflow run ID, image digest, attestation, signature identity, deployment record, and runtime image ID.
 
-The whole model can fit into one production sentence: Harbor Books is running `checkout-api` from commit `7c1a2ef4b49b7c6a1cc2e5d9a9f0d8f63e4c1a20`, merged through PR `#482`, built by workflow run `9142337112`, published as `ghcr.io/harborbooks/checkout-api@sha256:9f3e...`, verified by attestation and signature, approved in deployment record `prod-2026-06-21.3`, and observed on Kubernetes Pods in the `checkout` namespace.
+Here is a practical first version:
 
-That sentence is long because production evidence has many parts. Real teams usually make it manageable by recording the same identifiers everywhere: commit SHA, pull request number, workflow run ID, image digest, attestation, signature identity, deployment record, and runtime observation. Dashboards can display them. Release records can store them. Incident response runbooks can trace them.
-
-Here is a practical starter checklist for a team building this for the first time:
-
-| Area | First useful control |
+| Area | Starter control |
 |---|---|
-| Source | Require pull requests for production branches |
-| Review | Use CODEOWNERS for sensitive code and workflow paths |
-| Build | Record workflow run ID, commit SHA, and runner type |
-| Identity | Prefer OIDC-based publishing over shared long-lived secrets |
-| Artifact | Deploy by image digest |
-| Provenance | Generate build provenance attestations |
-| Signing | Verify the expected workflow identity before deployment |
-| Registry | Restrict push access and keep registry audit logs |
-| Deployment | Store commit, digest, approvers, and verification results |
-| Runtime | Compare Pod image IDs with the approved digest |
+| Source | Use pull requests for production branches |
+| Ownership | Add CODEOWNERS for sensitive app, workflow, and deployment paths |
+| Review | Require approvals and status checks before merge |
+| Build | Record workflow run ID, commit SHA, runner type, and job result |
+| Identity | Prefer short-lived OIDC identity over shared long-lived secrets |
+| Artifact | Publish and deploy container images by digest |
+| Provenance | Generate a build provenance attestation for the digest |
+| Signing | Sign the digest and verify the expected workflow identity |
+| Registry | Restrict who can push and keep registry audit logs |
+| Deployment | Store approvers, verification result, commit, and digest |
+| Runtime | Compare Kubernetes image IDs with the approved digest |
 
-This is also where the industry standards connect back to daily work. NIST SSDF gives the secure development practices, including protecting the build and preserving provenance. SLSA gives more detailed language for build integrity and provenance. Sigstore and GitHub Artifact Attestations give practical ways to attach proof to artifacts. Docker and OCI image digests give stable artifact names. Kubernetes gives runtime evidence that responders can compare to the release record.
-
-CISA supply-chain compromise material is a useful reminder that attackers often look for trusted delivery paths. They may target source control, build systems, update channels, credentials, or artifact storage because those systems already have permission to reach production. A delivery trust model gives defenders evidence at each handoff, so a suspicious release can be traced and challenged quickly.
+NIST SSDF gives teams a broad secure software development framework. SLSA gives more detailed language for build integrity and provenance. Sigstore and cosign give practical signing and verification tools. GitHub Artifact Attestations give GitHub Actions teams a built-in way to generate provenance. Kubernetes and registries give the runtime and artifact records that responders can compare.
 
 ![Release evidence summary infographic showing commit SHA, PR review, workflow run, image digest, deployment record, and running pods connected to one approved release](/content-assets/articles/article-devsecops-security-foundations-security-mental-model-delivery-systems/release-evidence-summary.png)
 
-*A useful release record stores the same few identifiers everywhere, so responders can compare the source, artifact, deployment, and runtime views.*
+*The release record is useful because the same identifiers appear in source control, CI, the registry, the deployment gate, and Kubernetes.*
 
 ## What's Next
 
-Now the delivery path has evidence. The next question is access: which humans, services, CI jobs, deployment systems, and runtime identities can perform each step, and which secrets or tokens make those actions possible. The next article moves into least privilege and secrets so the same release path has tighter control over who can change, build, publish, and deploy.
+Delivery trust gives the release path a chain of evidence. The next question is access. Which people, services, CI jobs, deployment systems, and runtime identities can perform each step? Which secrets or tokens make those actions possible? The next article moves into least privilege and secrets so the same release path has tighter control over who can change, build, publish, and deploy.
 
----
+## References
 
-**References**
-
-- [CISA: Supply Chain Compromise](https://www.cisa.gov/news-events/alerts/2021/01/07/supply-chain-compromise) - Official CISA alert material about a significant software supply-chain compromise and response guidance.
-- [CISA: Defending Against Software Supply Chain Attacks](https://www.cisa.gov/resources-tools/resources/defending-against-software-supply-chain-attacks) - CISA guidance on software supply-chain attack patterns and defensive practices.
 - [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST's SSDF publication for secure software development practices.
-- [SLSA: Build requirements](https://slsa.dev/spec/v1.2/requirements) - SLSA requirements for trusted build platforms and build integrity.
-- [SLSA: Provenance](https://slsa.dev/spec/v1.0/provenance) - SLSA provenance format and the evidence fields used to describe artifact builds.
+- [SLSA v1.1: Producing artifacts](https://slsa.dev/spec/v1.1/requirements) - SLSA requirements for build platforms, provenance, and build isolation.
+- [SLSA v1.1: Provenance](https://slsa.dev/spec/v1.1/provenance) - SLSA provenance fields and artifact subject structure.
 - [Sigstore cosign documentation](https://docs.sigstore.dev/cosign/) - Official cosign documentation for signing and verifying artifacts.
-- [Sigstore keyless signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/) - Sigstore guidance for signing container images with cosign.
+- [GitHub: Using artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) - GitHub documentation for generating and using artifact attestations.
+- [GitHub: About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - GitHub documentation for branch protection rules, review requirements, status checks, and signed commits.
 - [Docker: Image digests](https://docs.docker.com/dhi/core-concepts/digests/) - Docker documentation explaining image digests and immutable image references.
-- [OCI Image Specification](https://github.com/opencontainers/image-spec/blob/main/descriptor.md) - OCI descriptor documentation for media types, sizes, and digests.
-- [GitHub: About protected branches](https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - GitHub documentation for branch protection controls.
-- [GitHub: Using artifact attestations to establish provenance for builds](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) - GitHub documentation for creating build provenance attestations.
-- [GitHub: Verifying attestations offline](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations/verifying-attestations-offline) - GitHub documentation for verifying artifact attestations.
-- [Kubernetes: Images](https://kubernetes.io/docs/concepts/containers/images/) - Kubernetes documentation for container image names, tags, digests, and image pulls.
+- [OCI Image Specification: Descriptor](https://github.com/opencontainers/image-spec/blob/main/descriptor.md) - OCI descriptor documentation for media type, size, and digest fields.
+- [Kubernetes: Images](https://kubernetes.io/docs/concepts/containers/images/) - Kubernetes documentation for image names, tags, digests, and image pulls.

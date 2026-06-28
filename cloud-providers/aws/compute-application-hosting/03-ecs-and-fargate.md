@@ -12,110 +12,75 @@ aliases:
 
 ## Table of Contents
 
-1. [The Runtime Path For One Container](#the-runtime-path-for-one-container)
-2. [What ECS Does](#what-ecs-does)
-3. [Task Definitions: The Launch Contract](#task-definitions-the-launch-contract)
-4. [Tasks: One Running Copy](#tasks-one-running-copy)
-5. [Services: Keeping Copies Alive](#services-keeping-copies-alive)
-6. [Fargate: The Host Boundary](#fargate-the-host-boundary)
-7. [Networking: ENIs, Subnets, And Target Groups](#networking-enis-subnets-and-target-groups)
-8. [IAM Roles: Boot Permissions And App Permissions](#iam-roles-boot-permissions-and-app-permissions)
-9. [Logs, Health, And Deployment Evidence](#logs-health-and-deployment-evidence)
-10. [A Practical Deployment Flow](#a-practical-deployment-flow)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [From Image to Running Service](#from-image-to-running-service)
+2. [The Task Definition Contract](#the-task-definition-contract)
+3. [Registering the Task Definition](#registering-the-task-definition)
+4. [Services, Desired Counts, and Fargate Tasks](#services-desired-counts-and-fargate-tasks)
+5. [Networking and ALB Target Health](#networking-and-alb-target-health)
+6. [Roles, Secrets, and Logs](#roles-secrets-and-logs)
+7. [Deploying and Rolling Back a Revision](#deploying-and-rolling-back-a-revision)
+8. [Debugging a Failed ECS Rollout](#debugging-a-failed-ecs-rollout)
+9. [References](#references)
 
-## The Runtime Path For One Container
-<!-- section-summary: A production container path connects an image, task definition, service, Fargate task, load balancer target, IAM roles, and logs. -->
+## From Image to Running Service
+<!-- section-summary: ECS starts after a container image exists and turns that image into running tasks with networking, identity, logs, and health checks. -->
 
-Imagine the **devpolaris-orders-api** team has a small web API in a Docker image. On a laptop, the workflow is direct. The developer builds the image, runs the container, opens `localhost:3000`, and sees the health endpoint return `200`. That proves the image can start, but it leaves the production runtime questions open.
+The `orders-api` team has a Docker image. It starts with `node server.js`, listens on port `3000`, and works locally with a command like this:
 
-Production needs more than a container process. The team needs two healthy copies across private subnets, a public HTTPS endpoint, logs after a task disappears, permission to read one database secret, permission to write receipts to one S3 bucket, and a clear way to roll back a bad release. Those pieces are separate AWS resources, and ECS connects them into one running service.
-
-The production path uses this flow:
-
-```mermaid
-flowchart LR
-    Image["ECR image<br/>orders-api:2026.06.13.1"]:::build
-    TaskDef["Task definition<br/>devpolaris-orders-api:42"]:::compute
-    Service["ECS service<br/>desired count 2"]:::compute
-    Fargate["Fargate tasks<br/>private ENIs"]:::compute
-    ALB["Application Load Balancer<br/>HTTPS listener"]:::network
-    TargetGroup["Target group<br/>IP targets"]:::network
-    Logs["CloudWatch Logs<br/>/ecs/devpolaris/orders-api"]:::ops
-    Roles["IAM roles<br/>execution + task"]:::security
-
-    Image --> TaskDef
-    TaskDef --> Service
-    Service --> Fargate
-    ALB --> TargetGroup
-    TargetGroup --> Fargate
-    Fargate --> Logs
-    Roles --> TaskDef
-
-    classDef build fill:#25324a,stroke:#64b5f6,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef network fill:#19382f,stroke:#3ddc97,stroke-width:2px,color:#fff
-    classDef security fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef ops fill:#2a2a2a,stroke:#9aa0a6,stroke-width:2px,color:#fff
+```bash
+docker run -p 3000:3000 -e NODE_ENV=production orders-api:local
 ```
 
-Each resource has one job. **Amazon ECR** stores the container image. A **task definition** describes how ECS should start that image. An **ECS service** keeps the chosen number of copies running. **AWS Fargate** supplies the compute boundary for each copy. The **Application Load Balancer** receives user traffic and sends it to healthy task IP addresses. **IAM roles** decide what the platform and application can call. **CloudWatch Logs** keeps the container output after the task stops.
+`-p 3000:3000` maps laptop port `3000` to container port `3000`. `-e NODE_ENV=production` passes an environment variable into the container. `orders-api:local` names the image. This proves the image can start, but production still needs CPU, memory, network placement, AWS permissions, log delivery, health checks, and a way to keep several copies running.
 
-This article follows that path in order. We will keep using the same orders API because real ECS work usually fails at the boundaries between these pieces: image pull, task startup, service replacement, target health, role permission, or missing logs. When each boundary has a name, the team can debug the right thing instead of changing random settings.
+**Amazon ECS** is AWS's container orchestration service. ECS runs containers as **tasks**. A task can have one container or a small group of containers that share a lifecycle. **AWS Fargate** supplies serverless compute capacity for ECS tasks, so the team chooses task CPU and memory while AWS handles the underlying host fleet.
 
-## What ECS Does
-<!-- section-summary: ECS is the AWS container orchestrator that turns task definitions into running tasks and keeps service state aligned. -->
+For this article, the image lives in Amazon ECR. A task definition describes how to run one copy. An ECS service keeps three copies running. Fargate supplies capacity. An Application Load Balancer routes traffic to healthy task IPs. IAM roles let the app call AWS without static keys. CloudWatch Logs receives stdout and stderr.
 
-**Amazon Elastic Container Service**, usually called **ECS**, is AWS's container orchestration service. A container orchestrator starts containers, tracks their lifecycle, replaces failed copies, connects them to networking, and coordinates deployments. ECS handles that control work while your application code stays inside normal container images.
+That path has a clean order:
 
-The orders API team gives ECS a task definition that says, "start this image with this CPU, memory, port, environment, secrets, roles, and logging setup." ECS turns that definition into running tasks. When the team creates a service with desired count `2`, ECS keeps two task copies running and replaces tasks that stop or fail health checks.
+1. Build and push an image to ECR.
+2. Register a task definition revision that points at that image.
+3. Create or update an ECS service to use the revision.
+4. Watch service counts, task state, target health, logs, and application metrics.
 
-ECS has a few words that show up everywhere:
+The important shift from EC2 is that the container image is the artifact, while the task definition and service are the runtime contract.
 
-| ECS word | Simple meaning | Orders API example |
-|---|---|---|
-| **Cluster** | A logical place where ECS runs tasks and services | `devpolaris-orders-prod` |
-| **Task definition** | A versioned launch contract for the container | `devpolaris-orders-api:42` |
-| **Task** | One running copy created from a task definition | one private task with its own IP |
-| **Service** | A controller that maintains a desired number of tasks | two healthy copies behind the ALB |
-| **Capacity** | The compute that runs the task | Fargate in this article |
+![The container-to-service map shows how image, task definition, service, target group, logs, roles, and networking connect into one ECS release](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ecs-and-fargate/container-to-service-map.png)
 
-The cluster gives ECS a home for service placement. The task definition gives ECS the recipe for one copy. The service joins the recipe with a desired count, network placement, deployment rules, and load balancer registration.
+*The container-to-service map shows how image, task definition, service, target group, logs, roles, and networking connect into one ECS release.*
 
-That separation matters during incidents. If the image tag is wrong, the task definition needs attention. If the task exits after boot, the task stopped reason and logs need attention. If desired count is `2` and running count stays `1`, the service events need attention. If tasks run but users get `503`, the target group and port contract need attention.
 
-## Task Definitions: The Launch Contract
-<!-- section-summary: A task definition is the versioned JSON contract that tells ECS which image to run and which runtime settings to apply. -->
+## The Task Definition Contract
+<!-- section-summary: A task definition is the versioned recipe ECS uses to start one copy of the workload. -->
 
-A **task definition** is the launch contract for one ECS task. AWS describes it as a blueprint for your application, and that word fits the daily work well. It records the container image, CPU and memory, network mode, roles, ports, environment variables, secrets, and log driver. Registering a task definition creates a new revision, such as `devpolaris-orders-api:42`, and ECS services can deploy that exact revision.
+A **task definition** is a JSON document that describes one task. Every update creates a new revision, such as `orders-api:42`. That revision history matters because rollback means moving the service back to a previous known-good revision.
 
-The task definition is also where many production mistakes enter. A container image can be good, but the task definition can point at the wrong tag, declare the wrong port, omit a secret, choose too little memory, or use the wrong IAM role. The container then fails in ECS even though the same image worked during a local test.
-
-Here is a trimmed task definition for the orders API:
+Here is a realistic Fargate task definition for `orders-api`:
 
 ```json
 {
-  "family": "devpolaris-orders-api",
-  "requiresCompatibilities": ["FARGATE"],
+  "family": "orders-api",
   "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
   "memory": "1024",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/prod-orders-api-task-role",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/prod-ecs-task-execution-role",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
   },
-  "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-execution",
-  "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-task",
   "containerDefinitions": [
     {
-      "name": "orders-api",
-      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026.06.13.1",
+      "name": "api",
+      "image": "123456789012.dkr.ecr.eu-west-2.amazonaws.com/orders-api@sha256:5f6d7a8b9c0d",
       "essential": true,
       "portMappings": [
         {
           "containerPort": 3000,
-          "protocol": "tcp"
+          "protocol": "tcp",
+          "appProtocol": "http"
         }
       ],
       "environment": [
@@ -127,139 +92,216 @@ Here is a trimmed task definition for the orders API:
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/orders/database-url-AbCdEf"
+          "valueFrom": "arn:aws:secretsmanager:eu-west-2:123456789012:secret:prod/orders/db-AbCdEf"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/devpolaris/orders-api",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "orders"
+          "awslogs-group": "/ecs/prod/orders-api",
+          "awslogs-region": "eu-west-2",
+          "awslogs-stream-prefix": "api"
         }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 20
       }
     }
   ]
 }
 ```
 
-The important Fargate fields connect directly to the runtime path. `requiresCompatibilities` tells ECS to validate the definition for Fargate. `networkMode` uses `awsvpc`, which gives each task its own VPC network interface. `cpu` and `memory` describe the task-level size that Fargate will provision. `executionRoleArn` lets the platform pull the image, fetch configured secrets, and send logs. `taskRoleArn` gives the application code its own AWS permissions.
+The task-level fields describe the runtime envelope:
 
-The `containerDefinitions` block describes the actual container. The `image` points at ECR. The `portMappings` block says the app listens on port `3000`. The `secrets` block injects sensitive values at startup from Secrets Manager. The `logConfiguration` block sends stdout and stderr to CloudWatch Logs through the `awslogs` driver.
+| Field | Meaning |
+|---|---|
+| `family` | The task definition family name. Revisions appear as `orders-api:1`, `orders-api:2`, and so on. |
+| `networkMode` | `awsvpc` gives each Fargate task its own elastic network interface, subnet placement, private IP, and security group. |
+| `requiresCompatibilities` | `["FARGATE"]` tells ECS to validate this definition for Fargate. |
+| `cpu` | Task-level CPU units. `512` means half a vCPU for the whole task. |
+| `memory` | Task-level memory in MiB. `1024` means 1 GiB for the whole task. |
+| `taskRoleArn` | The IAM role the application code uses at runtime when it calls AWS APIs. |
+| `executionRoleArn` | The IAM role ECS uses to pull the image, fetch injected secrets, and send container logs. |
+| `runtimePlatform` | The CPU architecture and operating system family the task expects. |
 
-The deployment job registers the definition before it updates the service:
+The container-level fields describe the app process:
 
-```shell
+| Field | Meaning |
+|---|---|
+| `name` | The container name inside the task. ECS events and logs use this name. |
+| `image` | The exact image to run. A digest pins the content more precisely than a mutable tag. |
+| `essential` | If this container stops, ECS stops the whole task. That is right for the main API container. |
+| `portMappings` | The app listens on container port `3000` over TCP, and the ALB target group should send traffic there. |
+| `environment` | Non-secret runtime values. These appear in task metadata and should stay safe to reveal. |
+| `secrets` | Secret values injected from Secrets Manager or Parameter Store at startup. |
+| `logConfiguration` | Sends stdout and stderr to CloudWatch Logs using the `awslogs` driver. |
+| `healthCheck` | Runs inside the container and tells ECS whether the app process is healthy. |
+
+The port mapping deserves special attention. With Fargate and `awsvpc`, each task has its own network interface and private IP. The Application Load Balancer target group should use target type `ip`, and it should route to the task private IP on port `3000`. The target group health check and the container health check can use the same endpoint, but they answer different questions: ALB health controls user traffic, while container health controls task replacement.
+
+Now the task definition needs to become an ECS revision.
+
+## Registering the Task Definition
+<!-- section-summary: Registering a task definition creates a numbered revision that services can deploy and roll back to. -->
+
+Save the JSON as `orders-api-task.json`, then register it:
+
+```bash
 aws ecs register-task-definition \
-  --cli-input-json file://task-definition.json
+  --cli-input-json file://orders-api-task.json \
+  --region eu-west-2
 ```
 
-The output includes a new task definition ARN. A real pipeline stores that ARN or revision and passes it into the service update step. That keeps the release precise. The team can say, "revision 42 is the image from build `2026.06.13.1` with these roles, these ports, and this log group."
+Example output:
 
-## Tasks: One Running Copy
-<!-- section-summary: A task is one live copy of the task definition, with current state, networking, stopped reasons, and logs. -->
-
-A **task** is one running copy created from a task definition. If the task definition is `devpolaris-orders-api:42`, a task is the actual container process that started from revision 42, received CPU and memory, attached to a subnet, got an IP address, and began writing logs.
-
-Tasks have a lifecycle. They move through states such as provisioning, pending, running, stopping, and stopped. ECS records useful timestamps and reasons along the way. When a task fails before the app starts, the task may show a resource initialization error, image pull problem, secret retrieval problem, or log driver problem. When the app starts and then exits, the stopped reason and container exit code usually point closer to the application.
-
-For the orders API, a failed task might tell the team this:
-
-```shell
-aws ecs describe-tasks \
-  --cluster devpolaris-orders-prod \
-  --tasks arn:aws:ecs:us-east-1:123456789012:task/devpolaris-orders-prod/abc123
+```json
+{
+  "taskDefinition": {
+    "taskDefinitionArn": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:42",
+    "family": "orders-api",
+    "revision": 42,
+    "status": "ACTIVE",
+    "requiresCompatibilities": ["FARGATE"],
+    "cpu": "512",
+    "memory": "1024"
+  }
+}
 ```
 
-Useful fields from that response include `lastStatus`, `desiredStatus`, `stoppedReason`, `containers[].exitCode`, `containers[].reason`, `attachments`, and `startedAt`. The attachment data shows the task network interface, which helps connect one ECS task to one private IP, one security group, one target group target, and one flow-log path.
+`taskDefinitionArn` is the full address of this revision. `family` and `revision` give the short name `orders-api:42`. `status: ACTIVE` means ECS can use it for new tasks. The output repeats the Fargate compatibility, CPU, and memory so you can verify the registered recipe matches the intended release.
 
-Standalone tasks have a place in ECS. Teams use them for one-time jobs, migrations, diagnostics, and scheduled work. A web API needs a service around its tasks because user traffic expects the app to keep existing after one container exits. The service is the next layer.
+Many teams record the image digest and task definition revision in the release notes. That small record matters during incidents because "revision 42" should identify the exact image, roles, secrets, ports, log group, and health check used by the service.
 
-## Services: Keeping Copies Alive
-<!-- section-summary: An ECS service keeps the desired number of tasks running, replaces unhealthy copies, and coordinates deployments. -->
+A registered task definition can run one-off tasks, scheduled tasks, or long-running services. Web APIs usually need an ECS service.
 
-An **ECS service** is the long-running controller for a workload. It runs and maintains a specified number of task copies from a task definition. When the desired count is `2`, ECS tries to keep two tasks running. If one task stops, the service scheduler launches another copy from the task definition to bring the service back to the desired count.
+## Services, Desired Counts, and Fargate Tasks
+<!-- section-summary: An ECS service keeps the desired number of task copies running and reports whether rollout state matches that desired count. -->
 
-This gives the orders API its stable shape. Users never call a task directly. Users call the load balancer. The load balancer sends traffic to healthy targets. The service keeps registering new healthy task IPs behind that target group as old tasks disappear during failures, deployments, or scaling events.
+An **ECS service** keeps a desired number of task copies running. If desired count is `3`, ECS tries to keep three tasks alive. If one task stops, ECS starts a replacement. If the service is connected to a load balancer, ECS also registers and deregisters task IPs with the target group.
 
-The service owns several production decisions:
+For `orders-api`, the service might run in private subnets with desired count `3`. A rolling deployment starts new tasks with revision `42`, waits for health, then stops old tasks from revision `41`. Deployment settings such as minimum healthy percent and maximum percent control how much overlap happens during the rollout.
 
-| Service setting | What it controls | Orders API choice |
-|---|---|---|
-| **Desired count** | How many task copies should run | `2` for normal production |
-| **Deployment configuration** | How many old and new tasks can overlap | `minimumHealthyPercent` and `maximumPercent` |
-| **Deployment circuit breaker** | Whether ECS can fail and roll back a bad rollout | enabled with rollback |
-| **Network configuration** | Which subnets and security groups tasks use | private app subnets and task security group |
-| **Load balancer mapping** | Which target group and container port receive traffic | target group to `orders-api:3000` |
+Check the service state like this:
 
-The service is also the first place the team checks during a release:
-
-```shell
+```bash
 aws ecs describe-services \
-  --cluster devpolaris-orders-prod \
-  --services devpolaris-orders-api
+  --cluster prod-web \
+  --services orders-api \
+  --region eu-west-2 \
+  --query 'services[].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Desired:desiredCount,Running:runningCount,Pending:pendingCount,Rollout:rolloutState}}'
 ```
 
-The response shows `desiredCount`, `runningCount`, `pendingCount`, active deployments, rollout state, and recent events. A healthy release should move toward one primary deployment with the new task definition, running count equal to desired count, and service events that say the service reached a steady state.
+Example output:
 
-Deployment settings decide how much overlap the service can use. With desired count `2`, `minimumHealthyPercent: 100` tells ECS to keep two healthy tasks available during a rolling deployment. `maximumPercent: 200` allows ECS to run up to four tasks temporarily while new tasks start. That gives the replacement tasks room to pass health checks before old tasks stop.
+```json
+[
+  {
+    "Desired": 3,
+    "Running": 2,
+    "Pending": 1,
+    "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:42",
+    "Deployments": [
+      {
+        "Status": "PRIMARY",
+        "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:42",
+        "Desired": 3,
+        "Running": 2,
+        "Pending": 1,
+        "Rollout": "IN_PROGRESS"
+      }
+    ]
+  }
+]
+```
 
-The **deployment circuit breaker** gives the rollout a failure path. ECS can mark a deployment failed when tasks fail to reach running state or health checks keep failing. With rollback enabled, ECS can return to the last completed deployment. Production teams often combine this with CloudWatch alarms for HTTP 5xx, target response time, task failures, CPU, memory, and business-level error signals.
+`Desired` is how many tasks the service wants. `Running` is how many are currently running. `Pending` is how many are starting or waiting for placement. A short period with `Pending: 1` during a deployment can be normal. A long gap between desired and running means ECS is trying and failing to reach the desired state.
 
-## Fargate: The Host Boundary
-<!-- section-summary: Fargate supplies serverless ECS task compute, so the team sizes and configures tasks without managing EC2 container hosts. -->
+Service events usually explain the first reason:
 
-**AWS Fargate** is serverless compute for ECS tasks. The team chooses task CPU, memory, operating system family, CPU architecture, networking, and container settings. AWS provides the host capacity and manages the underlying server fleet, container agent work, and task isolation boundary.
+```bash
+aws ecs describe-services \
+  --cluster prod-web \
+  --services orders-api \
+  --region eu-west-2 \
+  --query 'services[].events[0:8].message'
+```
 
-ECS had an EC2 hosting model before Fargate. In that model, a team runs EC2 instances as container hosts, patches the instances, manages AMIs, monitors disk, updates the ECS agent, and thinks about how tasks pack onto hosts. Fargate removes that host fleet from the team's daily work. The team still owns the container image, task definition, service, scaling rules, network access, and application behavior.
+Example output:
 
-That division matters because Fargate will faithfully run the contract you gave it. If the orders API uses too little memory, the task can exit. If the app binds to `127.0.0.1` instead of `0.0.0.0`, the load balancer health check can fail. If private subnets lack a NAT path or the right VPC endpoints, the task may fail while pulling the image, fetching secrets, or sending logs. Fargate handles host capacity, and the application team handles the runtime contract.
+```json
+[
+  "service orders-api has started 1 tasks: task 9f8e7d6c5b4a.",
+  "service orders-api registered 1 targets in target-group arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/orders-api/abc123.",
+  "service orders-api (task 9f8e7d6c5b4a) failed container health checks."
+]
+```
 
-Fargate tasks require valid CPU and memory combinations. A small API might begin with `512` CPU units and `1024` MiB memory, then change after load testing. The team watches CPU utilization, memory utilization, startup time, and request latency. If memory climbs during traffic spikes, the fix may be a larger task size, a code fix, or autoscaling more copies, depending on what the metrics and logs show.
+These messages connect ECS state to the next check. The task started and registered with the target group, then failed container health checks. The next step is target health and logs.
 
-Fargate also changes cost thinking. Each task has a size and runtime duration. A service with desired count `2` runs all day. A one-time migration task runs only while the job is active. That is why long-running HTTP APIs often use ECS services, while short event handlers may fit Lambda, and scheduled container jobs may use standalone ECS tasks or EventBridge Scheduler.
+## Networking and ALB Target Health
+<!-- section-summary: Fargate tasks usually live in private subnets while an ALB routes public HTTPS traffic to healthy task IPs. -->
 
-## Networking: ENIs, Subnets, And Target Groups
-<!-- section-summary: Fargate tasks use awsvpc networking, private task ENIs, security groups, and IP target groups behind the load balancer. -->
+For a public API, place the Application Load Balancer in public subnets and Fargate tasks in private subnets. The ALB security group accepts HTTPS from users. The task security group accepts traffic only from the ALB security group on the container port. The task security group reaches the database security group on the database port.
 
-Fargate tasks use **awsvpc networking**. In simple terms, each task receives its own elastic network interface, usually called an **ENI**, inside your VPC. That ENI gives the task a private IP address and security groups. From the network's point of view, each task looks like a small private network target.
+The network path for `orders-api` can be summarized like this:
 
-The orders API should usually run in private subnets. The public Application Load Balancer sits in public subnets and receives HTTPS from users. The ECS tasks sit in private subnets and allow inbound traffic only from the load balancer security group on the application port. The database allows inbound traffic only from the task security group on the database port.
-
-The security group path might look like this:
-
-| Path | Source | Destination | Port |
+| Source | Destination | Port | Purpose |
 |---|---|---|---|
-| User to ALB | Internet | ALB security group | `443` |
-| ALB to task | ALB security group | ECS task security group | `3000` |
-| Task to database | ECS task security group | RDS security group | `5432` |
-| Task to AWS APIs | ECS task private IP | NAT gateway or VPC endpoints | `443` |
+| Internet | ALB security group | `443` | User HTTPS traffic. |
+| ALB security group | Task security group | `3000` | Load-balanced app traffic. |
+| Task security group | RDS security group | `5432` | PostgreSQL connection. |
+| Task network path | ECR, CloudWatch Logs, Secrets Manager | HTTPS | Image pulls, logs, and secret injection. |
 
-The load balancer target group needs `ip` target type for Fargate and awsvpc tasks. The target group registers task IP addresses, such as `10.0.21.45:3000`, because the task has its own ENI. An `instance` target group points at EC2 instances, a different network shape than Fargate tasks.
+With Fargate and `awsvpc`, the target group should use `ip` targets because each task gets its own private IP address. The target group health check might call `/health` on port `3000`. If health checks fail, the ALB stops routing user traffic to that task, and ECS can replace it depending on service health behavior.
 
-The port contract needs to line up across the whole path:
+Inspect target health:
 
-| Layer | Orders API value | What breaks when it disagrees |
-|---|---|---|
-| Application listen address | `0.0.0.0:3000` | Task starts, but outside traffic has no route to the process |
-| Task definition container port | `3000` | ECS registers the wrong port or health checks fail |
-| Target group port and health check | `3000` and `/healthz` | ALB marks targets unhealthy |
-| Listener rule | HTTPS `443` to target group | Users reach the load balancer but miss the service |
+```bash
+aws elbv2 describe-target-health \
+  --target-group-arn "$TG_ARN" \
+  --region eu-west-2 \
+  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
+```
 
-Private tasks still need outbound access for normal platform work. If the task pulls an image from ECR, sends logs to CloudWatch Logs, or fetches a secret from Secrets Manager, it needs a path to those AWS APIs. Teams usually use a NAT gateway, VPC endpoints, or a mix of both. In locked-down private VPCs, common endpoints include ECR API, ECR Docker registry, CloudWatch Logs, Secrets Manager, and S3 for image layer or application object access.
+Example output:
 
-Many ECS networking incidents are plain path mismatches. The service has running tasks, but the target group is unhealthy because the app listens on `8080` while the task definition says `3000`. The task startup fails because the private subnet has no path to ECR. The task reaches running state, but RDS rejects the database path because the database security group allows yesterday's IP instead of the task security group. The fix follows the named boundary.
+```json
+[
+  {
+    "Target": "10.20.31.45",
+    "Port": 3000,
+    "State": "healthy",
+    "Reason": null,
+    "Description": null
+  },
+  {
+    "Target": "10.20.42.18",
+    "Port": 3000,
+    "State": "unhealthy",
+    "Reason": "Target.ResponseCodeMismatch",
+    "Description": "Health checks failed with these codes: [500]"
+  }
+]
+```
 
-## IAM Roles: Boot Permissions And App Permissions
-<!-- section-summary: ECS uses a task execution role for platform boot work and a task role for application AWS API calls. -->
+The target IDs are task private IPs. A `healthy` target can receive normal traffic. `Target.ResponseCodeMismatch` means the ALB reached the task but the health endpoint returned a code outside the allowed matcher. That points toward the app health endpoint, missing config, startup readiness, or a dependency the health endpoint checks.
 
-ECS task definitions usually name two IAM roles, and the difference matters during every real incident. The **task execution role** gives the ECS and Fargate platform permission to do boot work on your behalf. The **task role** gives the application code permission to call AWS APIs after the container starts.
+Subnet IP capacity also matters. Every Fargate task needs a private IP address. If private subnets run low on IPs, tasks can stay pending even when CPU, memory, image, and health checks are correct. That failure appears in ECS service events and stopped task reasons.
 
-For the orders API, the execution role needs platform permissions. It can pull the image from ECR, retrieve configured Secrets Manager values that ECS injects at startup, and write container logs through CloudWatch Logs. These permissions support the task boot path. The application code uses the task role for normal SDK calls.
+Networking gets traffic to the task. The next layer is identity and evidence inside the task.
 
-The task role belongs to the running application. If the orders API writes receipt files to S3, reads order events from SQS, or calls DynamoDB, those permissions belong on the task role. The AWS SDK inside the container receives temporary task role credentials through the ECS credential provider path. No static AWS access key belongs in the image, environment file, or source code.
+## Roles, Secrets, and Logs
+<!-- section-summary: ECS separates the role used to start the task from the role the application uses at runtime, and logs should leave the task immediately. -->
 
-A small task role policy might look like this:
+ECS uses two common IAM roles for Fargate tasks. The **task execution role** lets ECS prepare the task. It pulls the image from ECR, retrieves secret values referenced in the task definition, and writes logs to CloudWatch. The **task role** is the identity your application code receives through the AWS SDK while the container is running.
+
+For `orders-api`, the execution role needs ECR, CloudWatch Logs, and Secrets Manager permissions for startup. The task role needs only the actions the app performs after startup, such as writing receipt objects to one S3 prefix. Keeping those roles separate makes debugging faster. Image pull and secret injection errors usually point at the execution role. Runtime `AccessDenied` errors from application code usually point at the task role.
+
+A task role policy might look like this:
 
 ```json
 {
@@ -268,186 +310,230 @@ A small task role policy might look like this:
     {
       "Sid": "WriteReceipts",
       "Effect": "Allow",
-      "Action": [
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::devpolaris-prod-receipts/*"
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::prod-orders-receipts/receipts/*"
     },
     {
-      "Sid": "ReadQueue",
+      "Sid": "PublishOrderEvents",
       "Effect": "Allow",
-      "Action": [
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage",
-        "sqs:GetQueueAttributes"
-      ],
-      "Resource": "arn:aws:sqs:us-east-1:123456789012:orders-events"
+      "Action": "events:PutEvents",
+      "Resource": "arn:aws:events:eu-west-2:123456789012:event-bus/prod-orders"
     }
   ]
 }
 ```
 
-The matching execution role should stay focused on platform startup:
+`WriteReceipts` lets the app read and write only under the receipt prefix. `PublishOrderEvents` lets it publish events only to the production orders event bus. This policy leaves the database password out because this example injects it at startup through the task definition `secrets` field, which the execution role retrieves.
+
+The log configuration in the task definition sends container output to CloudWatch Logs. A useful log group name includes environment and service name, such as `/ecs/prod/orders-api`. The stream prefix `api` helps group logs by container name and task ID.
+
+Search recent errors:
+
+```bash
+aws logs tail /ecs/prod/orders-api \
+  --since 30m \
+  --region eu-west-2 \
+  --filter-pattern '"ERROR"'
+```
+
+Example output:
+
+```bash
+2026-06-24T10:16:08Z api/orders-api/9f8e7d6c Error: DATABASE_URL is not set
+2026-06-24T10:16:08Z api/orders-api/9f8e7d6c     at loadConfig (/app/config.js:12:11)
+```
+
+`--since 30m` limits the search to the recent incident window. `--filter-pattern '"ERROR"'` prints events containing the word `ERROR`. A quiet result means the app may log with a different word or structure, so search by request ID, exception name, status code, task ID, or deployment time.
+
+With roles and logs in place, the service can move safely from one revision to another.
+
+## Deploying and Rolling Back a Revision
+<!-- section-summary: ECS deployments move a service from one task definition revision to another while service counts and health checks protect traffic. -->
+
+A basic ECS release has four steps: push a new image to ECR, register a new task definition revision, update the service, and watch health. The service update points at a revision rather than an image tag alone, so the release includes every runtime field in the task definition.
+
+Before changing the service, record the current revision:
+
+```bash
+aws ecs describe-services \
+  --cluster prod-web \
+  --services orders-api \
+  --region eu-west-2 \
+  --query 'services[0].taskDefinition'
+```
+
+Example output:
 
 ```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
+"arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:41"
+```
+
+Now update to the new revision:
+
+```bash
+aws ecs update-service \
+  --cluster prod-web \
+  --service orders-api \
+  --task-definition orders-api:42 \
+  --region eu-west-2
+```
+
+After the update, watch service counts, ECS events, ALB target health, task logs, and application metrics. A healthy rollout should move `Running` toward the desired count for the new primary deployment while old tasks drain from the target group.
+
+Rollback uses the same command with the previous revision:
+
+```bash
+aws ecs update-service \
+  --cluster prod-web \
+  --service orders-api \
+  --task-definition orders-api:41 \
+  --region eu-west-2
+```
+
+Some services enable the ECS deployment circuit breaker with rollback. That can mark a failed deployment and return the service to the last completed deployment. Even with automation, keep the previous revision in the release record. Humans still need to understand which image digest, roles, secrets, and health checks were active before and after the event.
+
+Now put the pieces together in a failure path.
+
+![The rollout summary connects image digest, task definition revision, service deployment, target health, logs, and previous revision evidence](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ecs-and-fargate/ecs-rollout-evidence-summary.png)
+
+*The rollout summary connects image digest, task definition revision, service deployment, target health, logs, and previous revision evidence.*
+
+
+## Debugging a Failed ECS Rollout
+<!-- section-summary: ECS rollout debugging follows service counts, service events, stopped task reasons, logs, target health, roles, and release metadata. -->
+
+At 15:05, revision `42` starts rolling out and users see intermittent `503` responses. Start with the service because it connects desired state, deployment state, and recent events:
+
+```bash
+aws ecs describe-services \
+  --cluster prod-web \
+  --services orders-api \
+  --region eu-west-2 \
+  --query 'services[].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Events:events[0:8].message,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Running:runningCount,Pending:pendingCount,Rollout:rolloutState}}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Desired": 3,
+    "Running": 2,
+    "Pending": 0,
+    "Events": [
+      "service orders-api (task 9f8e7d6c5b4a) failed container health checks.",
+      "service orders-api registered 1 targets in target-group arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/orders-api/abc123."
+    ],
+    "Deployments": [
+      {
+        "Status": "PRIMARY",
+        "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:42",
+        "Running": 1,
+        "Pending": 0,
+        "Rollout": "IN_PROGRESS"
+      },
+      {
+        "Status": "ACTIVE",
+        "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:41",
+        "Running": 1,
+        "Pending": 0,
+        "Rollout": "COMPLETED"
+      }
+    ]
+  }
+]
+```
+
+The service wants three tasks and only two are running. The primary deployment is revision `42`, and the event says container health checks failed. Check stopped tasks next:
+
+```bash
+aws ecs list-tasks \
+  --cluster prod-web \
+  --service-name orders-api \
+  --desired-status STOPPED \
+  --region eu-west-2 \
+  --max-results 5
+```
+
+Then describe one stopped task:
+
+```bash
+aws ecs describe-tasks \
+  --cluster prod-web \
+  --tasks arn:aws:ecs:eu-west-2:123456789012:task/prod-web/9f8e7d6c5b4a \
+  --region eu-west-2 \
+  --query 'tasks[].{LastStatus:lastStatus,StopCode:stopCode,StoppedReason:stoppedReason,Containers:containers[].{Name:name,ExitCode:exitCode,Reason:reason,LastStatus:lastStatus}}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "LastStatus": "STOPPED",
+    "StopCode": "EssentialContainerExited",
+    "StoppedReason": "Essential container in task exited",
+    "Containers": [
+      {
+        "Name": "api",
+        "ExitCode": 1,
+        "Reason": null,
+        "LastStatus": "STOPPED"
+      }
+    ]
+  }
+]
+```
+
+`EssentialContainerExited` means the main app container stopped, and `ExitCode: 1` means the app exited with an error. That points to logs rather than placement or image pull.
+
+```bash
+aws logs tail /ecs/prod/orders-api \
+  --since 20m \
+  --region eu-west-2 \
+  --filter-pattern '"DATABASE_URL"'
+```
+
+If logs show a missing secret, inspect the task definition revision:
+
+```bash
+aws ecs describe-task-definition \
+  --task-definition orders-api:42 \
+  --region eu-west-2 \
+  --query 'taskDefinition.containerDefinitions[].secrets'
+```
+
+Example output:
+
+```json
+[
+  [
     {
-      "Sid": "GetEcrAuthToken",
-      "Effect": "Allow",
-      "Action": [
-        "ecr:GetAuthorizationToken"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "PullOrdersImage",
-      "Effect": "Allow",
-      "Action": [
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchGetImage"
-      ],
-      "Resource": "arn:aws:ecr:us-east-1:123456789012:repository/devpolaris-orders-api"
-    },
-    {
-      "Sid": "WriteTaskLogs",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/ecs/devpolaris/orders-api:*"
-    },
-    {
-      "Sid": "ReadStartupSecrets",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/orders/database-url-*"
+      "name": "DATABASE_URL",
+      "valueFrom": "arn:aws:secretsmanager:eu-west-2:123456789012:secret:prod/orders/wrong-db-AbCdEf"
     }
   ]
-}
+]
 ```
 
-Notice how the roles answer different questions. "Can ECS pull the image and send logs?" points to the execution role. "Can the app write a receipt to S3?" points to the task role. "Can ECS inject the database URL before the app starts?" points back to the execution role because ECS retrieves that configured secret during startup.
+The secret ARN points to the wrong secret name. The fix is a new task definition revision with the correct `valueFrom`, then an `update-service` to deploy it. If users need immediate recovery, roll back to revision `41` first.
 
-This split also makes reviews easier. Security teams can review platform boot permissions separately from application business permissions. Operations teams can read an error and pick the right role instead of adding broad access to both roles and hoping the symptom disappears.
+Other stopped reasons point to different layers. `CannotPullContainerError` usually means the image, ECR permission, or network path to ECR failed. `ResourceInitializationError` can mean log group, secret retrieval, or network setup failed. Long `Pending` counts can mean subnet IP capacity, Fargate capacity, or invalid placement. ALB target health failures with running tasks point toward health endpoint behavior, security groups, target group port, or app readiness.
 
-## Logs, Health, And Deployment Evidence
-<!-- section-summary: ECS operations use service events, task details, target health, CloudWatch Logs, metrics, alarms, and deployment state together. -->
+The useful habit is to follow ECS evidence in order: service counts, service events, task stop reasons, container logs, target health, roles, and release metadata. That keeps the investigation tied to the layer that is actually failing.
 
-Cloud debugging starts with evidence that survives replacement. Tasks are temporary by design. If a task exits and Fargate cleans it up, the team still needs logs, stopped reasons, target health history, metrics, and deployment state. ECS and CloudWatch provide those signals when the task definition and service include the right configuration.
+![The ECS checklist summarizes the evidence to check across task definition, image, service events, target health, logs, roles, and capacity](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ecs-and-fargate/ecs-fargate-checklist.png)
 
-The `awslogs` log driver sends container stdout and stderr to CloudWatch Logs. That means the application should log useful startup facts, configuration validation failures, database connection errors, request IDs, and shutdown messages to stdout or stderr. The task definition chooses the log group, Region, and stream prefix. The team should also set a retention policy on the log group so logs stay long enough for incident review without growing forever.
+*The ECS checklist summarizes the evidence to check across task definition, image, service events, target health, logs, roles, and capacity.*
 
-A normal investigation for the orders API uses several views together:
 
-| Question | Evidence source | Example clue |
-|---|---|---|
-| Did ECS keep the desired count? | `describe-services` | `desiredCount: 2`, `runningCount: 1` |
-| Did the task start? | `describe-tasks` | `lastStatus`, `stoppedReason`, exit code |
-| Did the load balancer accept it? | target group health | `Target.ResponseCodeMismatch` or timeout |
-| Did the app fail during startup? | CloudWatch Logs | missing env var or DB connection error |
-| Did the release fail? | deployment state and events | `rolloutState: FAILED` |
-| Did traffic get worse? | CloudWatch metrics and alarms | 5xx rate or latency alarm |
+## References
 
-The team checks logs with a command like this:
-
-```shell
-aws logs tail /ecs/devpolaris/orders-api \
-  --since 30m \
-  --follow
-```
-
-The target group health check explains the user-facing path:
-
-```shell
-aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09
-```
-
-The ECS service event explains the controller path. A repeated message about failing load balancer health checks means the container may be running while the ALB still fails to verify it as healthy. A repeated resource initialization error points earlier, often image pull, secret retrieval, logging, or network egress.
-
-Production teams usually wire rollback decisions into this evidence. ECS deployment failure detection can use the deployment circuit breaker and CloudWatch alarms. The circuit breaker looks at whether tasks reach running state and pass health checks. CloudWatch alarms can catch broader service symptoms, such as HTTP 5xx or latency. With rollback enabled and a previous completed deployment available, ECS can roll back a failed deployment to the last completed state.
-
-## A Practical Deployment Flow
-<!-- section-summary: A production ECS deployment registers a new task definition, updates the service, watches steady state, verifies health, and keeps rollback evidence. -->
-
-Now the pieces can move as one release. The orders API team builds an image, pushes it to ECR, registers a task definition revision, updates the service, and watches the deployment until ECS reaches steady state. Each step creates evidence that the next step depends on.
-
-The build step creates an immutable image tag:
-
-```shell
-docker build -t devpolaris-orders-api:2026.06.13.1 .
-docker tag devpolaris-orders-api:2026.06.13.1 \
-  123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026.06.13.1
-docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026.06.13.1
-```
-
-The release job writes the image tag into `task-definition.json` and registers the new revision:
-
-```shell
-aws ecs register-task-definition \
-  --cli-input-json file://task-definition.json
-```
-
-Then the job updates the service to the exact revision returned by registration:
-
-```shell
-aws ecs update-service \
-  --cluster devpolaris-orders-prod \
-  --service devpolaris-orders-api \
-  --task-definition devpolaris-orders-api:42 \
-  --deployment-configuration "minimumHealthyPercent=100,maximumPercent=200,deploymentCircuitBreaker={enable=true,rollback=true}"
-```
-
-The watch step waits for a stable deployment and then verifies the outside path:
-
-```shell
-aws ecs wait services-stable \
-  --cluster devpolaris-orders-prod \
-  --services devpolaris-orders-api
-
-curl -fsS https://api.devpolaris.example.com/healthz
-```
-
-If the deployment fails, the team follows the evidence instead of changing multiple things at once. An image-pull failure points to ECR permissions or network egress. A task that stops after startup points to app logs and exit codes. A running task that stays unhealthy points to the port contract, health path, security groups, or warm-up timing. A 5xx alarm after healthy target registration points into application behavior or downstream dependencies.
-
-Rollback should use known revisions. The previous service deployment, previous task definition revision, and previous image tag should be visible in the deployment record. If automatic rollback succeeds, the team still records the failed revision, the first failed signal, and the smallest fix. When automatic rollback has no completed deployment available, the team needs a manual service update back to the last known good task definition.
-
-## Putting It All Together
-<!-- section-summary: ECS and Fargate turn a container image into an operated service by assigning each runtime concern to the right AWS boundary. -->
-
-The orders API starts as one container image in ECR. ECS needs a task definition before it can serve users from that image, so the team registers a definition that names the image, resources, roles, port, secrets, and logs. ECS starts tasks from that definition, and the service keeps the desired number of healthy task copies running.
-
-Fargate provides the compute boundary for each task. AWS manages EC2 container hosts for the team, while the team still owns task sizing, image quality, subnet choice, security groups, health checks, and application startup behavior. Fargate removes host maintenance from the workload, and it leaves the runtime contract visible in the task definition and service.
-
-Networking connects users to changing task IPs. Each Fargate task gets its own ENI through awsvpc mode. The ALB target group uses IP targets and health checks, and the ECS service registers and deregisters task IPs during replacement and deployment. The port contract has to match from application bind address to task definition, target group, and listener rule.
-
-IAM keeps boot work separate from application work. The execution role supports image pull, secret injection, and log delivery. The task role supports the application code after startup. That split keeps policy review, debugging, and least-privilege work clean.
-
-Operations come from durable signals. Service events, task stopped reasons, target health, CloudWatch Logs, metrics, alarms, and deployment state tell the team where a failure occurred. A good ECS service is a named chain of runtime boundaries that a team can deploy, scale, debug, and roll back with confidence.
-
-## What's Next
-
-ECS services fit long-running container workloads like APIs, workers, and internal services. The next compute shape is different. Some workloads only need code to run after an event, such as an uploaded file, queue message, scheduled job, or API request that can finish quickly.
-
-The next article moves into Lambda. It follows event-driven compute through events, handlers, triggers, timeouts, memory settings, retries, and idempotency so you can compare long-running ECS services with short-lived function execution.
-
----
-
-**References**
-
-- [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html) - Explains how ECS services maintain desired task count, replace failed tasks, integrate with load balancers, and support service autoscaling.
-- [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html) - Defines task definitions as application blueprints and lists the core task parameters.
-- [Amazon ECS task definition parameters for Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html) - Documents Fargate task role, execution role, awsvpc network mode, runtime platform, and task CPU and memory parameters.
-- [Amazon ECS task definition differences for Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html) - Covers Fargate-specific task requirements, CPU and memory combinations, awsvpc networking, private subnet image-pull paths, logging, and storage notes.
-- [Use an Application Load Balancer for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/alb.html) - Documents ALB integration and the requirement to use `ip` target groups for awsvpc tasks.
-- [Best practices for IAM roles in Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-roles.html) - Describes separate ECS roles, including the task execution role and task role.
-- [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html) - Explains how ECS captures stdout and stderr through the `awslogs` driver for CloudWatch Logs.
-- [Amazon ECS deployment failure detection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-failure-detection.html) - Summarizes deployment circuit breaker and CloudWatch alarm rollback options.
-- [How the Amazon ECS deployment circuit breaker detects failures](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html) - Details circuit breaker stages, rollback behavior, rollout state, and CLI examples.
-- [Amazon ECS interface VPC endpoints](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/vpc-endpoints.html) - Explains VPC endpoint considerations for ECS, ECR, Secrets Manager, and CloudWatch Logs paths.
+- [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)
+- [Amazon ECS task definition parameters for Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html)
+- [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)
+- [Use load balancing with Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html)
+- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
+- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html)
+- [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html)
+- [Architect for AWS Fargate for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html)

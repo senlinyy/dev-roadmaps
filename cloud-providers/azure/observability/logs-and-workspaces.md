@@ -26,7 +26,7 @@ aliases:
 12. [What's Next](#whats-next)
 
 ## The Production Question
-<!-- section-summary: Azure log work starts with one practical question: where will the evidence live when a production request fails? -->
+<!-- section-summary: Azure log work has one practical question: where will the evidence live when a production request fails? -->
 
 Let's use one production story for the whole article. The DevPolaris Orders team runs `devpolaris-orders-api` on Azure Container Apps, sends customer traffic through Application Gateway, and stores observability data in a Log Analytics workspace named `law-devpolaris-prod`. A customer reports that checkout failed around `2026-05-07T09:42:00Z`, and the incident note includes operation ID `checkout-5001`.
 
@@ -36,7 +36,7 @@ This article connects the pieces in the order the team needs them. **Azure Monit
 
 In real incidents, this order gives the team a checklist. First confirm that each resource has a route. Then confirm that the records reached the expected workspace. Then inspect the table and columns before writing the query. So we will start with Azure Monitor, then follow the records all the way to the KQL query.
 
-![Azure resources flowing through diagnostic settings into Log Analytics tables and a KQL answer](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/log-route-before-query.png)
+![Application resources flowing through diagnostic settings into workspace tables and a KQL answer](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/log-route-before-query.png)
 
 *Logs become useful when the resource, diagnostic setting, workspace, table, and KQL answer are connected before the incident starts.*
 
@@ -127,7 +127,21 @@ az monitor diagnostic-settings list \
 
 Those commands answer two practical questions. The category list tells the team which log and metric categories Azure exposes for this resource type. The diagnostic settings list tells the team whether a setting exists, which categories it enables, and which destination receives the records.
 
-The second check happens in Log Analytics. After a few minutes of normal traffic, query the expected table for the resource ID and summarize the row count. The exact table depends on the resource and diagnostic mode, so the team starts with the table they expect and adjusts after checking the workspace schema.
+A healthy check might show categories like this:
+
+| Name |
+|---|
+| `ContainerAppConsoleLogs` |
+| `ContainerAppSystemLogs` |
+| `AllMetrics` |
+
+The diagnostic setting output should also show the expected setting name and destination. If the list returns no rows, or if the workspace resource ID points to a development workspace, the incident query will miss production evidence even though the app is running.
+
+| Name | ResourceGroup | WorkspaceId |
+|---|---|---|
+| `send-containerapp-logs-to-law` | `rg-devpolaris-app-prod` | `/subscriptions/.../workspaces/law-devpolaris-prod` |
+
+The second check happens in Log Analytics. After a few minutes of normal traffic, query the expected table for the resource ID and summarize the row count. The exact table depends on the resource and diagnostic mode, so the team chooses the table they expect and adjusts after checking the workspace schema.
 
 ```kusto
 ContainerAppConsoleLogs_CL
@@ -136,7 +150,13 @@ ContainerAppConsoleLogs_CL
 | summarize rows = count(), latest = max(TimeGenerated)
 ```
 
-A zero-row result can mean the app did not emit logs, the category is disabled, the diagnostic setting points at a different workspace, ingestion has not completed yet, or the team queried the wrong table. That short list gives the operator a calm path: check the diagnostic setting, check the destination workspace, check the table schema, then generate a small known log event and query again.
+A healthy result should show recent rows and a recent timestamp:
+
+| rows | latest |
+|---|---|
+| `182` | `2026-05-07T09:47:18.221Z` |
+
+A zero-row result can mean the app has not emitted logs, the category is disabled, the diagnostic setting points at a different workspace, ingestion has not completed yet, or the team queried the wrong table. That short list gives the operator a calm path: check the diagnostic setting, check the destination workspace, check the table schema, then generate a small known log event and query again.
 
 ## Log Analytics Workspace
 <!-- section-summary: A Log Analytics workspace is the queryable data store where Azure Monitor Logs keeps collected records in tables. -->
@@ -178,11 +198,11 @@ Tables give us the nouns. KQL gives us the grammar for asking useful questions a
 ## KQL
 <!-- section-summary: KQL is the read-only query language Azure Monitor Logs uses to filter, shape, join, and summarize workspace data. -->
 
-**Kusto Query Language**, or **KQL**, is the read-only query language used by Azure Monitor Logs. Microsoft describes Azure Monitor log queries as using the same KQL foundation as Azure Data Explorer. A KQL query usually starts with a table name, then uses pipe-separated operators to filter, shape, group, and order the rows.
+**Kusto Query Language**, or **KQL**, is the read-only query language used by Azure Monitor Logs. Microsoft describes Azure Monitor log queries as using the same KQL foundation as Azure Data Explorer. A KQL query usually names a table first, then uses pipe-separated operators to filter, shape, group, and order the rows.
 
 KQL fills the same investigation slot that CloudWatch Logs Insights fills for many AWS teams. The syntax is different, but the habit is familiar: start with a tight time window, filter to the resource or operation, then project only the fields that prove the incident story.
 
-The first habit is to start with time. Log work can become expensive and noisy when the query scans a huge window, and incident work usually starts with a known time range. For the Orders incident, the team begins around `2026-05-07T09:42:00Z`, then expands the window if needed.
+The first habit is choosing the time window. Log work can become expensive and noisy when the query scans a huge window, and incident work usually has a known time range. For the Orders incident, the team begins around `2026-05-07T09:42:00Z`, then expands the window if needed.
 
 Here is the basic shape:
 
@@ -194,7 +214,13 @@ ContainerAppConsoleLogs_CL
 | order by TimeGenerated asc
 ```
 
-Read the query from top to bottom. `ContainerAppConsoleLogs_CL` chooses the table. The first `where` narrows the time window. The second `where` keeps the one operation. `project` chooses the columns that matter for the incident note. `order by` puts the records into a timeline.
+The query flows from the broadest choice to the narrowest evidence. `ContainerAppConsoleLogs_CL` chooses the table. The first `where` narrows the time window. The second `where` keeps the one operation. `project` chooses the columns that matter for the incident note. `order by` puts the records into a timeline.
+
+The output should give the responder a short event list rather than a dump of every log field:
+
+| TimeGenerated | OperationId | ResultCode | SeverityLevel | Message |
+|---|---|---|---|---|
+| `2026-05-07T09:42:10.884Z` | `checkout-5001` | `500` | `Error` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
 
 KQL names are case-sensitive, including table names, column names, operators, and functions. Real Azure schemas also vary across services and collection modes, so a careful engineer inspects the table schema before assuming a column name. If one table uses `OperationId` and another older example uses `operation_Id`, the spelling difference matters.
 
@@ -215,7 +241,13 @@ ContainerAppConsoleLogs_CL
 | order by TimeGenerated asc
 ```
 
-A useful result might say `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` with result code `500`. That points toward the application path, but the user reached the app through Application Gateway. The next query checks what the gateway saw for the same time window.
+A useful result might look like this:
+
+| TimeGenerated | SeverityLevel | ResultCode | Message |
+|---|---|---|---|
+| `2026-05-07T09:42:10.884Z` | `Error` | `500` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
+
+That row points toward the application path, but the user reached the app through Application Gateway. The next query checks what the gateway saw for the same time window.
 
 ```kql
 AzureDiagnostics
@@ -228,6 +260,10 @@ AzureDiagnostics
 
 If the gateway row says `Application Gateway backend ca-devpolaris-orders-prod returned 500 for POST /checkout`, the team now has two pieces of evidence. The gateway received the request and returned the backend failure to the user. The app runtime recorded a SQL-related failure at the same time and operation ID.
 
+| TimeGenerated | Category | ResultCode | Message |
+|---|---|---|---|
+| `2026-05-07T09:42:10.912Z` | `ApplicationGatewayAccessLog` | `500` | `backend ca-devpolaris-orders-prod returned 500 for POST /checkout` |
+
 When Application Insights is connected to the same workspace, the team can build a wider timeline. This query unions common app and platform tables, filters the same operation, and sorts everything by time. It turns separate rows into one incident sequence.
 
 ```kql
@@ -238,7 +274,17 @@ union ContainerAppConsoleLogs_CL, AzureDiagnostics, AppRequests, AppDependencies
 | order by TimeGenerated asc
 ```
 
-The final answer might be simple: `POST /checkout` returned `500`; the gateway passed that backend failure to the user; the app logged a SQL timeout; Application Insights recorded a dependency timeout and an exception. That is enough to move from "checkout is broken" to "the Orders API failed while calling SQL during one checkout operation."
+The combined result might read like this:
+
+| TimeGenerated | Type | ResultCode | Message |
+|---|---|---|---|
+| `09:42:10.840` | `AppRequests` | `500` | `POST /checkout` |
+| `09:42:10.884` | `ContainerAppConsoleLogs_CL` | `500` | `checkout failed while calling sql-devpolaris-orders-prod.database.windows.net` |
+| `09:42:10.912` | `AzureDiagnostics` | `500` | `backend ca-devpolaris-orders-prod returned 500` |
+| `09:42:11.023` | `AppDependencies` | `Timeout` | `SQL InsertOrder exceeded 1500 ms` |
+| `09:42:11.041` | `AppExceptions` | | `SqlTimeoutException in OrdersRepository.InsertOrder` |
+
+The final answer is direct: `POST /checkout` returned `500`; the gateway passed that backend failure to the user; the app logged a SQL timeout; Application Insights recorded a dependency timeout and an exception. That is enough to move from "checkout is broken" to "the Orders API failed while calling SQL during one checkout operation."
 
 ![Checkout incident evidence connected by the same operation ID across gateway, runtime, dependency, and exception records](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/operation-id-incident-trail.png)
 
@@ -274,7 +320,7 @@ A **workspace design** is the decision about which logs go into which Log Analyt
 
 A single shared production workspace supports cross-service incident queries. The Orders team can union app, gateway, dependency, and exception data in one place. The platform team can build shared dashboards and log alerts around one production workspace ID.
 
-Separate workspaces make sense when the boundary matters more than one big query surface. Development and production usually deserve separate workspaces because dev logs can be noisy, experimental, and less protected. Regulated systems may need their own workspace because access, retention, and data residency rules are stricter. A large company may separate workspaces by business unit so cost ownership and permissions stay understandable.
+Separate workspaces fit cases where the boundary matters more than one big query surface. Development and production usually deserve separate workspaces because dev logs can be noisy, experimental, and less protected. Regulated systems may need their own workspace because access, retention, and data residency rules are stricter. A large company may separate workspaces by business unit so cost ownership and permissions stay understandable.
 
 For DevPolaris, `law-devpolaris-prod` is a reasonable production shared workspace for the Orders scenario. It sits in the observability resource group, receives logs from the app and gateway, and has a clear production retention policy. A matching `law-devpolaris-dev` workspace could collect development logs so test traffic stays out of production incident queries.
 

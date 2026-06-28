@@ -23,7 +23,11 @@ id: article-containers-orchestration-kubernetes-operations-telemetry-pipelines
 ## Why a Telemetry Pipeline Exists
 <!-- section-summary: A telemetry pipeline gives every signal from devpolaris-orders-api a controlled route from the Pod to the backend. -->
 
-A **telemetry pipeline** is the path operational evidence takes after an application creates it. For `devpolaris-orders-api`, that evidence includes request logs, latency metrics, trace spans, and sometimes Kubernetes events around rollouts. Each signal answers a different question, yet all of them need a reliable way to leave the `orders` namespace and reach the tools your team uses during incidents.
+A slow checkout request leaves several kinds of evidence. The application writes a log line, the service records a latency number, and the request journey can show which step was slow. Those signals are useful only if responders can find them from the same request ID during an incident.
+
+A **telemetry pipeline** is the route operational evidence takes after an application creates it. For `devpolaris-orders-api`, that evidence includes logs, metrics, request traces, and sometimes Kubernetes events around rollouts. Each signal answers a different question, yet all of them need a reliable way to leave the `orders` namespace and reach the tools your team uses during incidents.
+
+Here is the concrete route. The orders API sends telemetry to `otel-collector.observability.svc.cluster.local`. The collector receives the data, removes unsafe fields such as raw tokens, batches the data, and exports it to the backend. Now a responder can search for `request.id=debug-20260616-1005` and see the request path instead of guessing which Pod handled it.
 
 Without a pipeline, every service team usually wires its own exporter, backend URL, authentication token, retry settings, and filtering rules. One service sends traces straight to a vendor. Another writes logs through a sidecar. Another exposes metrics only inside the namespace. That layout works for a small demo, then daily operations start to hurt because every service has a slightly different route for the same kind of evidence.
 
@@ -74,7 +78,9 @@ With the shape chosen, we can write a collector configuration that is small enou
 
 The collector usually reads its configuration from a **ConfigMap**. A ConfigMap stores non-secret configuration in Kubernetes. The backend token should live in a Secret, but the receiver, processor, exporter, and pipeline layout can live in a ConfigMap reviewed like any other operations manifest.
 
-This example uses the `opentelemetry-collector-contrib` image because the attribute processor and many production processors live in the contrib distribution. It receives OTLP traffic, removes risky attributes from traces, batches the data, exports traces to a Tempo-like OTLP HTTP endpoint, and exposes collector internal metrics on port `8888`.
+This example uses the `opentelemetry-collector-contrib` image because the attribute processor and many production processors live in the contrib distribution. We will build the ConfigMap in pieces first: receiver, processors, exporter, and service pipeline. That keeps the pipeline shape visible before the YAML gets busy.
+
+Start with the ConfigMap shell:
 
 ```yaml
 apiVersion: v1
@@ -84,6 +90,12 @@ metadata:
   namespace: observability
 data:
   collector.yaml: |
+    # receiver, processors, exporters, and service pipeline go here
+```
+
+The receiver is the entrance. OTLP over gRPC listens on `4317`, and OTLP over HTTP listens on `4318`:
+
+```yaml
     receivers:
       otlp:
         protocols:
@@ -91,7 +103,11 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+```
 
+The processors protect and shape the data. The memory limiter runs early, the attributes processor deletes unsafe fields, and the batch processor groups data before export:
+
+```yaml
     processors:
       memory_limiter:
         check_interval: 1s
@@ -108,13 +124,21 @@ data:
       batch:
         timeout: 5s
         send_batch_size: 1024
+```
 
+The exporter is the exit. This example sends traces to a Tempo-like OTLP HTTP endpoint and keeps a debug exporter available for short proof tests:
+
+```yaml
     exporters:
       otlphttp/traces:
         endpoint: http://tempo.observability.svc.cluster.local:4318
       debug:
         verbosity: normal
+```
 
+The service section turns the pieces on. Defining `attributes/drop_sensitive` above does nothing until the traces pipeline lists that processor:
+
+```yaml
     service:
       telemetry:
         metrics:
@@ -140,7 +164,9 @@ Now the collector needs a Deployment, a Service, and a network boundary.
 ## Deploying the Collector in Kubernetes
 <!-- section-summary: A collector Deployment gives applications a stable Service endpoint while NetworkPolicy keeps OTLP ports from turning into a cluster-wide open sink. -->
 
-The gateway collector runs well as a Kubernetes **Deployment**. A Deployment manages a set of replica Pods and rolls them out safely when the image or configuration changes. A **Service** gives those Pods a stable DNS name. `devpolaris-orders-api` should never care which collector Pod receives a request; it only needs the Service endpoint.
+The gateway collector runs well as a Kubernetes **Deployment**. A Deployment manages a set of replica Pods and rolls them out safely as the image or configuration changes. A **Service** gives those Pods a stable DNS name. `devpolaris-orders-api` should never care which collector Pod receives a request; it only needs the Service endpoint.
+
+Start with the Deployment skeleton:
 
 ```yaml
 apiVersion: apps/v1
@@ -161,6 +187,12 @@ spec:
       containers:
         - name: collector
           image: otel/opentelemetry-collector-contrib:0.154.0
+          # config, ports, resources, and volume mounts go here
+```
+
+Now add the collector arguments, ports, resource guardrails, and mounted ConfigMap:
+
+```yaml
           args:
             - --config=/conf/collector.yaml
           ports:
@@ -186,7 +218,11 @@ spec:
             items:
               - key: collector.yaml
                 path: collector.yaml
----
+```
+
+The Deployment gives you collector Pods. The Service gives applications one stable name for those Pods:
+
+```yaml
 apiVersion: v1
 kind: Service
 metadata:

@@ -26,13 +26,17 @@ aliases:
 ## What Cost and Resilience Mean Together
 <!-- section-summary: Cost explains what Azure keeps available for you, and resilience explains what that spending helps the workload survive. -->
 
+Start with the moment a beginner will actually recognize: the Azure bill grows, and someone asks what can be turned down. Maybe the app has more replicas than normal traffic needs. Maybe storage keeps old files for too long. Maybe the log workspace stores debug noise for months. Those are normal cost questions, and they are worth asking.
+
+The careful part is that each saving can also change a production promise. Fewer replicas may save money while making checkout slower during an event launch. Cheaper storage redundancy may save money while narrowing the failure boundary for receipt files. Shorter log retention may save money while removing evidence the team needs for an incident review. This is why cost and resilience belong in the same conversation.
+
 **Cost** is the money attached to the resources your workload asks Azure to provide. A virtual machine has a cost because Azure keeps compute capacity available. A database has a cost because Azure stores data, runs database engines, keeps backups, and offers performance. A log workspace has a cost because Azure ingests, indexes, and retains telemetry for later investigation.
 
 **Resilience** is the ability of a workload to keep giving users an acceptable experience during trouble, or to recover within an agreed time after trouble. Trouble can mean a process crash, a full virtual machine failure, an availability zone outage, a bad deployment, a mistaken delete, a corrupt database write, or a regional disruption. Resilience uses design choices like multiple instances, health checks, queue buffering, backups, restore testing, and failover paths.
 
 Those two ideas stay connected because every resilience choice asks Azure to hold something extra for you. Extra compute replicas cost money. Extra database capacity costs money. Extra copies of data cost money. Longer log retention costs money. A standby region costs money even on quiet days because you are buying a faster recovery path for a future bad day.
 
-The Azure Well-Architected Framework talks about this as a business and engineering conversation, not only a technical one. The Cost Optimization pillar asks teams to understand budgets, spending patterns, usage, and tradeoffs. The Reliability pillar asks teams to define what users need, design for faults, and recover within agreed targets. In real production work, those pillars meet in the same review: what promise are we buying, what failure does it cover, and what monthly spend does it add?
+The Azure Well-Architected Framework frames this as a business and engineering conversation. The Cost Optimization pillar asks teams to understand budgets, spending patterns, usage, and tradeoffs. The Reliability pillar asks teams to define what users need, design for faults, and recover within agreed targets. In real production work, those pillars meet in the same review: what promise are we buying, what failure does it cover, and what monthly spend does it add?
 
 AWS readers can map this to the same Well-Architected conversation. Cost Optimization asks whether spend matches value, and Reliability asks whether the workload can survive realistic failure. Azure uses Azure-specific services, but the review habit is very similar.
 
@@ -101,7 +105,7 @@ The ticketing service gives us five common failure shapes. These are the same sh
 
 ![Azure failure shape protection map matching instance crashes, zone outages, deleted receipts, bad SQL writes, and regional outages to the right protection choices](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-shape-protection-map.png)
 
-*The image shows why one reliability feature cannot cover every incident: each failure shape needs a matching protection or recovery path.*
+*The image shows why reliability choices need to match incidents: each failure shape needs a matching protection or recovery path.*
 
 **Instance failure** usually needs extra running capacity and routing. If the checkout API runs on one instance and that instance crashes, users feel it right away. If it runs on multiple healthy instances, the platform can stop sending traffic to the broken one while the others continue serving requests.
 
@@ -111,7 +115,7 @@ The ticketing service gives us five common failure shapes. These are the same sh
 
 **Bad database writes** show up during migrations, release bugs, background jobs, and manual operations. The database stayed online, but the state became wrong. Azure SQL automated backups and point-in-time restore can help the team create a recovered database from an earlier moment, but the team still needs an application-level plan for merging or replacing data.
 
-**Regional outage** changes the scale again. Zone redundancy inside one region cannot cover every regional disaster. A service that needs a regional recovery story needs secondary-region data, deployable compute, traffic routing, identity access, secrets, monitoring, and a practiced failover path. The monthly bill grows because the recovery path needs real resources and real tests.
+**Regional outage** changes the scale again. Zone redundancy inside one region protects against zone-level trouble, while a regional recovery story needs secondary-region data, deployable compute, traffic routing, identity access, secrets, monitoring, and a practiced failover path. The monthly bill grows because the recovery path needs real resources and real tests.
 
 Now the cost shapes have something to connect to. A second App Service instance maps to instance failure and capacity spikes. ZRS storage maps to zone trouble inside a supported region. Blob versioning maps to delete and overwrite mistakes. Geo-redundant storage maps to regional data durability, with details around read access, write failover, and replication lag.
 
@@ -120,7 +124,7 @@ Now the cost shapes have something to connect to. A second App Service instance 
 
 A **service promise** is the reliability statement attached to one user or business workflow. It explains what the team is trying to protect, how much downtime the workflow can tolerate, how much data loss the business can accept, and what kind of degraded behavior still counts as acceptable.
 
-This matters because one application contains many workflows. In the ticketing service, buying a ticket has a different promise than receiving a marketing image. A customer can wait a few minutes for a receipt email, but the payment and seat reservation need strong correctness. The admin dashboard can tolerate a short outage during a concert sale, but the public checkout path cannot become the weakest part of the business.
+This matters because one application contains many workflows. In the ticketing service, buying a ticket has a different promise than receiving a marketing image. A customer can wait a few minutes for a receipt email, but the payment and seat reservation need strong correctness. The admin dashboard can tolerate a short outage during a concert sale, while the public checkout path needs stricter protection because it carries live revenue.
 
 Two common recovery terms help make promises specific. **Recovery Time Objective**, or **RTO**, means the maximum acceptable time to restore a workflow after a disruption. **Recovery Point Objective**, or **RPO**, means the maximum acceptable amount of data loss measured in time. A checkout database with a five-minute RPO says the business can tolerate losing at most a few minutes of recent data in the recovery scenario. A nightly report with a one-day RPO says yesterday's source data may be enough.
 
@@ -187,7 +191,7 @@ Azure gives teams several sources of cost and usage evidence. **Microsoft Cost M
 
 A good review usually contains six facts. The first fact is the spend line, such as App Service plan hours, Log Analytics ingestion, Blob Storage capacity, or SQL backup storage. The second fact is the owner, because the owner understands why the resource exists. The third fact is the workflow, because a resource can support checkout, admin, reporting, or recovery.
 
-The fourth fact is the cost shape. The fifth fact is the failure shape or service promise affected by the change. The sixth fact is the rollback plan. A team that cannot name the rollback plan has not finished the review, especially for compute size, database tier, retention, redundancy, and network changes.
+The fourth fact is the cost shape. The fifth fact is the failure shape or service promise affected by the change. The sixth fact is the rollback plan. A review stays incomplete until the team can name the rollback plan, especially for compute size, database tier, retention, redundancy, and network changes.
 
 Here is a small decision record for the ticketing service:
 
@@ -206,7 +210,7 @@ That kind of review catches a common mistake. If the team only looked at average
 
 The same habit applies to logs and stored data. A log table with verbose debug traces from staging can have a short retention period. Security audit logs for production may need longer retention because investigations often happen after the original incident. A blob container full of temporary resized images can have aggressive lifecycle cleanup. Receipt PDFs need a stricter retention and restore conversation.
 
-The review also needs the current Azure values alongside the meeting note. Before changing production spend, the Orders team might capture the live configuration like this:
+The review also needs the current Azure values alongside the meeting note. Before changing production spend, the ticketing team might capture the live configuration like this:
 
 ```bash
 az appservice plan show \
@@ -225,7 +229,27 @@ az monitor log-analytics workspace show \
   --query "{retentionInDays:retentionInDays,sku:sku.name}"
 ```
 
-Those values line up with the tradeoff table. `capacity` is the number of App Service plan workers behind the API. Storage `redundancy` tells the team whether receipt files use LRS, ZRS, GRS, or another option. `retentionInDays` is the log evidence window. A cost review that records these values can also record the rollback value, such as returning the plan to two workers or restoring the previous log retention.
+Shortened output from those checks might look like this:
+
+```json
+{
+  "appServicePlan": {
+    "sku": "P1v3",
+    "tier": "PremiumV3",
+    "capacity": 2
+  },
+  "receiptStorage": {
+    "redundancy": "Standard_ZRS",
+    "publicNetworkAccess": "Disabled"
+  },
+  "logWorkspace": {
+    "retentionInDays": 90,
+    "sku": "PerGB2018"
+  }
+}
+```
+
+Those values line up with the tradeoff table. `capacity` is the number of App Service plan workers behind the API. Storage `redundancy` tells the team whether receipt files use LRS, ZRS, GRS, or another option. `retentionInDays` is the log evidence window. In this example, the team records a rollback value of two workers and 90 days of log retention before testing any cheaper setting.
 
 Cost optimization works best as an operating loop. Cost Management shows the spend. Tags and resource groups connect the spend to an owner. Metrics and logs show whether the resource carries real load. Service promises explain which workflows need protection. The tradeoff table records the decision. Monitoring and rollback watch the system after the change.
 

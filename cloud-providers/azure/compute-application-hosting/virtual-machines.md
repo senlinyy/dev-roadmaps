@@ -167,6 +167,23 @@ For the Orders worker, temporary storage can hold a retryable package extraction
 
 Mounting a Linux data disk also creates an operating responsibility. The disk needs a filesystem, a mount point, an `/etc/fstab` entry that survives reboot, permissions that match the service account, and capacity alerts before the partition fills. A VM can be running and still fail the application because `/data` did not mount or because the service account cannot write to the directory.
 
+Here is a small guest-side check after the data disk is attached and mounted. The first command confirms the mount target, source device, and filesystem type. The second confirms the worker has room on the durable path.
+
+```bash
+findmnt /data
+df -h /data
+```
+
+```console
+TARGET SOURCE    FSTYPE OPTIONS
+/data  /dev/sdc1 xfs    rw,relatime,attr2,inode64,logbufs=8,logbsize=32k
+
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdc1       256G   84G  173G  33% /data
+```
+
+Healthy output shows `/data` mounted from the expected data disk and enough free space for the worker. Suspicious output includes no `/data` mount, an unexpected temporary device, a read-only mount, or high disk usage that can stop the service even while the Azure VM resource still looks healthy.
+
 Here is the thread connecting storage back to startup. A rebuild from image is only useful when the startup path can attach or mount the right data disk and start the service against the expected path. That is why boot troubleshooting includes disk evidence. After storage, the next big piece is the network interface, because the worker must reach dependencies without opening the VM to unsafe access.
 
 ## Network Interfaces And Access
@@ -322,6 +339,19 @@ az vm show \
   --query "{name:name,powerState:powerState,location:location,size:hardwareProfile.vmSize,privateIps:privateIps,publicIps:publicIps}"
 ```
 
+```console
+{
+  "name": "vm-devpolaris-orders-legacy-01",
+  "powerState": "VM running",
+  "location": "eastus",
+  "size": "Standard_D4s_v5",
+  "privateIps": "10.40.12.14",
+  "publicIps": ""
+}
+```
+
+This is a good first VM result for a private worker: the VM is running, the size matches the design, the private IP is present, and no public IP is attached. It still says nothing about the service process inside the guest operating system.
+
 Instance view gives provisioning and guest agent status. That matters because extension failures and guest agent problems often explain why Azure automation did not reach the machine.
 
 ```bash
@@ -329,6 +359,13 @@ az vm get-instance-view \
   --resource-group rg-devpolaris-orders-prod \
   --name vm-devpolaris-orders-legacy-01 \
   --query "instanceView.statuses[].displayStatus"
+```
+
+```console
+[
+  "Provisioning succeeded",
+  "VM running"
+]
 ```
 
 Disk and NIC checks complete the Azure side of the first pass.
@@ -340,6 +377,20 @@ az vm show \
   --query "{osDisk:storageProfile.osDisk.name,dataDisks:storageProfile.dataDisks[].name,nics:networkProfile.networkInterfaces[].id}"
 ```
 
+```console
+{
+  "osDisk": "osdisk-vm-devpolaris-orders-legacy-01",
+  "dataDisks": [
+    "disk-orders-legacy-data-prod"
+  ],
+  "nics": [
+    "/subscriptions/.../networkInterfaces/nic-vm-devpolaris-orders-legacy-01"
+  ]
+}
+```
+
+This output confirms that Azure still sees the expected OS disk, data disk, and network interface. If the guest cannot find `/data`, this Azure check helps separate "disk not attached" from "disk attached but not mounted."
+
 After the Azure facts look reasonable, the operator moves inside the guest OS through the approved access path. The guest checks might include cloud-init status, boot diagnostics, disk mounts, service status, journal logs, available disk space, and recent authentication events.
 
 ```bash
@@ -349,6 +400,18 @@ systemctl status orders-inventory.service
 journalctl -u orders-inventory.service --since "30 minutes ago"
 df -h /data
 ```
+
+```console
+status: done
+/data /dev/sdc1 xfs rw,relatime
+orders-inventory.service - DevPolaris Orders Inventory Worker
+   Active: active (running) since Thu 2026-06-11 09:18:04 UTC
+Jun 11 09:19:12 vm-devpolaris-orders-legacy-01 inventory-worker[1842]: processed batch=42 queue=orders-inventory
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdc1       256G   84G  173G  33% /data
+```
+
+This output tells a better story than "the VM is up." First boot finished, the durable data path is mounted, the service is active, the worker is processing messages, and the data disk still has room. If one line is missing or unhealthy, the operator now has a specific layer to investigate.
 
 This evidence path prevents random fixes. If the VM is stopped, start with the Azure power state. If the data disk is missing, start with attachment and mount evidence. If the service is failed, start with systemd and logs. If extension status is failed, inspect the extension result and logs. The point is to follow the layer where the failure appears.
 
@@ -371,7 +434,7 @@ The VM should also keep proving that it deserves to exist. If the vendor worker 
 
 ## What's Next
 
-Next, look at App Service, where the compute conversation shifts from owning a full server to running web apps and APIs on a managed Azure hosting platform.
+The final article in this module looks at Azure Kubernetes Service. A VM gives one workload full server control. AKS gives a platform team Kubernetes control across many containerized workloads, which means the next article moves from guest operating systems to clusters, node pools, pods, services, ingress, workload identity, and Kubernetes production evidence.
 
 ---
 

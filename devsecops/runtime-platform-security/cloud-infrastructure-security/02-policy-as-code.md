@@ -1,7 +1,7 @@
 ---
 title: "Policy as Code"
-description: "Turn repeated infrastructure and deployment review rules into automated checks that can block risky changes."
-overview: "Policy as Code turns repeated cloud review rules into versioned, testable checks that can read plans, enforce exceptions, and leave useful evidence in pull requests."
+description: "Turn repeated infrastructure review rules into versioned checks that read plans, block risky changes, and record exceptions."
+overview: "Start with a repeated cloud review rule, then follow it into Terraform plan inputs, a small OPA/Rego policy, local and CI execution, Sentinel or managed enforcement, and exception records with owners and expiry dates."
 tags: ["devsecops", "policy-as-code", "opa", "terraform"]
 order: 2
 id: article-devsecops-cloud-infrastructure-security-policy-as-code
@@ -9,8 +9,8 @@ id: article-devsecops-cloud-infrastructure-security-policy-as-code
 
 ## Table of Contents
 
-1. [What Policy as Code Adds](#what-policy-as-code-adds)
-2. [The Customer Portal Rulebook](#the-customer-portal-rulebook)
+1. [The Review Rule Humans Get Tired Of Checking](#the-review-rule-humans-get-tired-of-checking)
+2. [What Policy as Code Adds](#what-policy-as-code-adds)
 3. [The Data That Policies Read](#the-data-that-policies-read)
 4. [Writing a Small OPA Rule](#writing-a-small-opa-rule)
 5. [Running Policies Locally and in CI](#running-policies-locally-and-in-ci)
@@ -18,67 +18,61 @@ id: article-devsecops-cloud-infrastructure-security-policy-as-code
 7. [Exceptions With Owners and Expiry](#exceptions-with-owners-and-expiry)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
+10. [References](#references)
+
+## The Review Rule Humans Get Tired Of Checking
+<!-- section-summary: Policy as Code starts with repeated review rules that humans should not have to re-check by hand every time. -->
+
+Every infrastructure team has a few review comments that appear again and again. "Customer receipt buckets cannot be public." "Production databases cannot expose port `5432` to the internet." "Every production resource needs an owner tag." "Public access needs a ticket, an owner, and an expiry date."
+
+A senior reviewer can write those comments by hand, and that works for a while. Then the pull requests get bigger. More teams start shipping. A reviewer is on call, the plan is noisy, and one risky rule slips through. The problem is not that the rule is hard to understand. The problem is that repeated checks are tiring, and tired humans miss boring but important details.
+
+Policy as Code starts with that kind of repeated rule. Here is one Northstar rule in plain English:
+
+> A bucket that stores customer receipts must block public ACLs and public bucket policies unless a reviewed exception names the resource, owner, reason, approver, and expiry date.
+
+That rule is specific enough to automate. It names the resource type, the expected settings, and the exception evidence. The rest of this article turns that sentence into a working review gate.
 
 ## What Policy as Code Adds
-<!-- section-summary: Policy as Code turns repeated review rules into versioned checks that can run before infrastructure is applied. -->
+<!-- section-summary: Policy as Code turns repeated review rules into versioned, testable decisions that run before apply. -->
 
-The previous article used IaC scanners to catch common mistakes in Terraform, OpenTofu, modules, secrets, and plan output. That gives a team a strong first layer. The next layer is **Policy as Code**, usually shortened to **PaC**. Policy as Code means the organization writes its own security and compliance rules as code, stores those rules in version control, tests them, reviews them, and runs them automatically in pull requests or managed deployment platforms.
+**Policy as Code**, usually shortened to **PaC**, means an organization writes security, compliance, and governance rules as code. The rules live in version control. Engineers review changes to the rules. Tests prove the rules behave as expected. CI or a managed platform runs the rules against infrastructure inputs and returns pass, warn, or deny decisions.
 
-Think about the kind of comments a senior engineer leaves again and again: production databases must stay private, customer data storage needs encryption, every resource needs an owner tag, production changes need an approved region, and public access needs a named exception. Those comments are valuable, but humans miss things when a pull request is large or when the incident queue is loud. Policy as Code takes the repeated parts of that review and makes them executable.
+The previous IaC security article used scanners to catch common mistakes in Terraform and OpenTofu. Scanners give teams a strong starting layer. Policy as Code adds the local rulebook: the rules that match your company, environment, data classes, exception process, approved regions, naming patterns, and risk appetite.
 
-The important idea is **repeatable judgment**. A scanner might include a default rule that says public object storage is risky. Your organization can add the local rule that says a public bucket is allowed only for the static marketing site, only in the `web-prod` workspace, only when the resource has an approved exception ticket, and only when that exception expires within 30 days. That local rule is where Policy as Code starts to matter in real production work.
+The Northstar customer portal gives us a concrete path. The team stores customer receipt PDFs, runs an API in private subnets, and deploys through Terraform. The platform team wants a small production rulebook:
 
-Policy as Code also creates evidence. A pull request can show which rules ran, which inputs they inspected, which resources failed, who approved an exception, and when the exception expires. That evidence helps engineers fix the change today, and it helps security teams answer audit questions later.
+| Rule | Plain-English check |
+|---|---|
+| Customer storage blocks public access | Receipt buckets use all public access block settings |
+| Production regions are approved | Resources land in `us-east-1` or `us-west-2` |
+| Resources have owners | Tags include `owner`, `service`, and `data-classification` |
+| Databases stay private | Database ports avoid internet-wide ingress |
+| Exceptions expire | Bypasses include an owner, approver, reason, and expiry |
 
-## The Customer Portal Rulebook
-<!-- section-summary: A concrete portal scenario shows why teams need their own guardrails beyond scanner defaults. -->
+Those rules should run every time. A human reviewer still checks architecture and intent. The policy engine checks the repeated rules and leaves evidence on the pull request.
 
-Let's keep following the Northstar customer portal from the IaC security article. The team stores customer receipts, runs an API in private subnets, and deploys through Terraform. The first article caught obvious mistakes: public storage settings, a database security group open to the internet, and a worker role with `s3:*` on `*`.
+![Policy inputs map showing plan JSON, run metadata, exception data, and approved lists flowing into a policy engine that returns pass, warn, or block](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-inputs-map.png)
 
-Now the platform team wants a small rulebook that every infrastructure pull request must follow. The rules are plain enough to say out loud. Production resources must live in `us-east-1` or `us-west-2`. Every resource must carry `owner`, `service`, and `data-classification` tags. Any bucket that stores customer data must use encryption. Public access to storage must have an approved exception with an owner and expiry date. Databases must avoid public IPs and public ingress.
+*The map shows how plan data, run context, exceptions, and approved lists flow into one policy decision that can pass, warn, or block.*
 
-Those rules cross several tools. Terraform writes the resources. The plan shows the actual proposed values. OPA or Sentinel evaluates the plan. CI reports the result on the pull request. A human still reviews the design, but the rulebook handles the repeatable checks every time.
-
-Here is the kind of Terraform change the team wants to control:
-
-```hcl
-resource "aws_s3_bucket" "receipts" {
-  bucket = "northstar-payment-receipts-prod"
-
-  tags = {
-    owner               = "payments-platform"
-    service             = "customer-portal"
-    data-classification = "customer"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "receipts" {
-  bucket = aws_s3_bucket.receipts.id
-
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-```
-
-The tags are good. The public access block settings are risky because this bucket stores customer receipts. A default scanner can flag the public settings. The local policy can add the business rule: customer data buckets need public access blocked unless a time-limited exception exists.
-
-That local rule needs input data, so the next section looks at what a policy engine actually reads.
+Before we write the rule, we need to see what data the rule can read.
 
 ## The Data That Policies Read
-<!-- section-summary: Policies need structured input, usually plan JSON plus optional business context such as exceptions and ownership. -->
+<!-- section-summary: A policy engine reads structured input such as plan JSON, run metadata, approved lists, and exception records. -->
 
-A **policy engine** is a program that reads structured input and decides whether the input follows a set of rules. The engine can return allow, deny, warnings, or detailed messages. In infrastructure workflows, the input is often Terraform plan JSON, OpenTofu plan JSON, Kubernetes YAML, cloud resource metadata, or a small JSON file that lists approved exceptions.
+A **policy engine** is a program that reads structured input and returns a decision. In an infrastructure workflow, the input is often Terraform plan JSON, OpenTofu plan JSON, Kubernetes YAML, cloud resource metadata, run metadata, or an exceptions file.
 
-Terraform and OpenTofu can produce a saved plan and convert that plan into JSON:
+Terraform can create a saved plan and convert it into JSON:
 
 ```bash
 terraform plan -out=tfplan
 terraform show -json tfplan > tfplan.json
 ```
 
-The JSON is large, but the part a policy cares about is understandable. A planned resource has a type, an address, an action, and the values after the change:
+`terraform plan -out=tfplan` saves the proposed infrastructure change. `terraform show -json tfplan` writes a machine-readable version of that plan to `tfplan.json`. OPA, Conftest, Sentinel-style tooling, and custom scripts can inspect that JSON.
+
+A tiny part of the plan for the Northstar receipt bucket looks like this:
 
 ```json
 {
@@ -100,33 +94,33 @@ The JSON is large, but the part a policy cares about is understandable. A planne
 }
 ```
 
-The policy can read that object and ask a direct question: does a planned S3 public access block resource set all four protection flags to `true`? If the answer is no, the policy can deny the change and print a message with the exact resource address.
+`address` gives the Terraform resource address that should appear in the finding. `type` tells the policy which cloud resource shape it is looking at. `actions` says the plan will create this resource. `after` contains the values the resource will have after apply.
 
-Real policies often need more than the plan. The Northstar team also needs exception data because a public resource might be intentional for a narrow use case. That exception data can live in a reviewed file:
+The policy can now ask a direct question: does every `aws_s3_bucket_public_access_block` resource set all four protection flags to `true`?
+
+Real policies often need business context too. Northstar stores approved exceptions in a reviewed file:
 
 ```yaml
 exceptions:
-  - id: SEC-1842
+  - id: SEC-2128
+    rule: storage.public_access_block
     resource: aws_s3_bucket_public_access_block.marketing_site
-    reason: Public static website bucket approved by security review.
+    reason: Public website bucket for static marketing assets.
     owner: web-platform
+    approved_by: security-platform
     expires: 2026-07-15
 ```
 
-This separate file matters because exceptions should receive review too. A hidden skip comment in a resource file can quietly disable a rule. A structured exception record gives the reviewer a reason, an owner, and a date when the exception should be removed or renewed.
+The exception file gives the policy a way to allow a specific case while still checking owner, approver, reason, and expiry. A hidden skip comment inside a resource file can quietly disable a rule. A structured exception record gives reviewers something concrete to approve and later remove.
 
-![Policy inputs map showing plan JSON, run metadata, exception data, and approved lists flowing into a policy engine that returns pass, warn, or block](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-inputs-map.png)
-
-*The map shows how plan data, run context, exceptions, and approved lists flow into one policy decision that can pass, warn, or block.*
-
-Now that the input is clear, the team can write a rule.
+Now the input is clear, so the first rule can stay small.
 
 ## Writing a Small OPA Rule
-<!-- section-summary: OPA and Rego let teams express infrastructure review rules with resource-specific deny messages. -->
+<!-- section-summary: OPA and Rego express infrastructure rules as code and return resource-specific deny messages. -->
 
-**Open Policy Agent**, usually called **OPA**, is a general-purpose policy engine. It uses a policy language called **Rego**. Rego reads structured input such as JSON, then produces decisions. In a Terraform workflow, OPA can read `tfplan.json` and return deny messages for resources that violate the rulebook.
+**Open Policy Agent**, usually called **OPA**, is a general-purpose policy engine. **Rego** is OPA's policy language. Rego reads input such as JSON and produces decisions such as allow, deny, warn, or data values chosen by the policy author.
 
-The Northstar team writes a small first rule: every S3 public access block resource must enable all four protections. The rule is small, but it has the shape of a real production rule. It loops through planned resources, selects S3 public access block resources, checks the final values, and returns a useful message.
+Northstar starts with one rule: every planned S3 public access block resource must enable all four protection settings. The first version checks one setting so the shape is easy to see:
 
 ```rego
 package terraform.security
@@ -136,45 +130,40 @@ deny[msg] {
   resource.type == "aws_s3_bucket_public_access_block"
   after := resource.change.after
 
-  not after.block_public_acls
+  after.block_public_acls != true
 
   msg := sprintf("%s must enable block_public_acls", [resource.address])
 }
+```
+
+`package terraform.security` names the policy package. `deny[msg]` creates a set of deny messages. `input.resource_changes[_]` loops through planned resources. The `resource.type` line selects S3 public access block resources. The `after` line reads the planned values. The final `msg` includes the Terraform address so the pull request author knows where to edit.
+
+The full beginner rule repeats that same shape for each required flag:
+
+```rego
+package terraform.security
+
+required_public_access_flags := [
+  "block_public_acls",
+  "block_public_policy",
+  "ignore_public_acls",
+  "restrict_public_buckets",
+]
 
 deny[msg] {
   resource := input.resource_changes[_]
   resource.type == "aws_s3_bucket_public_access_block"
-  after := resource.change.after
+  flag := required_public_access_flags[_]
 
-  not after.block_public_policy
+  resource.change.after[flag] != true
 
-  msg := sprintf("%s must enable block_public_policy", [resource.address])
-}
-
-deny[msg] {
-  resource := input.resource_changes[_]
-  resource.type == "aws_s3_bucket_public_access_block"
-  after := resource.change.after
-
-  not after.ignore_public_acls
-
-  msg := sprintf("%s must enable ignore_public_acls", [resource.address])
-}
-
-deny[msg] {
-  resource := input.resource_changes[_]
-  resource.type == "aws_s3_bucket_public_access_block"
-  after := resource.change.after
-
-  not after.restrict_public_buckets
-
-  msg := sprintf("%s must enable restrict_public_buckets", [resource.address])
+  msg := sprintf("%s must enable %s", [resource.address, flag])
 }
 ```
 
-The word `deny` is just a rule name chosen by the policy author. The CI job can treat any value in `deny` as a blocking finding. The message includes the Terraform resource address, so the author knows exactly where to edit.
+`required_public_access_flags` is a list of fields the policy expects. `flag := required_public_access_flags[_]` checks each field. `resource.change.after[flag]` reads the planned value by field name. One compact rule now checks all four flags and returns one deny message for each missing protection.
 
-The safer Terraform change sets all four flags to `true`:
+The Terraform fix is straightforward:
 
 ```hcl
 resource "aws_s3_bucket_public_access_block" "receipts" {
@@ -187,18 +176,18 @@ resource "aws_s3_bucket_public_access_block" "receipts" {
 }
 ```
 
-This rule handles one storage control. A real policy pack can add region checks, tag checks, encryption checks, network checks, IAM wildcard checks, and exception checks. The team should keep rules small and named around one idea, because a clear rule is easier to test and easier to explain in a pull request.
+The policy does not need to understand every reason a bucket exists. It checks a repeated production rule and gives the author a clear message. A richer policy can later connect the bucket's tags, data classification, and exception records.
 
 ![OPA rule flow showing Terraform plan data entering Rego checks, deny messages, CI feedback, and a block or pass decision](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/opa-rule-flow.png)
 
 *The flow shows the practical job of a Rego rule: select the resource change, match a rule, produce a deny message, and turn that into useful PR feedback.*
 
-Now the rule needs to run where engineers can see it.
+The rule exists now. The next step is running it close to the engineer and in the shared delivery path.
 
 ## Running Policies Locally and in CI
-<!-- section-summary: Good policy workflows give authors fast local feedback and strict pull request gates for high-risk failures. -->
+<!-- section-summary: Good policy workflows give authors fast local feedback and strict pull request gates for risky changes. -->
 
-Policy as Code works best when engineers can test rules before pushing. **Conftest** is a common CLI wrapper around OPA for testing configuration files and JSON inputs. The team can save the Rego policy under `policy/terraform/security.rego`, generate a plan JSON, and evaluate it locally:
+Local policy checks help authors fix problems before they push. **Conftest** is a common CLI that runs OPA policies against configuration files and JSON inputs. Northstar stores the Rego file at `policy/terraform/security.rego`, generates a plan JSON, and tests the plan:
 
 ```bash
 terraform plan -out=tfplan
@@ -206,7 +195,9 @@ terraform show -json tfplan > tfplan.json
 conftest test tfplan.json --policy policy/terraform
 ```
 
-A failing local result might look like this:
+The first two commands create the policy input. `conftest test` evaluates `tfplan.json`. `--policy policy/terraform` points Conftest at the folder that contains the Rego files.
+
+A failing result might look like this:
 
 ```bash
 FAIL - tfplan.json - terraform.security - aws_s3_bucket_public_access_block.receipts must enable block_public_acls
@@ -215,7 +206,9 @@ FAIL - tfplan.json - terraform.security - aws_s3_bucket_public_access_block.rece
 FAIL - tfplan.json - terraform.security - aws_s3_bucket_public_access_block.receipts must enable restrict_public_buckets
 ```
 
-The same command belongs in CI. The pull request gate should run formatting, validation, plan generation, scanner checks, secret checks, and policy checks. The policy part can produce a short markdown summary:
+Each line names the input file, policy package, resource address, and failed setting. That is enough for the author to edit the Terraform resource without opening the full plan JSON.
+
+The same check belongs in CI after formatting, validation, plan generation, scanner checks, and secret checks. A pull request summary can stay short:
 
 ```markdown
 ### Policy as Code gate failed
@@ -228,24 +221,22 @@ Blocking rules:
 
 Exception path:
 
-Open a security exception record with `id`, `resource`, `reason`, `owner`, and `expires`.
+Open a security exception record with `id`, `rule`, `resource`, `reason`, `owner`, `approved_by`, and `expires`.
 Exceptions over 30 days require security owner review.
 ```
 
-Notice the tone of this output. It names the rule, the resource, the reason, and the next path. The gate should avoid sending engineers into raw JSON unless the raw JSON is useful. A readable gate builds trust because the author can fix the problem without guessing what the policy meant.
+The summary names the rule, resource, risk, and exception path. It keeps the author in the pull request instead of sending them to raw JSON. The CI job should also run with careful credentials. A policy check that reads a generated plan usually needs no production write access. The apply job can use a separate deployment role with protected environment approval.
 
-The CI job also needs safe credentials. A pull request policy check can run from plan JSON, so it often needs no production write access. The apply job should use a separate deployment role, protected branch rules, and environment approvals. Policy as Code should support that separation instead of requiring a broad credential just to evaluate a file.
-
-Some teams run these checks in their own CI. Other teams use a managed Terraform platform with policy enforcement built in.
+Some teams run all policies in their own CI. Others add managed policy enforcement around Terraform workspaces.
 
 ## Sentinel and Managed Policy Enforcement
-<!-- section-summary: Managed Terraform platforms can enforce policy checks at plan time and record the result with the workspace run. -->
+<!-- section-summary: Managed Terraform platforms can evaluate policies at plan time and record the result with the workspace run. -->
 
-HashiCorp Sentinel is another Policy as Code language used with HCP Terraform and Terraform Enterprise. In that workflow, the platform creates a plan, passes structured imports such as `tfplan/v2` into the policy, and enforces the result before apply. This is common in organizations that already run Terraform through managed workspaces.
+**HashiCorp Sentinel** is a Policy as Code language used with HCP Terraform and Terraform Enterprise. In that workflow, the managed platform creates the plan, exposes structured imports such as `tfplan/v2`, runs Sentinel policies, and records the result with the workspace run before apply.
 
-The Northstar team might use OPA in GitHub Actions for fast pull request checks and Sentinel in HCP Terraform for the final workspace gate. The key idea stays the same: a policy reads structured plan data and decides whether the run can continue.
+Northstar might use OPA and Conftest in GitHub Actions for fast pull request feedback, then use Sentinel in HCP Terraform as the final workspace gate. The same idea carries through both systems: a policy reads structured plan data and decides whether the run can continue.
 
-A Sentinel policy can express a required tag rule:
+Here is a small Sentinel policy that checks required tags on newly created managed resources:
 
 ```hcl
 import "tfplan/v2" as tfplan
@@ -265,18 +256,20 @@ main = rule {
 }
 ```
 
-In a managed platform, policy results can be advisory or mandatory. An advisory policy warns reviewers. A mandatory policy blocks the run. The team should reserve mandatory enforcement for rules with strong confidence and clear fixes: public database ingress, missing encryption for customer data, production changes outside approved regions, missing owner tags, or high-risk IAM wildcards.
+`import "tfplan/v2" as tfplan` gives the policy access to the plan. `required_tags` names the fields Northstar expects. The `violations` filter selects newly created managed resources that miss at least one required tag. `main` is the final pass or fail rule.
 
-This split keeps the gate useful. New rules can start as advisory while the team measures noise and fixes legitimate existing drift. Once the rule is accurate, the platform team can promote it to mandatory. That progression gives engineers time to adjust without weakening the final production guardrail.
+Managed platforms often support advisory and mandatory enforcement. An advisory policy warns reviewers. A mandatory policy blocks the run. Northstar can start new rules as advisory while the platform team checks noise, fixes existing resources, and improves messages. Rules with clear fixes and high confidence can move to mandatory enforcement, such as public database ingress, missing encryption on customer data storage, production resources outside approved regions, or high-risk IAM wildcards.
 
-Policy engines are powerful, but they need a careful exception process.
+Provider governance still has a place behind these gates. AWS Organizations service control policies, Azure Policy, and Google Cloud Organization Policy can deny dangerous provider requests even when a repository check fails to run. Policy as Code works best as a stack: local checks for speed, CI checks for pull request evidence, managed workspace checks for apply-time control, and provider guardrails for broad organization boundaries.
+
+Policy engines need one more production detail: real exceptions.
 
 ## Exceptions With Owners and Expiry
-<!-- section-summary: Exceptions keep the gate practical by allowing reviewed risk with a named owner, reason, and expiry date. -->
+<!-- section-summary: Exceptions keep policy practical by allowing reviewed risk for a specific resource, owner, reason, and time window. -->
 
-An **exception** is a documented approval to bypass or modify a policy for a specific case. Exceptions are part of real security work because production systems have unusual needs. A public load balancer is normal. A public static website bucket can be valid. A temporary open network path might be approved during a vendor migration. The risk comes from exceptions that have no owner, no reason, and no end date.
+An **exception** is a documented approval to bypass or modify a policy for a specific case. Exceptions exist because production systems have unusual needs. A public load balancer is normal. A public static website bucket can be valid. A short network opening during a vendor migration may be approved for a narrow window.
 
-The Northstar team uses structured exception records. The policy can read them alongside the plan:
+The risk comes from broad, permanent, unexplained exceptions. A comment that says `skip policy` gives the team no owner, no expiry, and no review trail. Northstar uses structured exception records instead:
 
 ```yaml
 exceptions:
@@ -289,11 +282,11 @@ exceptions:
     expires: 2026-07-15
 ```
 
-The policy should check the exception too. It should verify that the exception references the exact resource, names the rule, has an owner, has an approval source, and has an expiry inside the allowed window. A broad exception such as "skip all storage rules" gives the team no useful control.
+Each field has a job. `id` links the exception to a ticket or review record. `rule` names the policy. `resource` limits the exception to one Terraform address. `reason` explains the business need. `owner` names the team responsible for cleanup. `approved_by` records who accepted the risk. `expires` creates a follow-up date.
 
-For customer data, the exception process should ask for compensating controls. A public static website exception might require no customer data, no upload path, object ownership controls, access logging, and a content review path. A temporary database network exception might require a short expiry, a named incident ticket, an IP allowlist, a rollback command, and monitoring during the window.
+The policy should validate exceptions too. It can reject expired exceptions, broad resource patterns, missing owners, missing approvers, or expiry windows longer than the standard limit. For customer data, the exception review should also ask for compensating controls such as no uploads, no sensitive objects, access logging, an IP allowlist, monitoring, or a rollback command.
 
-The pull request should show the exception evidence next to the policy result:
+A pull request should show accepted exceptions beside the policy result:
 
 ```markdown
 ### Policy exception accepted
@@ -307,20 +300,18 @@ The pull request should show the exception evidence next to the policy result:
 - Follow-up: remove public access after the static site migration completes
 ```
 
-That record helps two groups. Engineers see why the gate allowed the change. Security reviewers can later search for expiring exceptions and close them. Auditors can see that the organization made an explicit decision instead of quietly disabling a check.
-
-Now the Northstar workflow has scanner checks, custom policies, managed enforcement, and exceptions. The final step is putting it together as one operating loop.
+That record helps engineers understand why the gate allowed the change. It also gives security reviewers a search target for expiring exceptions. The goal is an explicit risk decision, not a hidden bypass.
 
 ## Putting It All Together
-<!-- section-summary: Policy as Code gives teams a reviewed rulebook that runs in local checks, pull requests, and managed apply gates. -->
+<!-- section-summary: Policy as Code gives teams a reviewed rulebook that runs locally, in pull requests, and in managed apply gates. -->
 
-The Northstar team uses a clear rulebook. Production resources need approved regions. Customer data storage needs encryption and public access blocking. Resources need owner and service tags. IAM policies need narrow actions and resources. Exceptions need an owner, approval, reason, and expiry.
+The Northstar team now has a practical rulebook. Customer data storage blocks public access. Production resources use approved regions. Resources have owner and service tags. Databases stay private. IAM policies avoid broad wildcards. Exceptions include a rule, exact resource, owner, approver, reason, and expiry.
 
-The rules live in a policy repository or a shared platform folder. Engineers can run them locally with Conftest and OPA against `tfplan.json`. Pull requests run the same checks after formatting, validation, plan generation, IaC scanning, and secret scanning. HCP Terraform or Terraform Enterprise can run Sentinel policies at the workspace level before apply. Cloud-side governance still exists behind all of this through services such as AWS Organizations policies, Azure Policy, or Google Cloud Organization Policy.
+The rules live in a policy repository or a shared platform folder. Engineers can run them locally with Conftest and OPA against `tfplan.json`. Pull requests run the same checks after formatting, validation, plan generation, IaC scanning, and secret scanning. HCP Terraform or Terraform Enterprise can run Sentinel policies at the workspace level before apply. Provider guardrails still exist across the account, subscription, folder, or organization.
 
-The biggest practical detail is rule quality. A rule that blocks a real public database risk earns trust. A rule that fails on harmless resources every day gets bypassed. Good platform teams test policies with sample plans, publish examples, add readable messages, and move rules from advisory to mandatory only when the fixes are clear.
+The most important production detail is rule quality. A rule that blocks real public database exposure earns trust. A rule with vague messages and constant false alarms gets bypassed. Good platform teams test policies with sample plans, publish passing and failing examples, write readable deny messages, and promote rules to mandatory only after the fix path is clear.
 
-The result is a security review that scales. A senior reviewer can focus on design: should this service exist, should this data flow be public, should this team own the resource, and should the exception be accepted. The policy engine handles the repeated checks that every production change must satisfy.
+The result is a security review that scales. A senior reviewer can focus on design: should this service exist, should this data path be public, should this team own the resource, and should this exception be accepted? The policy engine handles the repeated checks that every production change must satisfy.
 
 ![Policy as Code summary showing rule authoring, local tests, CI enforcement, managed policy checks, exception expiry, and review evidence](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-as-code-summary.png)
 
@@ -329,19 +320,19 @@ The result is a security review that scales. A senior reviewer can focus on desi
 ## What's Next
 <!-- section-summary: The next article moves from planned infrastructure changes to the live cloud environment after deployment. -->
 
-Policy as Code checks the plan before apply. That gives the team a strong gate at the moment of change. The live cloud environment still changes after deployment through console edits, emergency fixes, provider defaults, old scripts, and sometimes unauthorized access.
+Policy as Code checks the plan before apply. That gives Northstar a strong gate at the planned change. The live cloud account can still change afterward through console edits, emergency fixes, old scripts, provider tools, or unauthorized access.
 
 The next article follows that problem. It looks at **drift and perimeter security**, where the team compares reviewed code with the real cloud account, detects public exposure, investigates audit logs, and brings the environment back under code.
 
----
-
-**References**
+## References
 
 - [Open Policy Agent policy language](https://www.openpolicyagent.org/docs/latest/policy-language/) - Official OPA documentation for writing Rego policies.
+- [Open Policy Agent Terraform tutorial](https://www.openpolicyagent.org/docs/latest/terraform/) - Official OPA guide for evaluating Terraform plans.
 - [Conftest documentation](https://www.conftest.dev/) - Official Conftest documentation for testing configuration data with OPA policies.
 - [Terraform JSON output format](https://developer.hashicorp.com/terraform/internals/json-format) - Official Terraform documentation for the machine-readable plan and state JSON format.
 - [HCP Terraform policy enforcement](https://developer.hashicorp.com/terraform/cloud-docs/policy-enforcement) - Official HashiCorp documentation for policy checks in HCP Terraform and Terraform Enterprise.
 - [Sentinel documentation](https://developer.hashicorp.com/sentinel/docs) - Official HashiCorp documentation for the Sentinel policy language and runtime.
+- [AWS Organizations service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Official AWS documentation for organization-level permission guardrails.
 - [Azure Policy as Code](https://learn.microsoft.com/en-us/azure/governance/policy/concepts/policy-as-code) - Official Microsoft guidance for managing Azure Policy definitions and assignments as code.
 - [Google Cloud Organization Policy Service](https://cloud.google.com/resource-manager/docs/organization-policy/overview) - Official Google Cloud documentation for organization-wide policy constraints.
-- [NIST Secure Software Development Framework SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST guidance for secure development practices, including automated checks and evidence in delivery workflows.
+- [NIST Secure Software Development Framework SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST guidance for secure development practices, automated checks, and evidence in delivery workflows.

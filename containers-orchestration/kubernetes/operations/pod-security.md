@@ -23,11 +23,13 @@ id: article-containers-orchestration-kubernetes-operations-pod-security
 ## Why Pod Security Matters
 <!-- section-summary: Pod security reduces what an attacker or broken process can do after reaching the container. -->
 
-**Pod security** is the practice of limiting what a Pod can do at runtime. It covers the Linux user the process runs as, whether the process can gain extra privileges, which kernel capabilities it has, whether it can write to the image filesystem, whether it can use host namespaces, and whether it receives a Kubernetes API token.
+An ordinary API container still needs clear boundaries. For `devpolaris-orders-api`, imagine a bug in the order creation endpoint allows an attacker to run a shell command inside the container. The safest Pod is one where that command has very little room to move.
 
-For `devpolaris-orders-api`, imagine a bug in the order creation endpoint allows an attacker to run a shell command inside the container. Pod security cannot fix the application bug. It can reduce the next step. The process should not start as root, should not have powerful Linux capabilities, should not write anywhere it wants, should not see host namespaces, and should not have a Kubernetes token unless the app truly needs one.
+**Pod security** is the practice of limiting what a Pod can do at runtime. The beginner question is simple: if this container is compromised or misconfigured, what should it still be unable to do?
 
-Containers use Linux isolation features such as namespaces, cgroups, capabilities, seccomp, and filesystem mounts. Those features are real and useful, but they still run on the node's kernel. A Pod spec that grants privileged mode, host networking, host process access, or broad filesystem writes can give a compromised workload a much larger path through the node.
+Here is the concrete target. The orders API should run as a non-root user, drop extra Linux capabilities, use the runtime default seccomp profile, keep the root filesystem read-only, write only to explicit mounted directories such as `/tmp`, and avoid a Kubernetes API token unless the application has a real API use.
+
+The technical field names come later, but the review idea starts here. A Pod spec that grants privileged mode, host networking, host process access, or broad filesystem writes can give a compromised workload a much larger path through the node.
 
 The normal orders API is a good candidate for strict settings. It listens for HTTP requests, calls application dependencies, writes temporary files only when needed, and does not administer the cluster. That gives us a clear target: the Pod should look like a boring application workload with explicit runtime boundaries.
 
@@ -40,7 +42,7 @@ Kubernetes defines **Pod Security Standards** as three policy profiles: `privile
 
 For `devpolaris-orders-api`, aim for the restricted shape. The service does not need host networking, host PID access, privileged mode, extra Linux capabilities, or root access. It should run as a non-root user, use the runtime default seccomp profile, block privilege escalation, and drop Linux capabilities.
 
-Here is a compact Deployment shape for the orders API:
+Start with the Pod-level security shape. These settings apply to the Pod as a whole and give the process a non-root identity:
 
 ```yaml
 apiVersion: apps/v1
@@ -60,6 +62,11 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+```
+
+Then add the container-level restrictions and an explicit writable scratch directory:
+
+```yaml
       containers:
         - name: api
           image: ghcr.io/devpolaris/orders-api:2026-05-07.1
@@ -82,7 +89,7 @@ spec:
 
 *The restricted shape visual groups the settings that make an ordinary API Pod boring in production: non-root execution, explicit writes, fewer Linux powers, and no easy privilege jump.*
 
-This manifest says the Pod should run as UID `10001`, use the runtime's default seccomp profile, avoid a mounted Kubernetes API token, block privilege escalation, drop all Linux capabilities, and keep the root filesystem read-only. It still gives the application `/tmp` as explicit scratch space.
+Together, these fields say the Pod should run as UID `10001`, use the runtime's default seccomp profile, avoid a mounted Kubernetes API token, block privilege escalation, drop all Linux capabilities, and keep the root filesystem read-only. It still gives the application `/tmp` as explicit scratch space.
 
 That YAML is easier to understand once we separate Pod-level and container-level security settings.
 
@@ -132,7 +139,7 @@ Here is what each important field is doing:
 
 Use numeric IDs in manifests. Names such as `appuser` depend on `/etc/passwd` inside the image, while numeric IDs are clear to Kubernetes and the container runtime. The image should still create the user for file ownership and developer clarity, but the manifest should not rely on a name lookup.
 
-The first field most teams feel in practice is non-root execution.
+The first field most teams meet in practice is non-root execution.
 
 ## Run as a Non-Root User
 <!-- section-summary: Running as a numeric non-root UID reduces the damage from file permission mistakes and container breakouts. -->
@@ -342,7 +349,7 @@ If the image has root-owned application files that the process only needs to rea
 After fixing the image or manifest, prove the running Pod matches the security review.
 
 ## Prove the Running Pod Matches the Review
-<!-- section-summary: Runtime proof checks the actual Pod after rollout, not only the YAML reviewed in a pull request. -->
+<!-- section-summary: Runtime proof checks the actual Pod after rollout as well as the YAML reviewed in a pull request. -->
 
 A hardening pull request should include both the manifest and runtime proof. The manifest shows what you asked Kubernetes to run. Runtime proof shows what actually started after defaults, admission, image behavior, and rollout.
 

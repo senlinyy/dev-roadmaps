@@ -1,6 +1,6 @@
 ---
-title: "Foundations & Getting Started"
-description: "Understand why Infrastructure as Code matters, how Terraform works, how to run a safe first project, and how providers, versions, and credentials fit into real team workflows."
-tags: ["iac", "terraform", "providers", "getting-started"]
+title: "Terraform Orientation"
+description: "Understand why Infrastructure as Code matters and what Terraform does at a beginner overview level before the syntax and hands-on modules."
+tags: ["iac", "terraform", "orientation"]
 order: 1
 ---

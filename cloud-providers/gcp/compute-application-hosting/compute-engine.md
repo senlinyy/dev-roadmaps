@@ -36,6 +36,9 @@ For our running example, imagine the same Orders team also owns the billing side
 
 So in this article, the VM choice comes from this workload's server-shaped needs rather than habit. Then we will walk through the exact pieces that make the VM reproducible, secure, and operable in production.
 
+![Invoice worker reasons for choosing a VM](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/invoice-worker-vm-fit.png)
+*The invoice worker keeps a VM because it needs host packages, a daemon model, disk behavior, and a patch plan that match a server-shaped workload.*
+
 ## The Invoice Worker Scenario
 <!-- section-summary: A concrete workload helps connect machine sizing, images, disks, startup, identity, networking, and operations into one VM design. -->
 
@@ -136,6 +139,14 @@ gcloud compute instances create invoice-worker-prod-01 \
 
 This command is intentionally explicit. It names the zone, machine type, image, disk, subnet, absence of a public IP address, runtime identity, OAuth scope, and startup script. In a real team, this shape should move into Terraform or another infrastructure-as-code workflow so review and rollback stay out of shell history.
 
+Healthy output confirms that the VM object exists and has an internal IP but no public IP. That tells the beginner the instance can still run inside the VPC while public SSH exposure stays off the design path.
+
+```console
+Created [https://www.googleapis.com/compute/v1/projects/PROJECT_ID/zones/us-central1-a/instances/invoice-worker-prod-01].
+NAME                    ZONE           MACHINE_TYPE   INTERNAL_IP  EXTERNAL_IP  STATUS
+invoice-worker-prod-01  us-central1-a  e2-standard-2  10.40.2.15               RUNNING
+```
+
 ## Startup Scripts and Metadata
 <!-- section-summary: Metadata gives a VM runtime facts, and startup scripts turn a fresh boot into a working application server without hand setup. -->
 
@@ -172,6 +183,9 @@ systemctl enable --now invoice-worker.service
 ```
 
 The important detail is the data flow. The VM receives `app-version` through metadata, uses its attached service account to fetch the artifact, writes local configuration, and hands long-running process ownership to `systemd`. This gives the team a repeatable boot path. A broken replacement VM points to a version, a startup log, a service state, and a small number of inputs.
+
+![Compute Engine metadata, startup script, and systemd bootstrap path](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-bootstrap-path.png)
+*Metadata supplies the version, the startup script prepares the host, systemd owns the long-running process, and boot logs explain where setup failed.*
 
 ## Keeping the Worker Running with systemd
 <!-- section-summary: Startup gets the VM ready, while systemd keeps the invoice worker alive and records process-level evidence. -->
@@ -219,6 +233,18 @@ gcloud compute instances get-serial-port-output invoice-worker-prod-01 --zone=us
 ```
 
 Those commands answer different questions. `systemctl` tells you whether the service is running. `journalctl` shows process logs on the VM. Serial port output helps with early boot and startup-script failures, especially when SSH access is unavailable.
+
+The beginner should look for `active (running)` in `systemctl`, recent invoice progress in `journalctl`, and a completed startup script in serial output. A failed service with clean serial output usually points to the worker process; a missing artifact or package install error usually appears in serial or startup logs.
+
+```console
+● invoice-worker.service - Legacy invoice worker
+     Loaded: loaded (/etc/systemd/system/invoice-worker.service; enabled)
+     Active: active (running) since Sat 2026-06-27 20:10:41 UTC; 18min ago
+   Main PID: 1842 (node)
+
+Jun 27 20:24:12 invoice-worker-prod-01 worker[1842]: {"invoice_id":"INV-10492","status":"rendered","worker_version":"2026.06.27.1"}
+Jun 27 20:24:14 invoice-worker-prod-01 worker[1842]: {"invoice_id":"INV-10492","status":"uploaded","bucket":"billing-invoices-prod"}
+```
 
 ## Service Accounts, Scopes, and Network Access
 <!-- section-summary: A VM needs a runtime identity for Google APIs and VPC controls for traffic entering and leaving the machine. -->
@@ -311,6 +337,13 @@ gcloud compute disks add-resource-policies invoice-worker-data \
   --resource-policies=invoice-worker-daily
 ```
 
+The create command should show the snapshot schedule policy, and the attach command should confirm the disk now has that policy. If the disk name or zone is wrong, the attach step fails before the team assumes backups exist.
+
+```console
+Created [https://www.googleapis.com/compute/v1/projects/PROJECT_ID/regions/us-central1/resourcePolicies/invoice-worker-daily].
+Updated [https://www.googleapis.com/compute/v1/projects/PROJECT_ID/zones/us-central1-a/disks/invoice-worker-data].
+```
+
 And log review can start with a narrow Cloud Logging query:
 
 ```bash
@@ -320,6 +353,17 @@ gcloud logging read \
   --limit=50 \
   --format=json
 ```
+
+The output should show one invoice attempt moving through claim, render, upload, and completion. If the logs stop after `claimed`, the team checks the renderer and process logs. If they stop after `rendered`, the team checks upload permissions and bucket access.
+
+```console
+jsonPayload.invoice_id="INV-10492" jsonPayload.status="claimed"  jsonPayload.worker_version="2026.06.27.1"
+jsonPayload.invoice_id="INV-10492" jsonPayload.status="rendered" jsonPayload.path="/var/lib/invoice-worker/INV-10492.pdf"
+jsonPayload.invoice_id="INV-10492" jsonPayload.status="uploaded" jsonPayload.bucket="billing-invoices-prod"
+```
+
+![Compute Engine VM operations evidence board](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-operations-evidence.png)
+*A VM runbook needs server evidence and application evidence: instance status, process state, logs, snapshots, firewall scope, and the patch window all matter.*
 
 The runbook should be boring in the best way. During an incident, the team should have already settled how the VM was built, where logs live, which service account it uses, and whether the disk has backups. Those answers should already be in the recipe.
 

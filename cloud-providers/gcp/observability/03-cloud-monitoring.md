@@ -76,6 +76,9 @@ Here is a simplified time-series response for Cloud Run request count:
 
 The value `42` means very little by itself. The envelope says those are Cloud Run requests, from `checkout-api`, on revision `checkout-api-00042-n9p`, in `us-central1`, with response code class `5xx`, during one one-minute interval. That structure is what lets dashboards and alert policies ask precise questions.
 
+![Infographic showing a Cloud Monitoring data point surrounded by metric type, resource type, service, region, revision, response code class, interval, and healthy versus suspicious interpretation.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-monitoring/time-series-context.png)
+*A metric value needs its envelope. The same number can mean very different things depending on the service, revision, response class, and time interval.*
+
 The Monitoring API can return this shape directly. A responder might use the API when debugging an alert rule or proving that a filter selects the expected series:
 
 ```bash
@@ -89,7 +92,42 @@ curl -G \
   "https://monitoring.googleapis.com/v3/projects/shop-prod/timeSeries"
 ```
 
-This command mainly helps while debugging filters because it shows the same data model that dashboards, alert policies, SLOs, and API clients use underneath.
+This command mainly helps while debugging filters because it shows the same data model that dashboards, alert policies, SLOs, and API clients use underneath. `-G` sends the values as query parameters, `--data-urlencode` protects the Monitoring filter syntax, and the bearer token uses the current `gcloud` identity.
+
+```json
+{
+  "timeSeries": [
+    {
+      "metric": {
+        "type": "run.googleapis.com/request_count",
+        "labels": {
+          "response_code_class": "5xx"
+        }
+      },
+      "resource": {
+        "type": "cloud_run_revision",
+        "labels": {
+          "service_name": "checkout-api",
+          "revision_name": "checkout-api-00042-n9p",
+          "location": "us-central1"
+        }
+      },
+      "points": [
+        {
+          "interval": {
+            "endTime": "2026-06-14T14:05:00Z"
+          },
+          "value": {
+            "int64Value": "42"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Healthy output for a stable period shows mostly `2xx` points and low or absent `5xx` values. Suspicious output shows a growing `5xx` series for the new revision during the same window where logs show `provider_timeout`.
 
 ## Cloud Run Metrics For Checkout
 <!-- section-summary: Cloud Run request, latency, instance, CPU, and memory metrics give the first operating view for a serverless service. -->
@@ -133,6 +171,9 @@ Dashboards also need stable filters. If every chart uses a different service lab
 
 Dashboards and alerts have different jobs. A dashboard helps humans triage when they are looking. An alert policy decides when telemetry requires attention and sends that signal to the right place.
 
+![Infographic showing a checkout-api dashboard ordered by customer impact, service health, dependencies, and change context.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-monitoring/dashboard-response-order.png)
+*The dashboard order should match the responder's path. Start with customer impact, then inspect service health, dependencies, and recent changes.*
+
 ## Alert Policies, Conditions, And Notification Channels
 <!-- section-summary: Alert policies evaluate metric or query conditions and route incidents through notification channels. -->
 
@@ -142,6 +183,32 @@ A **condition** is the actual check. It might say that `5xx` rate is above 5 per
 
 A **notification channel** is the route from monitoring to people or automation. It can be email, chat, PagerDuty, webhooks, Pub/Sub, or another supported target. A production alert should include enough documentation for the responder to start well: what the alert means, what service owns it, which dashboard to open, which log query to run, and what rollback or mitigation paths are approved.
 
+Before creating the alert policy, the team needs a notification channel. In many production teams this is managed by Terraform, but a small YAML example shows the fields Cloud Monitoring expects:
+
+```yaml
+type: email
+displayName: "checkout on-call email"
+labels:
+  email_address: checkout-oncall@example.com
+enabled: true
+```
+
+The `type` selects the channel kind, `displayName` gives humans a readable target, `labels.email_address` is the email destination for this example, and `enabled` controls whether Cloud Monitoring can use the channel. A production PagerDuty, webhook, Pub/Sub, or chat channel has different labels, but the same review question applies: will this alert reach the responder who owns `checkout-api`?
+
+```bash
+gcloud monitoring channels create \
+  --project=shop-prod \
+  --channel-content-from-file=checkout-oncall-channel.yaml
+```
+
+Expected output gives the channel resource name that the alert policy references:
+
+```console
+Created notification channel [projects/shop-prod/notificationChannels/1234567890].
+```
+
+Healthy setup output creates a channel in the production project and the team tests that notifications reach the on-call path. Suspicious setup is a disabled channel, a stale email list, or a channel in a different project than the alert policy expects.
+
 Here is the creation command for a policy stored in a YAML file:
 
 ```bash
@@ -150,7 +217,13 @@ gcloud monitoring policies create \
   --policy-from-file=checkout-5xx-policy.yaml
 ```
 
-That command matters because alert policies should be treated like production configuration. Many teams manage them through Terraform or another infrastructure-as-code workflow, but the YAML shape is still useful for learning the fields that Cloud Monitoring evaluates.
+That command matters because alert policies should be treated like production configuration. Many teams manage them through Terraform or another infrastructure-as-code workflow, but the YAML shape is still useful for learning the fields that Cloud Monitoring evaluates. `--policy-from-file` points at the reviewed policy document, and `--project` decides where the policy lives.
+
+```console
+Created alert policy [projects/shop-prod/alertPolicies/9876543210987654321].
+```
+
+Healthy output creates one policy with the expected display name and channel. Suspicious output can still say "Created" while the policy has the wrong filter, wrong notification channel, or weak documentation, so a reviewer should inspect the stored policy before trusting the page.
 
 ## Error Rate As A Ratio
 <!-- section-summary: A ratio alert compares failed requests to total requests, which keeps alerting tied to customer impact instead of raw volume. -->
@@ -187,6 +260,9 @@ conditions:
 ```
 
 The `alignmentPeriod` groups incoming points into one-minute intervals. The `ALIGN_RATE` aligner turns delta request counts into a per-second rate. The `REDUCE_SUM` reducer combines the matching series, such as multiple revisions during a rollout, into one value for the service. The numerator and denominator use the same resource filters so the ratio compares the same service and region.
+
+![Infographic showing a Cloud Monitoring alert policy flow from metric filter and denominator through a ratio condition, incident, notification channel, and runbook.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-monitoring/alert-ratio-policy.png)
+*A useful page has a clear signal and a clear next step. The ratio compares failed checkout requests with all checkout requests, then routes the incident to the team that can act.*
 
 This policy still needs production tuning. A low-traffic service might need a minimum request volume condition so one failed request stays out of high-priority paging. A very critical service might need a lower threshold or a shorter duration. The right threshold comes from the service's reliability target, traffic pattern, and incident response expectations.
 
@@ -236,6 +312,25 @@ resource "google_monitoring_alert_policy" "checkout_5xx_ratio" {
 
 The Terraform version makes alert review part of the same change process as Cloud Run, IAM, and networking. A reviewer can see the metric filter, denominator filter, duration, threshold, notification channel, and runbook text before the alert starts paging people.
 
+A Terraform plan should show a new alert policy with the intended fields before anyone applies it:
+
+```console
+  # google_monitoring_alert_policy.checkout_5xx_ratio will be created
+  + resource "google_monitoring_alert_policy" "checkout_5xx_ratio" {
+      + display_name          = "checkout-api high 5xx rate"
+      + enabled               = true
+      + notification_channels = [
+          + "projects/shop-prod/notificationChannels/1234567890",
+        ]
+
+      + conditions {
+          + display_name = "5xx ratio above 5 percent"
+        }
+    }
+```
+
+Healthy plan output names the expected production project, the expected notification channel, and the expected condition. Suspicious plan output changes a shared channel, removes documentation, or points the filter at the wrong service or region.
+
 ## SLOs, SLIs, Error Budgets, And Burn Rate
 <!-- section-summary: SLO monitoring turns service health into explicit reliability targets and uses burn rate to page when the target is being spent too quickly. -->
 
@@ -253,6 +348,9 @@ For `checkout-api`, the team might start with two SLOs:
 | Latency | Good events finish under two seconds | Slow checkout can still lose orders |
 
 SLOs should use signals that match user experience. A CPU SLO describes resource pressure, while a checkout SLO should describe the service behavior that users care about. CPU can support diagnosis, and the reliability target should stay tied to checkout success or latency.
+
+![Infographic showing an SLI, SLO, error budget, fast burn, and slow burn for checkout-api reliability.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-monitoring/slo-burn-rate.png)
+*SLOs give the incident a reliability target. A fast burn needs immediate response, while a slower burn still needs investigation before the monthly target is missed.*
 
 ## Uptime Checks, Synthetic Checks, And Prometheus Metrics
 <!-- section-summary: Outside-in checks and Prometheus-style metrics cover gaps that built-in service metrics miss. -->

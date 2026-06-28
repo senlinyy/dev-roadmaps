@@ -38,6 +38,9 @@ A **runtime** is the managed environment that starts your code and keeps it reac
 
 This article follows one small team moving an Orders and Checkout system to GCP. They have a customer-facing Orders API, a receipt email task, a nightly reconciliation job, a legacy invoice PDF worker that still expects a Linux server, and a future platform discussion about Kubernetes. Each piece needs compute, but each piece asks for a different runtime contract.
 
+![Four workload shapes mapped to runtime contracts](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/runtime-contract-map.png)
+*The same checkout system can contain an HTTP API, a legacy server process, an event handler, and a shared platform workload, so the runtime choice starts from the work pattern.*
+
 ## The Orders Team Scenario
 <!-- section-summary: One application area can contain several workload shapes, so one cloud runtime rarely fits every part equally well. -->
 
@@ -69,6 +72,9 @@ GCP gives you several compute services because production applications do severa
 
 **Virtual machines** give the most direct server control. **Kubernetes** gives a powerful orchestration API for teams that already need cluster-level primitives. **Serverless containers** give a simpler service model for stateless web services and many background tasks. **Functions** give a small handler model for event-driven work. With that map in mind, we can walk through each option as the Orders team makes decisions, starting with the runtime that looks most like a traditional server.
 
+![Compute responsibility boundary across four runtime types](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/responsibility-boundary.png)
+*The responsibility boundary changes with each runtime: a VM keeps more server work with the team, while a function narrows the team's work to the handler and trigger.*
+
 ## Compute Engine: Virtual Machines
 <!-- section-summary: Compute Engine fits workloads that need direct operating-system control, but the team accepts more patching and process-management work. -->
 
@@ -85,6 +91,14 @@ gcloud compute instances create invoice-worker-1 \
   --image-family=debian-12 \
   --image-project=debian-cloud \
   --service-account=invoice-worker-runtime@orders-prod.iam.gserviceaccount.com
+```
+
+The output should confirm the instance was created, show the chosen zone, and show a running status after the VM starts. A beginner can use that status to separate "the VM exists" from "the invoice worker is healthy."
+
+```console
+Created [https://www.googleapis.com/compute/v1/projects/orders-prod/zones/us-central1-a/instances/invoice-worker-1].
+NAME              ZONE           MACHINE_TYPE   INTERNAL_IP  EXTERNAL_IP  STATUS
+invoice-worker-1  us-central1-a  e2-standard-2  10.20.1.14               RUNNING
 ```
 
 That command only creates the server. The production checklist continues with startup scripts or image baking, OS patching, process supervision, firewall rules, disk backups, monitoring agents, and a plan for replacing failed instances. Managed instance groups can help with fleets of similar VMs, but the team still owns the guest operating system and the process running inside it.
@@ -106,6 +120,18 @@ gcloud run deploy orders-api \
   --region=us-central1 \
   --service-account=orders-api-runtime@orders-prod.iam.gserviceaccount.com \
   --no-allow-unauthenticated
+```
+
+The deploy output should name the service URL, the latest revision, and the traffic target. The `--no-allow-unauthenticated` flag means the service URL can exist while callers still need the right invoker permission.
+
+```console
+Deploying container to Cloud Run service [orders-api] in project [orders-prod] region [us-central1]
+OK Deploying new service... Done.
+  OK Creating Revision...
+  OK Routing traffic...
+Done.
+Service [orders-api] revision [orders-api-00001-tan] has been deployed and is serving 100 percent of traffic.
+Service URL: https://orders-api-7a2b3c-uc.a.run.app
 ```
 
 In this example, the backend is private to callers with the right IAM permission. A public website can still sit in front of it, or the team can intentionally allow unauthenticated Cloud Run invocation for a public API. The important point is that access belongs in service configuration, not in the container image.
@@ -141,9 +167,22 @@ gcloud eventarc triggers create receipt-email-order-created \
   --service-account=receipt-trigger@orders-prod.iam.gserviceaccount.com
 ```
 
+The function deploy output should show a ready service revision, while the trigger output should show that Eventarc accepted the route from the Pub/Sub topic to the function. If the trigger does not reach an active state, the team should check the trigger service account and topic path before replaying events.
+
+```console
+Service [receipt-email] revision [receipt-email-00003-puv] has been deployed.
+Service URL: https://receipt-email-7a2b3c-uc.a.run.app
+
+Created trigger [receipt-email-order-created] in location [us-central1].
+Event filters:
+  type: google.cloud.pubsub.topic.v1.messagePublished
+Destination: Cloud Run service [receipt-email]
+Transport topic: projects/orders-prod/topics/order-created
+```
+
 The practical production idea here is **idempotency**. An idempotent handler can process the same event more than once and still leave the system in the correct final state. The receipt function can store an `email_sent_at` timestamp or an email delivery record keyed by `order_id`, so a retry does not send three receipts for one purchase.
 
-Functions are helpful when the code naturally fits a small event handler. If the Orders team starts adding many routes, shared middleware, long dependency initialization, custom container behavior, and rollout controls, the work may fit a Cloud Run service more cleanly. The decision follows the shape of the code and the operations the team wants to see. The platform team then raises Kubernetes, which is a different kind of runtime choice because it changes the operating surface, not just the packaging style.
+Functions are helpful when the code naturally fits a small event handler. If the Orders team starts adding many routes, shared middleware, long dependency initialization, custom container behavior, and rollout controls, the work may fit a Cloud Run service more cleanly. The decision follows the shape of the code and the operations the team wants to see. The platform team then raises Kubernetes, which is a different kind of runtime choice because it changes the operating surface and the platform contract around the container.
 
 ## GKE: Managed Kubernetes
 <!-- section-summary: GKE fits teams that intentionally operate through Kubernetes APIs and need cluster-level platform capabilities. -->
@@ -197,6 +236,9 @@ The **legacy invoice PDF worker** starts on Compute Engine. That keeps the OS-sp
 The **shared platform discussion** stays open for GKE. If the Orders system later needs Kubernetes policies, service mesh sidecars, custom controllers, or a company-wide deployment platform, GKE may be the right home. Until then, Cloud Run gives the Orders team a smaller operating surface for the main API.
 
 This is the core lesson: GCP compute selection is about workload shape and operating responsibility. The best architecture for a small team can use several runtimes at once, as long as each one has a clear reason to exist.
+
+![Summary of runtime choices for the Orders system](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/compute-choice-summary.png)
+*The late-stage summary ties each runtime to one production signal: concurrency for Cloud Run, patching for VMs, retries for functions, and cluster policy for GKE.*
 
 ## What's Next
 <!-- section-summary: The next article zooms into Cloud Run because it is the usual first home for a stateless backend API on GCP. -->

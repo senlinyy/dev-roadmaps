@@ -1,7 +1,7 @@
 ---
 title: "Pod Security and Runtime Hardening"
-description: "Harden Kubernetes pods with Pod Security Standards, securityContext settings, resource limits, and runtime detection."
-overview: "A Kubernetes pod can ask for powerful access to the node it runs on. This article follows a checkout service as it moves from a permissive pod spec to a safer runtime shape using Pod Security Admission, securityContext settings, resource limits, and Falco alerts."
+description: "Control what a Kubernetes pod can do after it starts with Pod Security Standards, securityContext settings, limits, and runtime detection."
+overview: "Follow a checkout pod after deployment and ask what the container can do on the node. Then move through Pod Security Standards, namespace labels, securityContext fields, a Restricted pod shape, verification commands, resource limits, and Falco runtime detection."
 tags: ["pods", "securityContext", "runtime", "falco", "ebpf", "breakout"]
 order: 2
 id: article-devsecops-kubernetes-security-pod-security-and-runtime-hardening
@@ -34,11 +34,11 @@ aliases:
 ## Why Pod Runtime Settings Matter
 <!-- section-summary: A pod spec controls more than scheduling and ports; it also controls how much power the container receives inside the node. -->
 
-In the previous article, Kubernetes security started with access: who can read secrets, who can create workloads, and which service accounts can talk to the API. That work matters because the API server is the front door. Now the checkout team has a different problem. Their payments service already made it through deployment, and the question has moved from "who can create this pod?" to "what can this pod do after it starts?"
+The previous article controlled who could ask Kubernetes for things. Now the `checkout-api` pod has already been deployed. The scheduler placed it on a node, the image pulled successfully, and the container process started. The next production question is simpler and sharper: what can this container do now?
 
-That second question lives inside the pod spec. A pod spec can decide whether a container runs as root, whether it can add Linux capabilities, whether it can mount files from the node, whether it can share the node network, and whether the container filesystem is writable. Those settings shape the **blast radius** of a bug or compromise. Blast radius means the amount of damage one failure can cause before another control stops it.
+That question lives inside the pod spec. A pod spec can decide whether a container runs as root, whether it can add Linux capabilities, whether it can mount files from the node, whether it can share the node network, and whether the container filesystem is writable. Those settings shape the **blast radius** of a bug or compromise. Blast radius means the amount of damage one failure can cause before another control stops it.
 
-Let's make this concrete. Your company runs an online store. The `checkout-api` pod accepts carts, calls a payment provider, writes order records, and emits a receipt event. A normal request path needs a network port, a service account token, a few environment variables, CPU and memory, and maybe a temporary directory. Node filesystem mounts, host process inspection, kernel-level features, and writable image filesystems sit outside that normal checkout job.
+Let's make this concrete. Harbor Books runs an online store. The `checkout-api` pod accepts carts, calls a payment provider, writes order records, and emits a receipt event. A normal request path needs a network port, a service account token, a few environment variables, CPU and memory, and maybe a temporary directory. Node filesystem mounts, host process inspection, kernel-level features, and writable image filesystems sit outside that normal checkout job.
 
 Kubernetes gives you two layers for this work. **Pod Security Admission** applies a namespace-level policy before pods are accepted. **securityContext** fields define the runtime settings inside the pod and container spec. Admission stops unsafe shapes from entering the cluster. The pod spec still needs the exact settings that make the workload safe and runnable.
 
@@ -47,7 +47,19 @@ Kubernetes gives you two layers for this work. **Pod Security Admission** applie
 
 Imagine the checkout team is under pressure before a launch. A previous incident happened because a log directory was hard to inspect. Someone added a host mount. A port conflict appeared in a staging cluster. Someone enabled host networking while debugging. A third-party library wanted to bind to a low port, so the team ran the container as root. The pod works, and it now carries permissions outside normal checkout traffic.
 
-Here is a deliberately unsafe pod. It is useful because it shows the kinds of fields you should learn to spot during review:
+Before we read the full manifest, here is the small shape of the problem:
+
+```yaml
+spec:
+  hostNetwork: true
+  hostPID: true
+  containers:
+    - securityContext:
+        privileged: true
+        runAsUser: 0
+```
+
+Those few lines ask for host network access, host process visibility, privileged mode, and root. The full pod below adds the surrounding fields so the review looks like a real manifest:
 
 ```yaml
 apiVersion: v1
@@ -167,6 +179,13 @@ You can test the unsafe pod against admission without creating it:
 kubectl apply --dry-run=server -f checkout-api-insecure.yaml
 ```
 
+Example warning or denial output usually names the profile and the unsafe fields:
+
+```bash
+Warning: would violate PodSecurity "restricted:v1.36": privileged, host namespaces, hostPath volumes
+Error from server (Forbidden): pods "checkout-api" is forbidden: violates PodSecurity "baseline:v1.36"
+```
+
 With `warn=restricted`, Kubernetes prints warnings for Restricted violations. With `enforce=baseline`, it rejects fields such as `privileged`, `hostNetwork`, `hostPID`, and `hostPath`. The exact message depends on your Kubernetes version and the fields in the manifest, but the review signal is immediate: this pod has more power than its job requires.
 
 Admission gives the team a gate. The next work happens inside the manifest.
@@ -255,7 +274,7 @@ USER 10001:10001
 CMD ["node", "server.js"]
 ```
 
-**Dropping capabilities** removes extra Linux privileges from the process. The Restricted PSS profile expects Linux containers to drop `ALL` capabilities and allows adding only `NET_BIND_SERVICE` when needed. The checkout API listens on `8080`, so `NET_BIND_SERVICE` can stay out of the manifest. If another service must bind to port `443` inside the container, the safer choice is often to change the container port to a higher port and let the Kubernetes Service or ingress expose `443`.
+**Dropping capabilities** removes extra Linux privileges from the process. The Restricted PSS profile expects Linux containers to drop `ALL` capabilities and allows adding only `NET_BIND_SERVICE` for low port binding. The checkout API listens on `8080`, so `NET_BIND_SERVICE` can stay out of the manifest. A service that needs public HTTPS can usually listen on a higher container port while the Kubernetes Service or ingress exposes `443`.
 
 **allowPrivilegeEscalation: false** blocks a process from gaining more privileges than its parent process. Kubernetes documents that this setting is always true for privileged containers or containers with `CAP_SYS_ADMIN`, which is another reason to remove those fields. For the checkout API, the process should keep the same privilege level for its whole lifetime.
 
@@ -343,6 +362,14 @@ kubectl exec -n payments checkout-api -- sh -c 'touch /should-not-write'
 kubectl exec -n payments checkout-api -- sh -c 'touch /tmp/runtime-check && ls -l /tmp/runtime-check'
 ```
 
+Example output:
+
+```bash
+uid=10001 gid=10001 groups=10001
+touch: /should-not-write: Read-only file system
+-rw-r--r--    1 10001    10001            0 Jun 28 10:15 /tmp/runtime-check
+```
+
 The `id` output should show UID `10001` instead of UID `0`. The write to `/should-not-write` should fail because the root filesystem is read-only. The write to `/tmp/runtime-check` should succeed because `/tmp` is an explicit writable volume.
 
 You can also check resource settings:
@@ -382,7 +409,7 @@ kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=50
 
 In production, Falco alerts usually go to a central destination through Falcosidekick, a logging pipeline, a SIEM, or an incident channel. The important practice is to tune rules with the application team. If checkout legitimately runs a migration helper during startup, a narrow exception for that command and container image keeps the signal useful. Broad exceptions can silence a whole class of behavior for every workload.
 
-PSA and `securityContext` reduce the actions a pod can take before runtime alerts enter the picture. Falco then gives you visibility when something unusual still happens. That order matters in production because alerts are easier to handle when the allowed runtime surface is already small.
+PSA and `securityContext` reduce the actions a pod can take before runtime alerts enter the picture. Falco then gives visibility for unusual runtime behavior that still breaks through. Production teams handle alerts more easily after the allowed runtime surface is already small.
 
 ## Putting It All Together
 <!-- section-summary: A hardened pod combines namespace policy, explicit pod settings, resource boundaries, verification, and runtime alerts. -->

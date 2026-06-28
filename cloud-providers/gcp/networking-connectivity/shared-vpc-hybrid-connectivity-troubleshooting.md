@@ -46,36 +46,8 @@ A **host project** is a Google Cloud project that contains one or more Shared VP
 
 A **service project** is a project attached to a host project so its eligible resources can use the shared network. The orders team deploys into `app-orders-prod`, but its VM or GKE node can select a subnet from `net-prod-host`. The workload still belongs to the orders project for IAM, billing, deployment, logs, and ownership. Its network interface receives an IP address from the host project's subnet.
 
-```mermaid
-flowchart TB
-    Org["Organization"]:::org
-
-    subgraph Host["Host project: net-prod-host"]
-        VPC["Shared VPC: prod-shared-vpc"]:::network
-        SubnetA["Subnet: apps-us-central1<br/>10.20.10.0/24"]:::network
-        FW["Firewall rules and routes"]:::network
-        VPC --> SubnetA
-        VPC --> FW
-    end
-
-    subgraph Orders["Service project: app-orders-prod"]
-        OrdersVM["orders-api VM or GKE nodes<br/>IP from shared subnet"]:::compute
-    end
-
-    subgraph Analytics["Service project: app-analytics-prod"]
-        AnalyticsVM["analytics workers<br/>IP from shared subnet"]:::compute
-    end
-
-    Org --> Host
-    Org --> Orders
-    Org --> Analytics
-    OrdersVM --> SubnetA
-    AnalyticsVM --> SubnetA
-
-    classDef org fill:#2a2a2a,stroke:#888,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef network fill:#173b36,stroke:#36d399,stroke-width:2px,color:#fff
-```
+![A generated infographic showing a host project owning the network while service projects run applications through delegated shared subnets.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-shared-vpc-hybrid-connectivity-troubleshooting/shared-vpc-ownership.png)
+*Shared VPC separates ownership: the host project owns the network, and service projects consume approved subnets.*
 
 This structure gives each team a clean job. The platform network team can design IP ranges, firewall policy, hybrid links, and DNS in one place. The orders team can deploy application resources without being allowed to edit global network routes. Finance can still see that compute spend belongs to `app-orders-prod`, while network egress through a host-project VPN gateway can appear under the host project depending on the resource.
 
@@ -143,6 +115,24 @@ gcloud compute networks subnets get-iam-policy apps-us-central1 \
   --format='table(bindings.role,bindings.members)'
 ```
 
+Healthy output should prove three different facts: the service project points at the host project, the host project has associated service-project resources, and the deploy identity has Network User on the intended subnet:
+
+```console
+net-prod-host
+```
+
+```console
+ID               TYPE
+app-orders-prod  PROJECT
+```
+
+```console
+ROLE                       MEMBERS
+roles/compute.networkUser  serviceAccount:orders-deploy@app-orders-prod.iam.gserviceaccount.com
+```
+
+If the host-project check is empty, the service project is not attached. If the IAM table lacks the deploy service account, application deployment may fail even though the Shared VPC exists.
+
 The same setup usually lives in Terraform:
 
 ```hcl
@@ -175,23 +165,8 @@ For `orders-api`, the VM or GKE node exists in `app-orders-prod`, but its networ
 
 This creates a practical operating rule: the application team owns the app symptom, and the network team owns much of the path evidence. The app team can provide source IP, destination IP, port, protocol, timestamp, service account, and hostname. The network team can check route tables, firewall policies, DNS zones, and hybrid link state. Neither side has to guess if they share those details at the start.
 
-```mermaid
-flowchart LR
-    App["orders-api<br/>service project"]:::compute
-    DNS["Private DNS zone<br/>host or bound project"]:::network
-    FW["Firewall policy<br/>host project"]:::network
-    Route["Dynamic route<br/>learned from Cloud Router"]:::network
-    Dest["on-prem settlement<br/>172.20.40.10:443"]:::service
-
-    App --> DNS
-    App --> FW
-    FW --> Route
-    Route --> Dest
-
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef network fill:#173b36,stroke:#36d399,stroke-width:2px,color:#fff
-    classDef service fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-```
+![A generated infographic showing hybrid route evidence through VPN or Interconnect, Cloud Router, advertised ranges, and an on-premises system.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-shared-vpc-hybrid-connectivity-troubleshooting/hybrid-route-evidence.png)
+*Hybrid evidence needs both transport state and route exchange: a tunnel can be up while the needed prefix is missing.*
 
 DNS is worth calling out because it often hides as an application issue. If `settlement.internal.example.com` resolves to an old on-premises IP, the route and firewall checks may all look correct for the wrong destination. If the private zone is attached to one VPC but the workload uses another, the application may fall back to public DNS or fail resolution entirely. For Shared VPC, private zones can live in the host project or use cross-project binding, so the team should know which model it uses.
 
@@ -240,6 +215,19 @@ gcloud compute interconnects attachments list \
   --format='table(name,region,interconnect,state,router)'
 ```
 
+The tunnel or attachment check answers the transport question only. Healthy examples show `ESTABLISHED` or an active attachment, but that does not prove the settlement prefix is learned:
+
+```console
+NAME                  REGION       STATUS       PEER_IP        ROUTER
+settlement-vpn-1      us-central1  ESTABLISHED  198.51.100.10  prod-router-us-central1
+settlement-vpn-2      us-central1  ESTABLISHED  198.51.100.11  prod-router-us-central1
+```
+
+```console
+NAME                    REGION       INTERCONNECT       STATE   ROUTER
+settlement-vlan-a       us-central1  prod-interconnect  ACTIVE  prod-router-us-central1
+```
+
 The next check asks Cloud Router for BGP status, advertised routes, and learned routes. This is one of the highest-value commands in a hybrid incident because it shows whether the route conversation agrees with the design:
 
 ```bash
@@ -251,6 +239,23 @@ gcloud compute routers get-status prod-router-us-central1 \
 
 The network team should look for the remote prefix `172.20.0.0/16` in learned routes and the GCP source subnet `10.20.10.0/24` in advertised routes. If the tunnel is established and the route is missing, the problem is route advertisement, BGP policy, prefix filtering, or the peer side. If both routes exist and packets still fail, move to firewall evidence and flow logs.
 
+Example useful output:
+
+```yaml
+bestRoutesForRouter:
+- destRange: 172.20.0.0/16
+  nextHopVpnTunnel: https://www.googleapis.com/compute/v1/projects/net-prod-host/regions/us-central1/vpnTunnels/settlement-vpn-1
+bgpPeerStatus:
+- name: settlement-peer-a
+  status: UP
+  ipAddress: 169.254.10.1
+  peerIpAddress: 169.254.10.2
+  numLearnedRoutes: 12
+advertisedRoutes:
+- destRange: 10.20.10.0/24
+  description: apps-us-central1
+```
+
 Route table checks make the selected next hop visible:
 
 ```bash
@@ -259,6 +264,15 @@ gcloud compute routes list \
   --filter='network~prod-shared-vpc AND destRange:172.20.' \
   --format='table(name,destRange,nextHopVpnTunnel,nextHopInterconnectAttachment,nextHopGateway,priority)'
 ```
+
+Example output should name the next hop that will carry traffic to the data center:
+
+```console
+NAME                         DEST_RANGE     NEXT_HOP_VPN_TUNNEL  NEXT_HOP_INTERCONNECT_ATTACHMENT  PRIORITY
+bgp-settlement-172-20-0-0    172.20.0.0/16  settlement-vpn-1                                      100
+```
+
+If the destination route is absent, the application timeout is not a Cloud Run, GKE, or VM runtime issue. Fix BGP advertisement, route import, NCC exchange, or the external peer before changing application code.
 
 The application team can help by providing one exact flow: source IP `10.20.10.18`, destination IP `172.20.40.10`, TCP `443`, and failure time. With those facts, VPC Flow Logs, Connectivity Tests, Cloud Router status, and on-premises firewall logs all point at the same packet story.
 
@@ -271,26 +285,8 @@ When a company has many VPCs, VPNs, Interconnect attachments, and sites, managin
 
 For a small environment, the network team might manage routes directly between one Shared VPC and one data center. For a larger environment, the team may have production VPCs, analytics VPCs, security inspection VPCs, multiple data centers, and connections to other cloud providers. NCC helps organize that shape by representing the connected pieces as spokes attached to a hub and controlling route exchange between them.
 
-```mermaid
-flowchart TB
-    Hub["NCC hub<br/>prod-connectivity"]:::network
-    VPC1["VPC spoke<br/>prod-shared-vpc"]:::network
-    VPC2["VPC spoke<br/>analytics-vpc"]:::network
-    VPN["Hybrid spoke<br/>HA VPN tunnels"]:::network
-    INT["Hybrid spoke<br/>Interconnect VLAN attachments"]:::network
-    DC["Data center networks"]:::service
-    Cloud["Other cloud network"]:::service
-
-    Hub --- VPC1
-    Hub --- VPC2
-    Hub --- VPN
-    Hub --- INT
-    VPN --- DC
-    INT --- Cloud
-
-    classDef network fill:#173b36,stroke:#36d399,stroke-width:2px,color:#fff
-    classDef service fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-```
+![A generated infographic showing a troubleshooting ladder from endpoint facts through DNS, routes, firewalls, hybrid state, and service logs.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-shared-vpc-hybrid-connectivity-troubleshooting/troubleshooting-ladder.png)
+*The troubleshooting ladder keeps DNS, routing, firewall policy, hybrid advertisements, and service logs in separate checks.*
 
 NCC supports VPC spokes that exchange subnet routes, hybrid spokes based on HA VPN tunnels or Interconnect VLAN attachments, and router appliance spokes for more advanced designs. With the right design, it can support site-to-cloud connectivity, VPC-to-VPC connectivity, and site-to-site data transfer over Google's network. These are powerful patterns, so teams usually pair NCC with clear route ownership, route filters, naming standards, and review workflows.
 

@@ -9,330 +9,290 @@ id: article-containers-orchestration-kubernetes-configuration-storage-storage-cl
 
 ## Table of Contents
 
-1. [StorageClass Is the Cluster Storage Profile](#storageclass-is-the-cluster-storage-profile)
-2. [The CSI Provisioner Does the Real Work](#the-csi-provisioner-does-the-real-work)
-3. [Parameters Are Platform-Owned Details](#parameters-are-platform-owned-details)
-4. [Default StorageClass Behavior](#default-storageclass-behavior)
-5. [volumeBindingMode and Scheduling](#volumebindingmode-and-scheduling)
-6. [Reclaim Policy and Expansion](#reclaim-policy-and-expansion)
-7. [Allowed Topologies and Zones](#allowed-topologies-and-zones)
-8. [Naming and Review with Platform Teams](#naming-and-review-with-platform-teams)
-9. [Troubleshoot the Wrong Class](#troubleshoot-the-wrong-class)
-10. [Choosing Classes for devpolaris-orders-api](#choosing-classes-for-devpolaris-orders-api)
-11. [What's Next](#whats-next)
+1. [Start with the Storage Profile](#start-with-the-storage-profile)
+2. [What a StorageClass Does](#what-a-storageclass-does)
+3. [The CSI Provisioner Does the Real Work](#the-csi-provisioner-does-the-real-work)
+4. [Parameters Are Platform-Owned Details](#parameters-are-platform-owned-details)
+5. [Default StorageClass Behavior](#default-storageclass-behavior)
+6. [volumeBindingMode and Scheduling](#volumebindingmode-and-scheduling)
+7. [Reclaim Policy and Expansion](#reclaim-policy-and-expansion)
+8. [Allowed Topologies and Zones](#allowed-topologies-and-zones)
+9. [Naming and Review with Platform Teams](#naming-and-review-with-platform-teams)
+10. [Troubleshoot the Wrong Class](#troubleshoot-the-wrong-class)
+11. [Assembled Example](#assembled-example)
+12. [Review Checklist](#review-checklist)
 
-## StorageClass Is the Cluster Storage Profile
-<!-- section-summary: A StorageClass names a storage profile so PVCs can request the right kind of volume without provider-specific YAML. -->
+## Start with the Storage Profile
+<!-- section-summary: A StorageClass is the named storage profile that a PVC can request. -->
 
-A **StorageClass** is a Kubernetes object that describes a kind of storage the cluster can create for claims. You can think of it as the storage menu the platform team offers to application teams. One class might mean standard encrypted block storage, another might mean fast SSD storage, and another might mean a shared filesystem that supports many writers.
+A real app team often needs a storage choice it can name. `notification-postgres` needs a fast disk for database writes, while an archive export job can use cheaper storage. The team should ask for `fast-ssd` or `standard` by name instead of copying cloud disk internals into every workload.
 
-The previous article introduced `orders-api-workdir`, the PVC used by `devpolaris-orders-api` for invoice work files. The claim asked for `storageClassName: standard-retain`. That single field is how the application chooses the cluster's storage profile without hardcoding a disk type, zone, encryption parameter, or provider API.
+A **StorageClass** is a named storage profile in a Kubernetes cluster. It tells Kubernetes which storage provisioner to use and which platform-specific settings to pass when a PersistentVolumeClaim asks for storage.
 
-The same production claim shows the application-facing contract. The workload asks for `standard-retain`, and that one field selects the storage profile the platform team has already reviewed:
-
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: orders-api-workdir
-  namespace: devpolaris-prod
-spec:
-  storageClassName: standard-retain
-  accessModes:
-    - ReadWriteOnce
-  volumeMode: Filesystem
-  resources:
-    requests:
-      storage: 20Gi
-```
-
-The PVC says what the workload needs. The StorageClass says how the cluster should satisfy that need. That split lets the application manifest stay readable while the platform team changes implementation details behind a reviewed class name.
-
-The full storage path now has a clear handoff. The **PVC** asks for storage, the **StorageClass** chooses the profile, the **CSI provisioner** creates the backend volume, Kubernetes records that backend as a **PV**, and the **Pod** mounts the claim into the container.
-
-| Step | Object or actor | What happens for `orders-api-workdir` |
-|---|---|---|
-| 1 | PVC | The app requests `20Gi` of `ReadWriteOnce` filesystem storage. |
-| 2 | StorageClass | `standard-retain` selects the retained production storage profile. |
-| 3 | CSI provisioner | The driver creates the real disk or file share for the claim. |
-| 4 | PV | Kubernetes represents the created volume as a bound PersistentVolume. |
-| 5 | Pod mount | The Deployment mounts the PVC at `/var/lib/devpolaris/orders-work`. |
-
-That handoff gives each team a natural review point. Application engineers review the claim size, access mode, and mount path. Platform engineers review the class, driver, retention, expansion, topology, backup coverage, and cost.
-
-## The CSI Provisioner Does the Real Work
-<!-- section-summary: The provisioner field points Kubernetes to the storage driver that can create, attach, resize, and snapshot volumes. -->
-
-The most important field in a StorageClass is `provisioner`. It names the driver that creates volumes for PVCs using this class. In modern Kubernetes clusters, that driver usually follows the **Container Storage Interface**, or **CSI**, which is the standard way storage systems integrate with Kubernetes.
-
-A CSI driver can create the backing disk or file share, attach it to a node, mount it for a Pod, expand it, and sometimes create snapshots. The exact abilities depend on the driver and the storage system behind it. This is why two classes with similar names can behave very differently.
-
-A simplified class for the production invoice work directory makes the hidden behavior visible. The PVC stays short, while the class carries the provisioner, lifecycle, expansion, and binding rules:
+Here is the small profile shape:
 
 ```yaml
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: standard-retain
-provisioner: disk.csi.platform.devpolaris.io
-reclaimPolicy: Retain
-allowVolumeExpansion: true
+  name: fast-ssd
+provisioner: csi.example.com
 volumeBindingMode: WaitForFirstConsumer
-parameters:
-  type: standard
-  encrypted: "true"
 ```
 
-The provisioner name is intentionally driver-specific. In a cloud cluster, you might see names such as `ebs.csi.aws.com`, `disk.csi.azure.com`, or `pd.csi.storage.gke.io`. In an on-premises cluster, the provisioner name might come from a storage vendor or an internal platform driver.
+A PVC can then ask for that profile:
 
-Application teams should know which provisioner family a class uses at a high level. A block-disk provisioner usually fits one writer per volume, while a file-share provisioner may support `ReadWriteMany`. The platform team should document those differences so developers choose a class by workload need instead of guessing from the name.
+```yaml
+spec:
+  storageClassName: fast-ssd
+```
 
-## Parameters Are Platform-Owned Details
-<!-- section-summary: StorageClass parameters configure provider-specific behavior, so platform teams should own and review them. -->
+The application team does not need to know the exact cloud disk SKU, storage array pool, or CSI driver parameters. It asks for the profile the platform team has published.
 
-The `parameters` map is passed to the provisioner. Kubernetes leaves those keys to each driver rather than giving them one universal meaning across all storage systems. A cloud disk driver, a network filesystem driver, and a storage appliance driver each define their own parameter names and supported values.
+## What a StorageClass Does
+<!-- section-summary: StorageClasses separate application storage requests from the provider details needed to create real volumes. -->
 
-That is why application teams should avoid copying StorageClass examples from a blog post into a shared cluster. A parameter such as `type: gp3`, `skuName: Premium_LRS`, or `replication-type: regional-pd` only makes sense for a specific driver and platform. The same-looking field can affect cost, performance, encryption, zone placement, backup eligibility, or failure domain.
+In the Customer Notification Platform, `notification-postgres` needs low-latency durable storage. A batch archive job might need cheaper storage. A shared report export path might need a network filesystem that supports many readers.
 
-For a production cluster, platform teams usually publish a small catalog of reviewed classes. The catalog should explain the operational promise behind each name:
+A StorageClass gives those choices names such as `fast-ssd`, `standard`, or `shared-rwx`. The name serves as the contract between application teams and platform teams. The PVC asks for a class, and the class describes how the cluster should create the backing PersistentVolume.
 
-| Class name | Intended use | Typical behavior |
-|---|---|---|
-| `standard-delete` | Development and short-lived environments | Encrypted standard block storage, deleted with the claim. |
-| `standard-retain` | Production single-writer application data | Encrypted standard block storage, retained after claim deletion, expansion enabled. |
-| `fast-delete` | Performance testing or cache-like data | Higher IOPS block storage, deleted with the claim. |
-| `shared-rwx` | Shared filesystem workloads | Multi-writer file storage, retained and snapshot-covered. |
+![StorageClass provisioning flow](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/storageclass-provisioning-flow.png)
 
-The class name should be boring and explicit. Names such as `standard-retain` and `shared-rwx` carry operational meaning. Names such as `gold` or `premium` can hide the important questions developers need answered during a production review.
+*A PVC asks for a class name, Kubernetes calls the CSI provisioner, and the provisioner creates the real backing volume.*
 
-## Default StorageClass Behavior
-<!-- section-summary: A default StorageClass can fill in missing PVC class names, which makes explicit class selection safer for important workloads. -->
+This abstraction keeps manifests portable. A development cluster might use a local CSI driver, while production uses a managed cloud disk driver. Both clusters can expose a class named `fast-ssd` if they want the same application manifest to work.
 
-A cluster can mark one StorageClass as the **default**. When a PVC leaves out `storageClassName`, Kubernetes may assign the default class to that claim. This is convenient for demos and simple environments, and it can surprise a team that expected an unnamed claim to wait for a hand-created PV.
+## The CSI Provisioner Does the Real Work
+<!-- section-summary: The provisioner field points to the CSI driver or in-tree provisioner that creates and manages storage. -->
 
-The class list gives the team the default marker before anyone creates a claim. The normal `kubectl get storageclass` view also shows lifecycle fields that matter during cleanup and recovery:
+The **provisioner** field names the storage driver that creates volumes. Modern Kubernetes storage usually uses **CSI**, the Container Storage Interface. CSI drivers let storage vendors and cloud providers integrate with Kubernetes through a standard interface.
+
+The StorageClass does not create disks by itself. It passes a provisioning request to the named driver. The driver talks to the cloud API, storage array, local volume manager, or network filesystem system behind the cluster.
+
+You can see available classes with:
 
 ```bash
 kubectl get storageclass
 ```
 
-The output makes the default class obvious. It also shows reclaim policy, binding mode, and expansion support:
+Example output:
 
-```bash
-NAME                        PROVISIONER                         RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION
-standard-delete (default)   disk.csi.platform.devpolaris.io      Delete          WaitForFirstConsumer   true
-standard-retain             disk.csi.platform.devpolaris.io      Retain          WaitForFirstConsumer   true
-shared-rwx                  files.csi.platform.devpolaris.io     Retain          Immediate              true
+```console
+NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE
+fast-ssd             csi.example.com         Delete          WaitForFirstConsumer
+standard (default)   csi.example.com         Delete          Immediate
+shared-rwx           nfs.csi.example.com     Retain          Immediate
 ```
 
-The default marker comes from an annotation. Platform teams usually manage this annotation through cluster configuration:
+The provisioner name tells platform engineers which driver owns the class. Application reviewers usually care more about the class name, access modes, performance expectations, topology behavior, and reclaim policy.
+
+## Parameters Are Platform-Owned Details
+<!-- section-summary: StorageClass parameters tune provider behavior, so platform teams should document what each class promises. -->
+
+**Parameters** are key-value settings passed to the provisioner. They can describe disk type, filesystem type, replication setting, encryption setting, performance tier, network share mode, or another provider-specific option.
 
 ```yaml
-metadata:
-  annotations:
-    storageclass.kubernetes.io/is-default-class: "true"
+parameters:
+  type: ssd
+  encrypted: "true"
 ```
 
-For `devpolaris-orders-api`, the production claim should name `standard-retain` directly. That line tells reviewers the team chose retained production storage on purpose. Leaving the field out could silently select `standard-delete`, which would be a poor fit for an invoice work directory that might matter during an incident.
+The exact keys depend on the CSI driver. A cloud disk driver and an NFS driver use different parameters. That is why StorageClasses should be owned and documented by the platform team rather than copied from random examples.
 
-There is one special value worth knowing. `storageClassName: ""` means the claim should use only a PV with no class, so dynamic provisioning through the default class is skipped. That shape appears during static provisioning and migrations, and it should be used deliberately because the claim now depends on a matching PV prepared ahead of time.
+For application teams, the useful question is not "which hidden parameter is best?" The useful question is "which class should `notification-postgres` use for durable low-latency database storage, and what are the limits?" The answer should appear in platform docs or class descriptions.
+
+## Default StorageClass Behavior
+<!-- section-summary: A default StorageClass can satisfy PVCs without storageClassName, but production workloads should choose intentionally. -->
+
+A cluster can mark one StorageClass as the default. PVCs without `storageClassName` can use that class automatically.
+
+```bash
+kubectl get storageclass
+```
+
+The default class appears with `(default)` in the output:
+
+```console
+NAME                 PROVISIONER       RECLAIMPOLICY
+standard (default)   csi.example.com   Delete
+fast-ssd             csi.example.com   Delete
+```
+
+Default classes are convenient for tutorials and simple workloads. Production stateful workloads should usually set `storageClassName` explicitly so the review shows the intended performance, topology, reclaim, and expansion behavior.
+
+If a PVC should bind only to a manually created PV, set `storageClassName: ""`. That empty string is different from omitting the field. It tells Kubernetes not to use the default class for that claim.
 
 ## volumeBindingMode and Scheduling
-<!-- section-summary: volumeBindingMode controls whether storage is created immediately or waits until Kubernetes knows where the Pod will run. -->
+<!-- section-summary: volumeBindingMode controls whether Kubernetes provisions storage immediately or waits until it knows where the Pod will run. -->
 
-The `volumeBindingMode` field controls the timing of binding and provisioning. `Immediate` creates or binds storage as soon as the PVC appears. `WaitForFirstConsumer` waits until a Pod uses the PVC, so the scheduler can pick a node and zone that fit the workload and the storage.
+**volumeBindingMode** controls when Kubernetes binds or provisions the volume. `Immediate` creates or binds the volume as soon as the PVC appears. `WaitForFirstConsumer` waits until a Pod that uses the claim is being scheduled.
 
-This timing matters for zone-bound storage. A block disk created in one zone usually attaches only to nodes in that same zone. If Kubernetes creates the disk before it knows where the Pod can run, the disk and Pod can end up in different places.
-
-For most zone-aware block storage classes, `WaitForFirstConsumer` is the safer default. It lets scheduling and volume placement agree before the volume is created:
+For zonal storage, `WaitForFirstConsumer` is often the safer default. Kubernetes can choose a volume zone that matches the node where the Pod will run. This avoids creating a disk in one zone and then discovering that the Pod can only schedule in another zone.
 
 ```yaml
 volumeBindingMode: WaitForFirstConsumer
 ```
 
-With this setting, the orders API rollout can look a little odd at first. The PVC may remain `Pending` until the Deployment creates a Pod. At that point, the scheduler considers the Pod's node options, the provisioner creates storage in a compatible zone, and the Pod starts.
+The visible behavior can surprise beginners. A PVC may stay `Pending` until a Pod references it. That pending state can be healthy when the class waits for the first consumer.
 
-The PVC and Pod events show the timing. Together, they tell you whether the wait is part of normal first-consumer binding or a stuck provisioning path:
+Check the PVC events before assuming failure:
 
 ```bash
-kubectl describe pvc orders-api-workdir -n devpolaris-prod
-
-kubectl describe pod -l app=orders-api -n devpolaris-prod
+kubectl describe pvc notification-postgres-data -n customer-notifications
 ```
 
-An event that mentions waiting for the first consumer is often part of the expected flow. A claim that waits for many minutes needs more investigation, especially around node selectors, topology rules, quotas, and CSI provisioner health.
+Expected event for this mode:
+
+```console
+Normal  WaitForFirstConsumer  persistentvolume-controller  waiting for first consumer to be created before binding
+```
 
 ## Reclaim Policy and Expansion
-<!-- section-summary: A StorageClass sets important volume lifecycle behavior, especially what happens after PVC deletion and whether storage can grow. -->
+<!-- section-summary: reclaimPolicy controls data cleanup after claim deletion, and allowVolumeExpansion controls whether claims can grow. -->
 
-`reclaimPolicy` decides what happens to dynamically provisioned storage after the PVC is deleted. `Delete` removes the backing storage through the provisioner. `Retain` leaves the backing storage in place for recovery or manual cleanup.
+**reclaimPolicy** tells Kubernetes what to do with dynamically provisioned PVs after the PVC is deleted. `Delete` removes the backing storage through the provisioner. `Retain` keeps the backing volume for manual recovery or inspection.
 
-The right value depends on the environment and the data. Development namespaces often use `Delete` to avoid old disks collecting cost. Production classes often use `Retain` for workloads where accidental PVC deletion should leave a recovery path.
+```yaml
+reclaimPolicy: Delete
+```
 
-`allowVolumeExpansion` tells Kubernetes whether a PVC using the class can request more capacity later. That setting matters when the invoice work directory grows faster than expected:
+For ephemeral test databases, `Delete` may fit. For production state, the team should understand deletion consequences before relying on it. Some organizations use `Retain` for critical classes and require manual cleanup after recovery checks.
+
+**allowVolumeExpansion** lets users increase the requested size of a bound PVC when the CSI driver supports expansion.
 
 ```yaml
 allowVolumeExpansion: true
 ```
 
-Expansion starts by editing the PVC request. The requested size can grow from `20Gi` to `40Gi`, and Kubernetes coordinates the storage resize with the provisioner and kubelet.
+Expansion is a growth path, not a substitute for capacity planning. Monitor disk usage, alert before the volume is full, and test how the filesystem expands for the chosen driver.
 
-```bash
-kubectl patch pvc orders-api-workdir -n devpolaris-prod \
-  --type merge \
-  -p '{"spec":{"resources":{"requests":{"storage":"40Gi"}}}}'
+![StorageClass decision matrix](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/storageclass-decision-matrix.png)
 
-kubectl describe pvc orders-api-workdir -n devpolaris-prod
-```
-
-Useful events include filesystem resize success, controller expansion success, and driver-specific errors. Expansion usually grows volumes in place, and shrinking a PVC requires a special migration or storage-specific procedure on most platforms.
+*StorageClass review should connect workload needs to provisioner, binding mode, reclaim policy, expansion, and topology.*
 
 ## Allowed Topologies and Zones
-<!-- section-summary: allowedTopologies limits where a provisioner may create storage, which keeps volumes aligned with cluster zones and node groups. -->
+<!-- section-summary: Allowed topologies restrict where storage can be provisioned so volumes match node and failure-domain rules. -->
 
-`allowedTopologies` restricts where the provisioner may create volumes for a StorageClass. Platform teams use it when storage must stay in certain zones, regions, racks, or node pools. The topology keys usually come from node labels and driver-supported topology domains.
-
-A simplified example can allow volumes in two zones. The exact topology keys and values should match your nodes and storage driver:
+**allowedTopologies** limits where the provisioner can create volumes. It is commonly used with zonal storage so a class provisions disks only in approved zones or regions.
 
 ```yaml
 allowedTopologies:
   - matchLabelExpressions:
       - key: topology.kubernetes.io/zone
         values:
-          - eu-west-2a
-          - eu-west-2b
+          - zone-a
+          - zone-b
 ```
 
-Topology rules should line up with scheduling rules. If the orders API Deployment requires nodes in `eu-west-2c`, while the StorageClass only creates volumes in `eu-west-2a` and `eu-west-2b`, Kubernetes has no place where both requirements fit. The symptom may appear as a Pod scheduling failure or a PVC that never binds.
+Topology rules protect scheduling and failure-domain plans. If `notification-postgres` can run only in zones where the database disk can attach, the StorageClass and scheduler need to agree on those zones.
 
-When you debug this kind of issue, compare the Pod's scheduling constraints, the node labels, and the StorageClass topology:
-
-```bash
-kubectl get nodes -L topology.kubernetes.io/zone
-
-kubectl get storageclass standard-retain -o yaml
-
-kubectl describe pod -l app=orders-api -n devpolaris-prod
-```
-
-Application teams can skip memorizing every topology setting. They should recognize that class choice and Pod placement are connected. Platform teams should document which classes work in which node pools and zones.
+For multi-zone production workloads, topology belongs in a larger design. The StorageClass can place a volume in a zone, but the database or application still needs replication, backup, and recovery planning across failures.
 
 ## Naming and Review with Platform Teams
-<!-- section-summary: A production StorageClass choice should be reviewed for access modes, backups, retention, expansion, topology, and cost. -->
+<!-- section-summary: StorageClass names should describe user-facing storage intent rather than exposing every provider implementation detail. -->
 
-StorageClass names live inside application manifests, so they deserve the same care as database tier names or network policy names. A name should communicate the important operational behavior. The best names make production review faster because the reviewer can see the intent immediately.
+Good StorageClass names describe the promise made to application teams. `fast-ssd`, `standard`, `shared-rwx`, and `archive-retain` are easier to discuss than provider SKU names copied into every workload manifest.
 
-For the invoice work directory, a review with the platform team should answer these questions. Each answer affects either day-two operations or incident recovery:
+Each published class should document:
 
-| Question | Why it matters for `orders-api-workdir` |
+| Topic | Example question |
 |---|---|
-| Which access modes does this class support? | The workdir has one writer today, and future replica changes need a storage plan. |
-| What happens when the PVC is deleted? | The team needs to know whether data is retained for recovery or deleted during cleanup. |
-| Does the class support expansion? | Invoice bursts can fill the workdir, and online growth may prevent an incident. |
-| Are snapshots or backups configured? | The backup article uses this exact workdir in a restore drill. |
-| Which zones and node pools can use it? | The Deployment and storage must land in compatible places. |
-| What encryption and compliance controls apply? | Invoice files can contain customer data and should follow data handling policy. |
-| What does it cost at 20Gi, 100Gi, and 500Gi? | Temporary work directories can quietly grow if cleanup jobs fail. |
+| Use case | Which workloads should request this class? |
+| Access modes | Does it support `ReadWriteOnce`, `ReadWriteMany`, or `ReadWriteOncePod`? |
+| Performance | What latency or throughput should teams expect? |
+| Topology | Is it zonal, regional, local, or network-based? |
+| Reclaim | Does PVC deletion delete or retain data? |
+| Expansion | Can claims grow after binding? |
 
-That conversation prevents a common production mistake: using a class because it worked in staging, then discovering during an outage that it deletes volumes on claim removal, lacks snapshots, or only exists in one zone.
-
-The chosen class belongs in version-controlled manifests. The PVC should have an owner label, and the storage choice should be visible in the service runbook. Future maintainers should understand why `standard-retain` was chosen without opening a long chat thread from six months ago.
+The platform team owns the class. Application teams own the claim. A healthy review names both sides, so storage requests do not turn into guesswork.
 
 ## Troubleshoot the Wrong Class
-<!-- section-summary: Wrong StorageClass failures usually show up in PVC events before they show up in application logs. -->
+<!-- section-summary: StorageClass mistakes appear as Pending PVCs, unexpected reclaim behavior, scheduling conflicts, or storage performance surprises. -->
 
-A typo in `storageClassName` is one of the simplest storage failures. The PVC stays `Pending`, and the `describe pvc` output names the missing class. That evidence belongs ahead of application restarts.
-
-```bash
-kubectl get pvc orders-api-workdir -n devpolaris-prod
-
-kubectl describe pvc orders-api-workdir -n devpolaris-prod
-```
-
-The event normally names the missing class directly. Here is the kind of message you are looking for:
+Start with the claim:
 
 ```bash
-Events:
-  Type     Reason                Message
-  Warning  ProvisioningFailed    storageclass.storage.k8s.io "standard-retian" not found
+kubectl describe pvc notification-postgres-data -n customer-notifications
 ```
 
-The manifest may need a corrected class name and a recreated PVC if the class name is immutable in the current object state. Before any production PVC deletion, the team should check whether a PV exists, whether the PV has data, and which reclaim policy applies. A tiny spelling fix can cause data loss if someone deletes a bound production claim too quickly.
+If the class name is wrong, events can show:
 
-The wrong class can also be a valid class with the wrong behavior. A `ReadWriteMany` claim using a block-disk class can stay `Pending` because the provisioner has no support for the requested access mode. A production claim using a `Delete` class can work perfectly until cleanup removes storage the team wanted retained.
+```console
+Warning  ProvisioningFailed  persistentvolume-controller  storageclass.storage.k8s.io "fast-ssd" not found
+```
 
-This quick sequence gathers the class list, claim YAML, claim events, and Pod events in one pass during triage:
+Then inspect the class:
 
 ```bash
-kubectl get storageclass
-
-kubectl get pvc orders-api-workdir -n devpolaris-prod -o yaml
-
-kubectl describe pvc orders-api-workdir -n devpolaris-prod
-
-kubectl describe pod -l app=orders-api -n devpolaris-prod
+kubectl describe storageclass fast-ssd
 ```
 
-The exact class name, access mode, namespace, and events give the platform team the useful evidence. Those four facts usually shorten the conversation from "storage is broken" to the actual mismatch.
+Useful fields include provisioner, reclaim policy, volume binding mode, expansion, parameters, and allowed topologies. If a claim is bound but performance is poor, compare the workload need against the class promise. The problem may be a wrong class selection rather than a Kubernetes failure.
 
-## Choosing Classes for devpolaris-orders-api
-<!-- section-summary: The orders API uses different classes by environment because staging cleanup and production recovery have different goals. -->
+For unexpected data deletion, check the reclaim policy on the bound PV:
 
-The same application can use different StorageClasses in different environments. The important part is that each choice is deliberate. `devpolaris-orders-api` needs a work directory for invoice files, and the operational goal changes as the service moves from staging to production.
+```bash
+kubectl get pv pvc-0d2df0c0-97d6-4d0d-a0a0-4a9d6e91a111 -o custom-columns=NAME:.metadata.name,RECLAIM:.spec.persistentVolumeReclaimPolicy
+```
 
-In staging, the team can use a cleanup-friendly class. The smaller size and `standard-delete` class match a disposable environment:
+That output tells you whether the PV was set to `Delete` or `Retain` at creation time.
+
+## Assembled Example
+<!-- section-summary: The full example shows a documented StorageClass and a PVC that requests it explicitly. -->
+
+Here is an assembled `fast-ssd` class for a cluster with a fictional CSI driver. Real clusters should use the exact parameters documented by their storage provider.
 
 ```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: csi.example.com
+parameters:
+  type: ssd
+  encrypted: "true"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: orders-api-workdir
-  namespace: devpolaris-staging
+  name: notification-postgres-data
+  namespace: customer-notifications
 spec:
-  storageClassName: standard-delete
+  storageClassName: fast-ssd
   accessModes:
     - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-```
-
-In production, the team can use a retained and expandable class. The manifest is almost the same, but the class choice changes the recovery story:
-
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: orders-api-workdir
-  namespace: devpolaris-prod
-spec:
-  storageClassName: standard-retain
-  accessModes:
-    - ReadWriteOnce
-  volumeMode: Filesystem
   resources:
     requests:
       storage: 20Gi
 ```
 
-The PVC still stays a temporary work area rather than the long-term invoice archive. The finished invoice should still move to object storage, and the order record should still live in the database. The production class gives the temporary work directory a safer recovery story while the application finishes its handoff.
+The PVC shows the application team's request. The StorageClass shows the platform team's profile. Keep those responsibilities separate during review.
 
-By the end of the review, the team should know the class name, the provisioner family, the reclaim policy, expansion support, snapshot coverage, topology constraints, and the expected cost. That is enough information to deploy confidently and enough context to debug storage problems later.
+![StorageClass topology and scheduling](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/storageclass-topology-and-scheduling.png)
 
-## What's Next
-<!-- section-summary: The next article proves that Kubernetes storage choices can be restored after real failures. -->
+*Binding mode and topology decide whether the volume is created before scheduling or after Kubernetes knows the Pod placement.*
 
-Now the claim and the class fit together. The PVC states the application's need, and the StorageClass maps that need to a reviewed storage profile owned by the platform.
+## Review Checklist
+<!-- section-summary: A StorageClass review checks provisioner ownership, workload fit, binding behavior, reclaim policy, expansion, and topology. -->
 
-The final article in this module covers backup and restore basics. It follows the same orders API and asks a practical question: if the cluster, manifests, Secrets, PVC data, or external database state disappears, what exactly brings the service back?
+Use this checklist before asking workloads to use a class:
 
----
+| Check | What to confirm |
+|---|---|
+| Provisioner | The CSI driver is installed, supported, and monitored |
+| Workload fit | The class matches the app's latency, throughput, and access-mode needs |
+| Binding | `Immediate` or `WaitForFirstConsumer` matches the scheduling and topology plan |
+| Reclaim | PVC deletion behavior is understood before production data lands there |
+| Expansion | Growth behavior is supported and tested |
+| Documentation | Platform docs tell application teams when to use the class |
 
 **References**
 
-- [Kubernetes Storage Classes](https://kubernetes.io/docs/concepts/storage/storage-classes/) - Documents StorageClass fields including provisioner, parameters, reclaim policy, volume binding mode, expansion, allowed topologies, and default class behavior.
-- [Kubernetes Dynamic Volume Provisioning](https://kubernetes.io/docs/concepts/storage/dynamic-provisioning/) - Explains how PVCs use StorageClasses to request dynamically provisioned storage.
-- [Change the default StorageClass](https://kubernetes.io/docs/tasks/administer-cluster/change-default-storage-class/) - Shows how Kubernetes marks and changes a default StorageClass.
-- [Kubernetes Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) - Defines PVC binding behavior, reclaim policies, access modes, and volume expansion.
-- [Container Storage Interface documentation](https://kubernetes-csi.github.io/docs/) - Explains the CSI storage driver model used by modern Kubernetes provisioners.
-- [Kubernetes Volumes](https://kubernetes.io/docs/concepts/storage/volumes/) - Gives broader context for Kubernetes volume types and Pod storage behavior.
+- [StorageClasses](https://kubernetes.io/docs/concepts/storage/storage-classes/)
+- [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
+- [CSI drivers](https://kubernetes-csi.github.io/docs/)

@@ -1,6 +1,6 @@
 ---
 title: "Environments & Security"
-description: "Isolate your environments to reduce blast radius and learn how to manage secrets safely."
-tags: ["terraform", "environments", "workspaces", "secrets"]
+description: "Run Terraform in real teams with safe credentials, directory-first environment isolation, careful workspace use, and secret handling that protects state."
+tags: ["terraform", "credentials", "environments", "workspaces", "secrets"]
 order: 6
 ---

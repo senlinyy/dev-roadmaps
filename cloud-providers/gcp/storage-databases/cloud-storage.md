@@ -32,20 +32,12 @@ Let's keep following the Orders product from the previous article. A customer ch
 
 **Cloud Storage** gives the team a managed object store. The app writes named objects into buckets, stores the object names in the database, and later grants short-lived access to one object when a customer or reviewer needs it. The database continues to answer business questions such as "which receipt belongs to this order," while Cloud Storage holds and serves the bytes.
 
-The full flow looks like this:
+The full flow moves through three handles: the order row keeps the business pointer, the object name points to the bytes, and the signed URL gives one temporary browser operation after the API checks the customer.
 
-```mermaid
-flowchart LR
-    Checkout["Checkout API"] --> SQL["Cloud SQL order row"]
-    Checkout --> Receipt["Receipt renderer"]
-    Receipt --> Bucket["Cloud Storage bucket"]
-    SQL --> Pointer["receipt_object name"]
-    Browser["Customer browser"] --> SignedURL["Short-lived signed URL"]
-    SignedURL --> Bucket
-    Bucket --> Audit["Audit logs, lifecycle, recovery controls"]
-```
+![Signed URL upload path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/signed-url-path.png)
+*The browser never receives bucket credentials. The backend signs a narrow URL for one object, Cloud Storage checks the signature and expiration, and the object lands in the bucket with the expected name.*
 
-The bucket design matters because it sets the boundary for location, access, lifecycle, retention, and cost. The object design matters because object names, metadata, and generations become the handles your app and operations team use during normal work and incidents.
+The bucket design matters because it sets the boundary for location, access, lifecycle, retention, and cost. The object design matters because your app and operations team use object names, metadata, and generations as handles during normal work and incidents.
 
 ## Buckets: The Boundary You Operate
 <!-- section-summary: A bucket is the location, policy, lifecycle, and naming boundary for related Cloud Storage objects. -->
@@ -69,6 +61,27 @@ gcloud storage buckets create gs://orders-prod-receipts-us \
 ```
 
 This command creates one bucket with a Standard storage class, uniform IAM-based access, enforced public access prevention, and a 14-day soft delete window. Google Cloud's default soft delete duration is seven days unless another policy applies, so the command makes the recovery window explicit. That explicit value helps reviewers, auditors, and future maintainers see the intended protection level.
+
+The important flags are `--location`, which fixes where the bucket stores data; `--uniform-bucket-level-access`, which makes IAM the access boundary; `--public-access-prevention`, which blocks public grants; and `--soft-delete-duration`, which sets the short recovery window for accidental deletion. The read-back command is the proof that the bucket carries the settings the design expected.
+
+```bash
+gcloud storage buckets describe gs://orders-prod-receipts-us \
+  --format='yaml(name,location,storageClass,uniformBucketLevelAccess,publicAccessPrevention,softDeletePolicy)'
+```
+
+```yaml
+name: orders-prod-receipts-us
+location: US-CENTRAL1
+storageClass: STANDARD
+uniformBucketLevelAccess:
+  enabled: true
+publicAccessPrevention: enforced
+softDeletePolicy:
+  retentionDurationSeconds: '1209600'
+```
+
+![Bucket and object boundary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/bucket-object-boundary.png)
+*The bucket owns policy and location. The object keyspace owns the durable file names the application stores in Cloud SQL and uses during restore work.*
 
 ## Objects, Names, And Generations
 <!-- section-summary: Objects are named byte payloads, and names plus generations give the app safe handles for lookup and recovery. -->
@@ -151,6 +164,26 @@ await bucket.upload("/tmp/receipt.pdf", {
 
 Metadata helps clients and background jobs handle the object correctly, but it should not replace the application database. Listing millions of objects to find "all receipts for this customer" creates slow operations and weak access control. The database should answer business queries, and Cloud Storage should serve the object bytes by name.
 
+After the upload, the team should read the object metadata back. The generation and metageneration values are useful because they prove which version the database should store and whether metadata changed later.
+
+```bash
+gcloud storage objects describe \
+  gs://orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf \
+  --format='yaml(name,generation,metageneration,contentType,size,metadata,crc32c)'
+```
+
+```yaml
+name: receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf
+generation: '1799948215814453'
+metageneration: '1'
+contentType: application/pdf
+size: '184233'
+metadata:
+  order-id: ord_7K2Q
+  tenant-id: tenant_42
+crc32c: ImIEBA==
+```
+
 ## IAM, Uniform Bucket-Level Access, And Public Access Prevention
 <!-- section-summary: Private buckets should rely on IAM at the bucket boundary, avoid object ACL drift, and block accidental public exposure. -->
 
@@ -210,6 +243,12 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 Signed URLs need small expiration windows and exact object names. Anyone who has the URL can use it until it expires, so the app should generate URLs after checking the caller, keep durations short, and avoid logging full signed URLs in application logs. For large uploads, a resumable upload session gives the browser a way to continue after a network interruption without starting over.
 
+The command output prints the signed URL. In a real runbook, the team should avoid pasting the full URL into tickets or logs because the query string is the credential until expiration.
+
+```console
+URL: https://storage.googleapis.com/orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=receipt-url-signer%40orders-prod-123.iam.gserviceaccount.com%2F20260614%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260614T104500Z&X-Goog-Expires=600&X-Goog-SignedHeaders=host&X-Goog-Signature=...
+```
+
 ## Versioning, Soft Delete, Retention, And Lifecycle
 <!-- section-summary: Recovery and cost controls should be deliberate because object protection features keep extra data by design. -->
 
@@ -265,7 +304,47 @@ gcloud storage buckets update gs://orders-prod-receipts-us \
   --lifecycle-file=receipts-lifecycle.json
 ```
 
+The lifecycle file is consumed by the bucket update command. The read-back command should show the same rules after Google Cloud accepts the policy, and reviewers should check the `matchesPrefix`, `age`, and noncurrent-version condition before approving the change.
+
+```bash
+gcloud storage buckets describe gs://orders-prod-receipts-us \
+  --format='json(lifecycle)'
+```
+
+```json
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {
+          "storageClass": "NEARLINE",
+          "type": "SetStorageClass"
+        },
+        "condition": {
+          "age": 90,
+          "matchesPrefix": [
+            "receipts/"
+          ]
+        }
+      },
+      {
+        "action": {
+          "type": "Delete"
+        },
+        "condition": {
+          "age": 30,
+          "isLive": false
+        }
+      }
+    ]
+  }
+}
+```
+
 The practical rule is to pair every protection feature with a cleanup rule and a restore test. Versioning without noncurrent cleanup can surprise the bill. Retention without a restore procedure still leaves the team guessing during an incident. Lifecycle without labels or prefixes can delete the wrong class of object if the naming plan is sloppy.
+
+![Cloud Storage summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/cloud-storage-summary.png)
+*Cloud Storage operations keep coming back to the same pieces: bucket boundary, object key, uniform access, signed URL, lifecycle, and versioned recovery.*
 
 ## gcloud And IaC Baseline
 <!-- section-summary: Production buckets should be reproducible, so teams usually keep the bucket, IAM, lifecycle, and recovery settings in reviewed code. -->
@@ -335,6 +414,22 @@ resource "google_storage_bucket_iam_member" "receipt_signer_viewer" {
 ```
 
 Real teams often wrap this in a reusable bucket module. The module should still expose the settings that change risk: public access prevention, uniform access, lifecycle rules, soft delete duration, retention period, logging, labels, and IAM members. Hiding those decisions behind a one-line module call makes review weaker.
+
+This Terraform resource is consumed by the platform pipeline, usually through `terraform plan` in a pull request and `terraform apply` after approval. The verification step should compare live metadata to the reviewed code instead of trusting that apply succeeded.
+
+```bash
+terraform plan -out=tfplan
+terraform show -no-color tfplan | sed -n '/google_storage_bucket.receipts/,/}/p'
+```
+
+```bash
+# google_storage_bucket.receipts will be created
++ name                        = "orders-prod-receipts-us"
++ location                    = "US-CENTRAL1"
++ public_access_prevention    = "enforced"
++ uniform_bucket_level_access = true
++ storage_class               = "STANDARD"
+```
 
 ## Production Checks
 <!-- section-summary: A production Cloud Storage bucket needs checks for access, naming, upload safety, recovery, cost, and observability. -->

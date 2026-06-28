@@ -38,34 +38,8 @@ That is the job of **backups and retention**. A backup gives the team a copy fro
 
 Here is the recovery map for the retail platform:
 
-```mermaid
-flowchart TD
-    Incident["Friday data incident"]:::risk
-    Orders["Cloud SQL orders"]:::db
-    Receipts["Cloud Storage receipts"]:::storage
-    Profiles["Firestore profiles"]:::db
-    Analytics["BigQuery revenue tables"]:::analytics
-    Worker["Persistent Disk staging"]:::compute
-
-    SqlRestore["PITR clone in restore project"]:::safe
-    ObjectRestore["Version or soft delete restore"]:::safe
-    FirestoreRestore["Backup restore, PITR read, or clone"]:::safe
-    BqRestore["Time travel copy or table snapshot"]:::safe
-    DiskRestore["New disk from snapshot"]:::safe
-
-    Incident --> Orders --> SqlRestore
-    Incident --> Receipts --> ObjectRestore
-    Incident --> Profiles --> FirestoreRestore
-    Incident --> Analytics --> BqRestore
-    Incident --> Worker --> DiskRestore
-
-    classDef risk fill:#3c1f1f,stroke:#ff6b6b,stroke-width:2px,color:#fff
-    classDef db fill:#23324a,stroke:#76a7ff,stroke-width:2px,color:#fff
-    classDef storage fill:#263820,stroke:#73d13d,stroke-width:2px,color:#fff
-    classDef analytics fill:#3c341f,stroke:#ffd166,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef safe fill:#1f3a34,stroke:#64d8cb,stroke-width:2px,color:#fff
-```
+![Recovery map by data shape](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/recovery-map-by-data-shape.png)
+*Each data shape has a different recovery tool. A good incident plan routes objects, rows, documents, analytics tables, disks, and file shares into a sandbox before production repair.*
 
 Notice the shape. Each data system has its own recovery tool because each system stores changes differently. Object storage has generations and soft-deleted objects. Databases have backups and transaction logs. Analytics tables have time travel and snapshots. VM disks have block snapshots. The senior engineering habit is matching the incident to the right previous copy.
 
@@ -109,6 +83,13 @@ gcloud storage cp \
   gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf
 ```
 
+The `--all-versions` output should show the live generation and older generations. The generation number after `#` is the exact version handle the restore command consumes.
+
+```console
+gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718216000123456  184233  2026-06-12T14:10:00Z
+gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718217100456789  192018  2026-06-12T14:31:40Z
+```
+
 Versioning protects against many overwrites, but Cloud Storage also gives teams **soft delete** for recent object and bucket deletes. Google Cloud creates new buckets with soft delete turned on by default, and the default duration is seven days unless a user or organization policy changes it. During the soft delete window, Cloud Storage keeps deleted objects or buckets in a recoverable state, then permanently deletes them after the window ends.
 
 The receipt bucket may use a 30-day soft delete window because support teams often notice accidental deletes within a month. The team can configure and verify that policy like this:
@@ -123,6 +104,12 @@ gcloud storage buckets describe \
   --format="default(soft_delete_policy)"
 ```
 
+```console
+soft_delete_policy:
+  effectiveTime: 2026-06-10T09:12:55.123Z
+  retentionDurationSeconds: '2592000'
+```
+
 During the Friday incident, the cleanup job deletes `receipts/2026/06/order-90210.pdf`. The recovery runbook lists soft-deleted versions for that object and restores the generation that matches the incident timeline:
 
 ```bash
@@ -132,6 +119,11 @@ gcloud storage ls \
 
 gcloud storage restore \
   gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#GENERATION_NUMBER
+```
+
+```console
+Restoring gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718216000123456...
+Completed 1 restore operation.
 ```
 
 The bucket also needs cost control. Object Versioning can keep many noncurrent generations, so production teams pair it with **Object Lifecycle Management**. A lifecycle rule can delete noncurrent versions after a chosen age, while soft delete still gives an additional recent-deletion recovery window.
@@ -174,6 +166,9 @@ gcloud storage buckets update \
 
 The simple rule for Cloud Storage is this: **versions recover older object contents, soft delete recovers recent deletes, retention policies prevent early removal, and lifecycle rules keep old generations from growing forever**. A real receipt bucket often needs all four, with separate IAM roles for people who upload, people who restore, and people who approve retention changes.
 
+![Cloud Storage recovery layers](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/cloud-storage-recovery-layers.png)
+*Object recovery is layered: generations help with overwritten files, soft delete helps with recent deletes, retention protects required records, and lifecycle rules keep the extra copies affordable.*
+
 ## Cloud SQL Backups, PITR, and Clones
 <!-- section-summary: Cloud SQL recovery uses backups for base copies, transaction logs for PITR, and clones or restored instances for sandbox validation. -->
 
@@ -203,6 +198,18 @@ gcloud sql instances clone orders-prod orders-restore-20260612 \
   --point-in-time="2026-06-12T14:18:00Z"
 ```
 
+The clone command creates a new instance. The first read-back should show `RUNNABLE`; the second check should come from SQL queries against the clone, not from the source instance.
+
+```bash
+gcloud sql instances describe orders-restore-20260612 \
+  --format='table(name,state,region,databaseVersion)'
+```
+
+```console
+NAME                    STATE     REGION       DATABASE_VERSION
+orders-restore-20260612 RUNNABLE  us-central1  POSTGRES_16
+```
+
 That clone gives the team a safe place to query the recovered orders. The team can compare row counts, inspect a sample of paid orders, and export selected rows back into production if the live database only needs a narrow data repair. If the production database needs a full rollback, the team still validates the clone first, then plans the application cutover, connection string update, traffic pause, and rollback path.
 
 Here is a small validation query set that belongs in the restore runbook:
@@ -225,6 +232,16 @@ WHERE order_id IN ('90210', '90211', '90212')
 ORDER BY order_id;
 ```
 
+```console
+zero_amount_orders
+0
+
+status      orders
+paid        48219
+pending      831
+refunded      44
+```
+
 Notice how Cloud SQL recovery combines engineering and operations. The Google Cloud feature gives the previous database state, while the team supplies the timestamp, the sandbox, the validation queries, and the application cutover plan. That is the difference between "we have backups" and "we can restore this service under pressure."
 
 ## Firestore Backups, PITR, and Exports
@@ -241,6 +258,19 @@ gcloud firestore backups schedules create \
   --database='(default)' \
   --recurrence=daily \
   --retention=14w
+```
+
+The schedule list should show retention and recurrence. This output gives the team evidence that the restore window matches the support-profile recovery target.
+
+```bash
+gcloud firestore backups schedules list \
+  --database='(default)' \
+  --format='table(name,retention,dailyRecurrence)'
+```
+
+```console
+NAME                                                                    RETENTION  DAILY_RECURRENCE
+projects/commerce-prod/databases/(default)/backupSchedules/a1b2c3d4     14w        02:00
 ```
 
 Firestore also supports **point-in-time recovery**. With PITR enabled, Firestore keeps older versions for seven days; without PITR, the older-version window is one hour. Teams can use PITR for historical reads, exports, and clone-style recovery flows, depending on the operation they need and the permissions their operators hold.
@@ -282,6 +312,10 @@ For restore, the team usually copies historical table data into a new table firs
 bq cp \
   commerce_reporting.daily_revenue@-7200000 \
   commerce_restore.daily_revenue_before_incident
+```
+
+```console
+Table 'commerce_restore.daily_revenue_before_incident' successfully copied.
 ```
 
 **Table snapshots** help with planned protection. A BigQuery table snapshot is a read-only table that preserves a table at a specific time. Google recommends creating snapshots in a different dataset from the base table so a dataset deletion leaves a separate restore path for the base table.
@@ -335,6 +369,11 @@ gcloud compute disks create worker-staging-restore-20260612 \
   --type=pd-balanced
 ```
 
+```console
+NAME                                     DISK_SIZE_GB  SRC_SNAPSHOT                     STATUS
+worker-staging-restore-20260612          200           worker-staging-disk-20260612      READY
+```
+
 Disk snapshots have a boundary that every team should say out loud. They capture blocks, so an application may still need database-level or filesystem-level steps for a clean, application-consistent recovery. For the staging disk, a crash-consistent snapshot may be fine because files either exist or the upload job retries. For a self-managed database on a VM, the team should use database-native backup procedures or carefully coordinate snapshots with the database.
 
 ## Restore Sandboxes and Validation
@@ -353,7 +392,7 @@ The restore flow usually follows four steps:
 | Validate application behavior | A read-only or isolated app version can load the data without calling external systems. |
 | Choose the production repair | The team chooses targeted merge, full cutover, table replace, object restore, or rebuild from raw data. |
 
-Validation should have commands, not just confidence. For Cloud SQL, the team can run SQL checks against the clone. For Cloud Storage, it can compare object sizes, checksums, and metadata. For BigQuery, it can compare aggregate totals between historical tables and raw events. For Firestore, it can sample repaired fields and compare write timestamps.
+Validation should have commands and recorded evidence. For Cloud SQL, the team can run SQL checks against the clone. For Cloud Storage, it can compare object sizes, checksums, and metadata. For BigQuery, it can compare aggregate totals between historical tables and raw events. For Firestore, it can sample repaired fields and compare write timestamps.
 
 Here is a small mixed validation script that shows the idea:
 
@@ -369,6 +408,16 @@ SELECT
 FROM `commerce_restore.daily_revenue_before_incident`
 WHERE order_date = DATE "2026-06-12";
 '
+```
+
+```console
+184233 ImIEBA==
+
++----------+--------+
+| revenue  | orders |
++----------+--------+
+| 9283312  | 48219  |
++----------+--------+
 ```
 
 The team should record the result of each restore drill in an incident-style note. That note should include the source system, recovery point, target resource, operator, duration, validation evidence, and cleanup steps. A backup without a recent restore record leaves too much guessing for the real incident.
@@ -420,6 +469,9 @@ Teams should treat failed drills as useful findings. A failed drill may reveal m
 The operating rhythm should also include policy review. Backup retention, soft delete duration, lifecycle rules, BigQuery snapshot expiration, Firestore backup schedules, and snapshot policies drift as products grow. A new marketplace integration may require longer receipt retention. A new analytics dataset may need snapshots because finance now uses it for reporting. A new privacy rule may require shorter retention for a different class of data.
 
 Good recovery work combines platform settings with team habits. The platform keeps previous copies. The team keeps the runbooks, owners, access reviews, validation queries, and drill records current.
+
+![Restore drill checklist](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/restore-drill-checklist.png)
+*A restore drill is successful when the team chooses a recovery point, restores into a sandbox, validates records, checks application reads, records RPO/RTO evidence, and cleans up access afterward.*
 
 ## Putting It All Together
 <!-- section-summary: The complete recovery plan maps each data system to a protected previous copy, an isolated restore target, deletion guardrails, and a practiced restore drill. -->

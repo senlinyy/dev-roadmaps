@@ -1,7 +1,7 @@
 ---
 title: "Image Trust and SBOMs"
-description: "Scan image layers, track base images, generate SBOMs, and connect image contents to vulnerability decisions."
-overview: "After a team builds a smaller payments-api image, trust work answers the next release questions: what is inside this exact image digest, which findings matter, which evidence travels with the image, and how the pipeline proves the image came from the expected build."
+description: "Answer what is inside a container image with scanning, SBOMs, base-image drift checks, signing, attestations, and CI evidence."
+overview: "Start with the plain production question: what is inside this payments-api image? Then inspect layers and packages, scan known vulnerabilities, publish SBOMs in CycloneDX or SPDX, handle base-image drift, triage findings, sign and attest the digest, and make CI publish the evidence that deployment policy can verify."
 tags: ["devsecops", "containers", "sbom", "image-scanning"]
 order: 2
 id: article-devsecops-container-image-security-image-scanning
@@ -22,7 +22,7 @@ aliases:
 
 ## Table of Contents
 
-1. [The Release Evidence Chain](#the-release-evidence-chain)
+1. [What Is Inside This Image?](#what-is-inside-this-image)
 2. [What Image Scanning Checks](#what-image-scanning-checks)
 3. [Layers and Package Visibility](#layers-and-package-visibility)
 4. [What an SBOM Records](#what-an-sbom-records)
@@ -33,15 +33,29 @@ aliases:
 9. [CI Publishes the Evidence](#ci-publishes-the-evidence)
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
+12. [References](#references)
 
-## The Release Evidence Chain
-<!-- section-summary: A trusted image release needs evidence for the exact digest, contents, findings, build identity, and triage decisions. -->
+## What Is Inside This Image?
+<!-- section-summary: Image trust starts by naming the exact digest and answering what software the image contains. -->
 
-In the previous step, the team made the `payments-api` container smaller and safer. They removed extra packages, avoided running as root, and kept the runtime image focused on the application. That hardening work reduces the number of things an attacker can use inside the container.
+In the previous article, the team made the `payments-api` shipping box smaller. They used a trusted base image, kept build tools out of the runtime stage, ran as a non-root user, and prepared the image for a read-only filesystem.
 
-Now the image leaves the developer's laptop and moves through the release path. A CI pipeline builds `payments-api`, pushes it to a private registry, and Kubernetes later pulls it into the cluster. At this point, the team needs **release evidence**, which means files and signatures that explain exactly what the build produced and why the team trusts it.
+Now the team asks the next plain question: **what is inside this exact image?** That question sounds simple, but production images have layers. A Node.js API image can contain Debian packages from the base image, npm packages from `package-lock.json`, compiled JavaScript, CA certificates, startup metadata, and sometimes files the team did not expect.
 
-For this article, the evidence chain has five practical questions. These questions show how the concepts fit together before we zoom into each one. The table below gives the map:
+A **digest** gives the team the exact image object, such as `ghcr.io/devpolaris/payments-api@sha256:...`. A **scan report** compares discovered packages with known vulnerability data. An **SBOM**, short for Software Bill of Materials, records the package inventory. A **signature** and **attestation** connect the digest and evidence back to the trusted CI workflow.
+
+Here is the small release record we will grow through the article:
+
+```yaml
+service: payments-api
+image: ghcr.io/devpolaris/payments-api
+digest: sha256:2c1a9f7b6d4e8b0c7a91e4d2f6c3b8a5d4e7f90123456789abcdef0123456789
+source_commit: 4f8c2a19d5be
+```
+
+The `image` field names the repository. The `digest` field names the exact image content. The `source_commit` field connects the image back to the code review and build. Every later piece of evidence should point back to this same digest.
+
+The table below shows the evidence chain before we zoom into each part:
 
 | Release question | Evidence the team should keep |
 |---|---|
@@ -51,13 +65,13 @@ For this article, the evidence chain has five practical questions. These questio
 | Who built and approved this image? | A signature, provenance attestation, and CI identity claims |
 | Which findings were accepted, fixed, or deferred? | A triage record with severity, reachability, owner, and due date |
 
-This is the same image journey from a few angles. The digest tells us which bytes we are talking about. The SBOM tells us what ingredients are inside those bytes. The scan report compares those ingredients with vulnerability databases. The signature and attestations connect the evidence back to the trusted CI pipeline. The triage record explains the human decision when a scanner finds something.
+This is the same image journey from a few angles. The digest tells us which image object we are discussing. The SBOM tells us what ingredients sit inside it. The scan report compares those ingredients with vulnerability databases. The signature and attestations connect the evidence back to the trusted CI pipeline. The triage record explains the human decision when a scanner finds something.
 
 ![Release evidence chain infographic showing a payments-api digest connected to SBOM, scan report, signature, triage record, CI build, and deploy policy](/content-assets/articles/article-devsecops-container-image-security-image-scanning/release-evidence-chain.png)
 
 *The release evidence chain keeps every trust decision attached to one digest, so later scanners, reviewers, and deployment policies all talk about the same artifact.*
 
-The first step is scanning, because scanning gives the team the first warning that a release contains vulnerable software. Before anyone can debate SBOMs or signatures, they need a concrete list of packages and vulnerabilities for the digest.
+The first step is scanning, because scanning gives the team the first concrete list of packages and vulnerabilities for the digest.
 
 ## What Image Scanning Checks
 <!-- section-summary: Image scanning inspects a built container image and compares discovered packages with vulnerability databases. -->
@@ -88,7 +102,7 @@ trivy image \
 
 The scan usually reports package name, installed version, vulnerability ID, severity, fixed version, and the package type. A finding might say that `openssl` from the Debian base image has a critical CVE and a fixed version exists. Another finding might say that an npm package copied with the Node application has a high severity vulnerability in a transitive dependency.
 
-That split matters because the fix path changes. Operating system package findings usually come from the base image. Application package findings usually come from the repository lockfile. To make those decisions well, the team needs to understand layers and package visibility.
+The fix path changes by package source. Operating system package findings usually come from the base image. Application package findings usually come from the repository lockfile. To make those decisions well, the team needs to understand layers and package visibility.
 
 ## Layers and Package Visibility
 <!-- section-summary: Layer and package visibility tells teams where a vulnerable component entered the image and which owner can fix it. -->
@@ -121,7 +135,7 @@ Tools can show package inventory in a simple table before the team even talks ab
 syft packages "$IMAGE" -o table
 ```
 
-That table gives engineers a quick way to answer, "Is the package actually in the runtime image?" This matters because multi-stage builds often install build tools in a builder stage and leave them out of the final stage. A clean final image gives scanners fewer runtime packages to report and gives humans fewer findings to triage.
+That table gives engineers a quick way to answer, "Is the package actually in the runtime image?" Multi-stage builds often install build tools in a builder stage and leave them out of the final stage. A clean final image gives scanners fewer runtime packages to report and gives humans fewer findings to triage.
 
 Scanning tells us what is risky today. The next need is an inventory that survives beyond today's vulnerability database.
 
@@ -171,7 +185,7 @@ The **Package URL**, usually written as **purl**, gives tools a consistent way t
 
 An SBOM also helps compliance and operations teams. Security can search for vulnerable components, legal teams can review licenses, and platform teams can compare two releases. The file should travel with the image digest because an SBOM without the digest leaves everyone guessing which artifact the inventory describes.
 
-Once the team knows what an SBOM records, the next question is which SBOM format they should publish. The format matters because the SBOM has to move between scanners, registries, customer portals, and internal review systems.
+Once the team knows what an SBOM records, the next question is which SBOM format they should publish. The format choice depends on the systems that need to read the SBOM: scanners, registries, customer portals, and internal review tools.
 
 ## CycloneDX and SPDX in Practice
 <!-- section-summary: CycloneDX and SPDX are the two common SBOM standards teams use to exchange image inventory data. -->
@@ -297,7 +311,7 @@ The CI pipeline is the best place to create release evidence because it already 
 
 For `payments-api`, a simple evidence bundle should include these items. Each item points back to the same image digest so reviewers can connect the files without guessing.
 
-| Evidence item | Example file or location | Why it matters |
+| Evidence item | Example file or location | Why the team keeps it |
 |---|---|---|
 | Image digest | `image-ref.txt` | Names the exact artifact that deploys |
 | Vulnerability scan | `evidence/trivy-payments-api.json` | Records known findings at release time |
@@ -371,7 +385,7 @@ jobs:
             evidence/
 ```
 
-The `id-token: write` permission matters for keyless signing because Cosign needs the CI platform to issue an OIDC identity token. The `packages: write` permission allows the workflow to push the image and registry-attached signature material. Teams should keep these permissions scoped to the release job and avoid giving every workflow broad package or identity permissions.
+The `id-token: write` permission is needed for keyless signing because Cosign needs the CI platform to issue an OIDC identity token. The `packages: write` permission allows the workflow to push the image and registry-attached signature material. Teams should keep these permissions scoped to the release job and avoid giving every workflow broad package or identity permissions.
 
 Some teams also publish provenance through the build system itself. Docker BuildKit and GitHub's artifact attestation features can generate provenance records, and SLSA gives a shared vocabulary for describing the build. The exact implementation can vary, while the evidence goal stays stable: a reviewer should be able to connect the digest back to source, workflow, dependency inventory, scan results, and signing identity.
 
@@ -396,9 +410,7 @@ The next article moves from image evidence to registry control. Once the team ha
 
 We will look at private registry access, push and pull permissions, immutable tags, digest-based deploys, lifecycle rules, and how to stop a trusted tag from quietly pointing at a different image. That completes the path from hardened image, to signed evidence, to controlled registry release.
 
----
-
-**References**
+## References
 
 - [OCI Image Manifest Specification](https://github.com/opencontainers/image-spec/blob/main/manifest.md) - Defines the image manifest, config reference, and ordered layer references used by container images.
 - [Trivy container image scanning documentation](https://trivy.dev/latest/docs/target/container_image/) - Documents scanning container images and supported image targets.

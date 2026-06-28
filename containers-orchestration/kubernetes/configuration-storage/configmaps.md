@@ -9,493 +9,380 @@ id: article-containers-orchestration-kubernetes-configuration-storage-configmaps
 
 ## Table of Contents
 
-1. [What a ConfigMap Stores](#what-a-configmap-stores)
-2. [Configuration Outside the Image](#configuration-outside-the-image)
-3. [Creating ConfigMaps from Literals and Manifests](#creating-configmaps-from-literals-and-manifests)
-4. [Wiring Specific Keys into Environment Variables](#wiring-specific-keys-into-environment-variables)
-5. [Using envFrom Carefully](#using-envfrom-carefully)
-6. [Mounting ConfigMaps as Files](#mounting-configmaps-as-files)
-7. [How Updates Reach Running Pods](#how-updates-reach-running-pods)
-8. [Immutable ConfigMaps](#immutable-configmaps)
-9. [Kustomize and Helm Workflows](#kustomize-and-helm-workflows)
-10. [Validation and Troubleshooting](#validation-and-troubleshooting)
-11. [Review Checklist](#review-checklist)
+1. [Start with One Plain Setting](#start-with-one-plain-setting)
+2. [What a ConfigMap Stores](#what-a-configmap-stores)
+3. [The Notification Platform Scenario](#the-notification-platform-scenario)
+4. [Create One, Then Inspect It](#create-one-then-inspect-it)
+5. [Wire Specific Keys into a Container](#wire-specific-keys-into-a-container)
+6. [Use envFrom Only for Dedicated ConfigMaps](#use-envfrom-only-for-dedicated-configmaps)
+7. [Mount a ConfigMap as Files](#mount-a-configmap-as-files)
+8. [How Updates Reach Running Pods](#how-updates-reach-running-pods)
+9. [Immutable ConfigMaps](#immutable-configmaps)
+10. [Kustomize, Helm, and GitOps Workflows](#kustomize-helm-and-gitops-workflows)
+11. [Validate and Troubleshoot](#validate-and-troubleshoot)
+12. [Assembled Example](#assembled-example)
+13. [Review Checklist](#review-checklist)
 
-## What a ConfigMap Stores
-<!-- section-summary: A ConfigMap stores plain, non-confidential settings that a Pod can read as environment variables, command arguments, or files. -->
+## Start with One Plain Setting
+<!-- section-summary: A ConfigMap begins with a plain application setting such as LOG_LEVEL that the Pod can receive at runtime. -->
 
-A **ConfigMap** is a namespaced Kubernetes API object for plain application configuration. It stores key-value data that other objects, usually Pods, can consume at runtime. Plain configuration means values your team can review in normal pull requests: log levels, feature flags, public service URLs, timeout values, queue names, and small config files.
+A familiar application need is one safe setting. The `notification-api` container should run with `LOG_LEVEL=info` in production and `LOG_LEVEL=debug` in a troubleshooting namespace. That value is safe to review, safe to print, and small enough that it should not require a new container image.
 
-For this article, imagine a Kubernetes application called `devpolaris-orders-api`. The same container image runs in staging and production. Staging uses `LOG_LEVEL=debug`, points at a staging catalog service, and keeps the refunds feature disabled. Production uses `LOG_LEVEL=info`, points at the production catalog service, and enables refunds after the feature has passed testing. The application code stays the same, while the runtime settings change by environment.
+A **ConfigMap** is a Kubernetes object for plain, non-secret configuration. Plain means the value can appear in a pull request, a support ticket, a `kubectl describe` output, and a teammate's screen share without exposing credentials or private keys.
 
-The important boundary is **confidentiality**. A ConfigMap is for values that can appear in YAML, review comments, `kubectl describe` output, and support tickets. A database password, API token, signing key, private certificate key, or cloud credential belongs in a Secret or an external secret manager. The next article covers that sensitive side of the same `devpolaris-orders-api` deployment.
-
-Kubernetes ConfigMaps usually store UTF-8 strings under `data`. They can also store binary data under `binaryData`, where values are base64-encoded. For normal application configuration, `data` is the common path. Kubernetes also sets a size limit of 1 MiB per ConfigMap, so use it as a small configuration object rather than a database, object storage bucket, or large policy bundle.
-
-ConfigMaps are namespaced. A Pod in `devpolaris-staging` references a ConfigMap in `devpolaris-staging`. A Pod in `devpolaris-prod` references a different ConfigMap in `devpolaris-prod`, even when both objects share the same name. That namespace boundary helps each environment carry its own settings.
-
-## Configuration Outside the Image
-<!-- section-summary: Moving configuration outside the image lets one tested container image run across environments with different runtime settings. -->
-
-A container image should carry the application code and its dependencies. The image for `devpolaris-orders-api` might contain the compiled Node.js service, package dependencies, startup script, and health endpoint. It should avoid a rebuild every time a timeout changes from `2000` to `3000`, or every time a feature flag changes in staging.
-
-This matters in production because teams usually promote one image through environments. The image `ghcr.io/devpolaris/orders-api:1.18.0` can go from a development namespace to staging and then to production. Each environment supplies its own ConfigMap. That gives you two review paths: image changes go through the build pipeline, and runtime configuration changes go through the Kubernetes manifest or release pipeline.
-
-The staging ConfigMap for the orders API keeps the first set of plain runtime values together. The keys are intentionally small and safe for normal review:
+Here is the smallest useful ConfigMap for that one setting:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: orders-api-config
-  namespace: devpolaris-staging
-  labels:
-    app.kubernetes.io/name: devpolaris-orders-api
-    app.kubernetes.io/component: api
+  name: notification-api-config
+  namespace: customer-notifications
 data:
-  PORT: "8080"
-  LOG_LEVEL: "debug"
-  FEATURE_REFUNDS: "false"
-  CATALOG_API_URL: "http://catalog-api.devpolaris-staging.svc.cluster.local:8080"
-  CHECKOUT_TIMEOUT_MS: "3000"
-```
-
-Every value under `data` reaches the application as a string. `PORT`, `FEATURE_REFUNDS`, and `CHECKOUT_TIMEOUT_MS` look like a number, boolean, and number, but the container receives strings. The application should parse those values at startup and fail with a clear error when the value is missing or invalid. That startup check catches a bad ConfigMap before the Pod starts serving traffic.
-
-The production ConfigMap can keep the same keys and change the values. That keeps the application contract stable while each namespace supplies environment-specific settings:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: orders-api-config
-  namespace: devpolaris-prod
-  labels:
-    app.kubernetes.io/name: devpolaris-orders-api
-    app.kubernetes.io/component: api
-data:
-  PORT: "8080"
   LOG_LEVEL: "info"
-  FEATURE_REFUNDS: "true"
-  CATALOG_API_URL: "http://catalog-api.devpolaris-prod.svc.cluster.local:8080"
-  CHECKOUT_TIMEOUT_MS: "2500"
 ```
 
-The container image stayed the same. The Deployment and the ConfigMap decide how that image behaves in each namespace. This is the everyday value of ConfigMaps: the software artifact stays portable, and environment-specific choices stay visible in Kubernetes configuration.
-
-## Creating ConfigMaps from Literals and Manifests
-<!-- section-summary: Literals help with quick experiments, while manifests make configuration reviewable and repeatable. -->
-
-Kubernetes gives you two common ways to create a ConfigMap. You can create one directly with `kubectl` from literal values or files, and you can write a YAML manifest that lives in your deployment source. Both create the same kind of API object, but they fit different moments in the workflow.
-
-Literals are useful when you are learning, debugging, or preparing a manifest from known values. The command below creates YAML without writing to the cluster because `--dry-run=client -o yaml` prints the object, which gives the team a reviewable starting point:
-
-```bash
-kubectl create configmap orders-api-config \
-  --namespace devpolaris-staging \
-  --from-literal=PORT=8080 \
-  --from-literal=LOG_LEVEL=debug \
-  --from-literal=FEATURE_REFUNDS=false \
-  --from-literal=CATALOG_API_URL=http://catalog-api.devpolaris-staging.svc.cluster.local:8080 \
-  --from-literal=CHECKOUT_TIMEOUT_MS=3000 \
-  --dry-run=client \
-  -o yaml
-```
-
-That generated output can help you build the committed manifest. In production, the manifest usually lives next to the Deployment so reviewers can see the application and its plain configuration together, then apply the same reviewed shape in each environment:
-
-```bash
-kubectl apply -f k8s/staging/orders-api-configmap.yaml
-kubectl get configmap orders-api-config -n devpolaris-staging -o yaml
-```
-
-Files are another common input. If the orders API reads a small YAML file at startup, you can create a ConfigMap from that file:
-
-```bash
-kubectl create configmap orders-api-file-config \
-  --namespace devpolaris-staging \
-  --from-file=orders.yaml=./config/staging/orders.yaml \
-  --dry-run=client \
-  -o yaml
-```
-
-Kubernetes uses `orders.yaml` as the key and the file content as the value. This is helpful when the application already expects a config file. It also keeps multi-line configuration readable, because the manifest can show the file as a block under one key.
-
-Most teams settle on a simple rule. Literals fit fast local experiments and generated YAML. Committed manifests, Kustomize overlays, Helm templates, or a GitOps tool fit shared environments. The cluster should be able to lose and recreate a namespace from the stored configuration without someone remembering a one-off terminal command.
-
-## Wiring Specific Keys into Environment Variables
-<!-- section-summary: Explicit env wiring documents exactly which ConfigMap keys a container expects and gives each key a stable environment variable name. -->
-
-Many applications read configuration from environment variables. The orders API might read `process.env.LOG_LEVEL` during startup and configure its logger before it accepts requests. Kubernetes can fill that environment variable from one specific ConfigMap key.
-
-Here is a Deployment fragment that maps individual keys:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: devpolaris-staging
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: orders-api
-  template:
-    metadata:
-      labels:
-        app: orders-api
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:1.18.0
-          ports:
-            - containerPort: 8080
-          env:
-            - name: PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: orders-api-config
-                  key: PORT
-            - name: LOG_LEVEL
-              valueFrom:
-                configMapKeyRef:
-                  name: orders-api-config
-                  key: LOG_LEVEL
-            - name: FEATURE_REFUNDS
-              valueFrom:
-                configMapKeyRef:
-                  name: orders-api-config
-                  key: FEATURE_REFUNDS
-            - name: CATALOG_API_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: orders-api-config
-                  key: CATALOG_API_URL
-            - name: CHECKOUT_TIMEOUT_MS
-              valueFrom:
-                configMapKeyRef:
-                  name: orders-api-config
-                  key: CHECKOUT_TIMEOUT_MS
-```
-
-This explicit form is a little longer, and that is part of the benefit. Reviewers can see exactly which settings the container expects. The environment variable name can also differ from the ConfigMap key when the application expects a different naming style.
-
-If `orders-api-config` or one of the referenced keys is missing, the Pod stays pending by default. That failure is useful for required settings. The Deployment should pause with a clear event instead of starting an application that silently falls back to the wrong catalog URL or a default timeout that nobody reviewed.
-
-Kubernetes lets you mark a reference as optional:
-
-```yaml
-env:
-  - name: FEATURE_REFUNDS
-    valueFrom:
-      configMapKeyRef:
-        name: orders-api-config
-        key: FEATURE_REFUNDS
-        optional: true
-```
-
-Optional references belong only to values that the application truly treats as optional. For `devpolaris-orders-api`, `FEATURE_REFUNDS` might be optional because the app defaults to `false`. `CATALOG_API_URL` should be required because the service needs catalog data to price orders correctly.
-
-## Using envFrom Carefully
-<!-- section-summary: envFrom is convenient for dedicated ConfigMaps, but it can hide collisions, skipped keys, and accidental extra settings. -->
-
-`envFrom` copies every valid key from a ConfigMap into the container environment. If `orders-api-config` contains exactly the environment variables that the orders API should receive, `envFrom` keeps the Deployment compact:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: devpolaris-staging
-spec:
-  template:
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:1.18.0
-          envFrom:
-            - configMapRef:
-                name: orders-api-config
-```
-
-This works best when the ConfigMap belongs to one container and the keys already match the application environment variable names. A dedicated `orders-api-config` object with `PORT`, `LOG_LEVEL`, and `FEATURE_REFUNDS` is a reasonable fit.
-
-The risks show up when a ConfigMap is shared or loosely managed. A teammate might add a key for a sidecar container, and the main API receives it as an environment variable too. A key might collide with an environment variable set elsewhere in the Deployment. A key such as `catalog.url` can exist in a ConfigMap, but it is invalid as a normal environment variable name. Kubernetes skips invalid environment variable names from `envFrom` and records an event.
-
-When a Pod starts but a setting seems absent, events usually show whether Kubernetes skipped or rejected an environment key:
-
-```bash
-kubectl get events -n devpolaris-staging --sort-by=.lastTimestamp
-kubectl describe pod -n devpolaris-staging -l app=orders-api
-```
-
-For production services, prefer explicit `env` entries for required application settings and use `envFrom` only when the ConfigMap is dedicated, small, and named around one application. That keeps the review simple: every key in `orders-api-config` belongs to the orders API container.
-
-## Mounting ConfigMaps as Files
-<!-- section-summary: File mounts work well for applications that read structured configuration from disk instead of individual environment variables. -->
-
-Some applications read config files instead of environment variables. The orders API might read `/etc/orders-api/orders.yaml` during startup because a shared library already expects a YAML file. A ConfigMap can project keys into a read-only volume, where each key appears as a file.
-
-The ConfigMap can store the file content under one key:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: orders-api-file-config
-  namespace: devpolaris-staging
-data:
-  orders.yaml: |
-    server:
-      port: 8080
-      logLevel: debug
-    features:
-      refunds: false
-    dependencies:
-      catalogApiUrl: http://catalog-api.devpolaris-staging.svc.cluster.local:8080
-      checkoutTimeoutMs: 3000
-```
-
-The Deployment mounts that key at a path:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: devpolaris-staging
-spec:
-  template:
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:1.18.0
-          args:
-            - "--config=/etc/orders-api/orders.yaml"
-          volumeMounts:
-            - name: orders-config
-              mountPath: /etc/orders-api
-              readOnly: true
-      volumes:
-        - name: orders-config
-          configMap:
-            name: orders-api-file-config
-            items:
-              - key: orders.yaml
-                path: orders.yaml
-```
-
-Inside the container, Kubernetes creates `/etc/orders-api/orders.yaml` with the value from the ConfigMap. This approach keeps related settings together and gives the application one file to parse. It also avoids a long environment variable list when the application has nested configuration.
-
-The `items` list fits mounts that need only certain keys or custom file names. If the ConfigMap key is missing and the item is required, the Pod fails to start. That is usually the right behavior for required config files.
-
-One detail matters for updates. A normal ConfigMap volume can receive updated file content after the ConfigMap changes. A `subPath` mount stays fixed for the life of the container. If you mount one ConfigMap key with `subPath`, plan a Pod restart for every config change.
-
-## How Updates Reach Running Pods
-<!-- section-summary: Environment variables stay fixed until restart, while mounted files update eventually and still need application reload behavior. -->
-
-ConfigMap update behavior depends on how the Pod consumes the data. For environment variables, Kubernetes reads the ConfigMap when the container starts. A later ConfigMap change leaves the running process environment unchanged. The existing orders API Pods keep their old values until you restart or replace them.
-
-For a Deployment, the normal operational command is:
-
-```bash
-kubectl apply -f k8s/staging/orders-api-configmap.yaml
-kubectl rollout restart deployment/orders-api -n devpolaris-staging
-kubectl rollout status deployment/orders-api -n devpolaris-staging
-```
-
-That restart creates new Pods, and the new Pods read the updated ConfigMap during startup. This is the safest path when the application reads settings once at boot, which is common for ports, loggers, client timeouts, and feature flags.
-
-Mounted ConfigMap files behave differently. Kubernetes eventually updates projected files in normal ConfigMap volumes. The kubelet checks and refreshes those values through its configured change detection strategy, so there can be a delay. The application also has to notice the file changed. Some applications watch the file and reload. Others read once at startup and need the same rollout restart as environment variables.
-
-For `devpolaris-orders-api`, one documented pattern should own each configuration path:
-
-| Configuration path | Runtime behavior | Operational action |
-|---|---|---|
-| Required env vars | Values fixed at container start | Restart or roll Pods after ConfigMap changes |
-| Mounted file read once | File may update, app keeps old parsed config | Restart or roll Pods after ConfigMap changes |
-| Mounted file with reload support | File may update, app reloads after change | Validate reload, keep restart as fallback |
-| `subPath` mounted file | Mounted file stays fixed | Restart or roll Pods after ConfigMap changes |
-
-When a configuration change matters for production behavior, prefer a rollout you can observe. `kubectl rollout status` shows whether the new ReplicaSet is healthy. Application logs and metrics should confirm that the new value was loaded, such as a startup log that prints `configVersion=2026-06-16` or `featureRefunds=true`.
-
-## Immutable ConfigMaps
-<!-- section-summary: Immutable ConfigMaps prevent accidental in-place edits and encourage versioned configuration objects. -->
-
-An **immutable ConfigMap** is a ConfigMap with `immutable: true`. After Kubernetes accepts it, the `data` and `binaryData` fields are locked. You can delete and recreate the object, or create a new object with a different name, but the existing data stays fixed in place.
-
-Here is a versioned immutable ConfigMap for production:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: orders-api-config-2026-06-16
-  namespace: devpolaris-prod
-  labels:
-    app.kubernetes.io/name: devpolaris-orders-api
-data:
-  PORT: "8080"
-  LOG_LEVEL: "info"
-  FEATURE_REFUNDS: "true"
-  CATALOG_API_URL: "http://catalog-api.devpolaris-prod.svc.cluster.local:8080"
-  CHECKOUT_TIMEOUT_MS: "2500"
-immutable: true
-```
-
-The Deployment references the versioned name:
+The Pod can then ask Kubernetes to put that key into the process environment:
 
 ```yaml
 env:
   - name: LOG_LEVEL
     valueFrom:
       configMapKeyRef:
-        name: orders-api-config-2026-06-16
+        name: notification-api-config
         key: LOG_LEVEL
 ```
 
-This pattern is useful for configuration you want to treat like a release artifact. A pull request creates `orders-api-config-2026-06-16`, updates the Deployment reference, and rolls the Deployment. Rollback means pointing the Deployment back to the previous ConfigMap name. The change history stays visible because each config version has its own object.
+Every value under `data` reaches the container as a string. `LOG_LEVEL` already looks like a string, and a value such as `RETRY_LIMIT: "5"` would still arrive as a string. The application should parse and validate those values when it starts so a bad ConfigMap stops a broken Pod early.
 
-Immutable ConfigMaps also reduce kubelet watch load in clusters with many ConfigMap mounts, because Kubernetes can stop watching locked objects. The operational tradeoff is stricter change management. If your team needs quick in-place edits during early development, immutable ConfigMaps can slow that loop. For production, that friction often helps because it pushes changes through versioned review and rollout.
+## What a ConfigMap Stores
+<!-- section-summary: ConfigMaps store small pieces of non-confidential runtime configuration, not credentials or large application data. -->
 
-## Kustomize and Helm Workflows
-<!-- section-summary: Kustomize and Helm give teams repeatable ways to generate environment-specific ConfigMaps and trigger rollouts when values change. -->
+A ConfigMap stores named values in a namespace. The common field is **data**, where each key maps to a UTF-8 string. Kubernetes also supports **binaryData** for bytes represented with base64, but most application configuration uses ordinary strings.
 
-Raw manifests work well for small services. As the number of environments grows, teams usually reach for Kustomize, Helm, or a GitOps tool that uses one of them. The goal stays the same: keep the image stable, keep the configuration reviewable, and make rollouts predictable.
+Good ConfigMap values include log levels, feature flags, queue names, public service URLs, timeout values, and small config files. The Customer Notification Platform might use `SENDGRID_REGION`, `MAX_BATCH_SIZE`, `RETRY_BACKOFF_MS`, and `TEMPLATE_BUCKET_NAME` in a ConfigMap.
 
-With **Kustomize**, you can generate ConfigMaps from literals, `.env` files, or config files. Kustomize appends a content hash to generated ConfigMap names by default and updates references in workloads it manages. That hash is useful because a changed ConfigMap name changes the Pod template, which triggers a new rollout for Deployments.
+Sensitive values belong somewhere else. `SMTP_PASSWORD`, `WEBHOOK_SIGNING_KEY`, private TLS keys, database passwords, and cloud credentials should use a Kubernetes Secret or an external secret manager. A ConfigMap gives you reviewable configuration, not a secrecy boundary.
 
-Example `kustomization.yaml` for staging:
+ConfigMaps are also small. Kubernetes documents a 1 MiB limit for each ConfigMap, so treat it as application settings, not a place for a large policy bundle, user data, generated reports, or a feature flag database.
 
-```yaml
-resources:
-  - deployment.yaml
+## The Notification Platform Scenario
+<!-- section-summary: One tested container image can run in several environments while each namespace supplies its own ConfigMap. -->
 
-configMapGenerator:
-  - name: orders-api-config
-    literals:
-      - PORT=8080
-      - LOG_LEVEL=debug
-      - FEATURE_REFUNDS=false
-      - CATALOG_API_URL=http://catalog-api.devpolaris-staging.svc.cluster.local:8080
-      - CHECKOUT_TIMEOUT_MS=3000
-```
+Imagine two Deployments in the Customer Notification Platform. `notification-api` accepts customer requests, validates them, and writes work to a queue. `notification-worker` reads from the queue and sends email, SMS, or push notifications through provider integrations.
 
-The usual preview and apply flow looks like this:
+The same `notification-api` image can move from staging to production. Staging uses verbose logs and a sandbox email gateway. Production uses quieter logs and the real internal gateway. A ConfigMap lets those runtime choices live beside the workload manifests instead of inside the image.
+
+![ConfigMap runtime boundary](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmap-runtime-boundary.png)
+
+*The image should carry application code, while the namespace supplies plain runtime settings through a ConfigMap.*
+
+This separation gives the team two clean review paths. Image changes go through build and release review. Runtime configuration changes go through manifest, Helm, Kustomize, or GitOps review. The production consequence is simpler rollback: you can roll back a bad setting without rebuilding the image.
+
+## Create One, Then Inspect It
+<!-- section-summary: kubectl can generate ConfigMap YAML for quick learning, but shared environments should apply reviewed manifests. -->
+
+`kubectl create configmap` is useful while learning or generating a starting manifest. The `--dry-run=client -o yaml` flags print YAML instead of creating the object in the cluster.
 
 ```bash
-kubectl kustomize k8s/overlays/staging
-kubectl apply -k k8s/overlays/staging
+kubectl create configmap notification-api-config \
+  --namespace customer-notifications \
+  --from-literal=LOG_LEVEL=info \
+  --from-literal=EMAIL_PROVIDER_URL=http://email-gateway.customer-notifications.svc.cluster.local:8080 \
+  --dry-run=client \
+  -o yaml
 ```
 
-The Deployment can reference `orders-api-config`, and Kustomize rewrites it to the generated name with the hash. The name suffix hash should stay enabled unless your team has a different rollout trigger, because a stable ConfigMap name alone may leave existing Pods running with old environment values.
+A short output looks like this:
 
-With **Helm**, the ConfigMap usually comes from chart templates and `values.yaml`. Helm can calculate a checksum of the rendered ConfigMap and place it on the Pod template annotations. When the ConfigMap template changes, the checksum changes, the Pod template changes, and the Deployment rolls.
+```console
+apiVersion: v1
+data:
+  EMAIL_PROVIDER_URL: http://email-gateway.customer-notifications.svc.cluster.local:8080
+  LOG_LEVEL: info
+kind: ConfigMap
+metadata:
+  name: notification-api-config
+  namespace: customer-notifications
+```
 
-Deployment template fragment:
+For a shared cluster, put that shape in source control and apply it from a reviewed file. The command below sends the manifest to the API server and then asks Kubernetes to show the stored object.
+
+```bash
+kubectl apply -f k8s/customer-notifications/notification-api-configmap.yaml
+kubectl get configmap notification-api-config -n customer-notifications
+```
+
+The second command should show the object with the number of keys Kubernetes stored:
+
+```console
+NAME                      DATA   AGE
+notification-api-config   2      14s
+```
+
+That `DATA` column counts top-level keys, not bytes or nested fields. If you expected five settings and the output says two, inspect the manifest before wiring the object into a Pod.
+
+## Wire Specific Keys into a Container
+<!-- section-summary: Explicit key references document the exact ConfigMap keys a container needs and fail clearly when required keys are missing. -->
+
+A **configMapKeyRef** tells Kubernetes to put one ConfigMap key into one environment variable. This explicit style is longer than bulk import, and the extra lines are useful during review.
+
+Start with one key. The fragment below says that the container environment variable `LOG_LEVEL` should come from the `LOG_LEVEL` key in `notification-api-config`.
 
 ```yaml
+env:
+  - name: LOG_LEVEL
+    valueFrom:
+      configMapKeyRef:
+        name: notification-api-config
+        key: LOG_LEVEL
+```
+
+Then add the second key. The container reads `EMAIL_PROVIDER_URL`, while the ConfigMap remains the source of the value.
+
+```yaml
+env:
+  - name: EMAIL_PROVIDER_URL
+    valueFrom:
+      configMapKeyRef:
+        name: notification-api-config
+        key: EMAIL_PROVIDER_URL
+```
+
+If the ConfigMap or key is missing, Kubernetes will not start the container by default. That fail-fast behavior protects production from a Pod that silently uses a fallback URL or an unsafe default.
+
+You can mark a key as optional:
+
+```yaml
+env:
+  - name: EXPERIMENTAL_SMS_ROUTE
+    valueFrom:
+      configMapKeyRef:
+        name: notification-api-config
+        key: EXPERIMENTAL_SMS_ROUTE
+        optional: true
+```
+
+Use optional references only when the application has a reviewed default. For `notification-api`, an optional experiment flag can default to disabled. `EMAIL_PROVIDER_URL` should stay required because the API cannot send work to the correct provider gateway without it.
+
+## Use envFrom Only for Dedicated ConfigMaps
+<!-- section-summary: envFrom copies many keys at once, which is convenient when one ConfigMap belongs to one container contract. -->
+
+**envFrom** copies every valid key from a ConfigMap into the container environment. It works well when the ConfigMap exists only for one container and every key should enter the process.
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: notification-api-config
+```
+
+The hidden cost is review clarity. If someone adds `DEBUG_PAYMENT_CALLBACKS` to the ConfigMap later, `envFrom` sends it into the container automatically. That can be fine for a dedicated ConfigMap and risky for a shared one.
+
+Kubernetes also ignores invalid environment variable names from `envFrom` and reports an event. A key such as `email-provider-url` works as ConfigMap data, but it is not a valid shell-style environment variable name. Use uppercase names with underscores when the ConfigMap will feed environment variables.
+
+## Mount a ConfigMap as Files
+<!-- section-summary: ConfigMap volumes turn keys into files for applications and tools that expect configuration on disk. -->
+
+Some programs want files instead of environment variables. A worker might read provider routing rules from `/etc/notification/routing.yaml`, or a sidecar might need a small config file at a known path.
+
+A ConfigMap can expose each key as a file. First, store a file-like value under one key:
+
+```yaml
+data:
+  routing.yaml: |
+    defaultChannel: email
+    providers:
+      email: internal-email-gateway
+      sms: internal-sms-gateway
+```
+
+Then mount the ConfigMap as a volume:
+
+```yaml
+volumes:
+  - name: notification-routing
+    configMap:
+      name: notification-routing-config
+containers:
+  - name: worker
+    volumeMounts:
+      - name: notification-routing
+        mountPath: /etc/notification
+        readOnly: true
+```
+
+Inside the container, Kubernetes presents `/etc/notification/routing.yaml`. The application reads a normal file, while the platform team keeps the file content in a reviewable Kubernetes object.
+
+![ConfigMap delivery options](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmap-delivery-options.png)
+
+*A ConfigMap can feed a Pod through explicit environment variables, bulk environment import, or mounted files.*
+
+Mounted files have a practical advantage for structured config. Multi-line YAML, JSON, Nginx snippets, and provider routing tables are easier to review as files than as dozens of environment variables.
+
+## How Updates Reach Running Pods
+<!-- section-summary: Environment variables stay fixed until restart, while mounted ConfigMap files can update after kubelet refreshes the volume. -->
+
+ConfigMap updates do not affect every delivery path the same way. Environment variables are read when the container starts. If you change `LOG_LEVEL` in a ConfigMap, a running `notification-api` process keeps the old environment until the Pod restarts.
+
+Mounted ConfigMap files can refresh in a running Pod. Kubernetes updates the projected volume after the kubelet notices the changed object and refreshes the mounted content. The practical result is not instant delivery, and applications still need a reload mechanism if they should react without a restart.
+
+The safe operational habit is to restart Deployments after important ConfigMap changes unless the application explicitly watches and reloads the mounted file.
+
+```bash
+kubectl rollout restart deployment/notification-api -n customer-notifications
+kubectl rollout status deployment/notification-api -n customer-notifications
+```
+
+A healthy rollout status looks like this:
+
+```console
+deployment "notification-api" successfully rolled out
+```
+
+Do not mount a ConfigMap file with `subPath` when you expect live refresh. Kubernetes documentation calls out that `subPath` mounts do not receive ConfigMap updates. Use a full directory mount for reloadable config, or restart Pods after changing the object.
+
+## Immutable ConfigMaps
+<!-- section-summary: Immutable ConfigMaps protect reviewed configuration from in-place edits and encourage versioned rollouts. -->
+
+An **immutable ConfigMap** cannot be changed after creation. You set `immutable: true`, and Kubernetes rejects updates to the data. That sounds strict, and the strictness is useful for production configuration that should move through versioned releases.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-api-config-v2026-06-28
+  namespace: customer-notifications
+immutable: true
+data:
+  LOG_LEVEL: "info"
+  EMAIL_PROVIDER_URL: "http://email-gateway.customer-notifications.svc.cluster.local:8080"
+```
+
+With immutable ConfigMaps, a change creates a new object name. The Deployment references the new name, and the rollout tells you exactly which Pods use which configuration version.
+
+The tradeoff is cleanup. Old ConfigMaps stay in the namespace until a release job, GitOps prune, or platform cleanup process removes unused versions. That cleanup should check that no live Pods still reference the old name.
+
+## Kustomize, Helm, and GitOps Workflows
+<!-- section-summary: Real teams usually generate or template ConfigMaps so each environment keeps the same contract with different values. -->
+
+Most teams do not hand-edit every ConfigMap in every namespace. They use a workflow that keeps the application contract stable and changes only environment values.
+
+Kustomize can generate ConfigMaps from files or literals and add a hash suffix when content changes. That suffix naturally triggers a Deployment rollout when the Pod template references the generated name. The useful detail is the hash: a changed value creates a changed object name, and Kubernetes sees a changed Pod template.
+
+Helm usually templates ConfigMaps from `values.yaml`. That gives one chart a shared shape and lets staging and production provide different values. Helm users should keep Secrets separate from ConfigMaps, even when both values appear in the same `values.yaml` tree.
+
+GitOps controllers such as Argo CD or Flux apply the reviewed state from Git. With ConfigMaps, GitOps works best when the cluster can recreate a namespace from committed files and known generators. One-off terminal changes create drift, and drift makes incident recovery slower.
+
+## Validate and Troubleshoot
+<!-- section-summary: ConfigMap problems usually show up as missing keys, invalid env names, stale Pods, or application startup validation errors. -->
+
+A good ConfigMap workflow includes both Kubernetes checks and application checks. Kubernetes can tell you whether the object exists and whether a Pod references it correctly. The application should tell you whether the values make sense for its own startup contract.
+
+Start with the object:
+
+```bash
+kubectl describe configmap notification-api-config -n customer-notifications
+```
+
+Useful output includes the keys and events related to the object:
+
+```console
+Name:         notification-api-config
+Namespace:    customer-notifications
+Data
+====
+EMAIL_PROVIDER_URL:
+----
+http://email-gateway.customer-notifications.svc.cluster.local:8080
+LOG_LEVEL:
+----
+info
+```
+
+Then check the Pod events when a container refuses to start:
+
+```bash
+kubectl describe pod notification-api-7c9b7f6d9d-2ftlz -n customer-notifications
+```
+
+If a required key is missing, the event names the ConfigMap and key. Fix the object or the reference, then restart the Deployment so the new environment reaches the process.
+
+For application validation, log a safe startup summary without printing secrets or huge config blobs. `notification-api` can log `LOG_LEVEL=info`, `EMAIL_PROVIDER_URL host=email-gateway...`, and `config source=notification-api-config`. That gives operators enough context without turning logs into a config dump.
+
+## Assembled Example
+<!-- section-summary: After the pieces are clear, the full example shows a ConfigMap wired into a Deployment with explicit keys. -->
+
+Here is the full pattern assembled after the individual pieces. The ConfigMap holds plain settings, and the Deployment asks for each required key by name.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-api-config
+  namespace: customer-notifications
+data:
+  LOG_LEVEL: "info"
+  EMAIL_PROVIDER_URL: "http://email-gateway.customer-notifications.svc.cluster.local:8080"
+  REQUEST_TIMEOUT_MS: "2500"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-api
+  namespace: customer-notifications
 spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: notification-api
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app: notification-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/customer-notifications/notification-api:1.8.0
+          env:
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: notification-api-config
+                  key: LOG_LEVEL
+            - name: EMAIL_PROVIDER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: notification-api-config
+                  key: EMAIL_PROVIDER_URL
+            - name: REQUEST_TIMEOUT_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: notification-api-config
+                  key: REQUEST_TIMEOUT_MS
 ```
 
-Typical commands:
-
-```bash
-helm template orders-api ./charts/orders-api -f values-staging.yaml
-helm upgrade --install orders-api ./charts/orders-api \
-  --namespace devpolaris-staging \
-  -f values-staging.yaml
-```
-
-Kustomize and Helm both help with repeatability, and the team still decides what belongs in a ConfigMap. Plain settings belong in ConfigMaps. Credentials and tokens belong in Secrets or an external secret manager. That separation keeps the next review simple: configuration reviewers can read ConfigMap diffs freely, while sensitive changes follow a tighter path.
-
-## Validation and Troubleshooting
-<!-- section-summary: Most ConfigMap failures come from missing objects, missing keys, namespace mismatches, invalid env names, stale Pods, or application parsing errors. -->
-
-Validation should happen before the rollout. The first check is whether the ConfigMap exists in the same namespace as the workload:
-
-```bash
-kubectl get configmap orders-api-config -n devpolaris-staging
-kubectl describe configmap orders-api-config -n devpolaris-staging
-```
-
-The Deployment wiring is the next check:
-
-```bash
-kubectl get deployment orders-api -n devpolaris-staging -o yaml
-kubectl describe deployment orders-api -n devpolaris-staging
-```
-
-If Pods are stuck in `CreateContainerConfigError`, inspect the Pod events. Kubernetes usually tells you when a ConfigMap or key is missing:
-
-```bash
-kubectl get pods -n devpolaris-staging -l app=orders-api
-kubectl describe pod -n devpolaris-staging -l app=orders-api
-kubectl get events -n devpolaris-staging --sort-by=.lastTimestamp
-```
-
-Common causes are straightforward:
-
-| Symptom | Likely cause | Check |
-|---|---|---|
-| Pod says ConfigMap is missing | ConfigMap was applied to another namespace or named differently | `kubectl get configmap -n devpolaris-staging` |
-| Pod says key is missing | Deployment references a key that the ConfigMap lacks | `kubectl get configmap orders-api-config -n devpolaris-staging -o yaml` |
-| App starts with default values | App defaulted because a reference was optional or the wrong env name was used | Review `env` names and startup logs |
-| `envFrom` key absent | Key name is invalid as an environment variable | Check events for invalid environment variable warnings |
-| Config changed but behavior stayed old | Running Pods still have old env vars or the app read a file once | Restart rollout and verify new Pods |
-| File mount stayed old | The file was mounted with `subPath` or kubelet refresh is still pending | Inspect volumeMounts and restart when needed |
-| App crashes on startup | Value is a string that failed application parsing | Check app logs for config validation errors |
-
-For safe runtime checks, prefer application logs that print a redacted or non-sensitive config summary. ConfigMaps carry plain values, so reading them is usually fine, but production diagnostics still need discipline. A startup log such as `config loaded logLevel=info featureRefunds=true checkoutTimeoutMs=2500` helps operators verify behavior without opening a shell in the container.
-
-When you need to prove the environment inside a Pod, use a short-lived debug path in a non-production namespace first. Production containers often have no shell, and interactive exec access should already be restricted. If you do use `kubectl exec`, keep the command narrow:
-
-```bash
-kubectl exec deploy/orders-api -n devpolaris-staging -- printenv LOG_LEVEL
-```
-
-The final check is rollout health:
-
-```bash
-kubectl rollout status deployment/orders-api -n devpolaris-staging
-kubectl logs deployment/orders-api -n devpolaris-staging --tail=50
-```
-
-That gives you three layers of confidence: Kubernetes accepted the object, the Pod consumed the expected keys, and the application started with the intended settings.
+This example keeps the full manifest small enough to review. A real Deployment would also include probes, resource requests, security context, and rollout settings, but those belong to the workload article rather than the ConfigMap contract.
 
 ## Review Checklist
-<!-- section-summary: A ConfigMap review should confirm ownership, safety, wiring, rollout behavior, validation, and rollback. -->
+<!-- section-summary: A production ConfigMap review checks sensitivity, naming, delivery path, rollout behavior, and recovery. -->
 
-This checklist fits pull requests that change a ConfigMap or its workload wiring:
+Use this checklist before merging a ConfigMap change:
 
-| Check | What to look for |
+| Check | What to confirm |
 |---|---|
-| Ownership | ConfigMap name, labels, and namespace match one application or one clearly shared purpose |
-| Confidentiality | Values are safe for plain review and contain no passwords, tokens, signing keys, or private certificates |
-| Key shape | Required keys exist, key names are consistent, and `envFrom` keys are valid environment variable names |
-| Type parsing | Numbers and booleans are quoted as strings in YAML and validated by the application |
-| Wiring | Deployment references the right ConfigMap name, namespace, and key names |
-| Optional values | `optional: true` appears only for values with safe application defaults |
-| Update behavior | The change includes a rollout plan, Kustomize hash, Helm checksum, or documented file reload behavior |
-| Immutable policy | Immutable ConfigMaps use versioned names and a clear rollback path |
-| Validation | Reviewer can see `kubectl apply`, `kubectl rollout status`, logs, or GitOps health checks for the change |
-| Cleanup | Old versioned ConfigMaps have a retention rule so rollback stays possible without clutter forever |
+| Sensitivity | No password, token, private key, or secret endpoint credential appears in the ConfigMap |
+| Contract | The keys match what `notification-api` or `notification-worker` validates at startup |
+| Delivery path | Required keys use explicit `configMapKeyRef`, while `envFrom` is reserved for dedicated ConfigMaps |
+| Rollout | The release plan restarts Pods or uses a reload mechanism for mounted files |
+| Namespaces | Staging and production values live in their own namespaces |
+| Recovery | The object can be recreated from Git, Helm, Kustomize, or a documented pipeline |
 
-For the orders API, the final review question is simple: can someone deploy the same image to staging and production, understand every plain runtime setting from the manifest, and predict how a change reaches running Pods? If the answer is yes, the ConfigMap is doing its job.
+![ConfigMap production review flow](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmap-production-review-flow.png)
 
----
+*A strong ConfigMap review follows the value from source control into the Pod and then through rollout and recovery.*
 
 **References**
 
-- [Kubernetes ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) - Defines ConfigMaps, supported data fields, Pod consumption methods, namespace rules, immutability, and size guidance.
-- [Configure a Pod to Use a ConfigMap](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/) - Shows `kubectl create configmap`, explicit environment variables, `envFrom`, optional ConfigMaps, restrictions, and common events.
-- [Updating Configuration via a ConfigMap](https://kubernetes.io/docs/tutorials/configuration/updating-configuration-via-a-configmap/) - Demonstrates update behavior for mounted ConfigMaps, environment variables, and immutable ConfigMaps.
-- [kubectl create configmap](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_create/kubectl_create_configmap/) - Documents literal, file, directory, env-file, dry-run, and hash options for creating ConfigMaps.
-- [Declarative Management of Kubernetes Objects Using Kustomize](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/) - Documents `configMapGenerator`, generated names, `kubectl kustomize`, and `kubectl apply -k`.
-- [Helm Chart Development Tips and Tricks](https://helm.sh/docs/howto/charts_tips_and_tricks/) - Includes Helm template functions and the checksum annotation pattern for rolling workloads after rendered config changes.
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Defines the sensitive-data companion to ConfigMaps and explains when confidential values need Secret handling instead.
+- [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
+- [Configure Pods to use ConfigMaps](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/)
+- [Define environment variables for a container](https://kubernetes.io/docs/tasks/inject-data-application/define-environment-variable-container/)

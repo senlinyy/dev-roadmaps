@@ -40,6 +40,9 @@ This is the moment where **Kubernetes itself** is the reason to choose the runti
 
 The beginner-friendly rule is simple enough for the first decision: **start with Cloud Run when one stateless container service is enough, and consider GKE when the platform needs Kubernetes features as part of the product architecture**. Those features include multiple cooperating services, shared namespace policy, Kubernetes Services and Ingress or Gateway routing, sidecar containers, custom controllers and operators, and common governance across teams.
 
+![GKE as a shared platform API](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/gke-platform-api.png)
+*GKE earns its place when the team wants a shared platform vocabulary for many containers, policy, ingress, workload identity, and platform controls.*
+
 ## What GKE Is
 <!-- section-summary: GKE is managed Kubernetes on Google Cloud, so the team works with Kubernetes objects while Google operates major cluster components. -->
 
@@ -60,6 +63,9 @@ The main object types show up quickly. These names will keep appearing as the ch
 | **ServiceAccount** | A Kubernetes identity that a Pod can run as. | `orders-api-ksa` identifies the orders workload inside the cluster. |
 
 Notice how the runtime has grown beyond "run this image." The platform now has a vocabulary for identity, rollout, networking, and policy. That vocabulary matters because the checkout team wants every service to follow the same production rules instead of inventing those rules again for each container.
+
+![Kubernetes request and rollout path through Deployment, Pods, Service, and Ingress](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/kubernetes-request-rollout-path.png)
+*The Deployment creates Pods, the Service gives those Pods a stable name, and Ingress or Gateway routes customer traffic only after readiness checks pass.*
 
 ## Autopilot and Standard
 <!-- section-summary: Autopilot shifts node operations to Google, while Standard keeps more infrastructure control with your platform team. -->
@@ -110,6 +116,18 @@ kubectl get deployment,pods --namespace checkout --selector app=orders-api
 kubectl logs deployment/orders-api --namespace checkout --container app --tail=100
 ```
 
+A healthy first pass shows the cluster credentials updated, the Deployment configured, the rollout completed, and Pods ready. The `kubectl logs` line should show the application startup message or recent request logs from the new Pods.
+
+```console
+Fetching cluster endpoint and auth data.
+kubeconfig entry generated for gke-checkout-prod.
+deployment.apps/orders-api configured
+deployment "orders-api" successfully rolled out
+deployment.apps/orders-api   3/3     3            3           4m
+pod/orders-api-6f8f7d7d7b-2m9zx   1/1   Running   0   2m
+2026-06-27T20:32:11Z INFO orders-api listening port=8080 version=2026.06.27.1
+```
+
 The important habit is reading the Deployment status before celebrating a release. `READY 3/3` means three requested replicas are ready. `AVAILABLE 3` means three replicas are available to serve traffic. A Pod stuck in `CrashLoopBackOff`, `ImagePullBackOff`, or `Pending` points the team toward app crashes, image permissions, or scheduling and resource problems.
 
 ## Services, Ingress, and Gateway
@@ -157,6 +175,19 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
   --role=roles/secretmanager.secretAccessor \
   --member="principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/orders-api-ksa" \
   --condition=None
+```
+
+The expected output should show the cluster update accepted, the namespace and Kubernetes ServiceAccount created, and the IAM policy updated. If the IAM member string has the wrong project number, namespace, or service account name, the Pod may start but fail when the client library tries to read the secret.
+
+```console
+Updating gke-checkout-prod...done.
+namespace/checkout created
+serviceaccount/orders-api-ksa created
+Updated IAM policy for project [PROJECT_ID].
+bindings:
+- members:
+  - principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/orders-api-ksa
+  role: roles/secretmanager.secretAccessor
 ```
 
 In production, the IAM binding should target the narrowest resource that supports the needed role. If the orders API only needs one Secret Manager secret, the team should avoid granting broad project-wide access. Some organizations also use the alternative service account impersonation pattern, where the Kubernetes ServiceAccount can impersonate a Google service account that already fits the company's IAM review process.
@@ -355,6 +386,24 @@ kubectl get events --sort-by=.lastTimestamp
 
 The output tells a story. If `kubectl rollout status` finishes successfully, Kubernetes accepted the new ReplicaSet and the Deployment reached its rollout condition. If `kubectl wait` times out, the team should inspect readiness probes, application logs, image pulls, scheduling events, and IAM access. Empty Service endpoints usually point to labels on the Pods and selectors on the Service that do not line up.
 
+Useful rollout output gives the release job enough evidence to explain the current state without opening the cluster dashboard. The Deployment reports success, Pods report readiness, the Service has endpoints, the Ingress has an address, and the logs show the app starting on the expected port.
+
+```console
+deployment.apps/orders-api configured
+deployment "orders-api" successfully rolled out
+deployment.apps/orders-api condition met
+
+NAME                              READY   STATUS    RESTARTS   AGE   IP           NODE
+orders-api-6f8f7d7d7b-2m9zx       1/1     Running   0          2m    10.12.3.18   gke-node-pool-1
+orders-api-6f8f7d7d7b-lq8tc       1/1     Running   0          2m    10.12.4.21   gke-node-pool-2
+orders-api-6f8f7d7d7b-v7pks       1/1     Running   0          2m    10.12.5.13   gke-node-pool-3
+
+NAME         TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)
+orders-api   ClusterIP   10.96.12.44   <none>        80/TCP
+
+2026-06-27T20:32:11Z INFO orders-api listening port=8080 version=2026.06.27.1
+```
+
 Rollback should also be boring and practiced. A Deployment keeps rollout history, so the team can move back to the previous revision when a release fails after deployment. The rollback command shape is:
 
 ```bash
@@ -362,6 +411,19 @@ kubectl rollout history deployment/orders-api
 kubectl rollout undo deployment/orders-api
 kubectl rollout status deployment/orders-api --timeout=180s
 ```
+
+```console
+deployment.apps/orders-api
+REVISION  CHANGE-CAUSE
+12        image=orders-api:2026.06.26.3
+13        image=orders-api:2026.06.27.1
+
+deployment.apps/orders-api rolled back
+deployment "orders-api" successfully rolled out
+```
+
+![GKE rollout evidence board](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/gke-rollout-evidence.png)
+*A production GKE rollout leaves evidence across the Deployment, replicas, Pod readiness, Service endpoints, Ingress, events, and container logs.*
 
 This is one of the practical benefits of using a Kubernetes Deployment. The team updates through a controller that understands replicas, progress, and rollback. The same release pattern can apply to `orders-api`, `pricing-api`, and `inventory-sync`, which gives the platform a shared operational rhythm.
 

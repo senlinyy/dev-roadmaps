@@ -22,13 +22,15 @@ id: article-containers-orchestration-kubernetes-operations-health-probes
 ## Why Kubernetes Checks Health
 <!-- section-summary: A running container can still be unsafe for traffic, so probes give Kubernetes a small health signal it can act on. -->
 
-A Pod can look alive from the outside while the application inside it has no useful response for a user yet. The container process may have started, the port may be open, and the Pod may show `Running` while the app is still loading configuration, opening a database pool, replaying migrations, or recovering from a stuck worker thread.
+A rollout finishes creating a new Pod, and the status line looks comforting: `STATUS` is `Running`. Then checkout requests still fail. The missing clue is in a different column: `READY` is `0/1`, so the Pod is alive on the node while still waiting outside Service traffic.
 
 For our scenario, the team runs **devpolaris-orders-api** in the `orders` namespace. It receives checkout requests, reads and writes PostgreSQL, and publishes order events to a queue. The Deployment has three replicas behind a Kubernetes Service, and the Service should send traffic only to replicas that can answer real requests.
 
-**Health probes** are small checks that kubelet runs for a container. **Kubelet** is the node agent that starts containers, watches them, and reports status back to the Kubernetes control plane. A probe can call an HTTP path, open a TCP socket, run a command inside the container, or use a gRPC health check when the application supports it.
+A **health probe** is a small check that kubelet runs against a container so Kubernetes can decide what to do next. The check might call `/health/ready`, open a TCP socket, run a short command, or use a gRPC health check. The answer is useful only when it maps to a clear action.
 
-That last sentence matters because probes are not just dashboard labels. Kubernetes uses them to make decisions. A failing readiness probe changes Service traffic. A failing liveness probe restarts a container. A startup probe delays the other checks while an application is still booting.
+Here is the concrete version. If `devpolaris-orders-api` is still opening its PostgreSQL pool, `/health/ready` should fail and Kubernetes should keep that Pod out of the Service endpoints. If the HTTP server is wedged and cannot answer even a shallow liveness check, kubelet should restart that container. If the image needs a longer boot window, startup should give it that time before the other checks enforce anything.
+
+Kubernetes treats probes as action signals, rather than dashboard labels. A failing readiness probe changes Service traffic. A failing liveness probe restarts a container. A startup probe delays the other checks while an application is still booting.
 
 The orders team cares because a rollout can have all three situations in one afternoon. A new Pod should stay out of traffic until it has loaded its config. A wedged process should restart. A slow image should get enough boot time so Kubernetes does not kill it during normal startup work.
 
@@ -37,7 +39,7 @@ The orders team cares because a rollout can have all three situations in one aft
 
 Kubernetes gives you three probe fields because one health endpoint cannot safely answer every operational question. A good probe design starts by matching the check to the action you want Kubernetes to take.
 
-Here is the practical map for `devpolaris-orders-api`. Keep your eye on the action column because that is what users will feel during a rollout or incident:
+Here is the practical map for `devpolaris-orders-api`. The action column shows what users may experience during a rollout or incident:
 
 | Probe | Question | Kubernetes action after repeated failure |
 |---|---|---|
@@ -62,7 +64,7 @@ A **readiness probe** controls whether a Pod is included in Service endpoints. W
 
 For `devpolaris-orders-api`, readiness should prove that the HTTP server can answer, required configuration is loaded, and the PostgreSQL connection pool can borrow a connection quickly. If the queue publisher is required for every checkout, include a cheap queue check too. If analytics export is optional, keep it out of readiness so a reporting outage does not remove the API from traffic.
 
-Here is a realistic Deployment slice. The example keeps the labels stable because those labels will also help with logs, metrics, and selectors later:
+Here is the Deployment shape first. Keep the app identity and the named HTTP port visible because the probe will refer to that port in the next step:
 
 ```yaml
 apiVersion: apps/v1
@@ -88,14 +90,19 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
+```
+
+Now add the readiness probe under the same container. This is the field that tells Kubernetes how to decide whether the Pod belongs in Service traffic:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
 ```
 
 The named port `http` keeps the probe readable and stable if the numeric port changes later. `periodSeconds: 10` means kubelet checks every ten seconds. `failureThreshold: 3` means Kubernetes needs three failed readiness checks in a row before it marks the Pod not ready.

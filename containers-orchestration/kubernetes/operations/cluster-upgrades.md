@@ -26,17 +26,19 @@ aliases:
 ## Why Cluster Upgrades Need a Runbook
 <!-- section-summary: A cluster upgrade changes the shared platform, so the team needs planned evidence before, during, and after the maintenance window. -->
 
+The shared Kubernetes version changes, but the app still has to serve users. That is the beginner-friendly way to think about a cluster upgrade. The platform may move the production cluster from Kubernetes `v1.29` to `v1.30`, while customers still expect checkout to work before, during, and after the maintenance window.
+
 A **cluster upgrade** changes Kubernetes itself: the API server that accepts manifests, the controllers that reconcile objects, the scheduler that chooses nodes, and the kubelets that run Pods. In a managed cluster, the cloud provider may run many of those steps for you, yet your workloads still live through the change. The platform team needs to prove that important services still work after the version moves.
 
-We will use one production scenario across this module. The service is `devpolaris-orders-api`, it runs in the `orders` namespace, and it serves checkout traffic. It has three replicas, an internal Service, an external route through an ingress controller, and dependencies on a database and queue.
+We will use one production scenario across this article. The service is `devpolaris-orders-api`, it runs in the `orders` namespace, and it serves checkout traffic. The first check is simple: can the app still receive requests and keep enough healthy Pods while the platform changes underneath it?
 
-The upgrade question is practical: can customers keep placing orders while the cluster moves from one supported Kubernetes version to the next? That question touches API compatibility, node drains, PodDisruptionBudgets, add-ons, observability, and rollback choices. A runbook keeps those checks in order so the maintenance window does not turn into random command execution.
+The runbook builds from that simple check. First, prove the current app path. Then check whether the API server accepts the manifests the app uses. Then check how Pods behave as nodes restart or drain. After that, check the shared cluster helpers such as DNS, ingress, storage, and metrics. The order keeps the maintenance window from turning into random command execution.
 
 ![Upgrade inventory board showing control plane, node pools, add-ons, kubectl clients, deprecated APIs, and rollback notes before a Kubernetes upgrade](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/upgrade-inventory-board.png)
 
 *The inventory board shows why a cluster upgrade starts with facts, not motion. The team needs platform versions, add-on support, client compatibility, API risks, and rollback notes before the window opens.*
 
-The important idea is **evidence before motion**. Before the upgrade, gather facts about the current cluster. During the upgrade, validate after each phase. After the upgrade, prove the application path, not only the Kubernetes version number.
+The important idea is **evidence before motion**. Before the upgrade, gather facts about the current cluster. During the upgrade, validate after each phase. After the upgrade, prove the application path as well as the Kubernetes version number.
 
 ## Build the Upgrade Inventory
 <!-- section-summary: The upgrade inventory names the exact platform pieces that might change, from API server version to add-ons and workload clients. -->
@@ -72,7 +74,7 @@ daemonset.apps/cilium                     3         3         3
 daemonset.apps/secrets-store-csi-driver   3         3         3
 ```
 
-Record the current version and target version for each add-on if your cluster exposes that through Helm, your GitOps repo, or provider metadata. An API server upgrade can finish successfully while an old ingress controller or CSI driver still fails against the new environment. The inventory gives you a place to catch that before production users feel it.
+Record the current version and target version for each add-on if your cluster exposes that through Helm, your GitOps repo, or provider metadata. An API server upgrade can finish successfully while an old ingress controller or CSI driver still fails against the new environment. The inventory gives you a place to catch that before production users hit it.
 
 ## Check API Versions Before the Window
 <!-- section-summary: API compatibility checks make sure Kubernetes still accepts the manifests and live objects that the orders service depends on. -->

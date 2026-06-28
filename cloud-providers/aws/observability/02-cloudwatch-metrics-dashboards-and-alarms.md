@@ -36,7 +36,7 @@ aliases:
 ## The First Metric Question
 <!-- section-summary: Metrics give the fast production overview that tells a team whether customers are affected and which part of the system is under pressure. -->
 
-During an incident, logs can feel tempting because logs contain the exact error. The problem is timing. If a flash sale sends thousands of shoppers through checkout, the log stream might contain millions of events. Searching all of that first can burn the first ten minutes of the incident.
+During an incident, logs are tempting because logs contain the exact error. The problem is timing. If a flash sale sends thousands of shoppers through checkout, the log stream might contain millions of events. Searching all of that first can burn the first ten minutes of the incident.
 
 Metrics give the first shape of the problem. A **metric** is a number recorded over time. Instead of reading every checkout log event, you can look at completed checkouts per minute, p95 checkout latency, target 5xx errors from the load balancer, RDS database connections, and SQS queue age. In a few seconds, the team can see whether the issue affects all users, one service, one dependency, or one Region.
 
@@ -71,6 +71,62 @@ For example, the load balancer latency metric might look like this:
 | Period | `60` seconds |
 | Unit | `Seconds` |
 
+When a responder wants to inspect this metric during an incident, `get-metric-data` can pull the same time window that a dashboard widget uses. The query file keeps the command readable:
+
+```json
+[
+  {
+    "Id": "albP95",
+    "Label": "ALB p95 target response time",
+    "MetricStat": {
+      "Metric": {
+        "Namespace": "AWS/ApplicationELB",
+        "MetricName": "TargetResponseTime",
+        "Dimensions": [
+          {
+            "Name": "LoadBalancer",
+            "Value": "app/prod-checkout/50dc6c495c0c9188"
+          }
+        ]
+      },
+      "Period": 60,
+      "Stat": "p95"
+    },
+    "ReturnData": true
+  }
+]
+```
+
+```bash
+aws cloudwatch get-metric-data \
+  --metric-data-queries file://checkout-alb-latency.json \
+  --start-time 2026-06-13T10:13:00Z \
+  --end-time 2026-06-13T10:18:00Z
+```
+
+A small response might look like this:
+
+```json
+{
+  "MetricDataResults": [
+    {
+      "Id": "albP95",
+      "Label": "ALB p95 target response time",
+      "Timestamps": [
+        "2026-06-13T10:17:00+00:00",
+        "2026-06-13T10:16:00+00:00",
+        "2026-06-13T10:15:00+00:00"
+      ],
+      "Values": [2.63, 2.41, 0.31],
+      "StatusCode": "Complete"
+    }
+  ],
+  "Messages": []
+}
+```
+
+`StatusCode: Complete` means CloudWatch finished the read. `TargetResponseTime` is measured in seconds, so `2.63` means the p95 target response time was 2.63 seconds for that minute. The values also show the timing of the incident: latency was normal at 10:15, then crossed two seconds at 10:16 and 10:17.
+
 CloudWatch metrics exist in the Region where they are created. Metric data also rolls up over time. The highest-resolution recent data has shorter retention, and older data is stored at coarser resolution. This is one reason teams keep dashboards focused on recent triage and use longer windows for capacity planning.
 
 CloudWatch cannot delete a metric directly. A metric stops appearing in normal metric lists after it stops receiving recent datapoints, and old datapoints expire on the CloudWatch retention schedule. That matters for naming. If a team accidentally publishes `CheckoutLatency` with a typo in the namespace, that mistaken metric can stay discoverable for a while even after the code is fixed.
@@ -78,6 +134,7 @@ CloudWatch cannot delete a metric directly. A metric stops appearing in normal m
 ![CloudWatch metric identity broken into namespace, metric name, dimensions, unit, and period](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/metric-identity.png)
 
 *The visual shows why dimensions matter so much. The namespace and metric name start the address, but dimensions decide the exact time series CloudWatch stores and alarms on.*
+
 
 ## Namespaces, Dimensions, Units, and Resolution
 <!-- section-summary: Metric identity choices control how CloudWatch stores, filters, aggregates, bills, and alarms on time-series data. -->
@@ -153,6 +210,8 @@ aws cloudwatch put-metric-data \
 
 The dimensions are stable. `Environment`, `Service`, and `PaymentProvider` have a small number of expected values. The command avoids `requestId`, `customerId`, and `orderId` because those belong in logs and traces.
 
+`put-metric-data` usually prints no response body when the write succeeds. For release checks, verify the result by reading the metric back with `get-metric-data` or by opening the dashboard that uses the same namespace and dimensions. That keeps the deployment evidence tied to a real datapoint instead of the absence of a CLI error.
+
 **Embedded metric format**, usually shortened to EMF, lets a service write structured JSON logs that CloudWatch Logs can extract into metrics. This is useful for Lambda functions and containers because the same event can carry detailed log fields and metric values.
 
 ```json
@@ -196,6 +255,16 @@ ORDER BY AVG() DESC
 LIMIT 10
 ```
 
+Example result:
+
+| ClusterName | ServiceName | AVG(CPUUtilization) |
+|---|---|---:|
+| prod-apps | checkout-api | 82.4 |
+| prod-apps | payment-worker | 71.8 |
+| prod-tools | report-exporter | 43.2 |
+
+This result says `checkout-api` is the hottest ECS service in the window. The responder should compare CPU with latency, task count, deployments, and error logs before scaling or rolling back.
+
 This query finds the load balancers with the highest active connection count:
 
 ```sql
@@ -206,6 +275,16 @@ ORDER BY MAX() DESC
 LIMIT 10
 ```
 
+Example result:
+
+| LoadBalancer | MAX(ActiveConnectionCount) |
+|---|---:|
+| app/prod-checkout/50dc6c495c0c9188 | 2480 |
+| app/prod-catalog/6d0ecf831eec9f09 | 930 |
+| app/prod-admin/3c1d5b0c4a1a2b33 | 44 |
+
+This output points to the checkout load balancer as the traffic-heavy edge. The next useful check is whether high connections line up with high target response time or 5xx errors.
+
 And this one finds queues with the oldest visible work:
 
 ```sql
@@ -215,6 +294,16 @@ GROUP BY QueueName
 ORDER BY AVG() DESC
 LIMIT 10
 ```
+
+Example result:
+
+| QueueName | AVG(ApproximateAgeOfOldestMessage) |
+|---|---:|
+| checkout-email-prod | 612 |
+| fraud-check-prod | 48 |
+| invoice-export-prod | 0 |
+
+The age value is in seconds. `checkout-email-prod` has messages that are about ten minutes old on average in this window, so customer payment may be complete while confirmation email work is delayed.
 
 Metrics Insights is especially useful for dynamic environments. If an Auto Scaling group adds instances or ECS launches a new service, a query-based widget can catch new resources without someone editing a dashboard by hand. CloudWatch can also create alarms on Metrics Insights queries, which helps with fleet-level alarms that track changing resources.
 
@@ -285,6 +374,8 @@ Here is a small dashboard body with one metric widget and one text widget. The r
 }
 ```
 
+Notice what each dashboard field contributes. `start: "-PT3H"` opens the dashboard on the last three hours, which is a useful incident window. `periodOverride: "auto"` lets CloudWatch adjust graph periods when viewers zoom. The widget grid fields `x`, `y`, `width`, and `height` place charts on a 24-column dashboard grid. In the second metric row, `"."` reuses the previous namespace and dimension fields so the JSON stays shorter. `yAxis: "right"` puts the error count on a separate scale from latency, and the text widget keeps owner, runbook, and escalation context on the same page as the graph.
+
 You can publish it with:
 
 ```bash
@@ -293,11 +384,49 @@ aws cloudwatch put-dashboard \
   --dashboard-body file://checkout-dashboard.json
 ```
 
+`file://checkout-dashboard.json` tells the CLI to read the dashboard body from a local JSON file. A clean response looks like this:
+
+```json
+{
+  "DashboardValidationMessages": []
+}
+```
+
+An empty `DashboardValidationMessages` list means CloudWatch accepted the body without validation warnings. If validation messages appear, fix the named widget or metric before treating the dashboard as release evidence. A dashboard can still render with a broken widget, so the validation output deserves the same attention as a build warning.
+
 CloudWatch dashboards can include cross-account and cross-Region widgets by using `accountId` and `region` in dashboard JSON. That helps teams build one high-level view across production accounts and Regions. The dashboard should still stay readable. A dashboard with fifty charts and no order usually slows response because every chart asks for attention at once.
+
+Alarm history is useful after the first page because it shows state changes and the reason CloudWatch evaluated. During triage, a responder can pull recent state transitions before changing thresholds:
+
+```bash
+aws cloudwatch describe-alarm-history \
+  --alarm-name checkout-prod-5xx-high \
+  --history-item-type StateUpdate \
+  --start-date 2026-06-13T09:00:00Z \
+  --query 'AlarmHistoryItems[].{Time:Timestamp,Summary:HistorySummary}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Time": "2026-06-13T10:05:14.981000+00:00",
+    "Summary": "Alarm updated from OK to ALARM"
+  },
+  {
+    "Time": "2026-06-13T09:42:03.117000+00:00",
+    "Summary": "Alarm updated from INSUFFICIENT_DATA to OK"
+  }
+]
+```
+
+If the alarm flips between `OK` and `ALARM` every few minutes, the issue may be a noisy threshold, missing-data handling, or a real intermittent dependency. If it stays in `ALARM`, the team should use the dashboard and logs to find the sustained pressure before tuning the alarm.
 
 ![Triage dashboard layout with customer health, edge latency, app errors, data pressure, queue delay, and recent changes](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/triage-dashboard-layout.png)
 
 *A dashboard should guide the responder's eyes. Customer impact comes first, then the path through edge, application, data, async work, and recent changes.*
+
 
 ## Alarms as State Machines
 <!-- section-summary: A CloudWatch alarm evaluates metric data over time and changes state only when the configured evaluation rule is satisfied. -->
@@ -335,6 +464,31 @@ aws cloudwatch put-metric-alarm \
   --treat-missing-data notBreaching \
   --alarm-actions arn:aws:sns:us-east-1:111122223333:checkout-critical-alerts
 ```
+
+`put-metric-alarm` updates the alarm definition and normally returns no response body. The release check should read the alarm back:
+
+```bash
+aws cloudwatch describe-alarms \
+  --alarm-names checkout-prod-alb-p95-latency-high \
+  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Threshold:Threshold,EvaluationPeriods:EvaluationPeriods,DatapointsToAlarm:DatapointsToAlarm,TreatMissingData:TreatMissingData}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Name": "checkout-prod-alb-p95-latency-high",
+    "State": "OK",
+    "Threshold": 2.0,
+    "EvaluationPeriods": 5,
+    "DatapointsToAlarm": 3,
+    "TreatMissingData": "notBreaching"
+  }
+]
+```
+
+This confirms the alarm is watching the two-second threshold with a `3 out of 5` rule and `notBreaching` missing-data behavior. `State: OK` only describes the current metric state. Teams usually test notification routing separately in a safe environment because alarm definition and notification delivery are separate pieces of the response loop.
 
 This is an **M out of N** alarm. `datapoints-to-alarm` is M. `evaluation-periods` is N. A `3 out of 5` alarm can catch sustained pain while giving the system room for a short spike. A `5 out of 5` alarm waits for five consecutive breaches. A `1 out of 1` alarm fires quickly and can create noise.
 
@@ -432,6 +586,7 @@ The production checklist is:
 ![CloudWatch metric response flow from datapoints through statistic, threshold, alarm state, SNS route, and runbook action](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/from-metric-to-response.png)
 
 *The summary image connects metric design to incident response. A number helps only after the alarm state reaches the right route and the runbook action is clear.*
+
 
 ## What's Next
 <!-- section-summary: The following observability work adds deeper log and trace practices so metrics can lead into exact evidence. -->

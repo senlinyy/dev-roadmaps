@@ -12,573 +12,466 @@ aliases:
 
 ## Table of Contents
 
-1. [The EC2 Path](#the-ec2-path)
-2. [What Is EC2](#what-is-ec2)
-3. [AMIs, Instance Types, and Storage](#amis-instance-types-and-storage)
-4. [Network Placement and Access](#network-placement-and-access)
-5. [Instance Roles, Metadata, and Secrets](#instance-roles-metadata-and-secrets)
-6. [First Boot with User Data](#first-boot-with-user-data)
-7. [Keeping the Process Alive with systemd](#keeping-the-process-alive-with-systemd)
-8. [From One Instance to a Fleet](#from-one-instance-to-a-fleet)
-9. [Deployments, Rollback, and Patching](#deployments-rollback-and-patching)
-10. [Operating Evidence During an Incident](#operating-evidence-during-an-incident)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [A Server-Shaped Runtime](#a-server-shaped-runtime)
+2. [AMIs, Instance Types, and Volumes](#amis-instance-types-and-volumes)
+3. [Network Access and Instance Roles](#network-access-and-instance-roles)
+4. [Booting the App with User Data and systemd](#booting-the-app-with-user-data-and-systemd)
+5. [From One Instance to a Fleet](#from-one-instance-to-a-fleet)
+6. [Deploying, Patching, and Rolling Back](#deploying-patching-and-rolling-back)
+7. [An EC2 Incident Path](#an-ec2-incident-path)
+8. [References](#references)
 
-## The EC2 Path
-<!-- section-summary: EC2 makes sense after you connect the server, boot image, network, identity, process, fleet, and operating evidence. -->
+## A Server-Shaped Runtime
+<!-- section-summary: EC2 gives you a virtual server, so the application runs in a familiar operating system environment with real server responsibilities. -->
 
-In the previous compute article, we sorted AWS compute into server-shaped, container-shaped, and event-shaped choices. **Amazon EC2** is the server-shaped option. It gives a team a virtual machine with an operating system, a disk, a network interface, host-level processes, and the familiar feeling of a Linux box that can run almost anything.
+Suppose `orders-api` already runs on Ubuntu with Node.js, Nginx, a native PDF package, and a host-level monitoring agent. The team knows the server workflow: install packages, write an environment file, run a `systemd` service, read logs, and patch the operating system. **Amazon EC2** is the AWS compute service that matches that server-shaped workflow.
 
-That familiar shape can trick a team into treating EC2 like one precious server. A developer SSHs into it, installs packages by hand, starts the app in a terminal, fixes a file at midnight, and suddenly the production runtime exists only in someone's shell history. That version of EC2 causes pain because a failed instance, a bad patch, or a lost disk turns into a rebuilding mystery.
+An **EC2 instance** is one virtual server launched from a recipe. The recipe includes an Amazon Machine Image, an instance type, storage, subnet, security groups, an IAM instance profile, tags, and optional user data. AWS runs the physical data center, networking, storage platform, and virtualization layer. Your team runs the guest operating system, installed packages, users, agents, app process, attached disks, and host-level security posture.
 
-So we will follow one concrete service: `devpolaris-orders-api`, a Node.js API that listens on port `3000`. It needs to call S3 for release artifacts, CloudWatch for logs, and Secrets Manager for runtime configuration. The team chooses EC2 because the app depends on a legacy PDF engine and a host-level monitoring agent that need normal Linux package access.
+For this article, `orders-api` listens on port `3000`, reads one database secret, writes receipt PDFs to S3, and sends logs to CloudWatch. EC2 fits today because the PDF renderer needs native Linux packages and the monitoring agent needs host access. The production goal is to keep that control while making each server replaceable.
 
-Here is the path we will build through the article. Each row connects the beginner question to the production habit we want the orders team to practice.
+A replaceable EC2 service has a few named pieces:
 
-| Piece | Beginner question | Production answer |
-|---|---|---|
-| **EC2 instance** | What is actually running my code? | A virtual server in a VPC subnet with a guest operating system your team operates. |
-| **AMI and instance type** | What does the server boot from, and how much hardware does it get? | A versioned boot image plus a measured CPU, memory, network, and storage shape. |
-| **Subnet, security group, and access path** | Who can reach the server? | Users reach the load balancer, the load balancer reaches the instance, and operators use Session Manager. |
-| **Instance role and metadata** | How does the app call AWS without access keys on disk? | The instance profile delivers temporary role credentials through the metadata path. |
-| **User data and systemd** | How does a new server turn into a working app server? | First-boot automation installs the release, and systemd keeps the process tied to the OS lifecycle. |
-| **Launch template and Auto Scaling group** | How does one server turn into a fleet? | A versioned server recipe feeds an Auto Scaling group behind an Application Load Balancer. |
-| **Patching, deployment, and evidence** | How does the team operate it every week? | New images, instance refreshes, rollback versions, logs, metrics, status checks, and patch findings drive the routine. |
+| Piece | What it answers |
+|---|---|
+| **AMI** | Which operating system, agents, and base packages boot? |
+| **Instance type** | How much CPU, memory, network, and storage performance does one server get? |
+| **EBS volume** | Which block devices attach to the instance, and how large are they? |
+| **Subnet and security groups** | Where does the server live, and which traffic can reach it? |
+| **Instance role** | Which AWS APIs can code on the instance call? |
+| **User data and systemd** | How does a fresh instance start the app every time? |
+| **Launch template and Auto Scaling group** | How does the fleet replace, scale, and roll servers safely? |
+| **Logs and metrics** | Which evidence survives after an instance disappears? |
 
-This is the main idea for the whole article: EC2 gives control, and control creates operating work. We keep that work under control by making every instance replaceable, private, observable, and launched from a recipe. Every section adds one part of that recipe.
+The rest of the article builds those pieces in the order a team usually meets them. First the server shape, then access, then boot, then replacement, then operations.
 
-## What Is EC2
-<!-- section-summary: EC2 is AWS virtual-machine compute, where AWS runs the physical platform and your team runs the guest operating system and application process. -->
+![The runtime stack shows the layers a team owns when it chooses a virtual server: network, instance, operating system, role, boot script, and app process](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers/ec2-runtime-stack.png)
 
-An **EC2 instance** is a virtual server in the AWS cloud. AWS runs the data center, physical host, network hardware, storage platform, and virtualization layer. Your team chooses the operating system image, virtual hardware size, subnet, firewall rules, attached disks, host packages, application process, and monitoring agents.
+*The runtime stack shows the layers a team owns when it chooses a virtual server: network, instance, operating system, role, boot script, and app process.*
 
-That split matters because EC2 gives more control than managed runtimes like Lambda or Fargate. On EC2, the team can install Linux packages, tune kernel settings, run a process manager, attach block storage, place custom agents on the host, and inspect OS logs. The same freedom also means the team owns OS patching, disk pressure, log shipping, process crashes, SSH or Session Manager access, and cleanup of old instances.
 
-For the orders API, EC2 fits because the PDF engine ships as a native Linux package and needs fonts installed at the OS level. The monitoring team also requires an agent that reads host metrics and local log files. Those are normal server tasks, so a virtual machine gives the team the right boundary.
+## AMIs, Instance Types, and Volumes
+<!-- section-summary: AMIs, instance types, and EBS volumes define what the server starts with and how much capacity it has. -->
 
-The boundary has two sides. AWS operates the platform below the instance, while the application team owns the guest operating system and service runtime above it.
+An **Amazon Machine Image**, usually called an **AMI**, is the starting disk image for an EC2 instance. It includes the operating system and any baked-in software. A team might build a base AMI with Ubuntu, security hardening, CloudWatch Agent, SSM Agent, company CA certificates, and the PDF package required by `orders-api`.
 
-```mermaid
-flowchart TB
-    AWS[AWS operates physical hosts, power, networking, storage platform, and virtualization]:::platform
-    EC2[EC2 instance]:::compute
-    OS[Your team operates the guest OS, packages, users, patches, agents, and disks]:::team
-    App[Your team operates orders-api, systemd, logs, metrics, secrets access, and deploys]:::team
+An **instance type** chooses the virtual hardware shape. A small burstable instance can support a test environment. A production API might use a general-purpose instance family such as `m7i` or a memory-focused family if the process keeps large caches. The instance type affects CPU, memory, network throughput, and sometimes EBS performance.
 
-    AWS --> EC2
-    EC2 --> OS
-    OS --> App
+Most EC2 instances use **Amazon EBS** for block storage. The root EBS volume holds the operating system and app files. Extra EBS volumes can hold data, but production business data often belongs in a managed service such as RDS, DynamoDB, S3, or EFS so replacement instances do not carry unique state.
 
-    classDef platform fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef team fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-```
-
-EC2 often appears in production for workloads that need host control, stable server processes, licensed software, background workers, special networking, or a migration path from an existing virtual machine. A team might later move the app to ECS, EKS, or Lambda after packaging and operating needs change. For now, the orders team has chosen a server, so the next question is what kind of server AWS should create.
-
-## AMIs, Instance Types, and Storage
-<!-- section-summary: AMIs define the boot image, instance types define the virtual hardware, and storage choices decide what survives instance replacement. -->
-
-An **Amazon Machine Image**, usually called an **AMI**, is the boot template for an EC2 instance. It contains the operating system and any software baked into the image. For example, the orders team might build an AMI named `orders-api-2026-06-13` with Amazon Linux, the PDF engine, the CloudWatch agent package, company CA certificates, and baseline security settings already installed.
-
-An **instance type** is the virtual hardware shape. It controls the CPU, memory, network performance, storage performance, processor family, and sometimes local instance storage. A `t4g.small` can work for a low-traffic development API, while an `m7i.large` or `c7g.large` might fit a busier production service after the team measures CPU and memory under real traffic.
-
-The AMI and instance type answer different questions. The storage choices then decide which files belong to the replaceable server and which files need a durable home.
-
-| Choice | What it answers | Orders API example |
-|---|---|---|
-| **AMI** | What operating system and baseline software boot? | `ami-0abc...` with Amazon Linux, PDF packages, agents, and hardening. |
-| **Instance type** | How much virtual hardware does the guest receive? | `m7i.large` for steady CPU and memory after load testing. |
-| **Root EBS volume** | Where does the OS disk live? | A `gp3` root volume sized for OS, packages, and temporary install files. |
-| **Data volume** | Where does local application data live? | A separate EBS volume only for workloads that truly need host-attached state. |
-| **Instance store** | What temporary local disk exists on some instance families? | Scratch space for cache files that can disappear during stop, termination, or host replacement. |
-
-**Amazon EBS** gives EC2 persistent block storage. A block volume behaves like a disk attached to the instance, and it lives in one Availability Zone. The root EBS volume usually contains the operating system. Extra EBS volumes can store application data, but a web API fleet usually keeps durable data in regional services such as RDS, DynamoDB, S3, or EFS so any one instance can disappear.
-
-For a replaceable EC2 service, the team treats the AMI as a versioned baseline and the instance as temporary capacity. If someone patches a package by hand on one running server, that change only lives on that one server. The next instance launched by Auto Scaling still boots from the AMI and user data recipe, so production practice pushes package changes into the next AMI or bootstrap version.
-
-Teams usually build AMIs with tools such as EC2 Image Builder, Packer, or a CI pipeline that runs hardening and smoke tests before publishing the image ID. The important habit is versioning the image and recording which app release expects it. For the orders API, the deployment record might say: app release `2026.06.13.4` runs on AMI `orders-api-2026-06-13`, with launch template version `12`.
-
-An operator can inspect the current server shape with the AWS CLI. This check is useful during both reviews and incidents because it shows the real instance AWS is running now.
+During a review or incident, inspect the real instance before changing it:
 
 ```bash
 aws ec2 describe-instances \
-  --instance-ids i-orders-api-01 \
-  --query "Reservations[].Instances[].{State:State.Name,Type:InstanceType,Image:ImageId,Subnet:SubnetId,PrivateIp:PrivateIpAddress,Profile:IamInstanceProfile.Arn,SecurityGroups:SecurityGroups[].GroupId}" \
-  --output table
+  --instance-ids i-0123456789abcdef0 \
+  --region eu-west-2 \
+  --query 'Reservations[].Instances[].{State:State.Name,Type:InstanceType,Image:ImageId,Subnet:SubnetId,PrivateIp:PrivateIpAddress,Profile:IamInstanceProfile.Arn,SecurityGroups:SecurityGroups[].GroupId,Metadata:MetadataOptions.HttpTokens}'
 ```
 
-The value of that command is evidence rather than repair. It gives the team the current instance facts: which AMI booted, which instance type runs, where the instance sits, which private IP it has, and which instance profile gives it AWS permissions. Once the server shape is visible, the next question is who can reach it.
+Example output:
 
-## Network Placement and Access
-<!-- section-summary: A production EC2 app usually sits in private subnets, accepts traffic from the load balancer security group, and uses Session Manager for operator shell access. -->
-
-A **subnet** is a range of IP addresses inside a VPC, and each subnet lives in one Availability Zone. EC2 instances launch into subnets, so subnet placement controls the network neighborhood for the server. For the orders API, the application instances belong in private application subnets across at least two Availability Zones.
-
-A **security group** is a stateful virtual firewall attached to the instance network interface. Stateful means return traffic for an allowed connection can flow back without a separate reverse rule. The orders API instance security group should allow inbound TCP `3000` from the Application Load Balancer security group, because users reach the load balancer first.
-
-The public request path should stay narrow. Customers reach the ALB, and the ALB security group acts as the allowed source for the private application instances.
-
-```mermaid
-flowchart LR
-    Browser[Customer browser]:::other
-    ALB[Public Application Load Balancer<br/>HTTPS 443]:::edge
-    SGA[sg-orders-alb]:::edge
-    SGI[sg-orders-api]:::compute
-    EC2A[EC2 orders-api<br/>private subnet A]:::compute
-    EC2B[EC2 orders-api<br/>private subnet B]:::compute
-
-    Browser --> ALB
-    ALB --> SGA
-    SGA -->|source security group rule<br/>TCP 3000| SGI
-    SGI --> EC2A
-    SGI --> EC2B
-
-    classDef edge fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef other fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
+```json
+[
+  {
+    "State": "running",
+    "Type": "m7i.large",
+    "Image": "ami-0abc1234def567890",
+    "Subnet": "subnet-0a111111111111111",
+    "PrivateIp": "10.20.14.73",
+    "Profile": "arn:aws:iam::123456789012:instance-profile/prod-orders-api",
+    "SecurityGroups": ["sg-0ordersapi"],
+    "Metadata": "required"
+  }
+]
 ```
 
-That security group rule is more stable than allowing a list of load balancer IP addresses. Load balancer nodes can change, and EC2 instances can change, but the security group identity stays attached to the application role in the network. The rule is small enough to read directly:
+This output tells you which server recipe is actually running. `Image` is the AMI ID, so you can compare it with the approved release record. `Type` is the server size. `Subnet` and `PrivateIp` show placement. `Profile` shows the IAM wrapper attached to the instance. `SecurityGroups` shows the network boundary. `Metadata: "required"` means IMDSv2 is required for instance metadata calls, which is the safer setting for modern EC2 fleets.
+
+Teams often build AMIs with EC2 Image Builder, Packer, or a CI pipeline. A useful image pipeline installs packages, applies hardening, verifies agents, starts a smoke-test instance, and publishes the AMI ID. The deployment record should keep the AMI ID, launch template version, app version, and rollback version together because incidents often ask which of those changed.
+
+The AMI gives the server a consistent base. The next production question is who can reach that server and what the app can call after it starts.
+
+## Network Access and Instance Roles
+<!-- section-summary: Security groups and IAM instance roles decide who can reach the instance and what the code on the instance can call. -->
+
+An EC2 instance sits in a subnet inside a VPC. For a private web API, the usual path is an Application Load Balancer in public subnets and EC2 instances in private subnets. Users reach the load balancer over HTTPS. The load balancer reaches the instances on the application port. The instances reach private databases, AWS APIs, and logging endpoints through controlled outbound paths.
+
+A **security group** is a stateful firewall attached to the instance network interface. For `orders-api`, the instance security group should accept TCP port `3000` from the load balancer security group, rather than from the whole internet.
 
 ```bash
 aws ec2 authorize-security-group-ingress \
-  --group-id sg-orders-api \
+  --group-id sg-0ordersapi \
   --protocol tcp \
   --port 3000 \
-  --source-group sg-orders-alb
+  --source-group sg-0ordersalb \
+  --region eu-west-2
 ```
 
-Operator shell access needs a separate path from customer traffic. **AWS Systems Manager Session Manager** gives operators an interactive shell through AWS APIs without opening inbound SSH, running a bastion host, or managing SSH key pairs. The instance needs the SSM Agent, an instance role with Systems Manager permissions, and network egress to Systems Manager endpoints through NAT or VPC endpoints.
+Example output:
 
-The operator command looks simple because the access setup lives in IAM, SSM Agent, and network egress. The shell opens through Systems Manager instead of an inbound port on the instance.
-
-```bash
-aws ssm start-session --target i-orders-api-01
+```json
+{
+  "Return": true,
+  "SecurityGroupRules": [
+    {
+      "SecurityGroupRuleId": "sgr-0123ordersapi",
+      "GroupId": "sg-0ordersapi",
+      "IpProtocol": "tcp",
+      "FromPort": 3000,
+      "ToPort": 3000,
+      "ReferencedGroupInfo": {
+        "GroupId": "sg-0ordersalb"
+      }
+    }
+  ]
+}
 ```
 
-Behind that command, the local SSM Agent maintains an outbound control path to Systems Manager. IAM decides who can start a session, and Session Manager preferences can send session logs to CloudWatch Logs or S3. That gives the team an access path that fits audit and private networking better than public port `22`.
+`--group-id` is the instance security group receiving the inbound rule. `--protocol tcp` and `--port 3000` describe the application listener. `--source-group sg-0ordersalb` means the source must be the load balancer security group. The output rule confirms that the permission is security-group-to-security-group, which is much tighter than opening port `3000` to `0.0.0.0/0`.
 
-Network access now has a clean shape: customers reach the ALB, the ALB reaches private instances, and operators reach instances through Session Manager. The application also needs to call AWS APIs, and that brings us to instance roles.
+The app also needs AWS permissions. Use an **instance role** through an **instance profile** instead of putting access keys on disk. The instance profile attaches the IAM role to the instance, and the AWS SDK retrieves temporary credentials from the Instance Metadata Service.
 
-## Instance Roles, Metadata, and Secrets
-<!-- section-summary: An EC2 instance profile gives applications temporary AWS credentials through the metadata path, so servers can avoid stored access keys. -->
-
-An **IAM role** is an AWS identity that can receive temporary credentials. An **instance profile** is the wrapper EC2 uses to attach one IAM role to an instance. The practical result is that code running on the instance can call AWS services without a static access key stored in `/home/orders-app/.aws/credentials`, an environment variable, or a deployment script.
-
-For the orders API, the instance role might allow three narrow jobs: read the release artifact from one S3 prefix during boot, read one Secrets Manager secret at runtime, and write logs or metrics to the expected CloudWatch destinations. The role should avoid broad permissions such as `s3:*` on every bucket because a compromised instance would then receive the same broad access.
-
-A scoped policy shape might look like this. It gives the orders host access to the exact artifact, secret, and log destination the service needs.
+Here is a scoped permission policy for the `orders-api` instance role:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadOrdersReleaseArtifacts",
+      "Sid": "ReadRuntimeSecret",
       "Effect": "Allow",
-      "Action": [
-        "s3:GetObject"
-      ],
-      "Resource": "arn:aws:s3:::devpolaris-artifacts-prod/orders-api/*"
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:eu-west-2:123456789012:secret:prod/orders-api/runtime-*"
     },
     {
-      "Sid": "ReadOrdersRuntimeSecret",
+      "Sid": "WriteReceipts",
       "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/orders-api/runtime-*"
-    },
-    {
-      "Sid": "WriteOrdersLogs",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/ec2/orders-api:*"
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::prod-orders-receipts/receipts/*"
     }
   ]
 }
 ```
 
-The instance receives these temporary credentials through the **Instance Metadata Service**, or **IMDS**. IMDS is a link-local HTTP service reachable from inside the instance. Modern EC2 configurations should require **IMDSv2**, which adds a token request before metadata is returned and reduces the risk from common server-side request forgery paths.
+`Version` names the IAM policy language version. Each `Statement` grants one narrow job. `Sid` gives the statement a readable name for review. `Effect: "Allow"` grants the listed actions. `Action` names the AWS API calls. `Resource` limits those calls to one secret pattern and one S3 prefix. The app can read its runtime secret and write receipt files, while a stolen role session has a smaller blast radius than a broad account-wide policy.
 
-Applications usually get these credentials through the AWS SDK credential provider chain rather than direct IMDS calls. The SDK finds the role credentials, refreshes them, and signs AWS API requests. That means the Node.js code can call Secrets Manager with normal SDK code, while the instance role controls what that code can read.
+Network rules and IAM roles work together. The security group decides whether packets can reach the server. The instance role decides whether code on the server can call AWS APIs. Once those boundaries are in place, the next question is how a fresh server turns into a running application host.
 
-User data deserves special care here. User data is useful for boot instructions, and AWS documents that it can be viewed from the instance metadata path. For that reason, user data should contain IDs, paths, and release versions, while passwords, API tokens, and database URLs should live in a secret store or parameter store and be read with the instance role.
+## Booting the App with User Data and systemd
+<!-- section-summary: User data and systemd turn a newly launched EC2 instance into a repeatable application host. -->
 
-Now the instance can reach AWS safely. The next problem is turning a fresh boot into a working application server without someone typing commands by hand.
-
-## First Boot with User Data
-<!-- section-summary: User data gives a new EC2 instance a small first-boot handoff that installs the release and prepares the service without manual shell work. -->
-
-**User data** is launch-time input that EC2 passes to the instance. On Linux, teams commonly provide a shell script or cloud-init configuration. AWS documents a raw user data limit of 16 KB before base64 encoding, and default Linux user data behavior runs during the first boot cycle after launch.
-
-That size and lifecycle tell us how to use it. User data works well as a small handoff: install a few packages, create a service user, fetch a versioned artifact, place files, write a systemd unit, and start the service. Large configuration systems usually belong in an AMI build, a configuration management tool, or a bootstrap script downloaded from a trusted artifact location.
-
-Here is a realistic first-boot script for the orders API. The script stays short enough to review, and the bigger software baseline belongs in the AMI.
+When an EC2 instance starts, **user data** can run a bootstrap script. Use it for small, deterministic startup work: fetch the release artifact, unpack it, write a config file, and start the app. Put slow baseline work such as installing large package sets into the AMI so replacement instances do not depend on a long public-internet install during every boot.
 
 ```bash
 #!/bin/bash
 set -euo pipefail
-
-dnf update -y
-dnf install -y nodejs amazon-cloudwatch-agent
-
-id orders-app >/dev/null 2>&1 || useradd --system --home-dir /opt/orders-api --shell /sbin/nologin orders-app
-
-install -d -o orders-app -g orders-app /opt/orders-api
-install -d -o orders-app -g orders-app /var/log/orders-api
-install -d -m 0755 /etc/orders-api
-
-aws s3 cp s3://devpolaris-artifacts-prod/orders-api/releases/2026.06.13.4.tgz /tmp/orders-api.tgz
-tar -xzf /tmp/orders-api.tgz -C /opt/orders-api --strip-components=1
-chown -R orders-app:orders-app /opt/orders-api
-
-cat >/etc/orders-api/runtime.env <<'ENV'
-PORT=3000
-NODE_ENV=production
-CONFIG_SECRET_ID=prod/orders-api/runtime
-ENV
-chown root:orders-app /etc/orders-api/runtime.env
-chmod 0640 /etc/orders-api/runtime.env
-
-cat >/etc/systemd/system/orders-api.service <<'UNIT'
-[Unit]
-Description=DevPolaris Orders API
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=orders-app
-Group=orders-app
-WorkingDirectory=/opt/orders-api
-EnvironmentFile=/etc/orders-api/runtime.env
-ExecStart=/usr/bin/node server.js
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/orders-api
-StandardOutput=append:/var/log/orders-api/stdout.log
-StandardError=append:/var/log/orders-api/stderr.log
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
-systemctl enable --now orders-api
+install -d -o orders -g orders /opt/orders-api/releases/2026-06-24
+aws s3 cp s3://prod-orders-artifacts/orders-api/2026-06-24/orders-api.tar.gz /tmp/orders-api.tar.gz
+tar -xzf /tmp/orders-api.tar.gz -C /opt/orders-api/releases/2026-06-24
+ln -sfn /opt/orders-api/releases/2026-06-24 /opt/orders-api/current
+systemctl enable orders-api
+systemctl restart orders-api
 ```
 
-Several production habits are hiding in this small script. The app runs under the dedicated `orders-app` user instead of `root`. The release comes from a versioned S3 path, so the team can tell which code a new instance downloaded. The script stores only a secret ID instead of the secret value, and the application can use its instance role to read the secret at runtime.
+Here is what each line does:
 
-The script also creates the systemd unit before enabling the service. Some teams bake the unit into the AMI and let user data only choose the release version. Both patterns can work, but every new instance needs a repeatable path from boot to a healthy `/health` response.
+| Line | Why it matters |
+|---|---|
+| `#!/bin/bash` | Runs the script with Bash. |
+| `set -euo pipefail` | Stops the script when a command fails, an unset variable is used, or a pipeline fails. |
+| `install -d ...` | Creates the release directory with the app user as owner. |
+| `aws s3 cp ...` | Downloads the versioned release artifact from S3 using the instance role. |
+| `tar -xzf ...` | Unpacks the release into the versioned directory. |
+| `ln -sfn ... current` | Points the stable `current` path at this release. |
+| `systemctl enable ...` | Makes the app service start again after reboot. |
+| `systemctl restart ...` | Starts this release through the same process manager used later. |
 
-Boot failures need evidence. On Amazon Linux and many cloud-init based images, the team usually checks user data output, the service status, and the local health endpoint through Session Manager. These checks separate a failed boot script from a failed application process:
-
-```bash
-sudo tail -n 100 /var/log/cloud-init-output.log
-sudo systemctl status orders-api --no-pager
-curl -fsS http://localhost:3000/health
-```
-
-User data got the files onto the box. The application now needs a supervisor so it survives restarts, crashes, and normal OS boot.
-
-## Keeping the Process Alive with systemd
-<!-- section-summary: systemd gives the application a service contract with a user, working directory, restart policy, logs, and boot integration. -->
-
-**systemd** is the service manager used by many Linux distributions. It starts services during boot, tracks process state, restarts failed processes when configured, and gives operators a standard command surface through `systemctl` and `journalctl`. For EC2, systemd turns the app from "a command someone ran" into "a service the operating system owns."
-
-Here is the service unit from the previous section in its own view. The unit file is the contract between the operating system and the application process.
+`systemd` is the Linux service manager that keeps the app process supervised:
 
 ```ini
 [Unit]
-Description=DevPolaris Orders API
+Description=Orders API
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
-User=orders-app
-Group=orders-app
-WorkingDirectory=/opt/orders-api
+User=orders
+WorkingDirectory=/opt/orders-api/current
 EnvironmentFile=/etc/orders-api/runtime.env
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/orders-api
-StandardOutput=append:/var/log/orders-api/stdout.log
-StandardError=append:/var/log/orders-api/stderr.log
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Each line answers an operating question. `User=orders-app` limits the process to a dedicated Linux user. `WorkingDirectory=/opt/orders-api` places the process in the release directory. `EnvironmentFile=/etc/orders-api/runtime.env` keeps small runtime settings outside the code bundle. `Restart=on-failure` tells systemd to start the service again after a failed exit. `NoNewPrivileges=true` and `ProtectSystem=strict` add useful hardening for many simple services.
+The `[Unit]` section describes startup ordering. `After=network-online.target` and `Wants=network-online.target` ask Linux to wait for network readiness before starting the app. The `[Service]` section describes the process. `User=orders` avoids running the app as root. `WorkingDirectory` points at the current release. `EnvironmentFile` loads runtime settings such as `DATABASE_URL`. `ExecStart` is the app command. `Restart=on-failure` restarts the process after a crash, and `RestartSec=5` waits five seconds before trying again. The `[Install]` section lets `systemctl enable` attach the service to normal multi-user boot.
 
-The local checks are part of the daily operating loop. They are the quick instance-side checks an operator can run after opening a Session Manager shell.
+When a fresh instance fails to serve traffic, check bootstrap logs and service state:
 
 ```bash
-sudo systemctl is-active orders-api
-sudo journalctl -u orders-api --since "15 minutes ago" --no-pager
-sudo systemctl restart orders-api
+sudo tail -n 80 /var/log/cloud-init-output.log
+sudo systemctl status orders-api --no-pager
+sudo journalctl -u orders-api -n 120 --no-pager
 ```
 
-Those commands help during a live incident, but durable observability should leave the instance. Local log files disappear with terminated instances unless an agent ships them out. A typical EC2 service installs the unified CloudWatch agent and sends `/var/log/orders-api/*.log` to a log group such as `/aws/ec2/orders-api`.
+Example `systemctl` output:
 
-A small CloudWatch agent log collection shape looks like this:
-
-```json
-{
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/log/orders-api/stdout.log",
-            "log_group_name": "/aws/ec2/orders-api",
-            "log_stream_name": "{instance_id}/stdout"
-          },
-          {
-            "file_path": "/var/log/orders-api/stderr.log",
-            "log_group_name": "/aws/ec2/orders-api",
-            "log_stream_name": "{instance_id}/stderr"
-          }
-        ]
-      }
-    }
-  }
-}
+```bash
+orders-api.service - Orders API
+   Loaded: loaded (/etc/systemd/system/orders-api.service; enabled)
+   Active: failed (Result: exit-code) since Wed 2026-06-24 10:17:42 UTC
+  Process: 1842 ExecStart=/usr/bin/node server.js (code=exited, status=1/FAILURE)
+ Main PID: 1842 (code=exited, status=1/FAILURE)
 ```
 
-Now the single instance can boot, run, restart, and emit evidence. Production still has a bigger problem: one healthy instance is still one failure boundary.
+`cloud-init-output.log` shows user data activity. `systemctl status` shows whether the service is active, failed, or restarting. `journalctl` shows the app logs and stack traces from the service. In this sample, the process exited with status `1`, so the next useful evidence is the app log around that timestamp.
+
+Bootstrapping gets one server ready. Production needs the same process across several servers so replacement and deployment become normal operations.
 
 ## From One Instance to a Fleet
-<!-- section-summary: Launch templates, Auto Scaling groups, target groups, and load balancer health checks turn one repeatable server into replaceable capacity. -->
+<!-- section-summary: Load balancers and Auto Scaling groups make EC2 instances replaceable instead of precious. -->
 
-A **launch template** stores the EC2 launch recipe: AMI ID, instance type, security groups, instance profile, block devices, user data, and tags. It is the formal version of the choices we have been making by hand. Launch templates are versioned, which gives the team a clean deployment handle.
+One instance can teach the runtime shape, but production traffic needs replacement and Availability Zone spread. The common EC2 web pattern uses an Application Load Balancer, a target group, a launch template, and an Auto Scaling group across at least two private subnets.
 
-An **Auto Scaling group**, often shortened to **ASG**, owns a group of EC2 instances. It has a minimum size, desired capacity, maximum size, subnet list, launch template version, and health check settings. If an instance fails health checks, EC2 Auto Scaling can replace it with a new instance from the group's current launch template settings.
+A **launch template** records the instance recipe: AMI ID, instance type, security groups, IAM instance profile, user data, EBS settings, and tags. An **Auto Scaling group** uses that template to keep a desired number of instances running. A **target group** connects the load balancer to the instances and runs health checks such as `GET /health`.
 
-An **Application Load Balancer**, or **ALB**, gives users one stable HTTP or HTTPS entry point. A **target group** is the backend pool attached to the ALB listener rule. For EC2 instance targets, the target group can route traffic to registered instance IDs on port `3000`, and the load balancer sends requests only to targets that pass health checks.
+The service now has two health layers. EC2 status checks tell you whether the virtual server and host path look healthy. Load balancer target health tells you whether the application endpoint is accepting traffic. Both matter because a server can pass EC2 status checks while the app process fails.
 
-The orders API fleet connects the recipe to capacity and traffic. The launch template feeds the ASG, while the ALB and target group decide which healthy instances receive requests.
-
-```mermaid
-flowchart TB
-    LT[Launch Template<br/>AMI, type, role, SG, user data]:::recipe
-    ASG[Auto Scaling Group<br/>min 2 desired 2 max 6]:::compute
-    A[EC2 instance<br/>private subnet A]:::compute
-    B[EC2 instance<br/>private subnet B]:::compute
-    ALB[Application Load Balancer<br/>HTTPS 443]:::edge
-    TG[Target Group<br/>HTTP 3000 /health]:::edge
-    Policy[Scaling policy<br/>CPU or request count]:::ops
-    Refresh[Instance refresh<br/>rolling replacement]:::ops
-
-    LT --> ASG
-    ASG --> A
-    ASG --> B
-    ALB --> TG
-    TG --> A
-    TG --> B
-    Policy --> ASG
-    Refresh --> ASG
-
-    classDef recipe fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef edge fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
-    classDef ops fill:#203a3a,stroke:#00d1b2,stroke-width:2px,color:#fff
-```
-
-The ASG capacity numbers tell the team how many instances should exist. **Minimum size** is the floor. **Desired capacity** is the current target. **Maximum size** is the ceiling that protects cost, database connection limits, and downstream services. For a small production service, `min=2`, `desired=2`, and `max=6` gives the app two steady instances across two private subnets and room to scale during traffic.
-
-The health check deserves care because it decides which instances receive traffic and which instances Auto Scaling can replace. A good `/health` endpoint checks the real things needed to serve a basic request, without doing expensive work. For the orders API, it might check that the Node.js process can answer, required config loaded, and the app can reach a lightweight dependency path.
-
-Many teams manage this with Terraform, CDK, or CloudFormation instead of hand-running CLI commands. The exact tool can change, but the shape stays the same. In Terraform, a simplified launch template plus ASG might look like this:
-
-```hcl
-resource "aws_launch_template" "orders_api" {
-  name_prefix   = "orders-api-"
-  image_id      = var.orders_api_ami_id
-  instance_type = "m7i.large"
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.orders_api.name
-  }
-
-  vpc_security_group_ids = [aws_security_group.orders_api.id]
-  user_data              = base64encode(templatefile("${path.module}/user-data.sh", {
-    release_version = var.orders_api_release
-  }))
-}
-
-resource "aws_autoscaling_group" "orders_api" {
-  name                = "orders-api"
-  min_size            = 2
-  desired_capacity    = 2
-  max_size            = 6
-  vpc_zone_identifier = [aws_subnet.private_a.id, aws_subnet.private_b.id]
-  target_group_arns   = [aws_lb_target_group.orders_api.arn]
-  health_check_type   = "ELB"
-
-  launch_template {
-    id      = aws_launch_template.orders_api.id
-    version = "$Latest"
-  }
-}
-```
-
-This is where EC2 turns from one hand-built server into a runtime platform. The launch template explains how to build one instance, the ASG explains how many to keep, and the ALB target group explains which instances can receive traffic.
-
-## Deployments, Rollback, and Patching
-<!-- section-summary: EC2 production work usually deploys by creating a new image or launch template version, then replacing instances under health checks. -->
-
-A **deployment** for an EC2 fleet should change the recipe first, then replace capacity under health checks. The clean path is usually a new AMI, a new release artifact, or a new launch template version. After that, an **instance refresh** rolls the new configuration through the ASG.
-
-For the orders API, release `2026.06.13.4` might pass CI, publish an S3 artifact, build AMI `orders-api-2026-06-13`, and create launch template version `12`. The team starts an instance refresh so Auto Scaling launches new instances, waits for health checks and warmup, and then terminates old instances in batches.
-
-A CLI deployment shape can look like this. In a real pipeline, this command usually runs after CI publishes the artifact and records the launch template version.
-
-```bash
-aws autoscaling start-instance-refresh \
-  --auto-scaling-group-name orders-api \
-  --desired-configuration '{"LaunchTemplate":{"LaunchTemplateName":"orders-api","Version":"12"}}' \
-  --preferences '{"MinHealthyPercentage":100,"InstanceWarmup":180,"CheckpointPercentages":[50,100],"CheckpointDelay":300}'
-```
-
-The settings matter. `MinHealthyPercentage=100` tells Auto Scaling to keep the desired healthy capacity during replacement. `InstanceWarmup=180` gives the app time to boot, load config, and pass health checks before the next batch. Checkpoints give the team a pause to inspect logs, target health, and error rates before replacement continues.
-
-**Rollback** uses the same machinery. If version `12` causes errors, the team points the ASG back to launch template version `11` and starts another instance refresh. The rollback works because the previous recipe still exists and the app can run on fresh instances created from that recipe.
-
-```bash
-aws autoscaling start-instance-refresh \
-  --auto-scaling-group-name orders-api \
-  --desired-configuration '{"LaunchTemplate":{"LaunchTemplateName":"orders-api","Version":"11"}}' \
-  --preferences '{"MinHealthyPercentage":100,"InstanceWarmup":180}'
-```
-
-Patching follows the same repeatable idea. For many EC2 web fleets, the strongest pattern is **build a patched AMI, create a new launch template version, and refresh the group**. That gives the team a tested image and removes the need to nurse old servers forever.
-
-Some EC2 workloads live longer because they carry state, licenses, or vendor constraints. Those fleets need a patching program. AWS Systems Manager Patch Manager can scan and install approved OS updates on managed nodes, Amazon Inspector can surface package vulnerabilities and unintended network exposure, and maintenance windows can schedule the work. Even then, the team should keep a replacement path tested because patching a running server still leaves room for drift.
-
-Disk hygiene belongs in this same operating loop. Root volumes need enough space for OS updates, logs before shipment, temporary artifacts, and package caches. Application data that matters should live outside the replaceable instance, and EBS snapshots or database backups should have retention rules. A full root disk can stop logs, break package updates, and crash the app in a way that looks like a code bug until someone checks disk usage.
-
-## Operating Evidence During an Incident
-<!-- section-summary: EC2 incidents make more sense when the team checks the load balancer, Auto Scaling group, instance status, OS service, logs, disk, and IAM path in order. -->
-
-An EC2 incident usually has several possible failure layers. The customer sees `502`, but the cause might be a bad ALB target health check, a missing security group rule, a failed user data script, a crashed systemd service, a full disk, an expired secret, a broken IAM permission, or an unhealthy underlying instance. The team needs evidence from each layer instead of guessing.
-
-For the orders API, a calm investigation can move from the outside request path toward the process:
-
-| Layer | What the team checks | Useful signal |
-|---|---|---|
-| **ALB target group** | Target health and reason codes | Is the load balancer sending traffic to this instance? |
-| **Auto Scaling group** | Desired capacity, lifecycle state, recent activities | Did the ASG launch, replace, or fail to launch capacity? |
-| **EC2 instance status** | Instance state, system status, instance status | Does AWS see a host or guest-level status problem? |
-| **Network rules** | Security group source rule from ALB to API | Can the ALB reach TCP `3000` on the instance? |
-| **Boot automation** | `cloud-init-output.log` and user data output | Did the release install and service unit get created? |
-| **Process supervisor** | `systemctl` and `journalctl` | Is `orders-api.service` active, restarting, or failing? |
-| **Local resources** | Disk, memory, CPU, open files | Did the guest OS run out of something? |
-| **AWS identity** | Instance profile and app errors | Can the app read S3, Secrets Manager, and CloudWatch as expected? |
-
-The AWS side gives fast clues. These commands show whether the load balancer, Auto Scaling group, and EC2 control plane agree that capacity is healthy.
+Inspect target health like this:
 
 ```bash
 aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/orders-api/6d0ecf831eec9f09
-
-aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names orders-api \
-  --query "AutoScalingGroups[].{Desired:DesiredCapacity,Min:MinSize,Max:MaxSize,Instances:Instances[].{Id:InstanceId,State:LifecycleState,Health:HealthStatus}}"
-
-aws ec2 describe-instance-status \
-  --instance-ids i-orders-api-01 \
-  --include-all-instances
+  --target-group-arn "$TG_ARN" \
+  --region eu-west-2 \
+  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
 ```
 
-The instance side fills in the operating system story. These checks show whether the process, logs, disk, memory, and local health endpoint agree with the AWS-side signals.
+Example output:
+
+```json
+[
+  {
+    "Target": "i-0123456789abcdef0",
+    "Port": 3000,
+    "State": "healthy",
+    "Reason": null,
+    "Description": null
+  },
+  {
+    "Target": "i-0fedcba9876543210",
+    "Port": 3000,
+    "State": "unhealthy",
+    "Reason": "Target.ResponseCodeMismatch",
+    "Description": "Health checks failed with these codes: [500]"
+  }
+]
+```
+
+The first target is healthy and can receive normal traffic. The second target returns `500` from the health check path, so the load balancer stops using it. This output points the investigation toward the application process, config, or dependency health on that instance, rather than the whole load balancer.
+
+Fleet design also affects shutdown. When Auto Scaling terminates an instance, the load balancer should drain existing requests before the instance disappears. The app should handle termination signals by closing the listener, finishing in-flight requests for a short window, and then exiting.
+
+Now the servers are replaceable. That gives the team a safer deployment and patching path.
+
+![The fleet view shows how a load balancer, health checks, launch template, desired capacity, and replacement instances work together](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers/ec2-fleet-autoscaling.png)
+
+*The fleet view shows how a load balancer, health checks, launch template, desired capacity, and replacement instances work together.*
+
+
+## Deploying, Patching, and Rolling Back
+<!-- section-summary: EC2 releases usually move through launch template versions, AMI updates, instance refresh, and rollback to a previous recipe. -->
+
+EC2 deployments work best when the release path changes the recipe and replaces instances. A team can bake the app into a new AMI, or it can keep the base AMI stable and use user data or a deployment agent to fetch a versioned app artifact. Both patterns can work. The important rule is that the new server can launch from scratch without a human logging in.
+
+An Auto Scaling **instance refresh** replaces instances in controlled waves. The group launches new instances from the current launch template, waits for warmup and health checks, then terminates old instances.
+
+```bash
+aws autoscaling start-instance-refresh \
+  --auto-scaling-group-name prod-orders-api \
+  --region eu-west-2 \
+  --preferences '{"MinHealthyPercentage":90,"InstanceWarmup":120}'
+```
+
+Example output:
+
+```json
+{
+  "InstanceRefreshId": "8b4a7f9e-3e2a-4f62-a8d8-11d3d8d1c931"
+}
+```
+
+`MinHealthyPercentage: 90` tells Auto Scaling to keep at least 90 percent of desired capacity healthy during the refresh. `InstanceWarmup: 120` gives each new instance 120 seconds to boot, start the app, and pass health checks before the rollout continues. The output ID lets you track this refresh later.
+
+Track progress with:
+
+```bash
+aws autoscaling describe-instance-refreshes \
+  --auto-scaling-group-name prod-orders-api \
+  --region eu-west-2 \
+  --query 'InstanceRefreshes[0].{Status:Status,PercentageComplete:PercentageComplete,StatusReason:StatusReason}'
+```
+
+Example output:
+
+```json
+{
+  "Status": "InProgress",
+  "PercentageComplete": 40,
+  "StatusReason": "Waiting for instances to warm up before continuing."
+}
+```
+
+`Status` shows the rollout state. `PercentageComplete` shows how far the replacement has moved. `StatusReason` gives the first useful sentence when the refresh pauses. If new instances fail health checks, pause the rollout, inspect target health and bootstrap logs, then roll back the launch template or app artifact version.
+
+Rollback should use the same replacement path. If launch template version `14` caused the issue and version `13` was healthy, update the Auto Scaling group back to version `13` and start a new refresh:
+
+```bash
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name prod-orders-api \
+  --launch-template LaunchTemplateName=orders-api,Version=13 \
+  --region eu-west-2
+```
+
+This command changes the recipe the group uses for new instances. Running instances keep their current recipe until replacement, so follow it with an instance refresh when the rollback needs to roll through the fleet. The deployment record should state which AMI, launch template version, and app artifact version were restored.
+
+Patching follows the same discipline. Bake a patched AMI or apply a managed patch workflow, then prove that fresh instances can enter service. A patch that exists only on one old instance will vanish during replacement and will create drift before the next incident.
+
+## An EC2 Incident Path
+<!-- section-summary: EC2 debugging follows load balancer health, instance health, process logs, bootstrap history, scaling events, and recent AWS changes. -->
+
+At 10:20, users receive `502` responses from the load balancer. Start with the traffic path. Target health tells you whether every instance is bad or only part of the fleet is reduced.
+
+```bash
+aws elbv2 describe-target-health \
+  --target-group-arn "$TG_ARN" \
+  --region eu-west-2 \
+  --query 'TargetHealthDescriptions[].{Target:Target.Id,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
+```
+
+If one target is unhealthy and the rest are healthy, the service may still be serving users with less capacity. If every target is unhealthy, the incident likely involves a shared change: bad release, security group update, health check path, database outage, or expired secret.
+
+Next check EC2 status for one failing instance:
+
+```bash
+aws ec2 describe-instance-status \
+  --instance-ids i-0fedcba9876543210 \
+  --include-all-instances \
+  --region eu-west-2 \
+  --query 'InstanceStatuses[].{Instance:InstanceId,State:InstanceState.Name,System:SystemStatus.Status,InstanceCheck:InstanceStatus.Status}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Instance": "i-0fedcba9876543210",
+    "State": "running",
+    "System": "ok",
+    "InstanceCheck": "ok"
+  }
+]
+```
+
+`System` covers the AWS host and network path. `InstanceCheck` covers the guest operating system. Both are `ok` in this sample, so the failed load balancer health check probably comes from the app process, port, health endpoint, local disk, memory, or config.
+
+Use Session Manager or another approved access path to inspect the instance:
 
 ```bash
 sudo systemctl status orders-api --no-pager
-sudo journalctl -u orders-api --since "30 minutes ago" --no-pager
+sudo journalctl -u orders-api -n 120 --no-pager
 df -h
 free -m
-curl -fsS http://localhost:3000/health
 ```
 
-A common beginner trap is stopping at the first green check. EC2 status checks can pass while the app fails. The systemd service can run while the ALB health check fails because the security group blocks traffic. The ALB target can report unhealthy while the local app works because `/health` depends on a downstream secret or database check.
+Example log lines:
 
-Real incident work connects those signals. If local `curl` works and target health fails, the team looks at security groups, target group port, and health check path. If user data failed, the team fixes the launch recipe and replaces the instance. If only one instance fails, the team can terminate it and let Auto Scaling launch a replacement after evidence collection.
-
-## Putting It All Together
-<!-- section-summary: A healthy EC2 design treats each server as replaceable capacity launched from a recipe and operated through evidence. -->
-
-The orders API started as one server-shaped workload because it needed host-level control. That choice gave the team a guest OS, packages, disks, a process supervisor, host agents, and a private network placement. AWS handled the physical platform, but the team accepted responsibility for everything inside the instance.
-
-The production design connects the pieces. Each box is a place where the team can inspect, deploy, restrict access, or roll back.
-
-```mermaid
-flowchart TB
-    AMI[Versioned AMI<br/>OS, packages, agents]:::recipe
-    LT[Launch template<br/>AMI, type, role, SG, user data]:::recipe
-    ASG[Auto Scaling group<br/>private subnets across AZs]:::compute
-    ALB[Application Load Balancer<br/>public HTTPS entry]:::edge
-    TG[Target group<br/>health checks on /health]:::edge
-    Role[Instance profile role<br/>S3, Secrets Manager, CloudWatch]:::security
-    SSM[Session Manager<br/>operator access path]:::security
-    CW[CloudWatch Logs and metrics<br/>durable evidence]:::ops
-    Refresh[Instance refresh<br/>deploy and rollback]:::ops
-
-    AMI --> LT
-    LT --> ASG
-    ASG --> TG
-    ALB --> TG
-    Role --> ASG
-    SSM --> ASG
-    ASG --> CW
-    Refresh --> ASG
-
-    classDef recipe fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef edge fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
-    classDef security fill:#3a2435,stroke:#ff5a9e,stroke-width:2px,color:#fff
-    classDef ops fill:#203a3a,stroke:#00d1b2,stroke-width:2px,color:#fff
+```bash
+Jun 24 10:16:08 ip-10-20-14-81 node[2214]: Error: DATABASE_URL is missing
+Jun 24 10:16:08 ip-10-20-14-81 systemd[1]: orders-api.service: Main process exited, status=1/FAILURE
+Jun 24 10:16:13 ip-10-20-14-81 systemd[1]: orders-api.service: Scheduled restart job, restart counter is at 5.
 ```
 
-The AMI gives the baseline. The launch template records the server recipe. The Auto Scaling group keeps enough copies alive. The target group and ALB control customer traffic. The instance profile gives AWS access without static keys. Session Manager gives shell access without public SSH. CloudWatch, Inspector, Patch Manager, and ASG activity history give the team evidence for operations.
+These lines explain the target health failure. The server is alive, but the app cannot start because its database setting is missing. `df -h` and `free -m` still matter because disk and memory pressure can create similar restart loops.
 
-That is the practical EC2 skill: treating a server as replaceable capacity managed from versioned inputs. The team can still open a shell during an incident, but the fix should flow back into the AMI, user data, launch template, policy, or service unit. The next replacement instance should include the lesson automatically.
+Then check recent fleet activity:
 
-## What's Next
+```bash
+aws autoscaling describe-scaling-activities \
+  --auto-scaling-group-name prod-orders-api \
+  --region eu-west-2 \
+  --max-items 10
+```
 
-EC2 gives maximum host control, and that control carries ongoing server work. Many application teams eventually want a smaller host ownership surface while still running long-lived web services.
+Example output:
 
-The next article moves to **ECS and Fargate**. It keeps the long-running service shape, but the deployment unit changes from a whole virtual machine to a container task, and AWS takes more of the server maintenance out of the team's daily work.
+```json
+{
+  "Activities": [
+    {
+      "StartTime": "2026-06-24T10:11:42.128000+00:00",
+      "StatusCode": "Successful",
+      "Cause": "At 2026-06-24T10:10:58Z an instance was taken out of service in response to an ELB health check failure.",
+      "Description": "Terminating EC2 instance: i-0fedcba9876543210"
+    },
+    {
+      "StartTime": "2026-06-24T10:12:10.419000+00:00",
+      "StatusCode": "Successful",
+      "Cause": "Launching a new EC2 instance. Status Reason: New instance started.",
+      "Description": "Launching EC2 instance: i-0123replacement"
+    }
+  ]
+}
+```
 
----
+Scaling activity shows launches, terminations, health-check replacements, and failed lifecycle events. In this output, Auto Scaling replaced one instance because the load balancer marked it unhealthy. If several new instances launched minutes before the outage, compare their launch template version and user data path with the last known-good version.
 
-**References**
+CloudTrail helps connect human or automation changes to the incident window:
 
-- [Amazon EC2 instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Instances.html) - Defines EC2 instances as virtual servers and explains instance control, lifecycle, billing, and scaling options.
-- [Launch an Amazon EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html) - Documents launching from AMIs, subnet placement, instance profiles, and Auto Scaling as the automation path.
-- [Amazon EC2 instance types](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html) - Explains how instance types define compute, memory, storage, networking capacity, families, and processor choices.
-- [Run commands when you launch an EC2 instance with user data](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html) - Documents user data behavior, size limits, root execution, and first-boot defaults.
-- [IAM roles for Amazon EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html) - Explains instance profiles, temporary credentials, and least-privilege permissions for applications on EC2.
-- [AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html) - Describes Session Manager access without inbound ports, bastion hosts, or SSH key management.
-- [Amazon EC2 security groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-security-groups.html) - Defines security groups as stateful virtual firewalls for EC2 instances.
-- [Amazon EC2 launch templates](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-templates.html) - Documents storing AMI IDs, instance types, network settings, and other launch parameters in templates.
-- [Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html) - Explains Auto Scaling groups, min desired max capacity, health management, and scaling policies.
-- [Auto Scaling health checks](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html) - Documents how Auto Scaling monitors and replaces unhealthy instances.
-- [Auto Scaling instance refresh](https://docs.aws.amazon.com/autoscaling/ec2/userguide/instance-refresh-overview.html) - Explains rolling replacement, launch template versions, warmup, checkpoints, and rollback options.
-- [Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html) - Documents target groups, target types, health checks, and routing to healthy targets.
-- [CloudWatch agent configuration](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html) - Shows the JSON configuration structure for collecting logs and metrics from EC2 instances.
-- [AWS Systems Manager Patch Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/patch-manager.html) - Documents scanning and installing operating system patches on managed nodes.
-- [Amazon Inspector](https://docs.aws.amazon.com/inspector/latest/user/what-is-inspector.html) - Describes continual scanning for software vulnerabilities and unintended network exposure on EC2 and other workloads.
-- [systemd.service](https://www.freedesktop.org/software/systemd/man/systemd.service.html) - Official systemd service unit reference, including service restart behavior.
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=ResourceName,AttributeValue=prod-orders-api \
+  --start-time 2026-06-24T09:30:00Z \
+  --end-time 2026-06-24T10:30:00Z \
+  --region eu-west-2
+```
+
+Example output:
+
+```json
+{
+  "Events": [
+    {
+      "EventTime": "2026-06-24T10:03:19+00:00",
+      "EventName": "UpdateAutoScalingGroup",
+      "Username": "release-bot",
+      "SourceIPAddress": "203.0.113.42",
+      "Resources": [
+        { "ResourceName": "prod-orders-api", "ResourceType": "AWS::AutoScaling::AutoScalingGroup" }
+      ]
+    }
+  ]
+}
+```
+
+CloudTrail uses UTC timestamps. In this sample, `EventName` says the Auto Scaling group changed, `Username` says the release automation made the call, `EventTime` places it just before the outage, `SourceIPAddress` gives another audit clue, and `Resources` confirms the changed target. Events such as `CreateLaunchTemplateVersion`, `UpdateAutoScalingGroup`, `AuthorizeSecurityGroupIngress`, or `PutSecretValue` near the incident time give the next layer to inspect.
+
+The response should match the evidence. If one instance is bad and replacements work, terminate the bad instance and let Auto Scaling replace it. If every new instance fails, roll back the launch template or artifact version. If a missing secret or bad config caused the failure, fix the config source and redeploy through the normal path so every future instance receives the same repair.
+
+![The incident ladder shows where to look as evidence moves from target health to instance checks, logs, scaling activity, and audit events](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers/ec2-incident-path.png)
+
+*The incident ladder shows where to look as evidence moves from target health to instance checks, logs, scaling activity, and audit events.*
+
+
+## References
+
+- [Amazon EC2 concepts](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html)
+- [Amazon EC2 best practices](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-best-practices.html)
+- [Use instance metadata to manage your EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+- [Configure the Instance Metadata Service](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html)
+- [Auto Scaling launch templates](https://docs.aws.amazon.com/autoscaling/ec2/userguide/launch-templates.html)
+- [Amazon EC2 Auto Scaling health checks](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html)
+- [Use an instance refresh to update instances in an Auto Scaling group](https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-instance-refresh.html)
+- [AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html)

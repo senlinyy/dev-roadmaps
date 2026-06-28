@@ -23,14 +23,14 @@ aliases:
 
 We will build this article in one connected path. First we separate the backup copy from the full recovery workflow. Then we give that workflow time and data-loss targets with **RTO** and **RPO**. After that we choose Azure recovery points, storage redundancy, a regional strategy, and a restore drill that proves the plan works.
 
-The example stays the same the whole way through. DevPolaris runs a checkout service in Azure. The public traffic reaches the app through Azure Front Door, the app runs on Azure App Service or Azure Container Apps, orders live in Azure SQL Database, receipt PDFs live in Azure Blob Storage, secrets live in Azure Key Vault, and the app uses managed identity for access. That gives us enough real pieces to talk about recovery without drifting into abstract diagrams.
+The example stays the same the whole way through. The ticketing company from the previous articles runs its checkout service in Azure. Public traffic reaches the app through Azure Front Door, the app runs on Azure App Service or Azure Container Apps, ticket orders live in Azure SQL Database, receipt PDFs live in Azure Blob Storage, secrets live in Azure Key Vault, and the app uses managed identity for access. That gives us enough real pieces to talk about recovery without drifting into abstract diagrams.
 
 ## What Recovery Planning Covers
 <!-- section-summary: Recovery planning connects data copies, restored targets, traffic, identity, validation, and ownership into one tested path. -->
 
 **Recovery planning** is the work of describing how a workload returns to a useful state after an outage, a bad deployment, a mistaken deletion, or a data corruption event. A good plan names the restore source, the restore target, the traffic path, the secrets, the identity permissions, the checks that prove the app works, and the people who make the call during an incident.
 
-For the DevPolaris checkout service, the plan has to answer several plain questions. Which Azure SQL backup can recover the order rows? Which Blob version can recover a receipt that a script overwrote? Which region receives traffic if the primary region has a serious problem? Which managed identity can read the restored Key Vault secrets and connect to the restored database? Which smoke test proves that a customer can place an order after the recovery?
+For the ticketing checkout service, the plan has to answer several plain questions. Which Azure SQL backup can recover the order rows? Which Blob version can recover a receipt that a script overwrote? Which region receives traffic if the primary region has a serious problem? Which managed identity can read the restored Key Vault secrets and connect to the restored database? Which smoke test proves that a customer can place an order after the recovery?
 
 This is the part that makes recovery planning feel bigger than backups. Azure can store copies of data for you, and many Azure services create recovery points automatically or through a policy. The team still has to know how those copies become a working system again, because the checkout page needs connection strings, identity, routing, and validation before customers can use it.
 
@@ -49,27 +49,27 @@ The first mistake usually happens at the boundary between a backup and a recover
 
 **Recovery** is the bigger workflow around that restore. The team has to connect the app to the restored database, make sure managed identities and Azure RBAC assignments still work, update Key Vault references if names changed, route traffic through Front Door or another entry point, run smoke tests, and record what happened. Recovery answers the practical question: "Can users complete the workflow again?"
 
-Here is the DevPolaris checkout example. Azure SQL has automatic backups for `sqldb-devpolaris-orders-prod`, so the team can restore yesterday's 10:15 database state into `sqldb-devpolaris-orders-restore`. That gives them data, but the checkout app still points at the production database connection string. The recovery plan says how the app receives the restored endpoint, which environment runs the recovered checkout service, which managed identity has database access, and which tests prove that checkout, receipt creation, and order lookup all work.
+Here is the ticketing checkout example. Azure SQL has automatic backups for `sqldb-ticketing-orders-prod`, so the team can restore yesterday's 10:15 database state into `sqldb-ticketing-orders-restore`. That gives them data, but the checkout app still points at the production database connection string. The recovery plan says how the app receives the restored endpoint, which environment runs the recovered checkout service, which managed identity has database access, and which tests prove that checkout, receipt creation, and order lookup all work.
 
 The same idea applies to Blob Storage. Blob versioning may preserve the previous copy of `receipts/ord-88421.pdf` after a broken export job overwrites it. That protects the object history, but the support workflow still needs to pick the correct version, restore it, verify the file, and confirm that customers can download the receipt from the app.
 
 This table keeps the words separated. It also gives the team a quick way to notice when someone has named a backup source but skipped the recovered service path.
 
-| Term | Simple meaning | DevPolaris example |
+| Term | Simple meaning | Ticketing example |
 |---|---|---|
 | **Backup** | A saved copy or recovery point | Azure SQL automated backups for the orders database |
-| **Restore** | A new target created from that saved copy | `sqldb-devpolaris-orders-restore` created from a point in time |
+| **Restore** | A new target created from that saved copy | `sqldb-ticketing-orders-restore` created from a point in time |
 | **Recovery** | The full path back to a useful service | App config, identity, traffic routing, validation, and customer workflow checks |
 
 A real recovery note should name the source and target together. This small YAML shape works well because it forces the team to write the missing pieces before an incident, and it gives reviewers concrete names to question during design review. The example uses the checkout workflow.
 
 ```yaml
 workflow: checkout
-source_of_truth: sqldb-devpolaris-orders-prod
+source_of_truth: sqldb-ticketing-orders-prod
 restore_source: Azure SQL point-in-time restore
-restore_target: sqldb-devpolaris-orders-restore
-application_target: app-devpolaris-checkout-recovery
-identity: mi-devpolaris-checkout-recovery
+restore_target: sqldb-ticketing-orders-restore
+application_target: app-ticketing-checkout-recovery
+identity: mi-ticketing-checkout-recovery
 traffic_entry: Azure Front Door recovery origin
 validation:
   - create a test order
@@ -96,7 +96,7 @@ RTO and RPO belong to individual workflows instead of whole cloud accounts. The 
 | **Nightly finance exports** | 24 hours | Rerun from source data | The job can run again after the database recovers. |
 | **Product search index** | 8 hours | Rebuild from catalog | The index is derived data, so the catalog database matters more than the index files. |
 
-Short targets cost money and operational attention. A five-minute RPO for orders may require Azure SQL active geo-replication or failover groups, application code that can handle failover, alerting that wakes the right people, and a tested way to point the app at the healthy writer. A 24-hour RTO for finance exports may only need durable source data and a documented rerun process.
+Short targets cost money and operational attention. A five-minute RPO for paid ticket orders may require Azure SQL active geo-replication or failover groups, application code that can handle failover, alerting that wakes the right people, and a tested way to point the app at the healthy writer. A 24-hour RTO for finance exports may only need durable source data and a documented rerun process.
 
 The timer also exposes hidden dependencies. Checkout may recover its database in 20 minutes, but the service still misses a 30-minute RTO if Key Vault access fails, the recovery app has no managed identity role assignment, or Front Door still routes to the failed origin. That is why a recovery target must cover the whole user workflow instead of the data store alone.
 
@@ -113,11 +113,11 @@ PITR creates a new database. That detail matters during an incident because a re
 
 Blob Storage protects a different shape of data. Receipt PDFs, export files, customer uploads, and generated reports usually need **Blob soft delete**, **container soft delete**, and **Blob versioning**. Soft delete keeps deleted objects recoverable for a retention period. Versioning keeps earlier versions when a blob changes. Container soft delete protects against a deleted container, while blob soft delete and versioning protect individual blobs and versions.
 
-Those features also affect cost and cleanup. Versioning creates extra stored objects when files change, so a team should separate critical receipt containers from temporary scratch containers. The DevPolaris receipt container may need versioning and a 30-day retention period, while a short-lived image-processing scratch container may use a cheaper cleanup policy because the source files can be regenerated.
+Those features also affect cost and cleanup. Versioning creates extra stored objects when files change, so a team should separate critical receipt containers from temporary scratch containers. The ticketing receipt container may need versioning and a 30-day retention period, while a short-lived image-processing scratch container may use a cheaper cleanup policy because the source files can be regenerated.
 
 VM workloads add one more concept: **backup consistency**. Azure Backup can create application-consistent, file-system-consistent, or crash-consistent recovery points depending on the workload and configuration. A line-of-business VM with a database process needs application-aware backup behavior or a database-native backup plan. A stateless web VM can usually recover from a simpler disk restore because its important state lives elsewhere.
 
-Here is how the DevPolaris recovery map looks after the team separates the data shapes. Each row has a different recovery source because each row stores a different kind of state. The validation column keeps the plan connected to a working user or operator action.
+Here is how the ticketing recovery map looks after the team separates the data shapes. Each row has a different recovery source because each row stores a different kind of state. The validation column keeps the plan connected to a working user or operator action.
 
 | Data shape | Azure protection | Recovery target | Validation |
 |---|---|---|---|
@@ -133,7 +133,7 @@ The data protection choices tell us how old the recovered data may be. They stil
 
 **Redundancy** is Azure's replica placement choice for a storage account. It controls how Azure stores multiple physical copies of the current data. Redundancy helps the storage account survive hardware, datacenter, zone, or regional failures depending on the option the team selects.
 
-**Locally redundant storage**, or **LRS**, keeps multiple synchronous copies in a single primary-region location. It gives a low-cost durability baseline for many workloads. The DevPolaris nightly export container might use LRS if the export can be regenerated from the orders database and the business can wait for the next run.
+**Locally redundant storage**, or **LRS**, keeps multiple synchronous copies in a single primary-region location. It gives a low-cost durability baseline for many workloads. The ticketing nightly export container might use LRS if the export can be regenerated from the orders database and the business can wait for the next run.
 
 **Zone-redundant storage**, or **ZRS**, keeps synchronous copies across multiple availability zones in one region. This helps when a zone has a problem and the application still operates in the same region. Receipt PDFs may use ZRS if the app needs strong regional availability and the business wants files to survive a zone-level failure without a regional failover process.
 
@@ -156,7 +156,7 @@ Once the team chooses recovery points and replica placement, the last design que
 
 **A recovery strategy** describes how ready the backup environment is before something goes wrong. A low-cost strategy keeps data copies and creates compute during recovery. A higher-cost strategy keeps more of the app running in another region so failover takes less time. The right strategy comes from the workflow's RTO, RPO, business value, and operational maturity.
 
-**Backup and restore** has the lowest steady cost. The team stores backups, templates, and runbooks, then creates the recovery environment during an incident. For DevPolaris finance exports, this works well because the job can rerun after the orders database recovers. The RTO may be hours, and that is acceptable for a batch workflow with a clear owner.
+**Backup and restore** has the lowest steady cost. The team stores backups, templates, and runbooks, then creates the recovery environment during an incident. For ticketing finance exports, this works well because the job can rerun after the orders database recovers. The RTO may be hours, and that is acceptable for a batch workflow with a clear owner.
 
 **Pilot light** keeps a tiny but important core ready in the recovery region. The data layer may replicate continuously, and the network, Key Vault, managed identities, and deployment templates already exist. App compute stays stopped, scaled to zero, or very small. For the checkout service, pilot light might mean an Azure SQL failover group in a paired region, a recovery App Service plan ready to scale, and Front Door configured with a secondary origin that helps after deployment and validation.
 
@@ -170,7 +170,7 @@ Azure Site Recovery belongs to another common case: VM-based recovery. It can re
 
 For AWS readers, Azure Site Recovery sits in the same disaster-recovery conversation as AWS Elastic Disaster Recovery for VM-based workloads. Both still require the team to test networking, identity, dependencies, and application health after failover.
 
-The DevPolaris team can now make different choices for different workflows. The expensive recovery shape goes to checkout, while the slower and cheaper shapes stay with rebuildable or lower-urgency work. The table keeps those tradeoffs visible.
+The ticketing team can now make different choices for different workflows. The expensive recovery shape goes to checkout, while the slower and cheaper shapes stay with rebuildable or lower-urgency work. The table keeps those tradeoffs visible.
 
 | Workflow | Strategy | Azure pieces |
 |---|---|---|
@@ -186,7 +186,7 @@ The team still needs proof after choosing the strategy. A recovery plan is trust
 
 **A restore drill** is a planned exercise that proves the team can recover a workflow without waiting for a real disaster. The drill uses a safe target such as an isolated resource group, test database name, non-production virtual network, or recovery app slot. The goal is evidence: actual recovery time, actual recovered data age, missing permissions, broken configuration, and validation results.
 
-For the checkout service, a useful drill starts with a clear scenario. The team may simulate a bad data import that corrupts recent order rows. They restore Azure SQL to a new database from a point before the import, deploy the checkout app into an isolated recovery environment, point that app at the restored database through Key Vault configuration, assign the managed identity to the restored target, and run a test order that never touches production.
+For the checkout service, a useful drill starts with a clear scenario. The team may simulate a bad data import that corrupts recent order rows. They restore Azure SQL to a new database from a point before the import, deploy the checkout app into an isolated recovery environment, point that app at the restored database through Key Vault configuration, assign the managed identity to the restored target, and run a test order that stays isolated from production.
 
 The drill should measure both targets. The **actual RTO** starts when the team declares the scenario and ends when the recovered checkout workflow passes validation. The **actual RPO** comes from the age of the restored data compared with the incident time. If the target says 30-minute RTO and five-minute RPO, the drill record should show whether the team met those targets and where the time went.
 
@@ -196,22 +196,51 @@ The drill can start with a few concrete commands. These commands create a restor
 
 ```bash
 az sql db restore \
-  --resource-group rg-devpolaris-orders-prod \
-  --server sql-devpolaris-orders-prod \
-  --name sqldb-devpolaris-orders-prod \
-  --dest-name sqldb-devpolaris-orders-restore \
+  --resource-group rg-ticketing-orders-prod \
+  --server sql-ticketing-orders-prod \
+  --name sqldb-ticketing-orders-prod \
+  --dest-name sqldb-ticketing-orders-restore \
   --time "2026-06-11T09:55:00"
 
-az webapp config appsettings set \
-  --resource-group rg-devpolaris-orders-recovery \
-  --name app-devpolaris-checkout-recovery \
-  --slot-settings ORDERS_DB_HOST=sql-devpolaris-orders-prod.database.windows.net \
-                  ORDERS_DB_NAME=sqldb-devpolaris-orders-restore
+az sql db show \
+  --resource-group rg-ticketing-orders-prod \
+  --server sql-ticketing-orders-prod \
+  --name sqldb-ticketing-orders-restore \
+  --query "{name:name,status:status,created:creationDate}"
 
-curl --fail https://checkout-recovery.devpolaris.internal/healthz
+az webapp config appsettings set \
+  --resource-group rg-ticketing-orders-recovery \
+  --name app-ticketing-checkout-recovery \
+  --slot-settings ORDERS_DB_HOST=sql-ticketing-orders-prod.database.windows.net \
+                  ORDERS_DB_NAME=sqldb-ticketing-orders-restore
+
+curl --fail https://checkout-recovery.ticketing.internal/healthz
 ```
 
-The values show where the recovery plan actually touches the system. `--time` defines the recovery point and therefore the practical RPO. `--dest-name` creates a separate database so the team can compare safely. `ORDERS_DB_NAME` is the app setting that points the recovery app at the restored target. The health URL proves the app, database, network, identity, and configuration worked together.
+The values show where the recovery plan actually touches the system. `--time` defines the recovery point and therefore the practical RPO. `--dest-name` creates a separate database so the team can compare safely. The `az sql db show` command is the read-only check that confirms the restored database exists before the app is pointed at it. `ORDERS_DB_NAME` is the app setting that points the recovery app at the restored target. The health URL proves the app, database, network, identity, and configuration worked together.
+
+Shortened output from the verification steps might look like this:
+
+```json
+{
+  "restoredDatabase": {
+    "name": "sqldb-ticketing-orders-restore",
+    "status": "Online",
+    "created": "2026-06-11T10:12:43Z"
+  },
+  "appSettings": [
+    { "name": "ORDERS_DB_HOST", "slotSetting": true },
+    { "name": "ORDERS_DB_NAME", "slotSetting": true }
+  ],
+  "health": {
+    "status": "ok",
+    "database": "connected",
+    "receiptStorage": "reachable"
+  }
+}
+```
+
+The `status` value tells the team the restored database is usable. The app settings confirm the recovery app points at the restored target, and the health response proves the app can reach both the database and receipt storage from the recovery environment.
 
 ![Azure restore drill loop showing backup, restore sandbox, app verification, and recorded results while production stays separate and RTO and RPO are measured](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
 
@@ -224,8 +253,8 @@ drill: checkout-sql-pitr
 scenario: bad order import
 declared_at: 10:00Z
 restore_point: 09:55Z
-restored_database: sqldb-devpolaris-orders-restore
-recovery_app: app-devpolaris-checkout-recovery
+restored_database: sqldb-ticketing-orders-restore
+recovery_app: app-ticketing-checkout-recovery
 actual_rpo: 5 minutes
 actual_rto: 27 minutes
 validation:
@@ -247,7 +276,7 @@ Recovery planning now has all the pieces: backup sources, restored targets, RTO,
 ## Putting It All Together
 <!-- section-summary: A complete Azure recovery plan gives each workflow a source, target, objective, strategy, validation path, and owner. -->
 
-A strong Azure recovery plan starts from the user workflow, then works backward through the systems that make that workflow useful. For DevPolaris checkout, the workflow needs the app, Azure SQL, Blob receipts, Key Vault, managed identity, Front Door, monitoring, and a person who can declare failover. Each dependency gets a recovery source, a recovery target, and a validation check.
+A strong Azure recovery plan starts from the user workflow, then works backward through the systems that make that workflow useful. For ticketing checkout, the workflow needs the app, Azure SQL, Blob receipts, Key Vault, managed identity, Front Door, monitoring, and a person who can declare failover. Each dependency gets a recovery source, a recovery target, and a validation check.
 
 The plan also avoids one-size-fits-all recovery. Checkout receives a warm standby because customer orders and revenue need a short RTO and RPO. Receipt downloads receive stronger Blob data protection and a lighter regional plan because the workflow can tolerate a little more delay. Finance exports use rerun logic because the database remains the source of truth. Search rebuilds from catalog data because the index is derived state.
 

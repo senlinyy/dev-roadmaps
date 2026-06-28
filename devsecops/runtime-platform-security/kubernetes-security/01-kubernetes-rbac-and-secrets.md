@@ -1,7 +1,7 @@
 ---
 title: "Kubernetes RBAC and Secrets"
-description: "Control Kubernetes API access and deliver application secrets without giving workloads unnecessary power."
-overview: "Kubernetes RBAC decides what people and workloads can do through the API server, while Secrets deliver sensitive values to pods. This article follows a checkout API team as they scope service account permissions, test access with kubectl, protect tokens, and handle database credentials safely."
+description: "Give Kubernetes workloads small API identities and deliver secret values without giving pods unnecessary cluster power."
+overview: "Follow one checkout pod that needs a small Kubernetes identity and one database password. Then trace the API server request path, service accounts, RBAC verbs and scopes, Roles, bindings, compromised pod risk, kubectl access checks, Secret mounting, encryption at rest, and external secret manager workflows."
 tags: ["rbac", "secrets", "kubernetes", "service-accounts", "etcd"]
 order: 1
 id: article-devsecops-kubernetes-security-rbac-and-secrets
@@ -34,17 +34,18 @@ aliases:
 13. [Least-Privilege Review Checklist](#least-privilege-review-checklist)
 14. [Putting It All Together](#putting-it-all-together)
 15. [What's Next](#whats-next)
+16. [References](#references)
 
 ## The Checkout API Scenario
 <!-- section-summary: We will follow one small production service so RBAC and Secret choices stay tied to real operational decisions. -->
 
-Imagine a small SaaS team running an online checkout system in Kubernetes. The team has a `checkout-prod` namespace with a `checkout-api` Deployment, a PostgreSQL database, a payment provider token, and a deployment pipeline that updates the API during releases. The service is important because every customer purchase passes through it, so the team wants enough automation to deploy safely without giving every pod and pipeline a master key to the cluster.
+Harbor Books runs one `checkout-api` pod in a namespace named `checkout-prod`. The pod has one normal job: receive a checkout request, talk to PostgreSQL, call the payment provider, and return an order result.
 
-Two kinds of access matter right away. The first kind is **Kubernetes API access**. The deployment pipeline needs to patch the `checkout-api` Deployment, read rollout status, and inspect pod logs when a release fails. The running `checkout-api` pods usually need very little Kubernetes API access. Most web applications serve HTTP traffic and talk to databases; they do not need to list every Secret or create workloads.
+That pod needs two small things from the platform. It needs a **Kubernetes identity** so the cluster knows which workload is running. It also needs one sensitive value, the database password. It does not need a broad Kubernetes API token. It does not need permission to list every Secret in the namespace. It does not need permission to create pods or change RBAC.
 
-The second kind is **application secret access**. The checkout service needs a database password and a payment API token. Those values need to reach the application at runtime, but they should stay out of Git history, container images, logs, and broad Kubernetes permissions.
+The deployment job has a different job. It needs to patch the `checkout-api` Deployment, read rollout status, and fetch pod logs when a release fails. That job should use a separate identity with release permissions. The runtime pod should use a smaller identity with no useful API power.
 
-This article connects those two areas because they meet in a real incident. If an attacker gets code execution inside one pod, they can often read files and environment variables inside that pod. If the pod has a powerful service account token, the attacker may also call the Kubernetes API. If that token can read Secrets across the namespace or cluster, a single vulnerable container can turn into a much larger compromise.
+This article keeps those two access paths separate. First we follow a request through the Kubernetes API server. Then we create service accounts, attach a narrow Role to the deployer, prove access with `kubectl auth can-i`, and deliver the database password to the pod through a Secret mount. The same story also gives us the incident lens: if an attacker gets shell access inside `checkout-api`, the service account token and mounted secrets decide how far that attacker can move.
 
 ## Every Important Action Goes Through the API Server
 <!-- section-summary: Kubernetes protects cluster state by checking each API request before it reaches stored objects or running workloads. -->
@@ -92,7 +93,7 @@ metadata:
 automountServiceAccountToken: true
 ```
 
-This split matters. The checkout runtime identity and the deployment identity have different jobs. The runtime service account should run the app. The deployer service account should update Kubernetes objects. Giving both identities the same permissions makes reviews confusing and increases the blast radius of a stolen token.
+The checkout runtime identity and the deployment identity have different jobs. The runtime service account runs the app. The deployer service account updates Kubernetes objects. Giving both identities the same permissions makes reviews confusing and increases the blast radius of a stolen token.
 
 You can check which service account a running pod uses:
 
@@ -101,11 +102,26 @@ kubectl get pod -n checkout-prod -l app=checkout-api \
   -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.spec.serviceAccountName}{"\n"}{end}'
 ```
 
+Example output:
+
+```bash
+checkout-api-7c9d7d6f8c-2p8kl -> checkout-api
+checkout-api-7c9d7d6f8c-x4m2n -> checkout-api
+```
+
+The output should show the dedicated `checkout-api` service account. If it shows `default` or `checkout-deployer`, the pod is using the wrong identity.
+
 You can also inspect whether Kubernetes mounted the service account token into a pod:
 
 ```bash
 kubectl exec -n checkout-prod deploy/checkout-api -- \
   sh -c 'ls -l /var/run/secrets/kubernetes.io/serviceaccount 2>/dev/null || echo "no service account token mounted"'
+```
+
+Expected output for this runtime pod:
+
+```bash
+no service account token mounted
 ```
 
 If the application does not need Kubernetes API access, the safer result is `no service account token mounted`. If a token exists, treat it like a live credential. Anyone with shell access inside the container may be able to copy it and use it against the API server until the token expires or access is removed.
@@ -401,7 +417,7 @@ Do not use broad Secret mounts. Mount the specific Secret keys the application n
 
 RBAC controls who can read a Secret through the API server. Encryption at rest controls how Secret data is protected in the Kubernetes backing store. Kubernetes can encrypt Secret data before writing it to etcd by using an API server encryption configuration.
 
-This matters because etcd snapshots and disks may move through backup systems, restore workflows, and administrator machines. If Secret data sits there in clear form, anyone with access to those files may recover application credentials. Encryption at rest adds a separate cryptographic protection layer for stored Secret data.
+etcd snapshots and disks often move through backup systems, restore workflows, and administrator machines. If Secret data sits there in clear form, anyone with access to those files may recover application credentials. Encryption at rest adds a separate cryptographic protection layer for stored Secret data.
 
 A simplified encryption configuration can look like this:
 

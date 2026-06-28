@@ -70,6 +70,10 @@ Each value carries release risk. If `CHECKOUT_RECEIPT_RETRY_ENABLED` turns on th
 
 This is why runtime configuration deserves the same review as the image digest. A release record that names the candidate image but leaves settings vague gives the team only half the production story. The artifact tells us which code runs. Configuration tells us what that code connects to and which branches it takes. The most common Azure place for these values is app settings.
 
+![Runtime configuration layers showing one artifact controlled by app settings, secrets, identity, feature flags, and startup checks](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/runtime-configuration-layers.png)
+
+*The same artifact can behave differently when Azure gives it different settings, secrets, identity, feature flags, and startup checks.*
+
 ## App Settings and Connection Values
 <!-- section-summary: App settings are Azure-managed environment values, and changing them can restart or reshape runtime behavior. -->
 
@@ -134,6 +138,14 @@ az webapp config appsettings set \
   --settings CHECKOUT_RECEIPT_RETRY_ENABLED=true
 ```
 
+The read-back check should show the new value without exposing unrelated settings:
+
+```console
+Name                            Slot Setting    Value
+------------------------------  --------------  -----
+CHECKOUT_RECEIPT_RETRY_ENABLED  False           true
+```
+
 If the app uses a staging slot, the release owner usually changes and tests the setting on the staging slot first. That gives the team a real host name where the candidate can be tested before production receives traffic.
 
 ```bash
@@ -158,6 +170,15 @@ az containerapp revision list \
   --resource-group rg-devpolaris-prod \
   --query "[].{name:name,active:active,trafficWeight:trafficWeight}" \
   --output table
+```
+
+The revision list should show the new `v31-config` revision before traffic moves:
+
+```console
+Name                         Active    TrafficWeight
+---------------------------  --------  -------------
+ca-orders-api-prod--v30      True      100
+ca-orders-api-prod--v31-config True    0
 ```
 
 This is the missing "how" for app settings. The release owner reads the current value, changes the setting in the right runtime or slot, and checks which revision or slot now contains the value. The next step is secret handling, because some runtime values should point to Key Vault rather than carry the secret directly.
@@ -224,6 +245,14 @@ az appconfig feature disable \
   --auth-mode login
 ```
 
+The useful read-back is the feature state. When the rollback command has worked, the feature shows `enabled: false` for the production label. If the flag still shows `true`, the risky branch can still run even if traffic splitting looks healthy.
+
+```console
+Name                   Label    Enabled    Locked
+---------------------  -------  ---------  --------
+checkout.receiptRetry  prod     false      false
+```
+
 Feature flags and traffic splitting solve different rollout problems. Traffic splitting controls which runtime version receives requests, while flags control which behavior runs inside that version. A strong rollout can use both: deploy `v31` with the retry code, send 10 percent of traffic to `v31`, enable `checkout.receiptRetry` only for a small cohort, then widen either traffic or flag exposure based on the watch-window evidence.
 
 ## Key Vault References
@@ -259,6 +288,10 @@ secret_review:
 The verification lines matter because Key Vault references can fail for ordinary reasons. The managed identity may lack permission. The URI may point to the wrong vault. The secret may have a disabled version. A private endpoint or firewall setting may block the app's path to the vault. These failures can show up as startup errors, missing environment values, or broken telemetry during the release.
 
 App Service caches Key Vault reference values and refreshes them periodically. A configuration change can also cause the app to restart and fetch values again. If a release needs a specific secret version, use a versioned secret URI and write that version into the release record. If a release should always use the latest secret version, write that expectation down too, because secret rotation and app rollout become connected.
+
+![Managed identity path from running app to Key Vault secret, with no secret stored in code](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/secret-reference-path.png)
+
+*A Key Vault reference keeps the secret value outside code and app settings, while the runtime identity controls whether the app can read it.*
 
 Key Vault references help with secrets on App Service and Functions. Container Apps uses its own secret model, and that model changes how the team thinks about revisions and restarts.
 
@@ -323,6 +356,26 @@ az containerapp update \
   --resource-group rg-devpolaris-prod \
   --revision-suffix v31-secrets \
   --set-env-vars APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appinsights-connection
+```
+
+The read-back check should prove that the app points at the secret name, not that the secret value is printed:
+
+```bash
+az containerapp show \
+  --name ca-orders-api-prod \
+  --resource-group rg-devpolaris-prod \
+  --query "properties.template.containers[0].env[?name=='APPLICATIONINSIGHTS_CONNECTION_STRING']"
+```
+
+Example output:
+
+```json
+[
+  {
+    "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+    "secretRef": "appinsights-connection"
+  }
+]
 ```
 
 The long identity resource ID is ugly, but it is useful because it makes the runtime identity explicit. In a real runbook, the team usually stores that identity ID as a variable so the command is easier to read. After the update, the release owner checks the new revision, runs a smoke test, and confirms telemetry appears in the expected Application Insights component.
@@ -502,6 +555,20 @@ az webapp deployment slot swap \
   --target-slot production
 ```
 
+After the swap, verify the production host and the rollback slot instead of assuming the command finished the release:
+
+```bash
+curl -fsS https://app-orders-api-prod.azurewebsites.net/healthz
+
+az webapp deployment slot list \
+  --name app-orders-api-prod \
+  --resource-group rg-devpolaris-prod \
+  --query "[].{name:name,host:defaultHostName,state:state}" \
+  --output table
+```
+
+Healthy output shows the production health endpoint returning success and the staging slot still present as the swap-back target.
+
 The old production version now sits on the other side of the swap. That is why the release owner should avoid deleting or overwriting the staging slot immediately after the swap. Keeping it available gives the team a direct swap-back path during the watch window.
 
 ## Traffic Splitting
@@ -543,6 +610,10 @@ Many Azure teams run this same idea through Kubernetes tooling on AKS. Helm or K
 
 On AWS, teams may run this same rollout pattern through CodeDeploy, Lambda aliases, ECS deployment settings, or ALB weighted target groups. The shared idea is gradual exposure with a ready path back, while the platform-specific command changes.
 
+![Traffic split showing a stable revision at 90 percent, a candidate revision at 10 percent, a watch window, and a rollback path](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/traffic-split-rollback-path.png)
+
+*A safe rollout keeps the stable path visible while the candidate receives limited traffic and the team watches agreed signals.*
+
 Traffic splitting gives the team control over exposure. The rollback shape tells the team how to recover from each exposure level.
 
 ## How To Move Container Apps Traffic
@@ -579,6 +650,24 @@ az containerapp ingress traffic set \
   --name ca-orders-api-prod \
   --resource-group rg-devpolaris-prod \
   --revision-weight orders-api--v31=100
+```
+
+The verification command is the same read-only traffic check used before the change:
+
+```bash
+az containerapp ingress traffic show \
+  --name ca-orders-api-prod \
+  --resource-group rg-devpolaris-prod \
+  --output table
+```
+
+At the 50 percent step, the output should still show both revisions:
+
+```console
+RevisionName      Weight
+----------------  ------
+orders-api--v30   50
+orders-api--v31   50
 ```
 
 Rollback uses the same tool. That is why traffic splitting is such a useful release control: the same command that exposes the candidate gradually can also move users back to the stable revision quickly.

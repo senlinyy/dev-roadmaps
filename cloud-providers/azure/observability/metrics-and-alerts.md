@@ -27,7 +27,7 @@ aliases:
 ## The Production Question
 <!-- section-summary: Metrics and alerts connect running system numbers to the people who need to respond. -->
 
-Imagine a ticket checkout API running on Azure App Service. The API accepts payment, writes the order to Azure SQL, uploads a receipt PDF to Blob Storage, and publishes a message for a worker. The application can look normal from the resource list while customers still see slow pages, failed payments, or missing receipts.
+Imagine the same `devpolaris-orders-api` running on Azure App Service. The API accepts payment, writes the order to Azure SQL, uploads a receipt PDF to Blob Storage, and publishes a message for a worker. The application can look normal from the resource list while customers still see slow pages, failed payments, or missing receipts.
 
 Metrics and alerts help the team answer a practical production question: **is the system healthy enough right now, and who needs to know if it changes?** A metric gives you the number, a chart gives the team a shared view, and an alert rule turns an important change into a notification or automation.
 
@@ -45,22 +45,22 @@ Azure metrics and alerts connect a few pieces that show up together in almost ev
 
 For AWS readers, this loop should feel close to CloudWatch metrics and alarms, with action groups covering the notification and automation fan-out that AWS teams often route through SNS, EventBridge, Lambda, or incident tools. Azure uses different resource names, but the operating loop is still measure, visualize, decide, and route.
 
-This article follows one checkout system because metrics become easier to understand when every number has a job. A CPU chart can explain pressure on the host, a request chart can show customer impact, and an alert can bring the right person into the incident before support tickets pile up.
+This article follows the same checkout system and gives every number a job. A CPU chart can explain pressure on the host, a request chart can show customer impact, and an alert can bring the right person into the incident before support messages pile up.
 
 ## What Azure Monitor Metrics Stores
 <!-- section-summary: Azure Monitor Metrics stores compact time-series records that are fast to chart, query, and evaluate. -->
 
 A **metric** is a number recorded at a point in time. Azure Monitor Metrics stores these numbers in a time-series database, which means each metric value is tied to a timestamp, a resource, a namespace, a metric name, the value itself, and optional dimensions. Microsoft describes this structure in the official [Azure Monitor Metrics data platform documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics).
 
-For the ticket checkout API, App Service can emit `Requests`, `Http5xx`, `HttpResponseTime`, `MemoryWorkingSet`, and `RequestsInApplicationQueue`. The portal may show friendly names such as "Http Server Errors," while the API and infrastructure code use metric names such as `Http5xx`. The [Microsoft.Web/sites supported metrics reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-web-sites-metrics) lists those platform metric names, units, dimensions, and supported aggregations.
+For `devpolaris-orders-api`, App Service can emit `Requests`, `Http5xx`, `HttpResponseTime`, `MemoryWorkingSet`, and `RequestsInApplicationQueue`. The portal may show friendly names such as "Http Server Errors," while the API and infrastructure code use metric names such as `Http5xx`. The [Microsoft.Web/sites supported metrics reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-web-sites-metrics) lists those platform metric names, units, dimensions, and supported aggregations.
 
 A metric is compact compared with a log. A log can tell you that one receipt upload failed because Blob Storage returned `AuthorizationPermissionMismatch`. A metric can tell you that receipt upload failures jumped from 2 per hour to 90 per hour after the latest release. That speed makes metrics a strong fit for dashboards and alert evaluation.
 
 Azure Monitor keeps most platform and custom metrics for 93 days. That retention makes metrics useful for recent trend analysis, release comparison, and operational alerting, while long-term audit or detailed investigation usually belongs in Log Analytics tables or archived logs.
 
-![Metric operating loop showing App Service, Azure SQL, and Blob Storage sending metrics into Azure Monitor Metrics, then into dashboards and alert rules](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/metric-operating-loop.png)
+![Metric operating loop showing an app host, database, and object store sending metrics into a metrics store, then into dashboards and alert rules](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/metric-operating-loop.png)
 
-*Metrics move from running Azure resources into Azure Monitor, then split into human dashboards and alert rules that can route attention.*
+*Metrics move from running services into Azure Monitor, then split into human dashboards and alert rules that can route attention.*
 
 Behind the scenes, Azure Monitor groups raw samples into time intervals before drawing a chart or evaluating a rule. The official [metrics aggregation documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/metrics-aggregation-explained) explains five common aggregation types: **Total**, **Count**, **Average**, **Minimum**, and **Maximum**. The right one depends on the question you want the metric to answer.
 
@@ -73,7 +73,7 @@ For example, `Http5xx` is an event count, so a five-minute **Total** tells you h
 
 Platform metrics help the team see whether the resource shape supports the workload. If checkout failures rise while App Service `Http5xx` rises, the application path is failing. If checkout latency rises while Azure SQL CPU and DTU usage rise, the database might be part of the pressure. If receipt uploads slow down while Storage latency and throttling rise, the object storage path deserves attention.
 
-**Custom metrics** are numbers your application or monitoring agent publishes because the cloud platform cannot infer them from the outside. Microsoft describes custom metrics as performance indicators or business-specific metrics in the [custom metrics documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/metrics-custom-overview). A ticket business might publish `CheckoutStarted`, `CheckoutCompleted`, `PaymentDeclined`, and `ReceiptUploadFailed`.
+**Custom metrics** are numbers your application or monitoring agent publishes because only the application knows them. Microsoft describes custom metrics as performance indicators or business-specific metrics in the [custom metrics documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/metrics-custom-overview). The Orders team might publish `CheckoutStarted`, `CheckoutCompleted`, `PaymentDeclined`, and `ReceiptUploadFailed`.
 
 Custom metrics close the gap between resource health and business health. App Service can report that HTTP requests are flowing, but only the application can report that checkout completion dropped below normal. A good production dashboard usually needs both: platform metrics for the host and custom metrics for the workflow customers care about.
 
@@ -100,13 +100,13 @@ The goal is enough detail to route the investigation. If `ReceiptUploadFailed` s
 
 Metrics become useful to a team when they have a shared place to look. **Metrics Explorer** is the Azure Monitor tool for charting metric values over time, splitting them by dimensions, changing aggregation, and comparing resources. Microsoft documents that charts from Metrics Explorer can be pinned to Azure dashboards or saved to workbooks in the [Metrics Explorer guide](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/analyze-metrics).
 
-A dashboard is a simple operating view. The ticket team might pin four charts for the live checkout path: App Service request volume, App Service `Http5xx`, average response time, and Azure SQL CPU. During a release, the team can keep that dashboard open and compare the candidate version with the normal production shape.
+A dashboard is a simple operating view. The Orders team might pin four charts for the live checkout path: App Service request volume, App Service `Http5xx`, average response time, and Azure SQL CPU. During a release, the team can keep that dashboard open and compare the candidate version with the normal production shape.
 
 A workbook gives the team a richer investigation page. It can combine metric charts, KQL query results, text, parameters, and links into one guided view. For a checkout incident, a workbook can show the top-level metrics first, then include KQL tables for failed requests, dependency failures, and recent deployment events.
 
 Dashboards and alerts serve different jobs. A dashboard helps a human see context, compare trends, and ask better questions. An alert handles the attention routing for conditions that deserve a response even when nobody is staring at the screen.
 
-For a production checkout system, a useful dashboard usually starts with the customer path and then moves toward supporting resources. The first panels tell the team whether customers are affected, and the later panels help explain which dependency changed.
+For a production checkout system, a useful dashboard usually puts the customer path first and then moves toward supporting resources. The first panels tell the team whether customers are affected, and the later panels help explain which dependency changed.
 
 | Panel | Why it belongs there |
 | --- | --- |
@@ -117,7 +117,7 @@ For a production checkout system, a useful dashboard usually starts with the cus
 | Database pressure | Shows whether SQL CPU, connections, or waits line up with API symptoms |
 | Queue backlog or age | Shows whether async workers are falling behind |
 
-The dashboard tells a small story from left to right. It starts with user-facing signals, then shows the likely supporting systems. That way an engineer can see whether the symptom is isolated to the API, connected to database pressure, or part of a larger dependency problem.
+The dashboard tells a small story from left to right. User-facing signals come first, then the likely supporting systems. That way an engineer can see whether the symptom is isolated to the API, connected to database pressure, or part of a larger dependency problem.
 
 ## Alert Rule Anatomy
 <!-- section-summary: A metric alert rule combines scope, signal, condition, time window, severity, and actions. -->
@@ -128,7 +128,7 @@ A metric alert rule has a few important parts that work together each time the r
 
 | Part | What it means | Checkout example |
 | --- | --- | --- |
-| **Scope** | The resource or resources being watched | `ticket-api-prod` App Service |
+| **Scope** | The resource or resources being watched | `app-devpolaris-orders-prod` App Service |
 | **Signal** | The metric the rule evaluates | `Http5xx` |
 | **Condition** | The comparison that decides firing | Total greater than 25 |
 | **Window size** | The lookback period for the data | Five minutes |
@@ -140,16 +140,14 @@ A metric alert rule has a few important parts that work together each time the r
 
 The alert engine works as a loop. Azure reads the metric series for the scoped resource, groups the samples over the configured window, applies the aggregation, compares the value with the threshold, and updates the alert state. If the state changes to fired, Azure routes the alert through the configured action groups.
 
-```mermaid
-flowchart TD
-    MetricSeries["Metric series<br/>Http5xx for ticket-api-prod"] --> Window["Window<br/>last 5 minutes"]
-    Window --> Aggregation["Aggregation<br/>Total"]
-    Aggregation --> Compare{"Total > 25?"}
-    Compare -->|"No"| Healthy["Remain resolved"]
-    Compare -->|"Yes"| Fired["Alert fired"]
-    Fired --> ActionGroup["Action group"]
-    ActionGroup --> Notify["Email, SMS, push, webhook, function, or incident tool"]
-```
+| Evaluation step | What Azure checks | Orders example |
+|---|---|---|
+| Metric series | Which metric values belong to the scoped resource | `Http5xx` from `app-devpolaris-orders-prod` |
+| Window | Which recent samples are included | Last five minutes |
+| Aggregation | How the samples are combined | `Total` server errors |
+| Comparison | Whether the combined value crosses the condition | Total `Http5xx` greater than `25` |
+| Alert state | Whether the rule should fire or stay resolved | Fire a severity 1 alert when the condition holds |
+| Action routing | Which response path receives the alert | `ag-devpolaris-orders-oncall` sends email and webhook |
 
 Metric alerts can use platform metrics, custom metrics, Application Insights custom metrics, and selected logs converted to metrics. They can also use multiple conditions, dimensions, and dynamic thresholds. For one resource with multiple conditions, Azure fires the alert when all conditions are true, then resolves it after at least one condition clears for the required checks.
 
@@ -164,9 +162,9 @@ The hardest part of metric alerting is choosing which numbers deserve a page. A 
 
 Both kinds of metrics matter, but they deserve different routing. A CPU spike during a nightly job can help explain behavior on a dashboard. A sustained rise in checkout failures means customers are actively hitting errors, so the on-call path should receive that signal quickly.
 
-For the ticket checkout API, the first page-worthy rule might use `Http5xx` because it measures the API boundary customers touch. A strong first version could be: severity 1 when total `Http5xx` for `ticket-api-prod` is greater than 25 over five minutes, evaluated every minute. That rule avoids waking the team for one unlucky request while still catching a real burst of failures.
+For the Orders checkout API, the first page-worthy rule might use `Http5xx` because it measures the API boundary customers touch. A strong first version could be: severity 1 when total `Http5xx` for `app-devpolaris-orders-prod` is greater than 25 over five minutes, evaluated every minute. That rule avoids waking the team for one unlucky request while still catching a real burst of failures.
 
-The next layer can use lower-priority alerts or tickets for supporting symptoms. A queue age rule can warn the platform team when async workers lag for 20 minutes. A SQL CPU rule can create a low-priority ticket if the database sits above 85 percent for half an hour. These alerts help operations without turning every resource wobble into a page.
+The next layer can use lower-priority alerts or work items for supporting symptoms. A queue age rule can warn the platform team when async workers lag for 20 minutes. A SQL CPU rule can create a low-priority work item if the database sits above 85 percent for half an hour. These alerts help operations without turning every resource wobble into a page.
 
 Aggregation and window size shape the alert behavior because they decide how much evidence Azure uses before firing. The same raw metric can create a calm, useful alert or a noisy alert depending on these choices.
 
@@ -180,7 +178,7 @@ Aggregation and window size shape the alert behavior because they decide how muc
 
 Dynamic thresholds can help when the normal value changes by hour or day. For example, checkout volume at 2 a.m. and checkout volume at noon may have very different normal ranges. A static threshold can miss the daytime drop or overreact to a nighttime dip, while a dynamic threshold can learn the expected pattern and flag unusual movement.
 
-Alert noise usually appears when rules lack a clear action. If the engineer receiving the alert cannot name the first investigation step, the rule needs better context, a different severity, a longer window, or a dashboard-only role. A useful page includes enough information for the responder to know which system changed, what customer path is affected, and where to start.
+Alert noise usually appears when rules lack a clear action. If the engineer receiving the alert has no clear first investigation step, the rule needs better context, a different severity, a longer window, or a dashboard-only role. A useful page includes enough information for the responder to know which system changed, what customer path is affected, and where to begin.
 
 Alert processing rules help during planned changes. Azure Monitor can apply processing rules as alerts fire, including adding action groups, suppressing action groups, filtering alerts, or applying the rule on a schedule. That gives the team a clean way to pause notifications during a planned database failover drill while still keeping alert instances visible for review.
 
@@ -191,13 +189,13 @@ An **action group** defines who gets notified and which automations run when an 
 
 The useful AWS comparison is the response shape. A CloudWatch alarm might publish to SNS or trigger automation; an Azure alert rule fires and sends that response through an action group.
 
-This separation is important because the same notification target can be reused by many alert rules. The ticket team can have `ag-ticket-web-oncall` for API incidents, `ag-ticket-data-team` for database incidents, and `ag-ticket-low-priority` for ticket-based operational work. The alert rule detects the condition, and the action group decides where the attention goes.
+This separation is important because the same notification target can be reused by many alert rules. The Orders team can have `ag-devpolaris-orders-oncall` for API incidents, `ag-devpolaris-data-team` for database incidents, and `ag-devpolaris-low-priority` for work-item-based operational follow-up. The alert rule detects the condition, and the action group decides where the attention goes.
 
 Action groups also let the team design escalation without duplicating every alert. A severity 1 checkout failure can route to the on-call engineer, incident webhook, and status-page automation. A severity 3 queue backlog can route to a team channel and work item system. A severity 4 capacity warning can send email only.
 
 Webhook and automation receivers work best with the **common alert schema** where possible. The [common alert schema documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-common-schema) explains that it gives alert notifications a standardized JSON structure across alert types. A shared schema keeps incident tools, chat integrations, and runbooks from needing separate parsers for metric alerts, log alerts, and activity log alerts.
 
-For the checkout API, the common alert payload gives the incident tool the essentials: affected resource, severity, monitor condition, alert rule name, metric name, threshold, and current value. The webhook can use those fields to create a useful incident title such as `Sev1: ticket-api-prod Http5xx fired, value 42 over 5 minutes`.
+For the checkout API, the common alert payload gives the incident tool the essentials: affected resource, severity, monitor condition, alert rule name, metric name, threshold, and current value. The webhook can use those fields to create a useful incident title such as `Sev1: app-devpolaris-orders-prod Http5xx fired, value 42 over 5 minutes`.
 
 Good routing also includes ownership. An alert for App Service `Http5xx` belongs to the application team because the API is returning server errors. An alert for SQL storage approaching a service limit may belong to the data platform team. An alert for Azure Service Health in the production region may belong to the incident commander or platform operations group.
 
@@ -217,11 +215,11 @@ Planned maintenance also needs a clear rule. Alert processing rules can suppress
 
 Production alerts work best when they live near the infrastructure that depends on them. The portal is useful for discovery, but Bicep or ARM templates make the rule reviewable in pull requests, repeatable across environments, and easier to recover after accidental deletion. Microsoft provides [Resource Manager template samples for metric alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/resource-manager-alerts-metric), and the same resource types work naturally in Bicep.
 
-The template below creates an action group and a metric alert rule for the ticket checkout App Service. The rule fires when the App Service reports more than 25 HTTP 5xx responses over a five-minute window, checked every minute.
+The template below creates an action group and a metric alert rule for the Orders checkout App Service. The rule fires when the App Service reports more than 25 HTTP 5xx responses over a five-minute window, checked every minute.
 
 ```bicep
-param webAppName string = 'app-tickets-prod'
-param actionGroupName string = 'ag-tickets-oncall'
+param webAppName string = 'app-devpolaris-orders-prod'
+param actionGroupName string = 'ag-devpolaris-orders-oncall'
 param onCallEmail string = 'oncall@example.com'
 
 @secure()
@@ -235,7 +233,7 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2021-09-01' = {
   name: actionGroupName
   location: 'global'
   properties: {
-    groupShortName: 'ticketsops'
+    groupShortName: 'ordersops'
     enabled: true
     emailReceivers: [
       {
@@ -258,7 +256,7 @@ resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'ma-${webAppName}-http5xx'
   location: 'global'
   properties: {
-    description: 'Page the web team when ticket checkout returns sustained server errors.'
+    description: 'Page the web team when Orders checkout returns sustained server errors.'
     severity: 1
     enabled: true
     scopes: [
@@ -296,12 +294,57 @@ The template also keeps the webhook URI as a secure parameter. Alert routing oft
 
 After deployment, teams usually test the action group and review the alert instance shape. A test notification proves the email address and webhook are reachable. A real alert instance proves the metric name, threshold, severity, and incident routing make sense to the people who will respond.
 
+The deployed rule should be easy to review in a pull request or in the portal:
+
+| Field | Expected value |
+|---|---|
+| Alert name | `ma-app-devpolaris-orders-prod-http5xx` |
+| Scope | `app-devpolaris-orders-prod` |
+| Metric namespace | `Microsoft.Web/sites` |
+| Metric name | `Http5xx` |
+| Aggregation and threshold | `Total > 25` |
+| Window and frequency | `PT5M` window, `PT1M` evaluation |
+| Severity | `1` |
+| Action group | `ag-devpolaris-orders-oncall` |
+
+The read-back check should inspect the deployed alert and action group:
+
+```bash
+az monitor metrics alert show \
+  --name ma-app-devpolaris-orders-prod-http5xx \
+  --resource-group rg-devpolaris-observability-prod \
+  --query "{enabled:enabled,severity:severity,window:windowSize,frequency:evaluationFrequency,actions:actions[].actionGroupId}" \
+  --output json
+
+az monitor action-group show \
+  --name ag-devpolaris-orders-oncall \
+  --resource-group rg-devpolaris-observability-prod \
+  --query "{enabled:enabled,email:emailReceivers[].emailAddress,webhook:webhookReceivers[].useCommonAlertSchema}" \
+  --output json
+```
+
+Example alert output:
+
+```json
+{
+  "actions": [
+    "/subscriptions/.../actionGroups/ag-devpolaris-orders-oncall"
+  ],
+  "enabled": true,
+  "frequency": "PT1M",
+  "severity": 1,
+  "window": "PT5M"
+}
+```
+
+If a test notification reaches email but the incident webhook receives no payload, the action group route needs attention before the alert protects production. If the alert instance fires with a vague name or no runbook link, the on-call engineer will still lose time after the metric did its job.
+
 ## Putting It All Together
 <!-- section-summary: Metrics, dashboards, alert rules, and action groups form one operating loop for production systems. -->
 
 Metrics and alerts work best as one operating loop. Azure resources emit platform metrics, application code emits custom workflow metrics, Metrics Explorer and workbooks turn those numbers into shared views, and metric alert rules evaluate the signals that deserve response. Action groups and alert processing rules then route that response to the right people or automations.
 
-For the ticket checkout API, the operating loop can be described as a sequence of team habits. Each habit turns raw telemetry into a clearer production response.
+For the Orders checkout API, the operating loop can be described as a sequence of team habits. Each habit turns raw telemetry into a clearer production response.
 
 | Step | What the team builds |
 | --- | --- |

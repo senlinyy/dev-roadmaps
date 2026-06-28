@@ -32,21 +32,8 @@ A **Google Cloud firewall rule** is a network access rule that decides whether t
 
 The food delivery app from the VPC article gives us the packet path for this article. The team has a web tier, an API tier, and a database client tier. The VPC route table can send packets from the web subnet to the API subnet. That only answers the path question. The firewall answers the access question: can a packet from the web tier reach TCP port `8080` on the API tier?
 
-```mermaid
-flowchart LR
-    Web["Web VM<br/>service account: web-sa"]:::vm
-    Firewall["Firewall evaluation<br/>direction + target + source + port"]:::firewall
-    API["API VM<br/>service account: api-sa<br/>tcp:8080"]:::vm
-    Drop["Denied packet"]:::drop
-
-    Web --> Firewall
-    Firewall -->|allowed| API
-    Firewall -->|denied| Drop
-
-    classDef vm fill:#2a2a2a,stroke:#f7c948,stroke-width:2px,color:#fff
-    classDef firewall fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef drop fill:#3d1f2b,stroke:#ff5c8a,stroke-width:2px,color:#fff
-```
+![A generated infographic showing packet facts such as direction, source, target, protocol, port, and action.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/packet-facts.png)
+*A firewall decision is easier to debug when the packet facts are written down before anyone edits a rule.*
 
 Firewall rules are attached to a VPC network, and Google Cloud enforces them for VM network interfaces that match the rule target. That detail is important for beginners because rule enforcement follows the targeted interfaces in the VPC rather than a single appliance VM sitting in one subnet. If a managed instance group replaces an API VM with a new VM that uses the same target service account, the rule applies to the new VM interface too.
 
@@ -90,6 +77,9 @@ Here is a small priority plan for the food delivery app:
 | `800` | Allow web tier to reach API tier on TCP `8080` | The application path is explicit |
 | `900` | Allow API tier to reach database private range on TCP `5432` | The database path is explicit |
 | `65535` | Implied rules | Google Cloud fallback behavior applies when no rule matches |
+
+![A generated infographic showing firewall priority order from broad denies to application allow rules and implied fallback behavior.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/priority-order.png)
+*Lower priority numbers win, so a broad guardrail at priority `100` can beat a narrower allow rule at priority `800`.*
 
 The numbers leave gaps, which helps a team add a future rule without renumbering everything. The exact bands are a team convention rather than a Google Cloud requirement. The important behavior is official: lower numbers have higher priority, and the highest-priority applicable rule takes precedence.
 
@@ -195,6 +185,14 @@ gcloud compute firewall-rules create deny-ingress-admin-from-internet \
   --enable-logging
 ```
 
+The important fields are `--direction=INGRESS`, `--priority=100`, `--deny=tcp:22,tcp:3389`, and `--source-ranges=0.0.0.0/0`. This is a mutating command, so a real change should be reviewed before it runs. A healthy create returns an operation that finishes successfully:
+
+```yaml
+operationType: insert
+status: DONE
+targetLink: projects/food-prod/global/firewalls/deny-ingress-admin-from-internet
+```
+
 The next rule allows the expected application path. The source and target are service accounts, so the rule follows workload identity instead of VM names or IP addresses:
 
 ```bash
@@ -209,6 +207,8 @@ gcloud compute firewall-rules create allow-ingress-api-from-web-tcp-8080 \
   --enable-logging
 ```
 
+The service account fields are the heart of this rule. `--source-service-accounts` names the workload identity that starts the connection, and `--target-service-accounts` names the API VM identity that receives it. If a VM runs with the wrong service account, the rule will not match even if the IP address sits in the expected subnet.
+
 If the team restricts egress, the API tier also needs a database path:
 
 ```bash
@@ -222,6 +222,8 @@ gcloud compute firewall-rules create allow-egress-api-to-db-tcp-5432 \
   --target-service-accounts=api-prod@food-prod.iam.gserviceaccount.com \
   --enable-logging
 ```
+
+`--destination-ranges=10.40.0.15/32` narrows the rule to one database private address. That is useful for a small example, but a managed database failover design might require a documented range or service-specific endpoint pattern instead of one hardcoded address.
 
 In a real production repo, the same rules usually live in Terraform. Terraform gives review, history, plan output, and rollback through the infrastructure workflow:
 
@@ -313,12 +315,40 @@ gcloud compute firewall-rules list \
   --format='table(name,direction,priority,disabled,allowed,denied,sourceRanges,destinationRanges,targetServiceAccounts)'
 ```
 
+Example output should put the guardrail deny above the application allows. `DISABLED` should be `False`, and the `TARGET_SERVICE_ACCOUNTS` column should match the workload identity that receives the rule:
+
+```console
+NAME                                  DIRECTION  PRIORITY  DISABLED  ALLOWED     DENIED             SOURCE_RANGES  DESTINATION_RANGES  TARGET_SERVICE_ACCOUNTS
+deny-ingress-admin-from-internet      INGRESS    100       False                 tcp:22,tcp:3389    0.0.0.0/0
+allow-ingress-api-from-web-tcp-8080   INGRESS    800       False     tcp:8080                                         api-prod@food-prod.iam.gserviceaccount.com
+allow-egress-api-to-db-tcp-5432       EGRESS     900       False     tcp:5432                     10.40.0.15/32    api-prod@food-prod.iam.gserviceaccount.com
+```
+
 The second command describes one rule when the team needs exact fields:
 
 ```bash
 gcloud compute firewall-rules describe allow-ingress-api-from-web-tcp-8080 \
   --project=food-prod \
   --format=yaml
+```
+
+The describe output is where a reviewer checks exact service account fields, logging, and priority instead of trusting the name:
+
+```yaml
+allowed:
+- IPProtocol: tcp
+  ports:
+  - '8080'
+direction: INGRESS
+disabled: false
+logConfig:
+  enable: true
+name: allow-ingress-api-from-web-tcp-8080
+priority: 800
+sourceServiceAccounts:
+- web-prod@food-prod.iam.gserviceaccount.com
+targetServiceAccounts:
+- api-prod@food-prod.iam.gserviceaccount.com
 ```
 
 The third check creates a Connectivity Test for the expected web-to-API path. The instance URIs and IP addresses should come from the actual incident or deployment evidence:
@@ -338,7 +368,34 @@ gcloud network-management connectivity-tests describe web-to-api-8080 \
   --format=yaml
 ```
 
+The create command mutates Google Cloud state by storing a test definition. The describe command is the important read-only evidence. A healthy result should show reachability instead of a firewall deny:
+
+```yaml
+name: projects/food-prod/locations/global/connectivityTests/web-to-api-8080
+source:
+  instance: projects/food-prod/zones/us-central1-a/instances/web-1
+  ipAddress: 10.20.10.15
+destination:
+  instance: projects/food-prod/zones/us-central1-a/instances/api-1
+  ipAddress: 10.20.20.9
+  port: 8080
+protocol: TCP
+reachabilityDetails:
+  result: REACHABLE
+  traces:
+  - endpointInfo:
+      sourceIp: 10.20.10.15
+      destinationIp: 10.20.20.9
+      destinationPort: 8080
+      protocol: TCP
+```
+
+If the result is `UNREACHABLE` and the trace names a firewall step, check the matching target, source, priority, and action before changing routes. If the trace names route selection, return to the VPC route table instead of editing firewall rules.
+
 Google Cloud also provides **Connectivity Tests** in Network Intelligence Center. Connectivity Tests can analyze the expected forwarding path for traffic between endpoints, such as a VM, GKE cluster, load balancer forwarding rule, or internet IP address. For some paths, it can also run live data plane analysis. This is useful when the route exists, but the packet still fails because a firewall rule, policy, or next hop blocks the path.
+
+![A generated infographic showing a firewall troubleshooting sequence with rule listing, Connectivity Tests, firewall logs, and flow evidence.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/firewall-troubleshooting.png)
+*Firewall debugging should move from configured rules to simulated path evidence and then to runtime logs or flow records.*
 
 A practical troubleshooting flow for the food delivery app might look like this:
 

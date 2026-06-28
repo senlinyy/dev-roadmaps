@@ -76,15 +76,33 @@ During a production review, the evidence usually comes from both Azure and publi
 az network dns record-set cname show \
   --resource-group rg-devpolaris-dns-prod \
   --zone-name devpolaris.com \
-  --name orders
+  --name orders \
+  --query "{ttl:TTL,cname:CNAMERecord.cname}"
 
 az network dns record-set txt show \
   --resource-group rg-devpolaris-dns-prod \
   --zone-name devpolaris.com \
-  --name asuid.orders
+  --name asuid.orders \
+  --query "{ttl:TTL,values:TXTRecords[].value[]}"
 ```
 
-The CNAME proves where the public name sends users. The TXT record proves that the Azure service can validate the hostname before it accepts traffic or issues a managed certificate. Once the name points at the right place, the next question is whether the browser can trust and encrypt the connection.
+Example output:
+
+```json
+{
+  "ttl": 300,
+  "cname": "fd-orders-prod.azurefd.net"
+}
+```
+
+```json
+{
+  "ttl": 300,
+  "values": ["7f8a9b0c1d2e3f4a"]
+}
+```
+
+The CNAME proves where the public name sends users. The TXT record proves that the Azure service can validate the hostname before it accepts traffic or issues a managed certificate. A `300` second TTL gives the team a short cache window during cutover. A suspicious result would point at the old gateway, show a one-day TTL during a planned move, or miss the ownership token the entry service expects. Once the name points at the right place, the next question is whether the browser can trust and encrypt the connection.
 
 ## TLS
 <!-- section-summary: TLS proves the public hostname and encrypts each connection, while the entry design decides where TLS ends and how the backend hop stays protected. -->
@@ -101,7 +119,27 @@ Here is the concrete orders API version. Users connect to Front Door with the `o
 
 Certificate names and host headers matter in that design. A backend TLS certificate has a subject name, and the entry service sends Server Name Indication, usually called **SNI**, during the backend handshake. If the gateway sends the wrong backend host name, the backend certificate validation can fail even though DNS and the public certificate look correct.
 
-A good incident story looks like this. A release changes the origin host name in Front Door from `agw-orders-prod.devpolaris.net` to the raw IP address of the gateway. DNS still works, and the public certificate still works, but the backend TLS handshake fails because the certificate expects a DNS name. The TLS evidence points to the fix before anyone touches the API process.
+You can check the public certificate from any network path that reaches the hostname. This command asks for the certificate using SNI and prints the fields humans usually inspect first.
+
+```bash
+openssl s_client \
+  -connect orders.devpolaris.com:443 \
+  -servername orders.devpolaris.com \
+  </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+```
+
+Example output:
+
+```console
+subject=CN=orders.devpolaris.com
+issuer=C=US, O=Microsoft Corporation, CN=Microsoft Azure TLS Issuing CA 05
+notBefore=Jun 20 00:00:00 2026 GMT
+notAfter=Sep 18 23:59:59 2026 GMT
+```
+
+Healthy output covers the requested hostname and has a valid date window. If the subject names the gateway's default hostname or the certificate is expired, fix the custom-domain or managed-certificate path before changing backend pools.
+
+Here is a common incident story. A release changes the origin host name in Front Door from `agw-orders-prod.devpolaris.net` to the raw IP address of the gateway. DNS still works, and the public certificate still works, but the backend TLS handshake fails because the certificate expects a DNS name. The TLS evidence points to the fix before anyone touches the API process.
 
 Now that DNS and TLS can bring a browser to a trusted HTTPS entry point, we can talk about the Azure services that receive the request. Each service handles a different layer of the request path, so the service choice should follow the kind of traffic decision the app needs.
 
@@ -111,6 +149,8 @@ Now that DNS and TLS can bring a browser to a trusted HTTPS entry point, we can 
 **Azure Front Door** is Azure's global HTTP and HTTPS entry service. It receives web traffic at Microsoft's edge network, matches the request to a Front Door profile, evaluates optional Web Application Firewall rules, matches a route, chooses an origin group, and forwards the request to a selected origin.
 
 For a beginner, the useful definition is this: Front Door is the public front layer for web apps that need global entry, custom domains, managed TLS, WAF policy, route rules, caching in some designs, and origin health checks. It works at **Layer 7**, so it understands HTTP details such as hostname and path.
+
+For new work, use Azure Front Door Standard or Premium rather than Classic. Microsoft has retired new Classic onboarding paths and lists **March 31, 2027** as the Classic retirement date, so a 2026 design should avoid building a new public edge on the older tier. Premium also matters when the origin needs supported Private Link connectivity from Front Door to a private origin.
 
 In our orders API story, Front Door owns the public custom domain `orders.devpolaris.com`. Users in London, Toronto, and Sydney all connect to the nearby Front Door edge. Front Door can apply a WAF policy before the request reaches the regional app, redirect HTTP to HTTPS, and route traffic to the `uksouth` origin group during the first release.
 
@@ -191,6 +231,23 @@ az network application-gateway show-backend-health \
   --name agw-orders-prod
 ```
 
+Example output:
+
+```json
+[
+  {
+    "backendAddress": "10.30.2.10",
+    "health": "Healthy",
+    "healthProbeLog": "Probe succeeded."
+  },
+  {
+    "backendAddress": "10.30.2.11",
+    "health": "Unhealthy",
+    "healthProbeLog": "Probe timed out."
+  }
+]
+```
+
 If `10.30.2.11` fails with a probe timeout while `10.30.2.10` stays healthy, the next step focuses on that one instance, its NSG path, its app process, or its local health endpoint. DNS and TLS may already be fine. Health evidence keeps the investigation close to the failing layer.
 
 We can now make the product choice with clearer language. A better product question is: "Which layer of the request does this entry point need to understand?" That question keeps the choice grounded in the evidence the team can inspect later.
@@ -251,16 +308,41 @@ A release review can collect this evidence before changing traffic:
 az network dns record-set cname show \
   --resource-group rg-devpolaris-dns-prod \
   --zone-name devpolaris.com \
-  --name orders
+  --name orders \
+  --query "{ttl:TTL,cname:CNAMERecord.cname}"
 
 az network dns record-set txt show \
   --resource-group rg-devpolaris-dns-prod \
   --zone-name devpolaris.com \
-  --name asuid.orders
+  --name asuid.orders \
+  --query "{ttl:TTL,values:TXTRecords[].value[]}"
 
 az network application-gateway show-backend-health \
   --resource-group rg-devpolaris-network-prod \
-  --name agw-orders-prod
+  --name agw-orders-prod \
+  --query "backendAddressPools[].backendHttpSettingsCollection[].servers[].{address:address,health:health}"
+```
+
+Example output:
+
+```json
+{
+  "ttl": 300,
+  "cname": "fd-orders-prod.azurefd.net"
+}
+```
+
+```json
+[
+  {
+    "address": "10.30.2.10",
+    "health": "Healthy"
+  },
+  {
+    "address": "10.30.2.11",
+    "health": "Healthy"
+  }
+]
 ```
 
 The CNAME output proves where users will go. The TXT output proves ownership validation. The backend health output proves whether the regional gateway sees healthy targets. Those three facts catch many failed cutovers before users feel them.
@@ -304,6 +386,7 @@ The next article moves from public ingress to private service access. We will fo
 **References**
 
 - [Azure Front Door overview](https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview) - Explains Front Door as a global entry service with edge security, WAF, custom domains, and origin connectivity.
+- [Azure Front Door Classic retirement FAQ](https://learn.microsoft.com/en-us/azure/frontdoor/classic-retirement-faq) - Documents the March 31, 2027 retirement date and guidance to use Standard or Premium.
 - [Azure Front Door routing architecture](https://learn.microsoft.com/en-us/azure/frontdoor/front-door-routing-architecture) - Shows how Front Door resolves, matches hostnames, evaluates WAF, matches routes, selects origins, and forwards requests.
 - [Azure Front Door domains](https://learn.microsoft.com/en-us/azure/frontdoor/domain) - Covers custom-domain requirements, CNAME behavior, apex-domain considerations, and domain validation issues.
 - [Azure Front Door best practices](https://learn.microsoft.com/en-us/azure/frontdoor/best-practices) - Covers origin restriction, TLS guidance, managed certificates, WAF guidance, and health-probe recommendations.

@@ -1,7 +1,7 @@
 ---
 title: "Network Isolation"
-description: "Limit pod-to-pod, namespace, ingress, and egress traffic with Kubernetes NetworkPolicy and clear workload labels."
-overview: "Kubernetes lets pods communicate freely by default. This article uses a checkout application to build default-deny NetworkPolicies, allow only the frontend, API, database, and DNS paths the app needs, and debug denied traffic safely."
+description: "Limit Kubernetes pod-to-pod, namespace, ingress, and egress traffic with NetworkPolicy and clear workload labels."
+overview: "Follow one frontend pod calling one checkout API pod. Then trace default pod networking, namespaces, NetworkPolicy selectors, default deny, allowed app paths, DNS and egress, rollout without outage, denied-traffic debugging, and NetworkPolicy limits."
 tags: ["network-policy", "kubernetes", "networking", "cni", "firewalls"]
 order: 3
 id: article-devsecops-kubernetes-security-network-isolation
@@ -32,7 +32,7 @@ aliases:
 ## The Open Cluster Network
 <!-- section-summary: Kubernetes starts with an open pod network, so a single compromised pod can reach more than the team expects. -->
 
-Imagine a small production checkout system running in Kubernetes. A public request reaches a frontend pod. The frontend calls a checkout API. The checkout API writes an order to a PostgreSQL database. All three workloads run as pods, and the frontend reaches the API through a Kubernetes Service name such as `checkout-api.prod.svc.cluster.local`.
+A public request reaches one frontend pod, and that frontend pod calls the `checkout-api` Service on TCP `8080`. The checkout API then writes an order to PostgreSQL on TCP `5432`. All three workloads run as pods, and the frontend reaches the API through a Kubernetes Service name such as `checkout-api.prod.svc.cluster.local`.
 
 That setup sounds simple, and it is a normal way to run applications. The risky part appears during an incident. A developer starts a temporary debug pod in a `tools` namespace to test connectivity. Later, that debug image contains a vulnerable package, or someone gets shell access inside it. With Kubernetes defaults, that debug pod can often try to connect to the checkout API, the database Service, and any other pod IP it can discover.
 
@@ -110,6 +110,13 @@ Inside that shell, this request uses Kubernetes DNS to find the checkout API in 
 
 ```bash
 wget -S -T 2 -O- http://checkout-api.prod.svc.cluster.local:8080/health
+```
+
+Example output in an open namespace might include an HTTP `200` response:
+
+```bash
+HTTP/1.1 200 OK
+ok
 ```
 
 If the cluster has no NetworkPolicy protecting the checkout pods, that request may reach the API. The debug pod lives in another namespace, but the network remains open. So the fix is to label the workloads and write policies that allow the real application path while leaving the debug namespace outside the allowed path.
@@ -195,6 +202,16 @@ kubectl apply -f default-deny-all.yaml
 kubectl get networkpolicy -n prod
 kubectl describe networkpolicy -n prod default-deny-all
 ```
+
+Example output:
+
+```bash
+networkpolicy.networking.k8s.io/default-deny-all created
+NAME               POD-SELECTOR   AGE
+default-deny-all   <none>         5s
+```
+
+`podSelector: {}` prints as `<none>` in this command output because the selector is empty. In NetworkPolicy, that empty selector means every pod in the namespace is selected.
 
 After this policy takes effect, the selected pods need allow policies for every required path. The frontend needs a path to the checkout API. The checkout API needs a path to the database. All application pods need DNS egress because Service names depend on DNS. If the frontend receives traffic from an Ingress controller, the frontend also needs an ingress allow rule from that controller's namespace and pods.
 
@@ -509,6 +526,7 @@ Admission control and policy engines help the cluster reject risky manifests bef
 
 - [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Defines NetworkPolicy behavior, pod isolation, ingress and egress rules, selectors, additive policies, `ipBlock`, and plugin enforcement requirements.
 - [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Explains how Services provide stable networking for changing pod backends.
+- [Kubernetes Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Explains how namespaces scope Kubernetes objects and help divide cluster resources.
 - [Kubernetes DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Documents Service DNS names and pod DNS behavior.
 - [Kubernetes Cluster Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/) - Describes the Kubernetes pod networking model and network plugin role.
 - [Debugging DNS Resolution](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) - Shows official DNS debugging patterns using test pods and `nslookup`.

@@ -56,6 +56,9 @@ An access review at parent scopes usually looks for a few patterns:
 | **Team folder** | Which team groups can administer projects outside their normal service area? | A service team can accidentally reach another team's data. |
 | **Project** | Which direct bindings grant access that parent scopes already grant? | Repeated bindings make reviews noisy and hide the real source of access. |
 
+![Production access guardrails](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/production-access-guardrails.png)
+*Production access review works best when the team can see the requester, role, scope, duration, guardrails, and evidence path together before access is granted.*
+
 For a beginner, the important part is the direction of inheritance. A role granted on a parent helps the principal work on descendants. A role granted on a child stays local to that child. When a role looks surprising in a production project, the source might be the project policy, the folder policy, or the organization policy.
 
 In mature environments, access reviews start with the broadest scopes. Security and platform teams review organization-level and production-folder grants before they review individual projects. Product teams still review their own project-level access, but they do that after the parent-scope picture is clear. That order prevents a project owner from removing a direct binding while a wider inherited binding still grants the same access.
@@ -147,7 +150,29 @@ resource "google_project_iam_member" "checkout_incident_logs" {
 }
 ```
 
+This Terraform resource is consumed by the Google provider during `terraform apply`, and it creates one IAM member binding on the `checkout-prod` project. The `project`, `role`, and `member` fields answer where the grant lives, what Maya receives, and which principal receives it. The `condition` block carries the incident title, reviewer-readable description, and time limit.
+
+A reviewer should expect a plan like this before approving the fallback:
+
+```hcl
+# google_project_iam_member.checkout_incident_logs will be created
++ resource "google_project_iam_member" "checkout_incident_logs" {
+    project = "checkout-prod"
+    role    = "roles/logging.viewer"
+    member  = "user:maya@example.com"
+
+    condition {
+      title       = "inc_4821_checkout_debug"
+      description = "Temporary log access for checkout production incident INC-4821"
+      expression  = "request.time < timestamp(\"2026-06-14T19:00:00Z\")"
+    }
+  }
+```
+
 The condition is the important part of this example. It makes the grant expire by time, and the title and description carry the incident evidence. If the team uses PAM for the same access, Terraform should avoid overwriting PAM-managed role bindings. Google specifically recommends using non-authoritative Terraform IAM resources when PAM also manages temporary role bindings, because authoritative resources can replace bindings that are outside Terraform state.
+
+![Temporary access lifecycle](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/temporary-access-lifecycle.png)
+*Temporary access should have a lifecycle: request, approval, time-bounded grant, production investigation, automatic removal, and after-incident review.*
 
 ## Cloud Audit Logs as Evidence
 <!-- section-summary: Cloud Audit Logs show who performed an action, what method ran, which resource was touched, and when it happened. -->
@@ -174,6 +199,22 @@ timestamp >= "2026-06-14T16:00:00Z"
 timestamp <= "2026-06-14T19:15:00Z"
 ```
 
+Use this in Logs Explorer or as the filter body for `gcloud logging read` when the evidence question starts with one person and one incident window. The principal filter selects Maya's actions, and the timestamps bracket the PAM grant plus a small buffer.
+
+A useful result should show the principal, service, method, resource, and timestamp:
+
+```yaml
+timestamp: '2026-06-14T16:42:11.219Z'
+protoPayload:
+  authenticationInfo:
+    principalEmail: maya@example.com
+  serviceName: run.googleapis.com
+  methodName: google.cloud.run.v2.Services.GetService
+resource:
+  labels:
+    project_id: checkout-prod
+```
+
 A second query can focus on IAM policy changes during the incident window:
 
 ```logging
@@ -183,7 +224,27 @@ timestamp >= "2026-06-14T16:00:00Z"
 timestamp <= "2026-06-14T19:15:00Z"
 ```
 
+This query looks for IAM policy changes, including temporary grants and removals. A reviewer should inspect the caller, the target project, and the delta in the policy change:
+
+```yaml
+timestamp: '2026-06-14T16:21:04.771Z'
+protoPayload:
+  authenticationInfo:
+    principalEmail: privilegedaccessmanager.googleapis.com
+  methodName: SetIamPolicy
+  resourceName: projects/checkout-prod
+  serviceData:
+    policyDelta:
+      bindingDeltas:
+      - action: ADD
+        member: user:maya@example.com
+        role: roles/logging.viewer
+```
+
 Those queries are only starting points. Real investigations usually add the project ID, service name, method names, or PAM-related fields once the first results show the shape of the event. The important habit is to capture the evidence package while the incident is still fresh: request reason, approval, grant start and end time, IAM changes, production actions, and any policy denials.
+
+![Audit evidence package](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/audit-evidence-package.png)
+*An after-incident evidence package should prove approval, IAM change, production activity, policy denials, and cleanup without relying on memory.*
 
 Data Access audit logs deserve extra planning. Admin Activity logs are written by default and stay enabled. Data Access logs can be large and start disabled by default for many services outside BigQuery, so security teams decide which production services need them, where to route them, who can read them, and how long to retain them. A team that waits until after a sensitive incident to enable Data Access logs may have a gap in the evidence.
 
@@ -233,6 +294,25 @@ resource "google_project_iam_member" "checkout_oncall_log_viewer" {
     expression  = "request.time.getDayOfWeek(\"Europe/London\") >= 1 && request.time.getDayOfWeek(\"Europe/London\") <= 5"
   }
 }
+```
+
+This config is consumed as a stable Terraform-managed IAM member binding for the checkout on-call group. The `member` field uses a group instead of a personal user so the identity team can manage membership separately, and the `condition` expression makes the intended support window visible to reviewers. If the team needs true 24/7 incident visibility, the reviewer should change the design rather than silently accept a business-hours condition that conflicts with operations.
+
+The plan should make the scope and condition easy to inspect:
+
+```hcl
+# google_project_iam_member.checkout_oncall_log_viewer will be created
++ resource "google_project_iam_member" "checkout_oncall_log_viewer" {
+    project = "checkout-prod"
+    role    = "roles/logging.viewer"
+    member  = "group:checkout-oncall@example.com"
+
+    condition {
+      title       = "checkout_oncall_business_hours"
+      description = "Checkout on-call log access for production support"
+      expression  = "request.time.getDayOfWeek(\"Europe/London\") >= 1 && request.time.getDayOfWeek(\"Europe/London\") <= 5"
+    }
+  }
 ```
 
 That example is a teaching shape rather than a universal recommendation. Many teams give on-call groups stable log visibility because incidents happen outside business hours. The useful part is the review pattern: the condition is visible, the principal is a group rather than a personal user, and the scope is one production project rather than the organization.

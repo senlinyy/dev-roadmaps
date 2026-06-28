@@ -76,6 +76,39 @@ X-Ray also records useful labels. **Annotations** are indexed key-value pairs th
 
 X-Ray categorizes problems in a way that matches HTTP and service behavior. `Error` covers client-side 4xx responses, `Fault` covers server-side 5xx responses, and `Throttle` covers throttling responses such as 429. During the checkout incident, that distinction helps the team separate bad customer input from provider failure or account-level throttling.
 
+A responder can ask X-Ray for trace summaries during the same alarm window:
+
+```bash
+aws xray get-trace-summaries \
+  --start-time 2026-06-13T10:10:00Z \
+  --end-time 2026-06-13T10:20:00Z \
+  --filter-expression 'service("checkout-api") { fault = true OR error = true OR responsetime > 2 }' \
+  --query 'TraceSummaries[].{Id:Id,Duration:Duration,ResponseTime:ResponseTime,HasFault:HasFault,HasError:HasError}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "Id": "1-666c182a-4f7d9b2e9a1d5c67b8142a10",
+    "Duration": 8.48,
+    "ResponseTime": 8.48,
+    "HasFault": true,
+    "HasError": false
+  },
+  {
+    "Id": "1-666c1840-9d1f0b6c5e3a2c8a11d7f901",
+    "Duration": 7.91,
+    "ResponseTime": 7.91,
+    "HasFault": true,
+    "HasError": false
+  }
+]
+```
+
+The filter asks for checkout traces that had a fault, an error, or a response time above two seconds. `Duration` and `ResponseTime` are seconds in this output, so both traces represent slow customer requests. `HasFault: true` points toward a server-side failure path that deserves log and span inspection.
+
 ## OpenTelemetry Is the Current Instrumentation Path
 <!-- section-summary: AWS now points new and migrated tracing work toward OpenTelemetry, with ADOT and the CloudWatch agent as AWS-supported implementation paths. -->
 
@@ -90,6 +123,18 @@ AWS has changed its guidance. The X-Ray SDKs and daemon entered maintenance mode
 **AWS Distro for OpenTelemetry**, or **ADOT**, is the AWS-supported distribution of OpenTelemetry components. AWS tests, secures, optimizes, and supports the distribution for AWS use cases. With ADOT, a team can instrument once and send correlated metrics and traces to CloudWatch, X-Ray, Amazon OpenSearch Service, or Amazon Managed Service for Prometheus.
 
 This is the practical default for a new checkout service. Use OpenTelemetry instrumentation in the application, use ADOT or the CloudWatch agent to receive and export the spans, and view the resulting traces in CloudWatch and X-Ray experiences. Existing X-Ray SDK applications can migrate in phases, which we will cover later in the article.
+
+For a beginner, separate the tracing pipeline into jobs:
+
+| Piece | Job in the checkout service |
+|---|---|
+| OpenTelemetry API | Gives application code a standard way to create spans |
+| OpenTelemetry SDK or auto-instrumentation | Starts spans for HTTP, AWS SDK, database, and custom work |
+| Propagator | Reads and writes trace context in headers or messages |
+| Collector, ADOT, or CloudWatch agent | Receives spans from the app and exports them to AWS |
+| X-Ray-backed CloudWatch views | Store, filter, and visualize the request path |
+
+The SDK runs with the application and knows what the code is doing. The collector or agent runs beside the application or on the host and moves telemetry to the backend. Keeping those roles separate helps during troubleshooting because a missing trace can come from code instrumentation, context propagation, collector reachability, IAM permission, sampling, or backend ingestion.
 
 ## Trace Context Propagation
 <!-- section-summary: Trace context is the request identity that travels across HTTP, AWS SDK calls, queues, and function boundaries so separate spans join one trace. -->
@@ -111,6 +156,7 @@ There is also a security habit here. AWS documentation notes that a trace header
 ![Trace context propagation through browser, checkout API, SQS message, Lambda worker, and payment provider](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/trace-context-propagation.png)
 
 *The trace header acts like the request identity. Each service keeps the same story going by reading the incoming context and sending context to the next hop.*
+
 
 ## Spans, Segments, and Subsegments
 <!-- section-summary: OpenTelemetry records spans, and X-Ray displays those records as segments and subsegments that show service work and dependency calls. -->
@@ -151,7 +197,7 @@ The production pipeline has two moving parts. The application creates spans thro
 }
 ```
 
-For containerized environments, the endpoint often needs to be reachable from another container or task. AWS documentation notes that `0.0.0.0` is appropriate when telemetry comes from outside the agent container's network namespace. That detail prevents a quiet failure where the app sends spans to a port the agent listens on only inside its own container.
+This config tells the agent to receive OTLP traces over gRPC on port `4317` and HTTP on port `4318`. For containerized environments, the endpoint often needs to be reachable from another container or task. AWS documentation notes that `0.0.0.0` is appropriate when telemetry comes from outside the agent container's network namespace. That detail prevents a quiet failure where the app sends spans to a port the agent listens on only inside its own container.
 
 AWS also documents a newer CloudWatch agent path built on the OpenTelemetry Collector. In that model, you append OpenTelemetry YAML to the CloudWatch agent configuration and send telemetry to CloudWatch OTLP endpoints with SigV4 authentication. AWS describes the CloudWatch agent as the recommended path for most customers sending OpenTelemetry telemetry to CloudWatch because one agent can also power curated CloudWatch experiences such as Application Signals and Enhanced Container Insights.
 
@@ -165,6 +211,8 @@ npm install --save \
   @opentelemetry/propagator-aws-xray \
   @opentelemetry/resource-detector-aws
 ```
+
+`npm install --save` adds these packages to the application dependency list. This installs the OpenTelemetry API, the Node SDK, an OTLP trace exporter, X-Ray trace propagation, and AWS resource detectors. The important operational detail is startup order: load the instrumentation file before the main app so HTTP clients, servers, and AWS SDK calls can be wrapped before they start handling requests.
 
 ```javascript
 const { NodeSDK } = require("@opentelemetry/sdk-node");
@@ -194,16 +242,19 @@ sdk.start();
 node --require ./instrumentation.js app.js
 ```
 
+`--require ./instrumentation.js` loads instrumentation before `app.js`, which lets the SDK patch libraries before the service starts handling traffic.
+
 The same shape applies in other languages. The names change, but the pieces stay familiar: OpenTelemetry SDK, resource detection, propagation, exporter, and collector or CloudWatch agent. The team verifies success in CloudWatch by checking trace maps, trace details, and the service views that use X-Ray trace data.
 
 ![OpenTelemetry to AWS pipeline showing app SDK, OTLP, CloudWatch agent, ADOT Collector, X-Ray traces, CloudWatch metrics, and CloudWatch logs](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/opentelemetry-to-aws.png)
 
 *The pipeline shows the modern AWS tracing path. Applications emit OpenTelemetry data, and AWS-supported agents or collectors deliver it into CloudWatch and X-Ray views.*
 
+
 ## Tracing Queues and Event-Driven Work
 <!-- section-summary: Async systems need explicit context handoff because the request leaves HTTP and waits in a queue before another service continues the work. -->
 
-HTTP request tracing feels direct because headers travel with the request. Event-driven systems need more attention because the work pauses in a queue, topic, or event bus before another runtime continues it. The trace still needs a way to carry context from producer to consumer.
+HTTP request tracing is direct because headers travel with the request. Event-driven systems need more attention because the work pauses in a queue, topic, or event bus before another runtime continues it. The trace still needs a way to carry context from producer to consumer.
 
 Amazon SQS integrates with X-Ray tracing through the `AWSTraceHeader` message system attribute. When a traced producer sends a message, SQS can carry the X-Ray trace header so the consumer can continue the same trace. AWS documentation also states that Lambda downstream consumers can receive trace context automatically, while other consumers may need manual instrumentation to recover and continue the context.
 
@@ -254,6 +305,28 @@ For the checkout API, the log line should carry both the operational fields from
 
 The logs stay in CloudWatch Logs, and the traces stay in X-Ray-backed CloudWatch views. The shared IDs are the bridge. A Logs Insights query can find `traceId`, while a trace detail page can point back to logs from the same request.
 
+When a responder starts from a log line, they can use the trace ID to ask X-Ray for the trace document:
+
+```bash
+aws xray batch-get-traces \
+  --trace-ids 1-666c182a-4f7d9b2e9a1d5c67b8142a10 \
+  --query 'Traces[].{TraceId:Id,Duration:Duration,SegmentCount:length(Segments)}'
+```
+
+Example output:
+
+```json
+[
+  {
+    "TraceId": "1-666c182a-4f7d9b2e9a1d5c67b8142a10",
+    "Duration": 8.48,
+    "SegmentCount": 5
+  }
+]
+```
+
+This readback confirms the trace exists and has five segment documents attached. If the count is lower than expected, the team checks instrumentation and context propagation on the missing service boundary. To inspect raw segment documents, remove the `--query` filter or change it to return `Segments[].Document`. Those documents are verbose, but they help when the console view hides a detail the team needs, such as a downstream fault flag, annotation, or service name. In normal incidents, the console trace map and trace detail page are easier to read. The CLI is useful for automation, evidence capture, and comparing one trace with another.
+
 This also improves incident communication. Instead of pasting five unrelated screenshots into a chat channel, one responder can share a trace ID and a Logs Insights query. The team gets one request story with service timing, downstream calls, and exact log evidence.
 
 ## Sampling and Cost Control
@@ -285,7 +358,7 @@ The first migration step is an inventory. List each service, language, runtime, 
 
 The second step is collector placement. ECS services may use a sidecar or task-level agent. EC2 services may use the CloudWatch agent on the host. EKS services may use a DaemonSet or sidecar pattern. Lambda functions may use Application Signals, an ADOT layer, or manual OpenTelemetry setup depending on runtime and latency requirements.
 
-The third step is code migration. X-Ray segments and subsegments become OpenTelemetry spans. X-Ray annotations and metadata become span attributes, with selected attributes configured as X-Ray annotations if the team needs searchable trace filters. AWS SDK, HTTP client, web framework, and database instrumentation should move to OpenTelemetry library instrumentation where available.
+The third step is code migration. X-Ray segments and subsegments map to OpenTelemetry spans. X-Ray annotations and metadata map to span attributes, with selected attributes configured as X-Ray annotations if the team needs searchable trace filters. AWS SDK, HTTP client, web framework, and database instrumentation should move to OpenTelemetry library instrumentation where available.
 
 The fourth step is propagation. The service should use W3C propagation where that is the platform standard and the AWS X-Ray propagator where AWS-integrated services need X-Ray-compatible context. Mixed environments can support multiple propagation formats during migration so new OpenTelemetry services and old X-Ray SDK services can still join traces.
 
@@ -330,6 +403,7 @@ This is the end state the observability section has been building toward. Metric
 ![Trace, log, and sampling summary showing trace map, trace-linked logs, sampling rules, and a checkout timeout callout](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/trace-log-sample-summary.png)
 
 *The summary connects the tracing controls that matter during incidents: enough sampled traces, trace-linked logs, and a clear trace map for the failing checkout path.*
+
 
 ## What's Next
 <!-- section-summary: The next article rolls telemetry into service health, service level indicators, and reliability targets. -->

@@ -10,332 +10,299 @@ aliases:
   - route-53-resolver
   - vpc-dns-resolver
 ---
-
 ## Table of Contents
 
-1. [Why DNS Is Part of Private Networking](#why-dns-is-part-of-private-networking)
+1. [Names Choose the First Destination](#names-choose-the-first-destination)
 2. [The VPC DNS Resolver](#the-vpc-dns-resolver)
-3. [VPC DNS Attributes and DHCP Options](#vpc-dns-attributes-and-dhcp-options)
+3. [DNS Attributes and DHCP Options](#dns-attributes-and-dhcp-options)
 4. [Private Hosted Zones](#private-hosted-zones)
-5. [Split-Horizon Private Names](#split-horizon-private-names)
-6. [PrivateLink and AWS Service Names](#privatelink-and-aws-service-names)
-7. [Inbound Resolver Endpoints](#inbound-resolver-endpoints)
-8. [Outbound Resolver Endpoints and Forwarding Rules](#outbound-resolver-endpoints-and-forwarding-rules)
-9. [Cross-VPC and Multi-Account DNS Patterns](#cross-vpc-and-multi-account-dns-patterns)
-10. [Resolver Query Logging](#resolver-query-logging)
-11. [Troubleshooting Wrong DNS Answers](#troubleshooting-wrong-dns-answers)
-12. [Putting It All Together](#putting-it-all-together)
-13. [References](#references)
+5. [PrivateLink Service Names](#privatelink-service-names)
+6. [Hybrid DNS with Resolver Endpoints](#hybrid-dns-with-resolver-endpoints)
+7. [Query Logs and Troubleshooting](#query-logs-and-troubleshooting)
+8. [References](#references)
 
-## Why DNS Is Part of Private Networking
-<!-- section-summary: Private network paths depend on DNS because applications usually connect to names before route tables ever see packets. -->
+## Names Choose the First Destination
+<!-- section-summary: Private network paths depend on DNS because applications usually connect to names before packets reach route tables. -->
 
-The payments app from the endpoint article now has a good private service path. Private ECS tasks can write receipts to S3 through a gateway endpoint, call Secrets Manager and CloudWatch Logs through interface endpoints, pull images from ECR, and reach a partner fraud API through PrivateLink.
+The receipts API now has private endpoints for S3, Secrets Manager, and CloudWatch Logs. The network path can look carefully designed, and the app can still fail before it sends a useful packet. The reason is simple: the application usually starts with a name.
 
-That sounds like a routing story, but the application rarely starts with a route. It starts with a name. The code asks for `secretsmanager.us-east-1.amazonaws.com`, `api.ecr.us-east-1.amazonaws.com`, `fraud.partner.internal`, or `db.corp.internal`. **DNS**, which stands for Domain Name System, turns those names into IP addresses. After DNS returns an answer, the route table and packet filters can do their work.
+**DNS**, the Domain Name System, maps names to addresses. The app asks for names like `secretsmanager.us-east-1.amazonaws.com`, `receipts-db.prod.internal`, or `fraud.partner.internal`. After DNS returns an IP address, route tables, security groups, NACLs, firewalls, and load balancers get their turn.
 
-This is why DNS belongs in the AWS networking module. A private endpoint can be perfectly built, and the application can still use the wrong path if the name resolves to a public address or to an on-premises address outside the VPC route plan. A hybrid network can have a healthy VPN, while `corp.internal` still needs a forwarding rule that tells AWS where to send those DNS queries.
+This is why many private networking incidents start as DNS incidents. A PrivateLink endpoint can exist and stay healthy while the app resolves a public AWS service address. A private hosted zone can contain the correct record while the VPC lacks the association that lets workloads see it. A hybrid forwarding rule can send a corporate name to the wrong DNS server and make a private service look offline.
 
-The practical question for this article is simple: when a workload asks for a name, which resolver answers, which zone or rule controls the answer, and which private network path can reach the returned IP address?
-
-![DNS answer shapes packet path infographic showing an app resolving a service name through Route 53 Resolver to either a private endpoint IP or a public service edge](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/dns-answer-packet-path.png)
-
-*A private network path starts with a name answer. If DNS returns a private endpoint IP, packets follow the private endpoint path; if DNS returns a public answer, the route-table investigation follows a different direction.*
+For the receipts app, start a timeout review with one question: "which name did the app ask for, and which IP address did it receive?" If `inventory.shared.internal` resolves to `10.40.8.20`, routing and packet controls can focus on that target. If it resolves to an old `10.70.x.x` address, the route review follows the wrong destination.
 
 ## The VPC DNS Resolver
-<!-- section-summary: Route 53 Resolver is the default DNS service inside a VPC and answers VPC, private hosted zone, and public recursive DNS queries. -->
+<!-- section-summary: Route 53 Resolver is the default DNS service inside a VPC and answers VPC, private hosted zone, public recursive, and endpoint private DNS queries. -->
 
-Every VPC gets access to a default AWS DNS service. AWS documentation calls it the **Route 53 Resolver**, the **VPC Resolver**, the **Amazon DNS server**, and **AmazonProvidedDNS** in different contexts. For beginners, these names refer to the same built-in resolver path that resources in a VPC commonly use for DNS.
+Every VPC has access to an AWS-managed DNS resolver. AWS documentation uses a few names for this path: **Route 53 Resolver**, **Amazon DNS server**, and **AmazonProvidedDNS**. In day-to-day VPC work, they all point to the resolver service that VPC resources use for DNS.
 
-The resolver is reachable at the VPC base address plus two. If the payments VPC uses `10.40.0.0/16`, the resolver is reachable at `10.40.0.2`. AWS also exposes it at `169.254.169.253` for IPv4 and `fd00:ec2::253` for IPv6. Instances and many managed compute runtimes learn the DNS server through the VPC DHCP configuration.
+The resolver is reachable at the VPC CIDR base address plus two. In a VPC with CIDR `10.40.0.0/16`, workloads can use `10.40.0.2`. AWS also documents link-local addresses `169.254.169.253` for IPv4 and `fd00:ec2::253` for IPv6. Most workloads receive the right resolver through DHCP options, so application teams rarely type these addresses directly.
 
-The default VPC resolver can answer several kinds of names:
+The resolver can answer EC2 private DNS names, Route 53 private hosted zone records, public recursive DNS queries, and private DNS records for interface endpoints. For the receipts app, the same resolver can answer `receipts-db.prod.internal` from a private hosted zone and `secretsmanager.us-east-1.amazonaws.com` through interface endpoint private DNS.
 
-| Name type | Example | Where the answer comes from |
-| --- | --- | --- |
-| **EC2 private names** | `ip-10-40-20-15.ec2.internal` | VPC-provided DNS records. |
-| **Private hosted zone records** | `api.payments.internal` | Route 53 private hosted zone associated with the VPC. |
-| **AWS service private DNS names** | `secretsmanager.us-east-1.amazonaws.com` | Interface endpoint private DNS when enabled. |
-| **Public internet names** | `example.com` | Recursive lookup through public DNS. |
+A runtime check can look like this from an instance, debug container, or task shell:
 
-The resolver gives the VPC one local place to ask DNS questions. You treat it as an AWS-managed resolver service built into the VPC networking environment. AWS handles the host placement, patching, and scaling underneath that service.
+```bash
+getent hosts secretsmanager.us-east-1.amazonaws.com
+getent hosts receipts-db.prod.internal
+```
 
-For the payments app, this means a container can ask the VPC resolver for both AWS service names and internal application names. The answer might come from an interface endpoint's private DNS configuration, a private hosted zone, or a forwarding rule that sends the question to corporate DNS.
+Example output:
 
-## VPC DNS Attributes and DHCP Options
-<!-- section-summary: VPC DNS attributes and DHCP options decide whether workloads use the AWS resolver and whether private hosted zones and endpoint private DNS work as expected. -->
+```console
+10.20.14.83 secretsmanager.us-east-1.amazonaws.com
+10.20.28.91 secretsmanager.us-east-1.amazonaws.com
+10.30.6.25 receipts-db.prod.internal
+```
 
-Two VPC attributes show up in almost every private DNS troubleshooting session: **DNS resolution** and **DNS hostnames**. In API and Terraform names, these are usually `enableDnsSupport` and `enableDnsHostnames`.
+These answers tell a story. The Secrets Manager name returns private `10.20.x.x` endpoint IPs, so private DNS for the interface endpoint is working from this runtime. The database name returns `10.30.6.25`, which looks like an internal database address. If the second command returned no result, the next action would be the private hosted zone record and VPC association. If the first command returned public AWS addresses, the next action would be the endpoint private DNS setting, VPC DNS attributes, and DHCP or forwarding path.
 
-**DNS resolution**, or `enableDnsSupport`, controls whether DNS queries to the Amazon-provided DNS server succeed. **DNS hostnames**, or `enableDnsHostnames`, controls whether public DNS hostnames are assigned to instances with public IPv4 addresses, and it is also required with DNS resolution for private hosted zones and PrivateLink private DNS patterns.
+Run the DNS check as close to the failing workload as practical. A laptop, bastion host, Lambda function, ECS task, and EC2 instance can use different resolvers, subnets, security groups, and DHCP option sets. DNS evidence from the wrong runtime can send the investigation in the wrong direction.
 
-For private hosted zones and interface endpoint private DNS, both attributes should be enabled. If either setting is wrong, records that look correct in Route 53 can fail from inside the VPC. The failure often appears as an unexpected public answer, an NXDOMAIN response, or an application timeout after DNS sends the caller to the wrong place.
+![The DNS answer path shows how a workload receives private service answers from the VPC resolver before it ever opens a network connection](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/dns-answer-packet-path.png)
 
-A small AWS CLI check can look like this:
+*The DNS answer path shows how a workload receives private service answers from the VPC resolver before it ever opens a network connection.*
+
+
+## DNS Attributes and DHCP Options
+<!-- section-summary: VPC DNS attributes and DHCP options decide whether workloads can use the AWS resolver and private DNS features. -->
+
+Two VPC attributes appear in many AWS DNS problems: `enableDnsSupport` and `enableDnsHostnames`. `enableDnsSupport` lets queries to the Amazon-provided resolver succeed. `enableDnsHostnames` supports DNS hostnames for instances with public addresses and works with DNS support for private hosted zones and interface endpoint private DNS.
+
+For the receipts app, both attributes should be enabled. Private hosted zones, EC2 names, and PrivateLink private DNS all rely on the VPC resolver path. A private hosted zone can contain perfect records, and workloads can still receive wrong answers when these settings or the resolver path have drifted.
+
+The AWS CLI checks each attribute separately:
 
 ```bash
 aws ec2 describe-vpc-attribute \
-  --vpc-id vpc-0abc1234payments \
+  --vpc-id vpc-0abc1234receipts \
   --attribute enableDnsSupport
 
 aws ec2 describe-vpc-attribute \
-  --vpc-id vpc-0abc1234payments \
+  --vpc-id vpc-0abc1234receipts \
   --attribute enableDnsHostnames
 ```
 
-A Terraform VPC shape usually sets both explicitly:
-
-```hcl
-resource "aws_vpc" "payments" {
-  cidr_block           = "10.40.0.0/16"
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+```json
+{
+  "VpcId": "vpc-0abc1234receipts",
+  "EnableDnsSupport": {
+    "Value": true
+  }
 }
 ```
 
-**DHCP options** are the network settings that instances receive when they join the VPC. The default DHCP option set uses `AmazonProvidedDNS` as the domain name server. Some companies replace it with custom DNS servers, often Active Directory DNS servers or centralized security resolvers. That can work, but the custom resolvers need conditional forwarding back to the VPC resolver for AWS-private names that only the VPC resolver can answer.
+```json
+{
+  "VpcId": "vpc-0abc1234receipts",
+  "EnableDnsHostnames": {
+    "Value": true
+  }
+}
+```
 
-The important production habit is to record which resolver the workload actually uses. A private hosted zone attached to a VPC helps only if the query reaches the VPC resolver or a DNS server that forwards the right name to it.
+The important field is `Value`. For this VPC, both outputs should show `true`. A `false` value gives the next action: enable the missing VPC DNS attribute, then retest the same hostname from the workload path.
+
+DHCP option sets decide which DNS servers instances learn. The default AWS option set sends instances to `AmazonProvidedDNS`. Some enterprises replace that with corporate DNS servers. That can work, but the corporate DNS servers need forwarding rules back to Route 53 Resolver for AWS private names such as private hosted zone records and interface endpoint private DNS names.
+
+Custom DNS should be specific. A common healthy pattern forwards corporate zones such as `corp.internal` to corporate DNS and keeps AWS private names on the VPC resolver path. A risky pattern sends every DNS query out to corporate DNS first, then relies on corporate DNS to understand every AWS private name. That design adds latency, broad dependency, and confusing failure modes.
 
 ## Private Hosted Zones
-<!-- section-summary: A private hosted zone stores DNS records for one or more associated VPCs, letting internal names resolve without publishing them on the internet. -->
+<!-- section-summary: Private hosted zones let associated VPCs resolve internal names without publishing those records to public DNS. -->
 
-A **hosted zone** is a container for DNS records for a domain. A public hosted zone answers internet DNS queries. A **private hosted zone** answers DNS queries only from the VPCs associated with that zone. It gives AWS workloads private names such as `api.payments.internal`, `ledger.payments.internal`, or `fraud.partner.internal` without publishing those names to the public internet.
+A **Route 53 private hosted zone** stores DNS records that only associated VPCs can resolve through the Route 53 Resolver path. This gives teams internal names such as `receipts-db.prod.internal`, `api.prod.internal`, or `inventory.shared.internal` without publishing those records to the public internet.
 
-For the payments app, the platform team creates a private hosted zone named `payments.internal`. The zone is associated with the production payments VPC. Inside the zone, the team can create records that point to internal load balancers, private API endpoints, or alias records that lead to endpoint DNS names.
+For the receipts app, a private hosted zone named `prod.internal` can hold `receipts-db.prod.internal`. The record can point to the RDS endpoint or to a stable internal load balancer name. Application config then uses a readable service name rather than a long provider-generated endpoint string.
 
-A small Terraform example looks like this:
-
-```hcl
-resource "aws_route53_zone" "payments_internal" {
-  name = "payments.internal"
-
-  vpc {
-    vpc_id = aws_vpc.payments.id
-  }
-}
-
-resource "aws_route53_record" "api" {
-  zone_id = aws_route53_zone.payments_internal.zone_id
-  name    = "api.payments.internal"
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.internal_api.dns_name
-    zone_id                = aws_lb.internal_api.zone_id
-    evaluate_target_health = true
-  }
-}
-```
-
-Private hosted zone associations are the access boundary for the DNS records. If the staging VPC also needs `payments.internal`, the zone must be associated with that VPC or shared through a managed multi-account pattern. If a developer laptop asks public DNS for `api.payments.internal`, public DNS has no reason to know that private name.
-
-Private hosted zones also interact with resolver rules. When a private hosted zone and a forwarding rule cover the same domain, rule precedence can change where the query goes. That detail matters in hybrid networks because a domain like `corp.internal` might exist in an on-premises DNS system while a subdomain like `aws.corp.internal` exists in Route 53.
-
-## Split-Horizon Private Names
-<!-- section-summary: Split-horizon DNS uses the same name in different DNS views so internal callers can receive private answers while external callers receive public answers. -->
-
-**Split-horizon DNS** means the same domain name can produce different DNS answers depending on where the query comes from. An internal caller might receive a private IP address, while an internet caller receives a public load balancer address. The name is the same, but the DNS view is different.
-
-The payments company may have a public API at `api.payments.example.com` for customer-facing requests and an internal API at the same name for private worker-to-worker calls. Public Route 53 can host the public zone for `payments.example.com`, while a private hosted zone associated with the VPC can host private records for selected names. Workloads inside the VPC receive the private answer from the VPC resolver. Internet users receive the public answer from public DNS.
-
-This pattern is powerful because application configuration can stay stable. The application asks for `api.payments.example.com` in every environment, and DNS decides the address based on the network view. That same convenience can create confusion during incidents because two engineers in different places may see different answers for the same name.
-
-A careful split-horizon design documents three things:
-
-| Question | Production answer to record |
-| --- | --- |
-| **Which views exist?** | Public hosted zone, production private hosted zone, staging private hosted zone, corporate DNS zone. |
-| **Which VPCs or networks can see each view?** | VPC associations, inbound endpoint forwarding, outbound endpoint rules. |
-| **What happens for missing records?** | NXDOMAIN from private zone, public fallback, or forwarding to corporate DNS depending on the matching zone and rule. |
-
-The missing-record behavior is important. If a private hosted zone matches a domain but lacks the specific record, the resolver can return NXDOMAIN, and public lookup fallback may never happen for that query. That is often the reason a name works from a laptop but fails inside the VPC.
-
-## PrivateLink and AWS Service Names
-<!-- section-summary: Interface endpoint private DNS changes AWS service and provider service names into private endpoint ENI addresses inside the VPC. -->
-
-The endpoint article introduced private DNS for interface endpoints. This topic deserves one more pass from the DNS side because it explains many wrong-path incidents.
-
-An **interface endpoint** creates endpoint ENIs with private IPs. When private DNS is enabled for an AWS service endpoint, the normal service hostname can resolve to those private endpoint IPs inside the VPC. For example, `secretsmanager.us-east-1.amazonaws.com` can resolve to private addresses in the payments VPC. The SDK keeps using the standard service name, and the packet path goes to the endpoint ENI.
-
-That means a DNS answer can reveal whether the application is using the endpoint path. If the ECS task resolves Secrets Manager to private IP addresses from the endpoint subnets, the DNS half looks good. If it resolves to public AWS addresses, the workload may use NAT or fail in an isolated subnet.
-
-Provider services add one more naming layer. A partner PrivateLink service may give the payments team a generated endpoint DNS name, and it may also support a private DNS name such as `api.fraudpartner.example.com`. The consumer can also create its own private hosted zone record such as `fraud.partner.internal` that points at the endpoint DNS name. In each case, the production goal is the same: application code gets a stable name, and the VPC resolver returns private endpoint addresses from inside the VPC.
-
-Custom DNS servers need special care here. If the payments VPC DHCP options point tasks to corporate DNS servers, those servers may resolve AWS service names using public DNS unless they forward the right names back to the VPC resolver. The endpoint can exist, the security group can allow traffic, and the app can still miss the endpoint because DNS took a different resolver path.
-
-## Inbound Resolver Endpoints
-<!-- section-summary: Inbound Resolver endpoints let DNS resolvers outside the VPC ask the VPC resolver for private hosted zone and VPC names over a private network link. -->
-
-A **Resolver inbound endpoint** lets DNS queries enter a VPC resolver from another network. The endpoint has private IP addresses in subnets you choose. Corporate DNS servers, another VPC, or another connected network can forward selected queries to those IPs over private connectivity such as VPN, Direct Connect, Transit Gateway, or another routed private path.
-
-For the payments company, the corporate network has internal tools that need to resolve `api.payments.internal`. That name lives in a Route 53 private hosted zone associated with the payments VPC. Corporate DNS sends that private question to AWS through an inbound Resolver endpoint in the payments VPC, then receives the answer from the VPC resolver.
-
-The flow looks like this:
-
-1. A corporate workstation asks corporate DNS for `api.payments.internal`.
-2. Corporate DNS has a conditional forwarder for `payments.internal`.
-3. Corporate DNS forwards the query over the private network to the inbound endpoint IPs.
-4. The VPC resolver answers from the private hosted zone.
-5. The workstation receives the private IP answer and uses the hybrid network path to connect.
-
-The endpoint IPs are private IPs from the VPC. Corporate DNS reaches them through private connectivity, with routing to those IPs, firewall rules that allow DNS traffic, and a return path. Most production inbound endpoints use IPs in at least two Availability Zones for resilience.
-
-Inbound delegation is a related pattern. A corporate DNS team can delegate a subdomain such as `aws.corp.internal` to inbound endpoint IPs by using NS records in the corporate DNS system. That gives Route 53 private hosted zones authority for a specific subdomain while the parent corporate domain stays on-premises.
-
-## Outbound Resolver Endpoints and Forwarding Rules
-<!-- section-summary: Outbound Resolver endpoints and forwarding rules let AWS workloads resolve domains that live in corporate or other private DNS systems. -->
-
-A **Resolver outbound endpoint** lets DNS queries leave a VPC resolver toward another DNS system. A **forwarding rule** tells the resolver which domain names should be sent to which target DNS server IPs. Together, they let AWS workloads resolve names hosted outside Route 53.
-
-The payments app needs to connect to `ledger.corp.internal`, an internal finance service in the corporate datacenter. That name lives in corporate DNS. The VPC resolver can answer AWS names and private hosted zones, but it needs a forwarding rule for `corp.internal` so those queries go to corporate DNS servers.
-
-The flow looks like this:
-
-1. The ECS task asks the VPC resolver for `ledger.corp.internal`.
-2. The resolver sees a forwarding rule for `corp.internal`.
-3. The resolver sends the query from the outbound endpoint IPs to the corporate DNS target IPs.
-4. Corporate DNS answers with the private address for the ledger service.
-5. The application uses the VPN or Direct Connect path to reach that address.
-
-![Resolver forwarding map showing corporate DNS, Route 53 Resolver, inbound endpoint, outbound endpoint, private hosted zone, and forwarding rules for corp.internal names](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/resolver-forwarding-map.png)
-
-*Inbound endpoints let outside resolvers ask AWS private DNS questions. Outbound endpoints and forwarding rules let AWS workloads ask corporate DNS questions without hardcoding resolver behavior into applications.*
-
-A small Terraform shape can look like this:
-
-```hcl
-resource "aws_route53_resolver_endpoint" "outbound" {
-  name      = "payments-outbound-dns"
-  direction = "OUTBOUND"
-
-  security_group_ids = [aws_security_group.resolver_outbound.id]
-
-  ip_address {
-    subnet_id = aws_subnet.shared_services_a.id
-  }
-
-  ip_address {
-    subnet_id = aws_subnet.shared_services_b.id
-  }
-}
-
-resource "aws_route53_resolver_rule" "corp_internal" {
-  domain_name          = "corp.internal"
-  name                 = "forward-corp-internal"
-  rule_type            = "FORWARD"
-  resolver_endpoint_id = aws_route53_resolver_endpoint.outbound.id
-
-  target_ip {
-    ip = "172.16.10.10"
-  }
-
-  target_ip {
-    ip = "172.16.20.10"
-  }
-}
-
-resource "aws_route53_resolver_rule_association" "payments" {
-  resolver_rule_id = aws_route53_resolver_rule.corp_internal.id
-  vpc_id           = aws_vpc.payments.id
-}
-```
-
-The forwarding rule association is easy to miss. Creating the rule defines the behavior, but associating it with the payments VPC applies that behavior to queries from that VPC. In multi-account environments, a networking account may share resolver rules with application accounts through AWS Resource Access Manager so VPCs can reuse centrally managed behavior.
-
-## Cross-VPC and Multi-Account DNS Patterns
-<!-- section-summary: Shared DNS designs usually centralize resolver endpoints and share private zones or forwarding rules, while keeping VPC associations explicit. -->
-
-As AWS usage grows, every VPC creating its own private zones, inbound endpoints, and outbound endpoints can turn DNS into a scattered system. A common production pattern uses a **shared services VPC** or networking account for central DNS plumbing. Application VPCs then associate with private hosted zones, share resolver rules, or forward through central endpoints depending on the organization's routing model.
-
-For the payments company, the production account owns the payments workload VPC. A networking account owns Transit Gateway, VPN, Direct Connect, and shared Resolver endpoints. The corporate DNS team owns `corp.internal`. The platform team needs these systems to cooperate without hiding ownership.
-
-There are three common building blocks:
-
-| Pattern | How it works | Payments example |
-| --- | --- | --- |
-| **Associate private hosted zones with multiple VPCs** | The private zone directly answers from each associated VPC. | `payments.internal` is associated with production and operations VPCs. |
-| **Share outbound forwarding rules** | A central rule for `corp.internal` is shared and associated with application VPCs. | Payments, billing, and reporting VPCs all forward `corp.internal` to corporate DNS. |
-| **Use inbound endpoints for external resolvers** | Corporate or another VPC resolver forwards AWS-private domains to inbound endpoint IPs. | Corporate workstations resolve `api.payments.internal` through the inbound endpoint. |
-
-Cross-VPC DNS still needs network reachability after the answer comes back. Resolving `api.payments.internal` to `10.40.20.50` only helps if the caller has a routed and allowed path to `10.40.20.50`. DNS gives the address. VPC routing, Transit Gateway route tables, security groups, network ACLs, and firewalls decide whether the connection works.
-
-The cleanest designs write down ownership at the domain boundary. Route 53 private hosted zones can own AWS application domains. Corporate DNS can own employee and datacenter domains. Resolver rules connect the two with explicit suffixes such as `corp.internal`, `aws.corp.internal`, or `payments.internal`.
-
-## Resolver Query Logging
-<!-- section-summary: Resolver query logs show which VPC resources asked which DNS questions and what answers or response codes they received. -->
-
-**Resolver query logging** records DNS queries handled by Route 53 Resolver for selected VPCs and resolver endpoint paths. It can log queries that originate in VPCs, queries from on-premises resources that use an inbound endpoint, queries that use an outbound endpoint, and DNS Firewall-related query results.
-
-For the payments app, query logs help answer incident questions. Did the ECS task ask for `secretsmanager.us-east-1.amazonaws.com`? Did it receive private endpoint IPs or public addresses? Did `ledger.corp.internal` return `NoError`, `NXDOMAIN`, or `ServFail`? Which VPC and source IP made the query?
-
-Resolver query logs can be sent to CloudWatch Logs, S3, or Firehose. CloudWatch Logs works well for live investigation. S3 works well for retention and analytics. Firehose works well when the security team sends DNS telemetry into a larger logging platform.
-
-One detail matters during troubleshooting: DNS resolvers cache answers according to TTL values. Route 53 Resolver query logging records unique queries that reach the resolver, and cached repeat answers can be absent from new log entries. A missing second query in the log may simply mean the application received a cached answer.
-
-Query logs are evidence alongside direct tests from the workload environment. During a production issue, combine logs with a query from a shell inside the same subnet, security group, and DNS configuration as the failing workload.
-
-## Troubleshooting Wrong DNS Answers
-<!-- section-summary: Wrong DNS answers usually come from the wrong resolver, missing VPC associations, overlapping zones, rule precedence, disabled DNS attributes, or stale caches. -->
-
-DNS failures often look like network failures. The application says timeout, TLS error, connection refused, or access denied. Before changing route tables, it helps to prove the DNS answer from the same place where the application runs.
-
-For the payments app, the team can compare three names:
-
-| Name | Expected private behavior |
-| --- | --- |
-| `secretsmanager.us-east-1.amazonaws.com` | Returns interface endpoint private IPs from the payments VPC. |
-| `fraud.partner.internal` | Returns a private endpoint or internal record for the partner service. |
-| `ledger.corp.internal` | Forwards to corporate DNS through the outbound Resolver endpoint. |
-
-A small investigation from an ECS debug task or EC2 instance in the same subnets can use tools such as `dig` or `nslookup`:
+A record change uses a JSON change batch. The command can look like this:
 
 ```bash
-dig secretsmanager.us-east-1.amazonaws.com
-dig fraud.partner.internal
-dig ledger.corp.internal
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z123PRIVATE \
+  --change-batch file://db-record-change.json
 ```
 
-The useful checks are practical:
+The `file://db-record-change.json` value tells the AWS CLI to read the change request from a local file. The file contains the action, record name, type, TTL, and value. A simple UPSERT for the database name can look like this:
 
-| Check | What it tells you |
-| --- | --- |
-| **Resolver path** | The workload may be using AmazonProvidedDNS, a custom corporate resolver, or a container-level DNS setting. |
-| **VPC DNS attributes** | Private hosted zones and endpoint private DNS need DNS support and DNS hostnames enabled. |
-| **Private hosted zone association** | The zone must be associated with the VPC asking the question. |
-| **Forwarding rule association** | The resolver rule must be associated with the VPC asking the question. |
-| **Rule and zone overlap** | More specific zones and resolver rule precedence can send a name somewhere unexpected. |
-| **Endpoint private DNS setting** | The interface endpoint may exist while private DNS remains disabled. |
-| **Inbound or outbound endpoint reachability** | DNS target IPs need routes, security group rules, firewall rules, and return paths. |
-| **Cache and TTL** | Old answers can persist until caches expire. |
+```json
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "receipts-db.prod.internal.",
+        "Type": "CNAME",
+        "TTL": 60,
+        "ResourceRecords": [
+          {
+            "Value": "receipts-prod-db.abc123.us-east-1.rds.amazonaws.com."
+          }
+        ]
+      }
+    }
+  ]
+}
+```
 
-Wrong DNS answers also create security surprises. If a name expected to resolve privately returns a public address, the application may use NAT and bypass the intended endpoint policy. If a private hosted zone accidentally captures a public domain without all needed records, internal clients may receive NXDOMAIN for names that work everywhere else.
+`UPSERT` creates the record when it is missing and updates it when it already exists. `TTL` controls how long resolvers can cache the answer. A short TTL such as `60` seconds helps during migrations, while mature steady-state records can often use longer values after the team understands the operational tradeoff.
 
-The steady debugging sequence is to prove the answer, prove the resolver that gave the answer, prove the rule or zone that matched, and then prove the network path to the returned address. That sequence keeps DNS and routing separate enough to fix the right layer.
+The Route 53 response includes the change status:
 
-## Putting It All Together
-<!-- section-summary: Route 53 Resolver connects private names, AWS endpoint names, corporate DNS, and hybrid forwarding into one DNS path that must match the packet path. -->
+```json
+{
+  "ChangeInfo": {
+    "Id": "/change/C0123456789ABC",
+    "Status": "PENDING",
+    "SubmittedAt": "2026-06-27T10:15:42.000Z"
+  }
+}
+```
 
-Private networking depends on names. The payments app can have correct VPC endpoints, correct route tables, and correct security groups, while a wrong DNS answer still sends traffic to the wrong destination. Route 53 Resolver is the AWS-managed DNS service that ties the private name story together inside a VPC.
+`PENDING` means Route 53 accepted the request and propagation is still in progress. After propagation, `get-change` should show `INSYNC`. If the record is `INSYNC` and the workload still receives no answer, the next action is the private hosted zone association, VPC DNS attributes, and custom forwarding path.
 
-**AmazonProvidedDNS** is the default VPC resolver path exposed through the VPC DNS configuration. **Private hosted zones** give VPCs private records such as `api.payments.internal`. **Split-horizon DNS** lets internal and external callers use the same name while receiving different answers. **Interface endpoint private DNS** lets normal AWS service names resolve to endpoint ENI private IPs inside the VPC.
+Private hosted zones can associate with multiple VPCs, including VPCs in other accounts when the correct authorization flow exists. Treat those associations as production access. If a shared services VPC can resolve `receipts-db.prod.internal`, the route tables and security groups should match that intended access path.
 
-Hybrid environments add **inbound Resolver endpoints**, **outbound Resolver endpoints**, and **forwarding rules**. Inbound endpoints let corporate DNS ask AWS for private VPC names. Outbound endpoints and forwarding rules let AWS workloads ask corporate DNS for names such as `corp.internal`.
+Private hosted zones can also create **split-horizon DNS**. The same name can have a public answer outside AWS and a private answer inside associated VPCs. This is useful for names such as `api.example.com` during migrations, but support teams need clear documentation because a laptop and an ECS task may receive different answers for the same name.
 
-The production rule is to pair every DNS design with the packet path that follows it. A name that resolves to a private IP still needs routing, security groups, network ACLs, and firewalls. A PrivateLink endpoint still needs the right private DNS answer. When the name answer and packet path agree, the team can trace private connectivity with DNS evidence and packet evidence.
+## PrivateLink Service Names
+<!-- section-summary: Interface endpoint private DNS maps normal AWS service names to endpoint private IPs inside the VPC. -->
 
-![Private DNS checklist summary board covering resolver source, VPC DNS flags, zone association, private DNS, forwarding rule, and query logs](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/private-dns-checklist.png)
+Interface endpoints often support **private DNS**. When enabled, a normal service name such as `secretsmanager.us-east-1.amazonaws.com` resolves to private endpoint IPs inside the VPC. The application keeps standard AWS SDK configuration, and the VPC resolver gives the private answer.
 
-*Private DNS reviews should prove the resolver source, VPC DNS attributes, zone associations, endpoint private DNS, forwarding rules, and query logs before changing route tables or packet filters.*
+This matters because service endpoint names appear in code, SDK defaults, environment variables, and third-party libraries. If every app had to use endpoint-specific hostnames, endpoint migrations would turn into application releases. Private DNS keeps the service name stable and moves the private path decision into infrastructure.
 
-**References**
+A private DNS check compares the endpoint configuration with the runtime DNS answer:
 
-- [DNS attributes for your VPC - Amazon VPC](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html)
-- [Understanding Amazon DNS - Amazon VPC](https://docs.aws.amazon.com/vpc/latest/userguide/AmazonDNS-concepts.html)
-- [What is Route 53 VPC Resolver? - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html)
-- [Working with private hosted zones - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html)
-- [Considerations when working with a private hosted zone - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zone-private-considerations.html)
-- [Forwarding inbound DNS queries to your VPCs - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-inbound-queries.html)
-- [Forwarding outbound DNS queries to your network - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-outbound-queries.html)
-- [Resolver query logging - Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs.html)
-- [AWS PrivateLink concepts - Amazon VPC](https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html)
+```bash
+aws ec2 describe-vpc-endpoints \
+  --vpc-endpoint-ids vpce-0secretsreceipts \
+  --query 'VpcEndpoints[0].{Service:ServiceName,State:State,PrivateDns:PrivateDnsEnabled,DnsEntries:DnsEntries[*].DnsName}'
+```
+
+```json
+{
+  "Service": "com.amazonaws.us-east-1.secretsmanager",
+  "State": "available",
+  "PrivateDns": true,
+  "DnsEntries": [
+    "vpce-0secretsreceipts-abc123.secretsmanager.us-east-1.vpce.amazonaws.com",
+    "vpce-0secretsreceipts-abc123-us-east-1a.secretsmanager.us-east-1.vpce.amazonaws.com",
+    "vpce-0secretsreceipts-abc123-us-east-1b.secretsmanager.us-east-1.vpce.amazonaws.com"
+  ]
+}
+```
+
+This output says the endpoint exists, private DNS is enabled, and AWS created endpoint-specific DNS names. If the app still resolves public addresses for `secretsmanager.us-east-1.amazonaws.com`, the next action is the VPC resolver path rather than the endpoint itself. Check VPC DNS attributes, DHCP options, custom DNS forwarding, and whether the test ran inside the associated VPC.
+
+Also check endpoint placement. DNS can return multiple endpoint IPs. A production design usually places interface endpoints in the Availability Zones where callers run, so zonal failure behavior and cross-zone dependencies stay predictable during an incident.
+
+## Hybrid DNS with Resolver Endpoints
+<!-- section-summary: Inbound and outbound Resolver endpoints connect VPC DNS with corporate or shared DNS systems through explicit forwarding rules. -->
+
+Hybrid networks add two more DNS needs. AWS workloads may need corporate names such as `corp.internal`, and corporate support tools may need AWS private names such as `inventory.shared.internal`. Route tables and VPNs only move packets after DNS has chosen an address, so hybrid DNS needs its own design.
+
+**Route 53 Resolver inbound endpoints** let DNS clients outside the VPC send queries into the VPC resolver. **Outbound endpoints** let the VPC resolver forward selected domains to DNS servers outside AWS. **Resolver rules** decide which domains get forwarded and which target IPs receive them.
+
+For example, the receipts VPC can use an outbound rule for `corp.internal` that forwards queries to corporate DNS over VPN or Direct Connect. Corporate DNS can use an inbound endpoint when on-premises support tools need to resolve `prod.internal` names inside AWS. Resolver endpoint ENIs live in subnets, so they need route and security group access to the DNS peers.
+
+A resolver rule inspection can look like this:
+
+```bash
+aws route53resolver list-resolver-rules \
+  --query 'ResolverRules[*].{Id:Id,Domain:DomainName,Type:RuleType,Targets:TargetIps[*].Ip}'
+```
+
+```json
+[
+  {
+    "Id": "rslvr-rr-0corpinternal",
+    "Domain": "corp.internal.",
+    "Type": "FORWARD",
+    "Targets": [
+      "172.16.10.10",
+      "172.16.10.11"
+    ]
+  },
+  {
+    "Id": "rslvr-rr-0system",
+    "Domain": ".",
+    "Type": "SYSTEM",
+    "Targets": []
+  }
+]
+```
+
+The `FORWARD` rule says queries for `corp.internal` go to the corporate DNS servers. The `SYSTEM` rule keeps normal resolver behavior for other names. If `inventory.shared.internal` accidentally matches a broad forwarding rule, the next action is rule priority and domain scope. Make forwarding rules as narrow as the domains that truly live outside AWS.
+
+Resolver endpoint security groups need DNS rules. Inbound endpoint security groups usually allow UDP and TCP `53` from approved corporate DNS servers. Outbound endpoints need a route to the target DNS servers and security rules that permit DNS traffic. DNS can fail because of ordinary network controls around those endpoint ENIs.
+
+![The forwarding map shows how inbound endpoints, outbound endpoints, and forwarding rules connect VPC DNS with on-premises DNS](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/resolver-forwarding-map.png)
+
+*The forwarding map shows how inbound endpoints, outbound endpoints, and forwarding rules connect VPC DNS with on-premises DNS.*
+
+
+## Query Logs and Troubleshooting
+<!-- section-summary: Resolver query logging records DNS questions from VPC resources and helps separate naming problems from routing problems. -->
+
+**Route 53 Resolver query logging** records DNS queries from VPC resources. It helps answer which name a workload asked for, which VPC sent the query, which record type was requested, and where the log was delivered. Query logs show DNS questions rather than the later TCP result, and they give the first piece of evidence in many private networking incidents.
+
+Production teams usually enable query logs before an incident. The destination can be CloudWatch Logs, S3, or Kinesis Data Firehose, depending on retention and analysis needs. A CloudWatch Logs setup can look like this:
+
+```bash
+aws route53resolver create-resolver-query-log-config \
+  --name receipts-prod-dns-queries \
+  --destination-arn arn:aws:logs:us-east-1:123456789012:log-group:/aws/route53resolver/receipts-prod \
+  --region us-east-1
+
+aws route53resolver associate-resolver-query-log-config \
+  --resolver-query-log-config-id rqlc-0123456789abcdef0 \
+  --resource-id vpc-0abc1234receipts \
+  --region us-east-1
+```
+
+`create-resolver-query-log-config` creates the logging destination link. `associate-resolver-query-log-config` attaches that logging config to the VPC that should produce DNS evidence. The returned IDs matter because the on-call team will use them to confirm logging status later.
+
+An inspection command can show whether the VPC has query logging:
+
+```bash
+aws route53resolver list-resolver-query-log-config-associations \
+  --filters Name=ResourceId,Values=vpc-0abc1234receipts \
+  --query 'ResolverQueryLogConfigAssociations[*].{ConfigId:ResolverQueryLogConfigId,ResourceId:ResourceId,Status:Status,Error:Error}'
+```
+
+```json
+[
+  {
+    "ConfigId": "rqlc-0123456789abcdef0",
+    "ResourceId": "vpc-0abc1234receipts",
+    "Status": "ACTIVE",
+    "Error": null
+  }
+]
+```
+
+`ACTIVE` means Route 53 Resolver should deliver query logs for this VPC. If the list is empty, DNS history for this VPC may be unavailable, and the next action is live runtime resolution plus enabling query logging for future incidents.
+
+During an incident, query log evidence can drive the next step:
+
+| Evidence | Meaning | Next action |
+| --- | --- | --- |
+| Hostname is missing from query logs | The workload may use a different name, resolver, VPC, or cache | Check app config, runtime resolver, and test location |
+| Hostname appears with an old answer | DNS data or forwarding source is stale | Check private hosted zone record, Resolver rule, or corporate DNS |
+| Hostname appears with the expected private answer | DNS likely did its job for this flow | Move to route tables, security groups, NACLs, Flow Logs, or service health |
+| Queries show repeated `NXDOMAIN` | Resolver returned a name-not-found answer | Check zone name, record spelling, and VPC association |
+
+A practical DNS runbook starts with one name. Resolve it from the workload path, compare the answer to the intended private address, check VPC DNS attributes, check private hosted zone association, check endpoint private DNS, and inspect Resolver rules for hybrid names. Once DNS returns the expected IP, move to routing and packet controls. If DNS returns the wrong IP, security group changes will only hide the real problem.
+
+![The private DNS checklist helps compare resolver settings, hosted zone association, endpoint private DNS, forwarding rules, and query logs](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-dns-route-53-resolver/private-dns-checklist.png)
+
+*The private DNS checklist helps compare resolver settings, hosted zone association, endpoint private DNS, forwarding rules, and query logs.*
+
+
+## References
+
+- [Amazon VPC documentation: Understanding Amazon DNS](https://docs.aws.amazon.com/vpc/latest/userguide/AmazonDNS-concepts.html)
+- [Route 53 documentation: Working with private hosted zones](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html)
+- [Route 53 Resolver documentation: Resolver endpoints and forwarding rules](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html)
+- [Route 53 Resolver documentation: Resolver query logging](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs.html)

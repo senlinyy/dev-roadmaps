@@ -27,7 +27,7 @@ aliases:
 
 A **backup** is a saved recovery point from an earlier moment. A **restore** is the work of turning that recovery point back into usable data. That second word matters a lot, because many teams can point at a backup job and still freeze during an incident. They know Azure has copies somewhere, but they cannot name which copy to choose, where to restore it, who can approve it, or how the application will use the recovered data.
 
-Let's use one production example through the article. Imagine a learning platform called `LearnTrail`. It sells course subscriptions, stores invoices as PDF blobs, keeps user enrollment records in Azure SQL Database, stores high-volume activity events in Cosmos DB, runs one old video processing VM with managed disks, and shares export templates through Azure Files. This is a small enough system to picture, but it has the same recovery problems that larger systems have.
+The previous storage articles mostly followed the Orders system so each service had a clear home. This final recovery article uses a second example because backup design needs several data shapes in one place. A learning platform called `LearnTrail` sells course subscriptions, stores invoices as PDF blobs, keeps user enrollment records in Azure SQL Database, stores high-volume activity events in Cosmos DB, runs one old video processing VM with managed disks, and shares export templates through Azure Files. This is a small enough system to picture, but it has the same recovery problems that larger systems have.
 
 For `LearnTrail`, one accident can hit several data shapes at the same time. A release might update the wrong enrollment rows in SQL. A cleanup job might delete invoice PDFs from Blob Storage. A worker might write bad activity events into Cosmos DB. A VM upgrade might damage files on a data disk. Each case needs a different Azure recovery feature, because each service stores data in a different way.
 
@@ -105,6 +105,36 @@ az storage account blob-service-properties update \
 
 That command is only the start of the design. The restore runbook still needs to say which prefix is protected, who can restore, how to choose the correct version, how to verify the PDF, and how to handle matching database records. Blob recovery fixes file history. The application story around that file still needs its own recovery step.
 
+The verification output should show the protection settings as account behavior and as deployment intent:
+
+| Setting | Expected value |
+| --- | --- |
+| Blob versioning | Enabled |
+| Blob soft delete | Enabled for `30` days |
+| Container soft delete | Enabled for `30` days |
+| Lifecycle cleanup | Present for temporary prefixes and old versions |
+| Immutable policy | Present only for final records that need WORM protection |
+
+The read-back check should query the service properties, because that is the behavior Azure will apply after deployment:
+
+```bash
+az storage account blob-service-properties show \
+  --account-name learntrailprodstore \
+  --resource-group rg-learntrail-prod \
+  --query "{versioning:isVersioningEnabled,blobRetention:deleteRetentionPolicy.days,containerRetention:containerDeleteRetentionPolicy.days}" \
+  --output json
+```
+
+Example output:
+
+```json
+{
+  "blobRetention": 30,
+  "containerRetention": 30,
+  "versioning": true
+}
+```
+
 The invoices are files, but `LearnTrail` also stores enrollment state in Azure SQL Database. Database recovery uses a different shape because the team often needs one exact second before a bad write.
 
 ## Azure SQL Database Restore
@@ -156,6 +186,14 @@ Resources
 
 That kind of query gives the operations team a list of accounts and backup settings before an incident. During an incident, they need to know which accounts have continuous restore windows and which accounts depend on periodic backup behavior.
 
+The output should make risky accounts obvious:
+
+| name | backupMode | continuousBackupTier | Review action |
+| --- | --- | --- | --- |
+| `cosmos-learntrail-activity-prod` | `Continuous` | `Continuous30Days` | Restore window matches customer-impacting event data |
+| `cosmos-learntrail-dev` | `Periodic` | Empty | Acceptable only if development data can be recreated |
+| `cosmos-unknown-prod` | `Periodic` | Empty | Review before the account stores production customer events |
+
 The database services now have a recovery story. The remaining `LearnTrail` state sits closer to operating system storage: managed disks and file shares.
 
 ## Managed Disks and Azure Files
@@ -170,6 +208,8 @@ The word **snapshot** can sound stronger than the guarantee it gives. A disk sna
 **Azure Files** is Azure's managed file share service. It exposes SMB or NFS shares for workloads that need a shared directory. `LearnTrail` uses an Azure Files share for export templates and shared report files. This data behaves more like a mounted folder than object storage, so recovery often focuses on file share snapshots and Azure Backup policies.
 
 Azure Backup can protect Azure Files through snapshot and vaulted backup tiers. The snapshot tier gives fast restore from file share snapshots. Vaulted backup adds offsite protection for stronger recovery scenarios, ransomware defense, cross-region recovery, and longer compliance-style retention where supported. Azure Backup policies can schedule backups and set daily, weekly, monthly, or yearly retention according to the workload.
+
+Azure Files soft delete protects against deleting an entire file share during its retention window. It is a useful guardrail for cleanup mistakes, and it should sit beside snapshots or Azure Backup rather than replace them. If a report worker overwrites one template file, the team usually needs a snapshot or backup restore path for that file. If someone deletes the whole share, share soft delete gives a different recovery door.
 
 File share recovery needs the same restore-side test as disk recovery. A template file restored to the wrong path, with the wrong permissions, or into a share the report worker cannot mount gives the team very little during month-end reporting. The runbook records the restored path, access identity, mount path, sample file check, and owner approval.
 
@@ -250,6 +290,7 @@ The useful test is simple: the team can name the data, name the restore point, n
 * [Online backup and on-demand data restore in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/online-backup-and-restore) - Periodic backup defaults, backup protection, and audit query examples.
 * [Create an incremental snapshot for managed disks](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-incremental-snapshots) - Managed disk snapshot behavior and restore use.
 * [About Azure Files backup](https://learn.microsoft.com/en-us/azure/backup/azure-file-share-backup-overview) - Azure Files snapshot and vaulted backup behavior.
+* [Prevent accidental deletion of Azure file shares](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-prevent-file-share-deletion) - File share soft delete behavior and retention planning.
 * [Immutable vault for Azure Backup](https://learn.microsoft.com/en-us/azure/backup/backup-azure-immutable-vault-concept) - Vault immutability concepts and considerations.
 * [Secure by default with soft delete for Azure Backup](https://learn.microsoft.com/en-us/azure/backup/secure-by-default) - Backup soft delete behavior and retention.
 * [Lock Azure resources to protect infrastructure](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources) - Resource lock scope and control-plane boundaries.

@@ -1,7 +1,7 @@
 ---
 title: "Post-Incident Hardening"
-description: "Turn incidents into better pipeline checks, runtime controls, alerts, access rules, and engineering practices."
-overview: "Post-incident hardening turns recovery evidence into lasting controls: stronger deployment identity, better secret prevention, sharper detections, verified follow-up, and practiced response."
+description: "Turn service recovery into stronger timelines, root-cause fixes, detections, pipeline controls, owners, deadlines, tabletop practice, and metrics."
+overview: "After service recovery, the team still has learning work to do. This article turns the leaked deployment key incident into a timeline, root cause and contributing factors, preventive controls, detection improvements, access and pipeline hardening, verified owners, tabletop practice, and response metrics."
 tags: ["devsecops", "post-incident", "hardening", "continuous-improvement"]
 order: 3
 id: article-devsecops-compliance-incident-readiness-post-incident-hardening
@@ -9,7 +9,7 @@ id: article-devsecops-compliance-incident-readiness-post-incident-hardening
 
 ## Table of Contents
 
-1. [Why Hardening Starts After Recovery](#why-hardening-starts-after-recovery)
+1. [After Service Recovery](#after-service-recovery)
 2. [Rebuilding the Timeline](#rebuilding-the-timeline)
 3. [Root Cause and Contributing Factors](#root-cause-and-contributing-factors)
 4. [Preventive Controls](#preventive-controls)
@@ -18,11 +18,12 @@ id: article-devsecops-compliance-incident-readiness-post-incident-hardening
 7. [Verification, Owners, and Deadlines](#verification-owners-and-deadlines)
 8. [Tabletop Practice and Metrics](#tabletop-practice-and-metrics)
 9. [Putting It All Together](#putting-it-all-together)
+10. [References](#references)
 
-## Why Hardening Starts After Recovery
+## After Service Recovery
 <!-- section-summary: Post-incident hardening turns the incident record into concrete controls that reduce repeat incidents and improve the next response. -->
 
-The response article recovered `checkout-api` after a leaked production deployment key. The key was deactivated, the unsafe GitHub secrets were removed, the workflow moved toward OIDC, and the service owner verified production. That closes the urgent response work and leaves one important question open: why did the system allow the incident in the first place?
+It is 00:15 UTC, and `checkout-api` is serving traffic again. The leaked production deployment key is inactive, the unsafe GitHub secrets are gone, the workflow has a tested OIDC replacement path, and the service owner has verified production. The emergency is over, and the team still has important work to do.
 
 **Post-incident hardening** is the work that turns incident lessons into durable improvements. The team studies the timeline, identifies root causes and contributing factors, writes corrective actions, assigns owners, verifies the fixes, and updates response practice. The goal is practical improvement and shared learning.
 
@@ -102,7 +103,7 @@ Here is a small hardening checklist for this incident:
 - Old IAM user `deploy-bot-prod` has no active keys and has a retirement ticket
 ```
 
-The checklist is useful because each item can be verified. Hardening should produce evidence, not only good intentions.
+The checklist is useful because each item can be verified. Hardening should produce evidence as well as good intentions.
 
 ## Detection Improvements
 <!-- section-summary: Detection improvements catch the next suspicious path faster by joining source control, identity, cloud, and runtime evidence. -->
@@ -233,9 +234,18 @@ grep -n "id-token: write" "evidence/$CASE_ID/hardening/deploy-workflow.yml"
 grep -n "$DEPLOY_ROLE_ARN" "evidence/$CASE_ID/hardening/deploy-workflow.yml"
 ```
 
+The IAM export proves whether the old user still has active keys. The workflow export lets reviewers inspect the exact production deployment configuration. The CloudTrail export finds short-lived OIDC role sessions during the review window. The two `grep` commands give quick checks that the workflow requests `id-token: write` and assumes the intended role.
+
+Example `grep` output:
+
+```bash
+12:  id-token: write
+28:  role-to-assume: arn:aws:iam::123456789012:role/checkout-api-production-deploy
+```
+
 The output still needs human review. The reviewer should confirm that the old key list is empty or inactive, the workflow requests `id-token: write` only where it needs cloud access, and the CloudTrail role sessions match approved deployment runs.
 
-AWS Config can also help with ongoing checks for aged access keys. For organizations that still need some IAM users, a managed rule such as `access-keys-rotated` can flag keys older than the configured age. That rule should support a broader move away from static keys, not excuse static keys for workflows that can use short-lived credentials.
+AWS Config can also help with ongoing checks for aged access keys. For organizations that still need some IAM users, a managed rule such as `access-keys-rotated` can flag keys older than the configured age. That rule should support a broader move away from static keys for workflows that can use short-lived credentials.
 
 The review owner should close actions only after evidence lands in the incident record or a linked ticket. That habit matters months later when an auditor, leader, or new engineer asks how the team knows the fix stayed fixed.
 
@@ -265,11 +275,10 @@ That is the real value of post-incident hardening. The incident record stops bei
 
 _The final loop summarizes the module: recovery closes the incident, and hardening improves the system that will face the next alert._
 
----
-
-**References**
+## References
 
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management](https://csrc.nist.gov/pubs/sp/800/61/r3/final) - Frames incident response as a continuous risk management activity across CSF 2.0 functions.
+- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework) - Connects post-incident improvements to Govern, Protect, Detect, Respond, and Recover outcomes.
 - [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks) - Provides playbook ideas for coordination, remediation, recovery, and mitigation tracking.
 - [GitHub push protection](https://docs.github.com/en/code-security/concepts/secret-security/push-protection) - Explains blocking supported secrets before they are pushed and creating alerts for bypass events.
 - [GitHub secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning) - Documents secret scanning alerts and secret protection workflows.

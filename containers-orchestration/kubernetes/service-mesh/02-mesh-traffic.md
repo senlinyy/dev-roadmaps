@@ -23,13 +23,15 @@ id: article-containers-orchestration-kubernetes-service-mesh-mesh-traffic
 ## Where Mesh Traffic Control Fits
 <!-- section-summary: Mesh traffic control lets the platform change request routing and failure behavior without asking every service team to rewrite application code. -->
 
-With Istio's Envoy proxies on the request path, the store can control traffic without changing the `web` application code. In the checkout rollout, `web` still calls the normal `checkout` service name, and Envoy uses Istio's rules to decide which real workload receives each request.
+Start with the ordinary path. `web` calls `checkout` over HTTP at `http://checkout`. Kubernetes sends that request to one ready checkout Pod behind the Service. If every checkout Pod runs the same code and every dependency is healthy, that basic path is enough.
 
-**Mesh traffic control** is the set of rules that tells those proxies how to route requests, how long to wait for slow calls, whether a failed call gets a bounded second attempt, and when to stop sending traffic to unhealthy backends. For the online store, this is the layer that lets the team send a small slice of checkout traffic to `v2`, cap slow calls, and protect the rest of the store if inventory starts failing during a warehouse sync.
+The rollout gets harder when the team has two checkout versions. `checkout-v1` already handles orders. `checkout-v2` changes tax calculation, and the team wants a small amount of real traffic before a full release. The team also wants a two-second waiting limit when checkout is slow, a careful retry for short network failures, and protection when `inventory` starts returning errors during a warehouse sync.
 
-In Istio, these rules usually live in **Kubernetes custom resources**. A custom resource is an extra Kubernetes API type installed by a project like Istio, so the cluster can store Istio traffic objects alongside normal workload and networking objects. Two of those traffic objects show up throughout this article: a **VirtualService**, which holds routing choices for a host, and a **DestinationRule**, which names destination versions and policies after a route chooses a service. The workflow is straightforward: write YAML, apply it with **`kubectl`**, and inspect Istio's view with **`istioctl`**, the Istio command-line tool. That distinction matters during the checkout rollout because `kubectl` tells you whether Kubernetes accepted the desired config, while `istioctl` helps you check whether Istio translated that config for the proxies.
+**Mesh traffic control** means rules that tell the proxies where a request should go and how the network should behave when a call is slow or failing. For the store, traffic control sends 5% of checkout requests to `v2`, keeps 95% on `v1`, caps slow calls with a timeout, limits retries, and reduces pressure on unhealthy inventory Pods. The `web` application still calls the stable `checkout` Service name.
 
-This is useful in production because releases rarely move in one perfect step. A team may want to send 5 percent of traffic to a new version, watch errors and latency, increase the percentage, and roll back in minutes if the new version misbehaves. A team may also want clear limits around slow dependencies so one bad service does not keep every caller waiting.
+The object names come later. For the first idea, keep the picture small: the application still calls `checkout`, and the proxies choose which checkout version receives each request. That lets the team change traffic behavior outside the application code while keeping the normal Service name.
+
+Production releases rarely move in one perfect step. A team may send 5 percent of traffic to a new version, watch errors and latency, increase the percentage, and roll back in minutes if the new version misbehaves. A team may also want clear limits around slow dependencies so one bad service does not keep every caller waiting.
 
 The practical result is that **traffic control gives you a release and reliability layer between services**. Your code still needs good error handling, metrics, and tests, because the mesh cannot understand every business rule inside your application. The mesh handles network-level behavior that is common across many services, so each team does not have to rebuild the same routing and protection logic from scratch.
 
@@ -40,7 +42,7 @@ We will use one connected scenario for the whole article. An online store has a 
 
 The team has a stable `checkout` version called `v1`. They have also built `checkout` `v2`, which improves tax calculation and changes part of the order validation flow. The team wants to move from `v1` to `v2` carefully. First, they run a **canary**, which means a small amount of real traffic goes to `v2` while most customers still use `v1`. Then they add a **timeout**, a clear waiting limit for slow calls, and a **retry**, a bounded second chance for temporary failures, so customer requests do not hang forever. Finally, they add a **circuit breaker**, a protection rule that limits pressure on an unhealthy dependency, for calls from `checkout` to `inventory`, because inventory sometimes has latency spikes during warehouse sync jobs.
 
-For this rollout, both versions sit behind the same Service named `checkout`. The Pods need version labels so Istio can tell them apart. The snippet below is trimmed to the labels and Service selector that matter for traffic routing, so focus on `app: checkout` and `version: v1` or `version: v2`:
+For this rollout, both versions sit behind the same Service named `checkout`. The Pods need version labels so Istio can tell them apart. Start with the two labels that matter for traffic routing:
 
 ```yaml
 apiVersion: apps/v1
@@ -66,7 +68,11 @@ spec:
       labels:
         app: checkout
         version: v2
----
+```
+
+The `app: checkout` label keeps both versions behind one Service. The `version` label gives Istio the extra detail it needs for canary routing. The Service then keeps the caller contract stable:
+
+```yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -105,7 +111,7 @@ A **canary** is a release pattern where a small slice of real traffic goes to a 
 
 For checkout, start with 95 percent of requests going to `v1` and 5 percent going to `v2`. That gives `v2` enough traffic to prove basic behavior while keeping the customer impact small if it returns errors or adds latency. In a larger store, the team might start at 1 percent. In a small test environment, 5 or 10 percent makes the split easier to see.
 
-The first real traffic file can be named `checkout-traffic.yaml`. It contains both resources because the route and the subsets have to move together:
+The first real traffic file can be named `checkout-traffic.yaml`. Start with the DestinationRule because the route needs named subsets before it can split traffic:
 
 ```yaml
 apiVersion: networking.istio.io/v1
@@ -122,7 +128,11 @@ spec:
   - name: v2
     labels:
       version: v2
----
+```
+
+Then add the VirtualService that chooses from those subsets. This route sends 95 percent of requests to `v1` and 5 percent to `v2`:
+
+```yaml
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
@@ -179,7 +189,7 @@ When `v2` behaves well, move gradually. A common production path is 5 percent, 1
 
 At this point, we need one more definition: **control-plane sync**. In Istio, the control plane watches Kubernetes and Istio resources, translates them into Envoy proxy configuration, and sends that configuration to the data-plane proxies. **Control-plane sync** means the proxies have received and accepted the current config from Istio. The YAML stored in Kubernetes records the desired state; the checkout rollout only affects real traffic after the relevant Envoy proxies load the generated config.
 
-`istioctl` is the tool we use for that second question. `kubectl apply` can tell you that Kubernetes accepted `checkout-traffic.yaml`, but `istioctl proxy-status` asks Istio and the proxies whether the current generated config has reached the data plane. That matters in a canary because a stale `web` proxy could keep sending traffic with the old weights even after the YAML has changed.
+`istioctl` is the tool we use for that second question. `kubectl apply` can tell you that Kubernetes accepted `checkout-traffic.yaml`, but `istioctl proxy-status` asks Istio and the proxies whether the current generated config has reached the data plane. In a canary, a stale `web` proxy could keep sending traffic with the old weights even after the YAML has changed.
 
 The first check is `istioctl proxy-status`, which asks whether the proxies report synced configuration:
 
@@ -209,7 +219,7 @@ istioctl proxy-config routes "$WEB_POD" -n store --name 80 -o json | grep -A 25 
 
 If your service port is different, change `--name 80` to the route name that matches your listener. The exact JSON is verbose, but you are looking for the virtual host or route that points to `checkout` and includes weighted clusters for `v1` and `v2`.
 
-For a cleaner view, many teams use **`jq`** locally. `jq` is a command-line JSON filter, and it matters here because Envoy config output is large JSON that is hard to scan by eye. During the checkout rollout, `jq` lets you pull out just the weighted cluster block so you can see whether the proxy has the 95/5 split you expected:
+For a cleaner view, many teams use **`jq`** locally. `jq` is a command-line JSON filter, and it helps here because Envoy config output is large JSON that is hard to scan by eye. During the checkout rollout, `jq` lets you pull out just the weighted cluster block so you can see whether the proxy has the 95/5 split you expected:
 
 ```bash
 istioctl proxy-config routes "$WEB_POD" -n store --name 80 -o json \
@@ -288,7 +298,7 @@ Now the canary has routing, timeout, and retry protection. The next problem sits
 
 A **circuit breaker** is a protection rule that limits calls to an upstream host when it is overloaded or repeatedly failing. An upstream host is one backend instance the proxy might call, such as one `inventory` Pod behind the `inventory` Service. In Istio, circuit breaking is configured in a DestinationRule because it applies to the real destination after routing has selected the service. For checkout, the goal is to fail quickly when inventory is unhealthy instead of letting every checkout request sit and wait on the same slow dependency.
 
-The **connection pool** is the set of open or waiting connections and requests Envoy manages for a destination. Limits such as `maxConnections`, `http1MaxPendingRequests`, and `http2MaxRequests` put a ceiling on how much pressure checkout can send toward inventory at one time. That ceiling matters during warehouse sync spikes because bounded waiting gives checkout a chance to return a controlled error or fallback instead of filling every worker with stuck inventory calls.
+The **connection pool** is the set of open or waiting connections and requests Envoy manages for a destination. Limits such as `maxConnections`, `http1MaxPendingRequests`, and `http2MaxRequests` put a ceiling on how much pressure checkout can send toward inventory at one time. During warehouse sync spikes, bounded waiting gives checkout a chance to return a controlled error or fallback instead of filling every worker with stuck inventory calls.
 
 **Outlier detection** is the part of circuit breaking that watches individual upstream hosts and temporarily ejects unhealthy ones from the load-balancing pool. For HTTP services, repeated 5xx responses can mark a host as an outlier. For TCP-like failures, connection failures and timeouts can count too. The ejection is temporary, so a host can return to the pool after the configured time. In the online store, that means one bad inventory Pod can be avoided for a short window while the other inventory Pods keep serving checkout traffic.
 

@@ -1,7 +1,7 @@
 ---
 title: "What Is Cost and Resilience"
-description: "Connect AWS spending to the reliability and recovery choices it buys, so cost reviews do not accidentally remove protection the service still needs."
-overview: "Cost and resilience are paired operating questions. This article explains cost shapes, resilience shapes, headroom, waste, and review habits through one running orders service."
+description: "Connect AWS spending to the reliability and recovery choices it buys, so cost reviews preserve protection the service still needs."
+overview: "AWS cost and resilience decisions shape each other. This article explains cost shapes, resilience shapes, headroom, waste, and review habits through one running orders service."
 tags: ["cost", "resilience", "tradeoffs", "aws"]
 order: 1
 id: article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model
@@ -12,245 +12,170 @@ aliases:
 
 ## Table of Contents
 
-1. [The Cost Review Crisis](#the-cost-review-crisis)
-2. [Cost and Resilience as a Paired Equation](#cost-and-resilience-as-a-paired-equation)
-3. [The Five Primary Cost Shapes](#the-five-primary-cost-shapes)
-4. [The Five Primary Resilience Shapes](#the-five-primary-resilience-shapes)
-5. [The Capacity Trap: Headroom vs. Waste](#the-capacity-trap-headroom-vs-waste)
-6. [The Boring Efficiency of Waste Removal](#the-boring-efficiency-of-waste-removal)
-7. [The Cost vs. Resilience Tradeoff Map](#the-cost-vs-resilience-tradeoff-map)
-8. [Pre-Cut Evidence and Rollback Checks](#pre-cut-evidence-and-rollback-checks)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Operating Loop](#the-operating-loop)
+2. [Cost Is a Workload Signal](#cost-is-a-workload-signal)
+3. [Resilience Is a Promise](#resilience-is-a-promise)
+4. [Where Cost and Resilience Meet](#where-cost-and-resilience-meet)
+5. [Headroom, Waste, and Unknown Spend](#headroom-waste-and-unknown-spend)
+6. [A Monthly Review Habit](#a-monthly-review-habit)
+7. [What's Next](#whats-next)
+8. [Official References](#official-references)
 
-## The Cost Review Crisis
+## The Operating Loop
+<!-- section-summary: Cost and resilience belong to the same operating loop because spending often buys capacity, evidence, or recovery. -->
 
-Your application service, `devpolaris-orders-api`, is fully live. The service controller is running, configuration parameters are isolated, telemetry alarms are active, and deployment pipelines are green. The engineering team can build, observe, and adjust the system cleanly.
+The `orders` service has a normal week. Customers place orders, workers send receipts, and the API runs on ECS. Then the monthly AWS bill lands 22 percent higher than expected. Nothing dramatic happened, so the team feels a pull toward the biggest number on the bill.
 
-Then, the monthly cost review meeting arrives. An executive points out that AWS spending has risen by 40% and demands immediate, aggressive cuts. The engineering team, under pressure to reduce the invoice immediately, executes several quick cost-saving cuts:
+That first reaction makes sense, and it can also create trouble. The largest line might be an RDS standby that protects checkout during an Availability Zone problem. It might be CloudWatch Logs that support customer support investigations. It might be NAT Gateway traffic from a real design issue. The team needs a way to separate **waste**, **headroom**, and **protection** before anyone starts deleting things.
 
-* They reduce the ECS desired task count from four to two.
-* They delete several old database backups and snapshots.
-* They shorten CloudWatch Logs storage retention to three days.
-* They scale background workers down to a single instance.
+This module follows one practical loop:
 
-Two days later, a database lock contention occurs. Responders open the logging console but find no historical tracebacks because logs were pruned. Active checkouts crash immediately because Fargate has zero task headroom to absorb the connection blip, and the background workers fall behind on millions of pending receipt emails. 
+| Step | What the team tries to answer | Example for `orders` |
+|---|---|---|
+| See cost | Where did spend happen, and who owns it? | Cost Explorer shows CloudWatch Logs and NAT Gateway rose in the production account |
+| Explain drivers | Which usage pattern created the spend? | Debug logs stayed enabled after a release, and private tasks read S3 through NAT |
+| Right-size safely | Which change reduces waste without hurting users? | Reduce noisy logs, add an S3 gateway endpoint, and keep ECS deploy headroom |
+| Plan recovery | Which spending protects restoration after failure? | Keep RDS backups, prove point-in-time restore, and test receipt file recovery |
 
-The immediate cost savings created a massive production outage. Cost and resilience are permanently paired. Most architectural protection costs money, and most cost cuts remove some form of operational insurance.
+This article introduces cost and resilience as operating responsibilities for a running service. The next articles get more hands-on with Cost Explorer reports, AWS CLI output, sizing evidence, backup checks, and restore drills.
 
-## Cost and Resilience as a Paired Equation
+For the examples, `orders` means a production workload with an ECS API, an ECS worker service, RDS PostgreSQL, S3 receipt files, SQS jobs, CloudWatch logs, NAT Gateways, and AWS Backup. That mix is ordinary on purpose. Cost and resilience work usually happens in normal systems as well as large disaster recovery programs.
 
-Cost is the total financial spend required to provision running capacity, transfer data, store backups, and retain operational evidence. Resilience is your application's physical ability to keep serving transactions or recover cleanly to a usable state after an infrastructure failure.
+## Cost Is a Workload Signal
+<!-- section-summary: AWS cost usually reflects capacity, storage, requests, data movement, managed features, and retained evidence. -->
 
-At a high level, cost is the spend model for your AWS architecture, while resilience is the failure-behavior model that spend supports. You review them together because reducing a bill often changes capacity, recovery, evidence retention, or isolation.
+**Cost visibility** means the team can connect spend to a service, owner, environment, and usage pattern. A bill that only says `AmazonEC2`, `AmazonRDS`, or `AmazonCloudWatch` gives a starting point, but the team still needs to know which workload used the service and why usage changed.
 
-To operate successfully in the cloud, the team needs to replace the vague question *How do we make AWS cheaper?* with a precise paired equation:
+AWS charges for several shapes of work. Compute cost pays for running code through EC2 instances, ECS tasks on Fargate, Lambda duration, or EKS worker nodes. Storage cost pays for RDS storage, S3 objects, EBS volumes, snapshots, backups, and log retention. Request cost pays for API calls, queue operations, function invocations, and metric ingestion. Data movement cost pays for paths such as NAT Gateway processing, internet egress, cross-AZ transfer, and cross-Region replication.
 
-> What specific failure does this active AWS spend protect our customers against?
+Managed features also show up on the bill. RDS Multi-AZ, read replicas, backup copies, larger Auto Scaling minimums, and longer retention periods all add spend. Many of these choices buy a specific operating property: faster failover, more restore points, safer deployments, or better incident evidence.
 
-A spare ECS task looks like idle waste on a quiet Sunday afternoon, but it represents vital availability headroom if one task crashes during a heavy Monday morning deployment. A stored database snapshot appears as redundant storage cost until a faulty database migration corrupts your core tables. 
+For `orders`, the first cost map might look like this:
 
-To make cost management safe, every line item on the AWS invoice must be evaluated as an active investment in a specific reliability outcome.
+| Cost shape | Where the team sees it | What it may buy |
+|---|---|---|
+| Always-on capacity | ECS desired count, RDS instance class, NAT Gateway hourly charge | Baseline service availability and network access |
+| Burst execution | Lambda duration, ECS scale-out, SQS worker growth | Faster handling of peaks and background jobs |
+| Storage growth | RDS storage, S3 receipts, EBS snapshots, log retention | Data durability, audit history, and restore points |
+| Data movement | NAT Gateway, cross-AZ traffic, internet egress, replication | Private subnet access, user downloads, or disaster recovery copies |
+| Operational evidence | CloudWatch Logs, custom metrics, traces, CloudTrail | Debugging, incident response, and audit trails |
 
-Let us map the cost and resilience boundaries of our orders api:
+The important habit is connecting every expensive line to a purpose. `prod-orders-db` Multi-AZ can have a purpose note that says it supports local AZ failure recovery for checkout. `/ecs/prod/orders-api` logs can have a purpose note that says they support 30 days of support investigations. A NAT Gateway with no owner, no known workload, and no traffic explanation belongs in the investigation bucket.
 
-```mermaid
-flowchart TD
-    Customers["Customers"] --> ECS["ECS Tasks ($ Capacity)"]
-    ECS --> RDS["RDS Database ($ Host/Storage)"]
-    ECS --> S3["S3 Receipt Buckets ($ Storage/API)"]
-    ECS --> SQS["SQS Queues ($ Requests)"]
-    SQS --> Workers["Worker Fleet ($ Capacity)"]
-    ECS --> Logs["CloudWatch ($ Ingestion/Storage)"]
-    RDS --> Backups["Snapshots ($ Storage/Retention)"]
+## Resilience Is a Promise
+<!-- section-summary: Resilience covers availability, recovery points, restore capacity, and evidence the team can use during incidents. -->
+
+**Resilience** means the workload can keep serving users through some failures and return to a usable state after others. In AWS, resilience includes live availability, backup and restore, disaster recovery, operational evidence, and the human runbooks that connect those pieces.
+
+Availability protects current traffic. An ECS service running tasks in two Availability Zones can keep serving if one task or one zone has trouble. An Application Load Balancer can route only to healthy targets. RDS Multi-AZ can fail over to a standby. These choices cost more than a single-copy system, but they reduce outage time for important paths.
+
+Recovery protects data and service restoration. RDS automated backups, snapshots, S3 versioning, DynamoDB point-in-time recovery, EBS snapshots, and AWS Backup recovery points give the team a place to restore from. These features only matter after the team proves what they restore, how long restore takes, and how the app will use the restored target.
+
+Operational evidence protects decision-making. Logs, metrics, traces, CloudTrail events, deployment records, and backup reports help responders explain what changed and what failed. Cutting all logs to save money may reduce the monthly bill and leave the team blind during a customer dispute or production incident.
+
+`orders` needs recovery targets by component. Checkout may need a 30-minute recovery target and a five-minute data loss target because paid orders directly affect customers and revenue. Internal reporting may accept a four-hour recovery target because the reports can wait. Receipt files in S3 may need versioning because customers need proof of purchase. Temporary recommendation cache data may accept rebuild instead of backup.
+
+That business difference should show up in cost. Checkout receives stronger database protection, clearer alarms, and practiced restore steps. Reporting receives a cheaper recovery path. The team writes down the reason so a future cost review can see which spending buys user protection.
+
+## Where Cost and Resilience Meet
+<!-- section-summary: The same AWS setting can change the bill, user impact, recovery time, and operational evidence. -->
+
+Cost and resilience meet in ordinary configuration choices. A team may increase ECS minimum tasks to protect deploy overlap and short spikes. That raises the bill every hour. A team may reduce log retention from 90 days to 30 days. That lowers storage cost and may still support support investigations. A team may copy backups to another Region. That adds storage and transfer cost and supports regional recovery.
+
+The useful review asks two questions together: can this cost less, and what risk changes if the team removes it? This keeps cost work from quietly weakening the service.
+
+| Decision | Cost effect | Resilience effect | Practical review question |
+|---|---|---|---|
+| Keep RDS Multi-AZ | Higher steady database cost | Faster local failover for checkout | Which RTO or availability target requires it? |
+| Reduce ECS minimum tasks | Lower compute cost | Less spare capacity for peaks and deploy overlap | Do p95 latency and deployment health stay inside target? |
+| Add S3 gateway endpoint | Endpoint has no hourly charge, route changes need review | Private tasks avoid NAT path for S3 | Which buckets and policies need endpoint access checks? |
+| Shorten log retention | Lower CloudWatch Logs storage | Less historical evidence | How far back do support and incident reviews need logs? |
+| Copy backups cross-Region | Higher storage and transfer cost | Recovery path for regional failure | Has the team restored from the copied backup in a drill? |
+
+This is why finance and engineering need the same evidence. Finance can see the trend and budget pressure. Engineering can explain workload behavior and failure risk. Product or business owners can decide how much downtime or data loss the service may accept. Cost work without resilience context can remove protection. Resilience work without cost context can keep expensive features after their purpose has gone away.
+
+![The cost-resilience map shows how capacity, redundancy, backups, observability, and recovery choices create both spend and protection](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/cost-resilience-map.png)
+
+*The cost-resilience map shows how capacity, redundancy, backups, observability, and recovery choices create both spend and protection.*
+
+
+## Headroom, Waste, and Unknown Spend
+<!-- section-summary: Teams need different actions for useful spare capacity, clear waste, and spend that needs investigation. -->
+
+**Headroom** is spare capacity with a purpose. An ECS API may run four tasks because rolling deployments need old and new tasks to overlap. A worker service may scale up before an 08:00 marketplace import. A database may keep memory and I/O capacity for short bursts that a monthly average can miss.
+
+**Waste** is spend with no current purpose. An unattached EBS volume from an old test, a forgotten load balancer in a sandbox account, snapshots kept forever after a migration, or debug logs retained for years can cost money without helping users or operators.
+
+**Unknown spend** needs evidence before action. A shared NAT Gateway with no obvious owner, an S3 bucket with terabytes of exports, or a log group with sudden ingestion growth may be waste, protection, or a signal from a new feature. The first action is assigning an owner and gathering data before any deletion decision.
+
+For `orders`, CPU may average 12 percent on the database and still hit 85 percent during a morning import. The worker service may sit idle overnight and need to process queued jobs quickly after 08:00. NAT Gateway spend may spike during deployments because every private task pulls a large image through the same route. Averages can hide the moments users notice.
+
+The team can sort a review like this:
+
+| Item | Classification | Reason | First action |
+|---|---|---|---|
+| RDS Multi-AZ for checkout | Required protection | Supports checkout local failover target | Keep, verify failover and restore evidence |
+| ECS worker count overnight | Adjustable headroom | Idle most nights, busy every morning | Test scheduled scaling with queue-age watch |
+| Old unattached EBS volume | Likely waste | No attachment and no owner after review | Snapshot if policy requires, then delete |
+| CloudWatch Logs ingestion spike | Unknown spend | Started after release, cause unclear | Find log group, compare deploy timeline, inspect sample logs |
+
+This simple classification prevents two common mistakes. One mistake is treating all spend as protection and keeping everything forever. The other mistake is treating all unexplained spend as waste and removing something the service still needs. Good cost work moves unknown items into one of the other buckets with evidence.
+
+![The headroom view separates useful safety margin from idle waste, unknown spend, and risky cuts](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/headroom-vs-waste.png)
+
+*The headroom view separates useful safety margin from idle waste, unknown spend, and risky cuts.*
+
+
+## A Monthly Review Habit
+<!-- section-summary: A repeatable review keeps the team focused on evidence, ownership, action, and risk. -->
+
+A practical monthly review starts with the top cost changes instead of every penny in the account. The team looks at the service, usage type, tags, owner, runtime evidence, and recovery purpose. Each item receives one decision: keep, tune, investigate, or delete after a risk check.
+
+The review note should be small enough to maintain. It should say what changed, what evidence supports the decision, who owns it, what action will happen, and which signal will show whether the change hurt users. That record helps the next review because the team can see why a costly item still exists.
+
+```yaml
+finding: CloudWatch Logs cost increased 35 percent
+scope:
+  account: prod
+  region: eu-west-2
+  workload: orders
+evidence:
+  - increase began after release 2026-06-10.3
+  - /ecs/prod/orders-api log ingestion rose from 4 GB/day to 18 GB/day
+  - error rate stayed normal, so debug verbosity is the likely driver
+owner: commerce-platform
+decision: restore LOG_LEVEL=info and keep 30-day retention
+riskCheck: confirm request_id, order_id, version, and error_code remain searchable
 ```
 
-## The Five Primary Cost Shapes
+This note uses a YAML shape because the fields are easy to scan in a ticket, runbook, or pull request. `finding` names the cost problem. `scope` narrows the account, Region, and workload. `evidence` links the bill to operational facts. `owner` names the team that can change the system. `decision` says what will happen. `riskCheck` protects the operational evidence responders still need.
 
-AWS resources bill teams using different pricing structures. Recognizing the cost shape is the first step in deciding what evidence to analyze:
+The same review can keep a table for quick decisions:
 
-A cost shape is the billing behavior behind a resource. It tells you whether spend grows with time, usage, storage, support traffic, or recovery protection.
+| Item | Evidence | Decision | Risk check |
+|---|---|---|---|
+| RDS standby cost | Supports checkout Multi-AZ recovery target | Keep | Revisit only if RTO changes |
+| Sandbox NAT Gateway | No owner and no traffic for 45 days | Delete after owner notice | Confirm no active sandbox dependency |
+| ECS worker minimum | Queue empty overnight, busy at 08:00 | Add scheduled scaling | Watch oldest message age and retry count |
+| Old snapshots | Migration completed three months ago | Delete snapshots outside retention policy | Confirm AWS Backup still meets restore target |
 
-* **Running Capacity (Fixed-Time Charge)**: Resources that bill a flat rate per hour while provisioned, regardless of actual work processed. Examples include RDS instance hours, ECS Fargate task allocations, and active NAT Gateways.
-* **Usage Volume (Transaction Charge)**: Charges driven entirely by application activity. Examples include Lambda execution counts, SQS request APIs, and data transfer rates between Availability Zones.
-* **Storage Growth (Accumulating Charge)**: Spending that increases continuously over time as files accumulate. Examples include S3 object storage, EBS volumes, and RDS databases.
-* **Hidden Support (Quiet Aggregators)**: Auxiliary services that grow behind the scenes. Examples include log delivery streams, CloudWatch Logs ingestion, and NAT Gateway data processing fees.
-* **Recovery Options (Insurance Charge)**: The cost of maintaining secondary recovery points. Examples include AWS Backup vaults, database snapshots, and cross-Region replication volumes.
+This habit gives the rest of the module a clear path. First the team sees cost. Then it explains drivers. Then it right-sizes with runtime evidence. Finally it protects recovery promises with RTO, RPO, backups, restore tests, and failure scenario decisions.
 
-One service often contains multiple cost shapes. Amazon S3 bills for object storage size (Storage Growth), PUT/GET API transactions (Usage Volume), and cross-Region replication paths (Recovery Options). Treating "S3 is expensive" as a single problem is too blunt. You must optimize the specific cost shape driving the invoice.
+![The review loop shows how spend, ownership tags, reliability promises, headroom, safe changes, and follow-up reviews belong together](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/cost-resilience-review-loop.png)
 
-## The Five Primary Resilience Shapes
+*The review loop shows how spend, ownership tags, reliability promises, headroom, safe changes, and follow-up reviews belong together.*
 
-Just as spending has different shapes, your reliability design is partitioned into five distinct resilience shapes:
-
-A resilience shape is the specific failure-handling capability a design buys. It names whether the system is paying for redundancy, spare capacity, isolation, recovery points, or diagnostic evidence.
-
-* **Redundancy**: Running multiple physical replicas of a component so that one instance can fail completely without severing the user route. Examples include Multi-AZ databases and multi-task ECS services.
-* **Headroom**: Maintaining spare capacity to absorb traffic surges, transactional blips, and deployment overlaps without performance degradation.
-* **Isolation**: Partitioning resources so that a failure in one service boundary cannot cascade and crash adjacent systems. Examples include separate SQS queues and microservice network borders.
-* **Recovery Points**: Preserving chronological copies of state to enable recovery from bad writes, accidental deletions, or database corruptions. Examples include RDS Point-in-Time Recovery (PITR) logs.
-* **Evidence**: Retaining the logs, metrics, and trace profiles required to diagnose active incidents.
-
-Every resilience shape requires financial investment. Redundancy increases running capacity hours. Headroom leaves vCPUs idle. Recovery points accumulate storage fees. Evidence drives CloudWatch ingestion costs. Operating a safe cloud environment means balancing these insurance costs against verified business risk.
-
-## The Capacity Trap: Headroom vs. Waste
-
-Headroom and waste can look identical on a quiet system graph. If you open CloudWatch at 2 a.m. and find your application tasks operating at 5% CPU utilization, a naive cost review will declare the idle capacity to be waste and demand immediate downsizing.
-
-Headroom is intentionally unused capacity reserved for failure absorption, deployment overlap, or traffic spikes. Waste is unused capacity or storage with no verified workload, owner, or recovery purpose.
-
-This is the capacity trap. In an ECS cluster, that low-activity headroom protects several critical operations:
-
-* **Task Failure Absorption**: If your service runs four tasks and one process crashes, the remaining three tasks must absorb the traffic spike instantly without saturating their own CPU and memory limits.
-* **Deployment Overlap**: During a rolling update, the orchestrator starts fresh tasks and waits for health checks before stopping the old ones. The cluster requires sufficient capacity headroom to run both versions simultaneously.
-* **Flash Surges**: Real traffic is not a smooth average; it spikes instantly when marketing emails are broadcast or user cohorts log in.
-
-Useful Headroom vs. Idle Waste:
-
-| Operational Dimension | Useful Headroom | Idle Waste |
-| :--- | :--- | :--- |
-| **ECS Task count** | Running four tasks when three are required, protecting deployment overlap and task failure margins. | Running twelve tasks because the scaling cooldown is set too long, leaving vCPUs idle for weeks. |
-| **RDS Instance Class** | Provisioning a `db.m6g.xlarge` to ensure nightly export jobs complete within the batch window. | Provisioning a `db.r6g.2xlarge` because a developer forgot to delete a temporary load testing database. |
-| **S3 Snapshot Storage** | Retaining 30 days of daily backups to meet verified compliance and disaster recovery targets. | Retaining thousands of un-lifecycle-expired snapshots from a testing environment deleted last year. |
-
-![Cost and resilience infographic showing a quiet utilization graph, useful headroom for failed tasks, deployment overlap, and traffic surge, plus idle waste that must prove its purpose](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/headroom-vs-waste.png)
-
-*Quiet utilization does not prove waste. Some idle-looking capacity protects task failures, deployment overlap, and traffic spikes; other idle resources are true waste only after the team proves they serve no active purpose.*
-
-## The Boring Efficiency of Waste Removal
-
-Waste is any cloud spending that does not serve a measured workload, support operational evidence checks, or satisfy a verified recovery target.
-
-Waste removal is the safest form of cost optimization because it targets resources that have no active operational contract. The goal is to delete or lifecycle only what the team can prove is unused.
-
-The safest cost-saving actions are completely boring:
-* **Shutdown Dev Environments**: Write automated shell scripts to scale staging ECS desired counts to zero during weekends and non-business hours, eliminating fixed-time running capacity hours when developers are offline.
-* **Enforce Storage Lifecycles**: Apply strict S3 lifecycle rules to transition temporary exports or build logs to S3 Glacier storage classes or deletion paths after a set period.
-* **Audit Orphaned Resources**: Delete unattached EBS volumes, forgotten snapshots, and unused load balancers.
-
-The practical rule: never delete or downsize a resource unless you can prove exactly who owns it, what business purpose it serves, and what recovery strategy it supports.
-
-## The Cost vs. Resilience Tradeoff Map
-
-To operate a reliable AWS environment, every cost-saving decision must be treated as an operational trade. Operators must document the saved cost, the reliability risk, the required verification metrics, and the precise rollback plan:
-
-A cost-resilience tradeoff map is a change record for infrastructure economics. It connects the proposed saving to the reliability capability being reduced, the metrics that must stay healthy, and the exact reversal path.
-
-Cost vs. Resilience Tradeoff Map:
-
-| Planned Decision | Cost Shape Reduced | Resilience Risk Created | Required Verification Metrics | Backup Rollback Target |
-| :--- | :--- | :--- | :--- | :--- |
-| **Reduce ECS desired count** | Running Capacity (Fargate hourly fees). | Less headroom to absorb task failures or deployment overlaps. | `CPUUtilization`, `MemoryUtilization`, ALB `HTTPCode_Target_5XX_Count`. | Restore desired count to original value via CLI. |
-| **Downsize RDS Instance Class** | Running Capacity (Database hourly fees). | Slower query executions, higher CPU saturation during batch windows. | RDS `CPUUtilization`, `DatabaseConnections`, `ReadLatency`. | Modify database back to original instance class. |
-| **Shorten CloudWatch retention** | Storage Growth (Log storage accumulation). | Lost historical evidence during post-mortem incident reviews. | Log group storage volume, incident timeline search logs. | Revert log retention parameter to original duration. |
-| **Apply S3 lifecycle rules** | Storage Growth (S3 object storage fees). | Accidental deletion of compliance or customer-required files. | S3 bucket object count, prefix-specific access age trends. | Recover objects from S3 versions or backup vault. |
-| **Enable Database PITR** | Recovery Option (Snapshot storage fees). | Requisite backup cost; higher baseline storage fees. | Database RPO targets, successful restore drill logs. | Keep enabled; PITR is non-negotiable for system of record. |
-
-This tradeoff map is the core of professional cloud operations. It ensures that every cost-saving change is rolled out with clear risk boundaries, explicit metrics, and an active rollback target ready to be executed if performance degrades.
-
-## Pre-Cut Evidence and Rollback Checks
-
-A cost review should create an evidence bundle before anyone changes capacity, retention, or backup settings. The bundle does not need to be fancy. It needs to show the current setting, the customer-facing risk, the metric that will prove the change is still healthy, and the exact command or pull request that restores the old setting.
-
-For the `devpolaris-orders-api`, the team can collect a small baseline before reducing ECS capacity:
-
-```bash
-aws ecs describe-services \
-  --cluster devpolaris-prod \
-  --services devpolaris-orders-api \
-  --query 'services[].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Deployments:deployments[].rolloutState}'
-
-aws cloudwatch get-metric-data \
-  --metric-data-queries file://orders-capacity-review.json \
-  --start-time 2026-06-01T00:00:00Z \
-  --end-time 2026-06-08T00:00:00Z
-```
-
-The metric query file can track the signals that should stay healthy during the change. This example watches task CPU, memory, and load balancer target errors together, because cutting tasks only makes sense if the remaining tasks keep serving traffic cleanly.
-
-```json
-[
-  {
-    "Id": "ecs_cpu",
-    "MetricStat": {
-      "Metric": {
-        "Namespace": "AWS/ECS",
-        "MetricName": "CPUUtilization",
-        "Dimensions": [
-          { "Name": "ClusterName", "Value": "devpolaris-prod" },
-          { "Name": "ServiceName", "Value": "devpolaris-orders-api" }
-        ]
-      },
-      "Period": 300,
-      "Stat": "p95"
-    }
-  },
-  {
-    "Id": "alb_5xx",
-    "MetricStat": {
-      "Metric": {
-        "Namespace": "AWS/ApplicationELB",
-        "MetricName": "HTTPCode_Target_5XX_Count",
-        "Dimensions": [
-          { "Name": "LoadBalancer", "Value": "app/orders-prod/abc123" }
-        ]
-      },
-      "Period": 300,
-      "Stat": "Sum"
-    }
-  }
-]
-```
-
-The same habit applies to evidence retention and recovery. Before shortening log retention, the team can record the current setting and the rollback command:
-
-```bash
-aws logs describe-log-groups \
-  --log-group-name-prefix /aws/ecs/devpolaris-orders-api \
-  --query 'logGroups[].{Name:logGroupName,Retention:retentionInDays,StoredBytes:storedBytes}'
-
-aws logs put-retention-policy \
-  --log-group-name /aws/ecs/devpolaris-orders-api \
-  --retention-in-days 30
-```
-
-Before deleting snapshots or backup recovery points, the team should prove which restore point each database depends on:
-
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier orders-prod \
-  --query 'DBInstances[].{MultiAZ:MultiAZ,BackupRetention:BackupRetentionPeriod,LatestRestorableTime:LatestRestorableTime}'
-
-aws backup list-recovery-points-by-backup-vault \
-  --backup-vault-name prod-orders-vault \
-  --query 'RecoveryPoints[].{ResourceArn:ResourceArn,Created:CreationDate,Status:Status,Lifecycle:Lifecycle}'
-```
-
-These commands turn the cost review into an engineering review. A person can see the old value, the proposed new value, the metric window, and the rollback action. If checkout latency rises, task restarts climb, RDS restore coverage disappears, or incident logs no longer cover the expected investigation window, the team has a clean path back instead of a debate in the middle of an outage.
-
-## Putting It All Together
-
-Cost and reliability are paired dimensions of the same architectural system:
-
-* **Unify Cost and Reliability**: Treat every AWS line item as a deliberate investment in a specific operational safety outcome.
-* **Identify the Cost Shape**: Analyze whether spending is driven by running capacity, transaction volume, storage growth, hidden support, or recovery options.
-* **Protect Availability Headroom**: Maintain sufficient compute task margin to absorb task restarts and deployment overlaps, avoiding the capacity trap.
-* **Target Boring Waste First**: Focus cost-saving efforts on shutting down idle dev servers and purging unattached block volumes.
-* **Document Every Trade**: Maintain a strict tradeoff map for every resource change, defining metrics, risks, and recovery targets before executing changes.
 
 ## What's Next
+<!-- section-summary: The next article turns the first loop step into concrete Cost Explorer, tag, budget, and spend-jump evidence. -->
 
-We have established the paired equation of cost and resilience, mapping the balance between spending and reliability. In the next article, we will go deep into cost visibility. We will detail how to configure cost allocation tags, navigate Cost Explorer trends, set up AWS Budgets alerts, and execute terminal CLI sessions to query billing data.
+The rest of this module turns the operating loop into hands-on work. Cost visibility comes next because the team needs owned evidence before it can tune anything. After that, right-sizing uses utilization, latency, queue, and recovery evidence to reduce waste safely. The final article builds recovery plans with RTO, RPO, backups, restore drills, and failure scenario decisions.
 
-![Cost resilience map checklist covering cost shapes, resilience shapes, headroom, waste, tradeoff map, and rollback plan](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/cost-resilience-map.png)
+## Official References
 
-*Use this as the cost and resilience map: identify the cost shape, name the resilience shape it buys, protect real headroom, remove proven waste, document each tradeoff, and keep the rollback plan close.*
-
----
-
-**References**
-
-* [AWS Well-Architected Framework: Cost Optimization Pillar](https://docs.aws.amazon.com/wellarchitected/latest/framework/a-cost-optimization.html) - AWS guide to delivering business value at the lowest price.
-* [AWS Well-Architected Framework: Reliability Pillar](https://docs.aws.amazon.com/wellarchitected/latest/framework/a-reliability-pillar.html) - Documentation on designing resilient cloud systems.
-* [AWS Cost Explorer Documentation](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html) - Technical reference for analyzing billing trends.
-* [Defining Recovery Objectives](https://docs.aws.amazon.com/wellarchitected/2022-03-31/framework/rel_planning_for_recovery_objective_defined_recovery.html) - AWS guide to setting downtime and data loss boundaries.
+- [Cost Explorer overview](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)
+- [Managing costs with AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)
+- [Plan for Disaster Recovery](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html)
+- [Identifying opportunities with Cost Optimization Hub](https://docs.aws.amazon.com/cost-management/latest/userguide/cost-optimization-hub.html)
+- [AWS Well-Architected Reliability Pillar](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html)
+- [AWS Backup developer guide](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html)

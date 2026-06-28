@@ -23,7 +23,11 @@ id: article-containers-orchestration-kubernetes-operations-rbac
 ## Why RBAC Shows Up During Operations
 <!-- section-summary: RBAC controls which identities can ask the Kubernetes API to read or change specific resources. -->
 
+A developer joins an incident call and needs to read Pod logs in the `orders` namespace. They run `kubectl logs`, and the API server returns `Forbidden`. The cluster knows who they are, but it has not been told that this user or group can read `pods/log`.
+
 **RBAC** means role-based access control. In Kubernetes, RBAC answers authorization questions for the API server. Authentication tells Kubernetes who is calling. Authorization decides whether that caller can do the requested action.
+
+Here is the concrete permission. A support group may get `get`, `list`, and `watch` on Pods and Events, plus `get` on the `pods/log` subresource, inside `orders`. That lets people inspect a failed rollout without giving them permission to exec into containers, read Secrets, delete Pods, or change Deployments.
 
 Almost every operational task around `devpolaris-orders-api` turns into an API request. A release job patches the Deployment in the `orders` namespace. A developer reads Pods and Events after a failed rollout. A telemetry collector may watch Pods so it can attach Kubernetes metadata to spans. A controller updates status on the objects it manages. These tasks look different from the outside, but each one reaches the same API server.
 
@@ -66,7 +70,7 @@ This sentence style makes review much calmer. Instead of asking whether a role n
 
 ![RBAC request path showing a user or ServiceAccount request reaching the API server with verb, resource, namespace, RoleBinding, and allow or deny decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rbac-request-path.png)
 
-*The request path turns RBAC review into concrete fields. A permission is not just a role name; it is a subject asking for a verb on a resource inside a scope.*
+*The request path turns RBAC review into concrete fields. A permission is a subject asking for a verb on a resource inside a scope.*
 
 Now we need to name the callers that receive those permissions.
 
@@ -108,7 +112,11 @@ kind: ServiceAccount
 metadata:
   name: orders-release
   namespace: orders
----
+```
+
+The Role names the API groups, resources, and verbs the release job needs:
+
+```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -121,7 +129,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events"]
     verbs: ["get", "list", "watch"]
----
+```
+
+The RoleBinding connects that Role to the ServiceAccount inside the same namespace:
+
+```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

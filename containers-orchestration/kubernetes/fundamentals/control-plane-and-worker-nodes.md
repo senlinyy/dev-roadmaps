@@ -12,9 +12,9 @@ aliases:
 
 ## Table of Contents
 
-1. [The Shape of a Kubernetes Cluster](#the-shape-of-a-kubernetes-cluster)
-2. [Our Shared Scenario](#our-shared-scenario)
-3. [From Manifest to Running Pod](#from-manifest-to-running-pod)
+1. [One Pod Needs a Place to Run](#one-pod-needs-a-place-to-run)
+2. [The App We Will Deploy](#the-app-we-will-deploy)
+3. [From Request to Running Pod](#from-request-to-running-pod)
 4. [The API Server and Kubernetes API](#the-api-server-and-kubernetes-api)
 5. [etcd: The Cluster State Store](#etcd-the-cluster-state-store)
 6. [Controllers and the Scheduler](#controllers-and-the-scheduler)
@@ -25,25 +25,27 @@ aliases:
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
 
-## The Shape of a Kubernetes Cluster
-<!-- section-summary: A Kubernetes cluster has a coordination side and an execution side, and most debugging starts by knowing which side owns the failing step. -->
+## One Pod Needs a Place to Run
+<!-- section-summary: One container runs inside one Pod, and that Pod needs a worker node plus a control plane that coordinates placement. -->
 
-A **Kubernetes cluster** is a group of machines that run containerized applications under one API. The cluster has two big parts: the **control plane** and the **worker nodes**. The control plane handles coordination, state, and decisions. Worker nodes provide CPU, memory, disk, and networking so containers can actually run.
+A **container** is a packaged application process with the files it needs to run. For example, the `notification-api` container image can hold the API code, installed dependencies, and the command that starts the HTTP server. A container image answers the packaging question: what should run?
 
-That split matters because Kubernetes work moves through several small hand-offs. When you deploy `notification-api`, you send a request to the control plane. The control plane records what you want, creates the lower-level objects needed to reach that goal, chooses worker nodes for the Pods, and then each selected node starts the containers locally.
+A **Pod** is the smallest runtime unit Kubernetes schedules. One `notification-api` Pod usually wraps one API container and gives it a cluster network identity, health checks, and a place in the Kubernetes API. A Pod answers the first runtime question: what is one running copy of the app?
 
-A **control plane** is the set of Kubernetes components that expose the API and keep cluster state moving toward the requested configuration. In plain English, it is the decision and coordination layer. It includes the API server, etcd, the scheduler, and controllers. Each component has a narrow job, and together they turn a YAML file into work that node machines can perform.
+A **worker node** is a physical or virtual machine that runs Pods. The node supplies CPU, memory, local disk, and networking. Each worker node runs a local agent called the kubelet, a container runtime such as containerd or CRI-O, and networking components that let Pods communicate.
 
-A **worker node** is a physical or virtual machine that runs Pods. A Pod is the smallest Kubernetes runtime unit, usually one application container plus any helper containers that share the same network identity and storage volumes. Each worker node runs a local agent called the kubelet, a container runtime such as containerd or CRI-O, and networking components that let Pods communicate.
+A **Kubernetes cluster** is a group of worker nodes managed under one API. The cluster needs a coordination layer because many Pods need placement, many nodes report health, and many users or pipelines can ask for changes. That coordination layer is the **control plane**.
 
-This article walks through those parts in the order you meet them during real work. We will start with the shared application, send a deployment request, follow the API server and etcd, then follow controllers, scheduler, kubelet, runtime, networking, and operations. By the end, a Kubernetes rollout should read like a chain of concrete jobs.
+A **control plane** is the set of Kubernetes components that expose the API and keep cluster state moving toward the requested configuration. It includes the API server, etcd, the scheduler, and controllers. The API server accepts requests, etcd stores cluster data, the scheduler chooses nodes for Pods, and controllers keep checking whether the cluster matches what was requested.
 
-## Our Shared Scenario
+This article follows that split in the order work actually travels. We will start with the shared application, send a deployment request, follow the API server and etcd, then follow controllers, scheduler, kubelet, runtime, networking, and operations. By the end, a Kubernetes rollout should read like a chain of concrete jobs.
+
+## The App We Will Deploy
 <!-- section-summary: The Customer Notification Platform gives every component a concrete job: API traffic, worker processing, database dependency, rollout, and operations. -->
 
 We will use a Customer Notification Platform for the whole article. It has a `notification-api` service that receives HTTP requests from other product systems, such as checkout or billing. It validates the request, stores a notification record in a database, and returns a response. It also has a `notification-worker` process that picks up pending notifications and sends email, SMS, or push messages.
 
-The database dependency matters because many Kubernetes failures show up as application symptoms. The `notification-api` Pod can start successfully while the database connection fails. The worker can keep running while it falls behind because database latency increased. Kubernetes can help route traffic only to healthy Pods, restart failed containers, and schedule replacement Pods, but the app still needs good probes, logs, resource requests, and rollout settings.
+Many Kubernetes failures show up as application symptoms. The `notification-api` Pod can start successfully while the database connection fails. The worker can keep running while it falls behind after database latency increases. Kubernetes can help route traffic only to healthy Pods, restart failed containers, and schedule replacement Pods, but the app still needs good probes, logs, resource requests, and rollout settings.
 
 In this scenario, the platform usually has these Kubernetes objects. Each one lines up with a real production job, so the same names will reappear when we talk about scheduling, traffic, rollout, and debugging.
 
@@ -56,14 +58,16 @@ In this scenario, the platform usually has these Kubernetes objects. Each one li
 | **Secret** | `notification-database` | Holds the database connection string or credentials. |
 | **ConfigMap** | `notification-settings` | Holds non-secret settings such as batch size or feature flags. |
 
-The same scenario also gives us realistic operations work. A new image version rolls out after a bug fix. Traffic must reach only ready API Pods. Worker replicas may need scaling during a marketing campaign. A database outage should show up in readiness, logs, and metrics. A node upgrade should drain Pods safely without losing notification requests halfway through processing.
+The same example also gives us realistic operations work. A new image version rolls out after a bug fix. Traffic must reach ready API Pods. Worker replicas may need scaling during a marketing campaign. A database outage should show up in readiness, logs, and metrics. A node upgrade should drain Pods safely without losing notification requests halfway through processing.
 
-## From Manifest to Running Pod
-<!-- section-summary: A Kubernetes request moves from YAML to API object, then through controllers, scheduler, kubelet, runtime, and networking before traffic reaches a Pod. -->
+## From Request to Running Pod
+<!-- section-summary: A Kubernetes request moves from desired state to API object, then through controllers, scheduler, kubelet, runtime, and networking before traffic reaches a Pod. -->
 
 A **manifest** is a YAML or JSON file that describes a Kubernetes object. The file says what you want the cluster to manage. For `notification-api`, a manifest can describe the image, replicas, port, database Secret, health checks, and resource requests. A resource request tells Kubernetes how much CPU or memory the container expects to need for scheduling.
 
-Here is a Deployment we can use as a concrete request. It gives the API two replicas, a readiness probe that checks the application before traffic reaches it, and resource requests so the scheduler can make a real placement decision.
+The manifest is the desired state. For example, `replicas: 2` asks Kubernetes to keep two API Pods running. The rest of the cluster then works from that stored request: controllers create Pod records, the scheduler chooses nodes, and kubelets start containers on the selected machines.
+
+Start with the smallest Deployment skeleton. It gives the API two replicas and enough labels for controllers to connect the Deployment to the Pods it creates.
 
 ```yaml
 apiVersion: apps/v1
@@ -86,27 +90,38 @@ spec:
       containers:
         - name: api
           image: ghcr.io/devpolaris/notification-api:1.8.0
-          ports:
-            - containerPort: 3000
-          env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: notification-database
-                  key: url
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 3000
-            periodSeconds: 10
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              cpu: "1"
-              memory: "1Gi"
+```
+
+The next slice names the port and the database Secret. The port gives probes and Services a target. The Secret reference gives the container a database URL without putting the credential in the image.
+
+```yaml
+ports:
+  - name: http
+    containerPort: 3000
+env:
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: notification-database
+        key: url
+```
+
+Readiness and resources finish the part that matters to scheduling and traffic. The scheduler uses the requests to place the Pod, and the readiness probe keeps the Pod out of traffic until `/ready` passes.
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  periodSeconds: 10
+  failureThreshold: 3
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1"
+    memory: "1Gi"
 ```
 
 You apply that file with `kubectl`, the command-line client for the Kubernetes API. The client reads your kubeconfig, authenticates to the cluster, and sends an HTTP request to the API server.
@@ -130,6 +145,9 @@ The full hand-off looks like this. The table follows one Deployment request, but
 | 7 | **kubelet** | Notices a Pod assigned to its node and asks the runtime to start containers. |
 | 8 | **Container runtime** | Pulls the image and starts the container process. |
 | 9 | **Networking components** | Give the Pod an IP address and route Service traffic to ready Pods. |
+
+![Manifest handoff chain showing kubectl, API server, etcd, controllers, scheduler, kubelet, container runtime, networking, and status updates for notification-api](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/manifest-handoff-chain.png)
+*One Deployment request moves through the control plane first, then through worker-node components that start containers and report status.*
 
 This flow is the practical structure for debugging. If `kubectl apply` fails, the investigation starts at the API server request. If Pods sit in `Pending`, scheduling and capacity need attention. If Pods show `ImagePullBackOff`, the request reached a worker node and the runtime failed to pull the image. If the Pod runs and receives no traffic, readiness and Service endpoints need inspection.
 
@@ -237,6 +255,9 @@ For `notification-api`, the kubelet sees that the scheduler assigned a Pod to `w
 The **container runtime** is the software that actually runs containers on the node. Common Kubernetes runtimes include containerd and CRI-O. Kubernetes talks to runtimes through the **Container Runtime Interface**, usually shortened to CRI, so the kubelet can ask for standard actions such as pulling an image, creating a container, starting it, stopping it, and collecting status.
 
 This local responsibility explains common failure messages. `ImagePullBackOff` usually means the kubelet reached the runtime and the runtime failed to fetch the image because of a bad tag, missing registry credentials, or registry outage. `CrashLoopBackOff` usually means the runtime started the container and the process exited repeatedly. A readiness failure means the process may be running while the app reports that it should stay out of Service traffic.
+
+![Node runtime stack showing a worker node with kubelet, container runtime, Pod sandbox, notification-api container, probes, logs, volumes, and status reporting back to the API server](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/node-runtime-stack.png)
+*Worker-node debugging usually follows this stack: node condition, kubelet event, runtime action, container log, probe result, and status update.*
 
 These commands show the node side of the story. They connect the Pod you care about to the worker machine, runtime events, and application logs.
 
@@ -366,15 +387,65 @@ The Deployment controller sees the updated Pod template and creates a new Replic
 
 Once the API Pods report ready, the Service endpoint set includes their Pod IPs. Customer traffic reaches the Service, flows to a ready API Pod, and the API writes notification records to the database. The worker Deployment runs separate Pods that process the pending records and send notifications. If a worker falls behind, scaling the worker Deployment creates more worker Pods through the same controller, scheduler, kubelet, and runtime path.
 
+Here is the full Deployment request after the control-plane and worker-node responsibilities have names. The API server stores this object, controllers expand it into lower-level objects, the scheduler chooses nodes, and kubelets start the containers.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-api
+  namespace: notifications-prod
+  labels:
+    app: notification-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-api
+  template:
+    metadata:
+      labels:
+        app: notification-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/devpolaris/notification-api:1.8.0
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-database
+                  key: url
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+```
+
 The same structure handles failure. A bad manifest fails at the API server. Missing capacity shows up in scheduler events. A private image problem shows up in node and runtime events. A database outage shows up through readiness, logs, and application metrics. A node upgrade uses cordon, drain, replacement scheduling, and readiness to keep the platform serving customers.
 
 That is the core of control plane and worker nodes. The control plane accepts, stores, decides, and coordinates. Worker nodes pull images, start containers, run probes, report status, and carry traffic. Kubernetes works well in production because those responsibilities stay separated and communicate through the API.
+
+![Control plane and worker node summary showing API server, etcd, controllers, scheduler, kubelet, container runtime, Services, readiness, and operations evidence around notification-api](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/control-plane-node-summary.png)
+*The control plane coordinates through the API, and worker nodes perform the local runtime work that makes the application real.*
 
 ## What's Next
 
 This article focused on the components that cooperate inside a cluster. The next article goes deeper into **desired state and reconciliation**, which is the Kubernetes pattern behind Deployments, ReplicaSets, node health, and many higher-level tools.
 
-That topic will make controllers feel much more concrete. You will see how Kubernetes keeps comparing the requested state with the observed state, why it keeps retrying after failures, and how that loop changes the way you deploy, scale, and recover applications like the Customer Notification Platform.
+That topic makes controllers more concrete. You will see how Kubernetes keeps comparing the requested state with the observed state, why it keeps retrying after failures, and how that loop changes the way you deploy, scale, and recover applications like the Customer Notification Platform.
 
 ---
 

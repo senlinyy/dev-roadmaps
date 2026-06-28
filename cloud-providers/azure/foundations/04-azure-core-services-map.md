@@ -33,7 +33,9 @@ An **Azure core services map** is a small operating map for an application. It c
 
 Imagine a junior engineer joining the on-call rotation for a production Orders API. On day one, the useful list is much smaller than the Azure catalog: where public traffic enters, where the code runs, where order data lives, which identity reads secrets, where logs land, where container images come from, who owns the resource group, how cost is tracked, and how the team restores data after a bad day.
 
-That gives us the structure for the whole article:
+Before we name services, picture the first production question. A customer clicks checkout and the Orders API returns `500`. The on-call engineer needs to know which part of the system owns the public route, which part runs the code, which part stores the order, which identity can read secrets, and which workspace has the evidence. The table below is a small map for that request path, not a list to memorize.
+
+That request path gives us the structure for the whole article:
 
 | Application job | Plain English question | Common Azure service families |
 |---|---|---|
@@ -133,7 +135,19 @@ Here is the kind of runtime evidence the team expects to retrieve from Azure CLI
 az containerapp show \
   --name devpolaris-orders-api \
   --resource-group rg-devpolaris-orders-prod \
-  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,revisionMode:properties.configuration.activeRevisionsMode}"
+  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,revisionMode:properties.configuration.activeRevisionsMode}" \
+  --output json
+```
+
+The output gives the runtime facts the team can compare with the release plan:
+
+```json
+{
+  "fqdn": "devpolaris-orders-api.orange-meadow.example.azurecontainerapps.io",
+  "image": "acrdevpolaris.azurecr.io/orders-api:1.8.4",
+  "revisionMode": "Multiple",
+  "targetPort": 8080
+}
 ```
 
 That command asks Azure for the hostname, ingress target port, image reference, and revision mode. Those fields matter because many production failures hide in those small details. A container that listens on `3000` while ingress forwards to `8080` can produce gateway errors even though the resource exists. A revision pointing at the wrong image tag can keep old code running even though the release pipeline says it deployed.
@@ -190,7 +204,27 @@ az role assignment create \
   --scope "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod"
 ```
 
-That command shows the shape of the authorization record: one principal, one role, and one scope. If the app receives `403 Forbidden` from Key Vault, the team can check the managed identity principal ID, the assigned role, the vault scope, the vault network settings, and the exact secret operation being attempted. The map turns a vague phrase like "the app can read secrets" into reviewable facts.
+That command shows the shape of the authorization record: one principal, one role, and one scope. A safer review also reads the assignment back:
+
+```bash
+az role assignment list \
+  --assignee "<managed-identity-principal-id>" \
+  --scope "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod" \
+  --query "[].{principalId:principalId,role:roleDefinitionName,scope:scope}" \
+  --output json
+```
+
+```json
+[
+  {
+    "principalId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "role": "Key Vault Secrets User",
+    "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod"
+  }
+]
+```
+
+If the app receives `403 Forbidden` from Key Vault, the team can check the managed identity principal ID, the assigned role, the vault scope, the vault network settings, and the exact secret operation being attempted. The map turns a vague phrase like "the app can read secrets" into reviewable facts.
 
 Access connects directly to signals because identity failures only become useful when someone can see them. The next row of the map collects the evidence that proves what the app, platform, and Azure control plane experienced.
 
@@ -246,7 +280,8 @@ For ownership and cost, the map should name the **resource group** and the core 
 ```bash
 az group show \
   --name rg-devpolaris-orders-prod \
-  --query "{id:id,location:location,tags:tags}"
+  --query "{id:id,location:location,tags:tags}" \
+  --output json
 ```
 
 The expected output should prove the production boundary:
@@ -294,10 +329,22 @@ The first useful runtime check collects the active ingress and image fields:
 az containerapp show \
   --name devpolaris-orders-api \
   --resource-group rg-devpolaris-orders-prod \
-  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,provisioningState:properties.provisioningState}"
+  --query "{fqdn:properties.configuration.ingress.fqdn,targetPort:properties.configuration.ingress.targetPort,image:properties.template.containers[0].image,provisioningState:properties.provisioningState}" \
+  --output json
 ```
 
-Suppose the command returns `targetPort: 8080`, and the latest release changed the Node.js app to listen on `3000`. That one mismatch explains why entry can reach the Container App surface while the backend remains unhealthy. The resolution belongs in compute configuration or app startup before SQL tuning or Key Vault permissions.
+Suppose the command returns this:
+
+```json
+{
+  "fqdn": "devpolaris-orders-api.orange-meadow.example.azurecontainerapps.io",
+  "image": "acrdevpolaris.azurecr.io/orders-api:1.8.5",
+  "provisioningState": "Succeeded",
+  "targetPort": 8080
+}
+```
+
+If the latest release changed the Node.js app to listen on `3000`, that mismatch explains why entry can reach the Container App surface while the backend remains unhealthy. The resolution belongs in compute configuration or app startup before SQL tuning or Key Vault permissions.
 
 Now imagine a different incident. The API logs show `Forbidden` when reading `sql-orders-connection` from Key Vault. Public traffic reaches the app, and the app starts normally. The map moves to access because the symptom names the vault. The team checks the managed identity on the container app, the role assignment on the vault, the role name, the scope, and any vault network restrictions. A missing `Key Vault Secrets User` assignment at the vault scope would explain the failure.
 

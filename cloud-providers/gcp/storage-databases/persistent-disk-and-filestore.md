@@ -35,6 +35,9 @@ In this article, we will follow Northstar Shop again, but now from the operation
 
 The first choice is the most important one: one VM-owned disk, or one shared filesystem for many clients. That choice decides which service owns consistency, permissions, backups, and failure recovery.
 
+![Disk and file share choices](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/disk-file-share-choices.png)
+*The attached-storage choice starts with file behavior. One VM-owned filesystem points to a block disk, while many clients sharing one path points to Filestore.*
+
 ## Persistent Disk, Hyperdisk, and the VM Boundary
 <!-- section-summary: Persistent Disk and Hyperdisk provide durable network-attached block devices; the VM still owns the filesystem and mount behavior. -->
 
@@ -71,6 +74,23 @@ gcloud compute disks create render-metadata \
 
 Block storage gives the VM a raw device. Linux still needs a filesystem and a mount point before application code can use it.
 
+After creating or resizing a disk, verify the cloud resource before logging into the VM. The `users` field shows whether a VM currently has the disk attached.
+
+```bash
+gcloud compute disks describe render-cache \
+  --zone=us-central1-a \
+  --format='yaml(name,type,sizeGb,status,users)'
+```
+
+```yaml
+name: render-cache
+type: https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/diskTypes/pd-balanced
+sizeGb: '200'
+status: READY
+users:
+- https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/instances/render-vm-01
+```
+
 ## Linux Formatting, Mounting, and Growth
 <!-- section-summary: A block device needs a filesystem, a stable mount path, an fstab entry, and a tested resize process before an application should rely on it. -->
 
@@ -100,6 +120,16 @@ df -h /mnt/render-cache
 
 The `nofail` option keeps the VM boot path more forgiving if the data disk has an attachment problem. Production teams still alert on missing mounts because an application that writes to an empty mount directory can fill the boot disk by accident. A simple startup check can prevent that class of incident:
 
+The `findmnt` and `df` output are the proof that the renderer is using the attached disk rather than writing into an ordinary directory on the boot disk.
+
+```console
+TARGET            SOURCE                                      FSTYPE OPTIONS
+/mnt/render-cache /dev/disk/by-id/google-render-cache         ext4   rw,relatime,discard
+
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdb        196G  1.1G  185G   1% /mnt/render-cache
+```
+
 ```bash
 test -d /mnt/render-cache/lost+found
 findmnt --mountpoint /mnt/render-cache
@@ -117,6 +147,9 @@ df -h /mnt/render-cache
 ```
 
 If the disk uses partitions, the team grows the partition before growing the filesystem. If the filesystem uses XFS, the team uses `xfs_growfs` on the mounted path. The exact commands matter less than the habit: resize work belongs in a runbook, and the runbook should include verification before and after.
+
+![Persistent Disk lifecycle](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/persistent-disk-lifecycle.png)
+*A block disk does useful work only after the VM attaches it, Linux formats and mounts it, and the team verifies the path. Snapshot and restore steps belong in the same lifecycle.*
 
 Now the renderer has a durable local path. The next problem is recovery. A durable disk still needs snapshots, restore tests, and a plan for zone failure.
 
@@ -147,6 +180,21 @@ sudo systemctl start northstar-renderer
 ```
 
 Real teams automate that pattern carefully. Google Cloud supports snapshot schedules and guest flush scripts for Linux application-consistent disk snapshots. The team keeps the freeze period short, tests the pre- and post-snapshot scripts, and alerts when a scheduled snapshot fails. A backup with no restore test is only a hopeful file in another place.
+
+The snapshot read-back should show `READY`, source disk, and storage locations. A restore drill then creates a new disk from the snapshot and mounts it on a test VM before trusting the snapshot policy.
+
+```bash
+gcloud compute snapshots describe render-cache-before-upgrade \
+  --format='yaml(name,status,sourceDisk,storageLocations)'
+```
+
+```yaml
+name: render-cache-before-upgrade
+status: READY
+sourceDisk: https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/disks/render-cache
+storageLocations:
+- us
+```
 
 Regional disks solve a different problem. A **zonal disk** lives in one zone. A **regional Persistent Disk** synchronously replicates data between two zones in the same region. If `us-central1-a` has a problem, the team can fail over to a VM in the replica zone and attach the regional disk as part of the failover process. The application still needs a tested startup and recovery procedure.
 
@@ -185,6 +233,10 @@ gcloud filestore instances describe render-shared \
   --format="value(networks.ipAddresses[0])"
 ```
 
+```console
+10.0.1.2
+```
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y nfs-common
@@ -196,6 +248,20 @@ sudo mount -t nfs \
 ```
 
 The Filestore mounting guide recommends NFS options such as `hard`, `timeo=600`, `retrans=3`, tuned read and write sizes, and privileged source ports. For supported newer Linux kernels and tiers, `nconnect` can improve throughput by opening multiple TCP connections between the client and server. The exact mount options should match the tier, kernel, and workload, so the team measures with the renderer's real file sizes and avoids relying on a tiny test file.
+
+After mounting, use `findmnt` and a small write-read-delete test from at least two renderer VMs. That proves the path is mounted and shared, not a local directory with the same name.
+
+```bash
+findmnt /mnt/media-shared
+echo "render-vm-01 $(date -u +%FT%TZ)" | sudo tee /mnt/media-shared/incoming/mount-check.txt
+cat /mnt/media-shared/incoming/mount-check.txt
+```
+
+```console
+TARGET            SOURCE        FSTYPE OPTIONS
+/mnt/media-shared 10.0.1.2:/media nfs4   rw,hard,timeo=600,retrans=3
+render-vm-01 2026-06-14T10:45:00Z
+```
 
 The boot-time mount belongs in `/etc/fstab` or `autofs`. `autofs` is helpful when a VM should boot even if the network filesystem has a temporary issue and only mount the share on first access. A simple `/etc/fstab` entry looks like this:
 
@@ -238,6 +304,25 @@ gcloud filestore backups create render-shared-before-import \
   --file-share=media \
   --location=us-central1
 ```
+
+The backup output should lead to a read-back. `READY` means the backup exists; it does not prove the application can use restored files. The drill should restore into a separate test instance or share, mount it, and read a known file.
+
+```bash
+gcloud filestore backups describe render-shared-before-import \
+  --location=us-central1 \
+  --format='yaml(name,state,sourceInstance,sourceFileShare,capacityGb)'
+```
+
+```yaml
+name: projects/northstar/locations/us-central1/backups/render-shared-before-import
+state: READY
+sourceInstance: projects/northstar/locations/us-central1-a/instances/render-shared
+sourceFileShare: media
+capacityGb: '1024'
+```
+
+![Filestore shared workflow](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/filestore-shared-workflow.png)
+*Filestore adds a shared NFS path, but the team still has to manage POSIX users, staging directories, locks, and backup read-backs.*
 
 The team now has the operational pieces. The final section shows how the same design usually lands in infrastructure as code.
 
@@ -304,6 +389,22 @@ resource "google_filestore_instance" "render_shared" {
 ```
 
 Terraform creates the cloud resources, and guest configuration still handles disk formatting, mount directories, and `/etc/fstab` unless the team adds a configuration-management step. In real environments, teams often pair Terraform with startup scripts, Ansible, cloud-init, image baking, or a Kubernetes CSI driver depending on the compute platform. The same rule keeps the design reliable: cloud resource creation, guest OS mounting, application ownership, and restore testing all need ownership.
+
+The Terraform plan is consumed by the platform pipeline, while the VM startup script or configuration-management tool consumes the device name and Filestore IP. A useful review checks both halves: the cloud resources exist, and the guest has a repeatable way to mount them.
+
+```bash
+terraform plan -out=tfplan
+terraform show -no-color tfplan | sed -n '/google_compute_disk.render_cache/,/google_filestore_instance.render_shared/p'
+```
+
+```console
++ google_compute_disk.render_cache
++ size = 200
++ type = "pd-balanced"
++ google_filestore_instance.render_shared
++ tier = "ZONAL"
++ capacity_gb = 1024
+```
 
 ## Putting It All Together
 <!-- section-summary: Persistent Disk, Hyperdisk, and Filestore solve different attached-storage jobs, so the right design starts with the application's file behavior. -->

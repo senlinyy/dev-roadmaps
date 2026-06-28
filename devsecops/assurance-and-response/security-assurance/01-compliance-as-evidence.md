@@ -1,7 +1,7 @@
 ---
 title: "Compliance as Evidence"
-description: "Map pull requests, scan outputs, approvals, deployment logs, and access reviews to audit-ready security evidence."
-overview: "Compliance evidence is the proof a team already creates while building and shipping: pull requests, approvals, scan results, release records, access reviews, and incident notes. This article shows how to collect that proof without turning engineering into separate manual paperwork."
+description: "Prove safety checks happened by connecting controls to pull requests, scans, approvals, releases, and access reviews."
+overview: "Compliance evidence proves that expected safety checks actually happened. This article follows one Northstar Payments release through controls, workflow records, pull requests, scans, release approvals, access reviews, evidence packets, and evidence freshness."
 tags: ["devsecops", "compliance", "evidence", "audit"]
 order: 1
 id: article-devsecops-compliance-incident-readiness-compliance-as-evidence
@@ -9,7 +9,7 @@ id: article-devsecops-compliance-incident-readiness-compliance-as-evidence
 
 ## Table of Contents
 
-1. [Why Evidence Comes From the Workflow](#why-evidence-comes-from-the-workflow)
+1. [Prove the Safety Check Happened](#prove-the-safety-check-happened)
 2. [What Auditors Are Asking For](#what-auditors-are-asking-for)
 3. [The Payments Portal Scenario](#the-payments-portal-scenario)
 4. [Map Controls to Engineering Records](#map-controls-to-engineering-records)
@@ -20,17 +20,20 @@ id: article-devsecops-compliance-incident-readiness-compliance-as-evidence
 9. [Build an Evidence Packet for One Release](#build-an-evidence-packet-for-one-release)
 10. [Keep Evidence Fresh Without Busywork](#keep-evidence-fresh-without-busywork)
 11. [What's Next](#whats-next)
+12. [References](#references)
 
-## Why Evidence Comes From the Workflow
+## Prove the Safety Check Happened
 <!-- section-summary: Compliance evidence should come from the same systems engineers already use to review, test, approve, and deploy software. -->
 
-Compliance evidence is **proof that a control actually happened**. A control is a security or reliability expectation, like "production changes receive review before release" or "known vulnerable dependencies are assessed before deployment." Evidence is the record that lets another person verify the expectation without trusting a story from memory.
+Picture a reviewer asking one plain question: "Can you prove the safety check happened?" For Northstar Payments, that check might be code review before a payment change, dependency scanning before a release, approval before production deploy, or a quarterly review of people who can administer the payment portal.
+
+**Compliance evidence** is the proof that a safety check actually happened. A **control** is the safety check itself, such as "production changes receive review before release" or "known vulnerable dependencies are assessed before deployment." **Evidence** is the record that lets another person verify the control without trusting a story from memory.
 
 In a healthy DevSecOps workflow, evidence comes from ordinary delivery systems. Pull requests show who changed code and who reviewed it. CI logs show which tests and scans ran. Deployment records show which version reached production. Access reviews show who could approve, merge, deploy, and administer the service. The team gets audit proof from work they already do.
 
 Here is the important shift. Compliance work should ask, "Which normal engineering record proves this?" before it creates a new spreadsheet. A spreadsheet can still help as an index, especially during an audit, but the strongest evidence usually lives in source control, CI/CD, ticketing, cloud logs, identity systems, and monitoring tools.
 
-We will use one scenario through the whole Security Assurance submodule. The team owns **Northstar Payments**, a customer payment portal that stores saved payment methods, generates receipts, and sends settlement events to a finance system. The product matters because payment data creates real customer risk, and the portal ships often enough that manual evidence gathering would quickly drain the team.
+We will use one scenario through the whole Security Assurance submodule. The team owns **Northstar Payments**, a customer payment portal that stores saved payment methods, generates receipts, and sends settlement events to a finance system. Payment data creates real customer risk, and the portal ships often enough that manual evidence gathering would quickly drain the team.
 
 ## What Auditors Are Asking For
 <!-- section-summary: Auditors usually want to see the control objective, the selected sample, the proof, and a clear link between all three. -->
@@ -41,7 +44,7 @@ The request has four parts. **The control objective** says what the organization
 
 A weak answer sounds like a meeting recap: "We always require review and the team checks vulnerabilities." A strong answer points to records: pull request `#142`, commit `a81c0f2`, CI run `881245`, SBOM artifact `northstar-payments-2026.06.18.cdx.json`, release approval `REL-447`, production deploy `deploy-2026-06-18-2`, and the access review completed on `2026-06-20`.
 
-That trace matters because compliance evidence needs chain of custody. Chain of custody means the evidence keeps enough context to show where it came from, who created it, and whether someone could have changed it after the fact. A screenshot pasted into a document loses much of that context. A signed artifact, a pull request event, a CI run URL, and an immutable deployment log carry much more detail.
+Compliance evidence also needs **chain of custody**. Chain of custody means the evidence keeps enough context to show where it came from, who created it, and whether someone could have changed it after the fact. A screenshot pasted into a document loses much of that context. A signed artifact, a pull request event, a CI run URL, and an immutable deployment log carry much more detail.
 
 ## The Payments Portal Scenario
 <!-- section-summary: A realistic release gives the article a concrete thread for showing how evidence appears across tickets, code, builds, scans, deployments, and access reviews. -->
@@ -50,7 +53,7 @@ Northstar Payments is preparing for a SOC 2 Type 2 audit and an internal mapping
 
 The release we will follow is `2026.06.18`, a change that adds step-up verification before customers update saved cards. The product manager created ticket `PAY-1842`. An engineer opened pull request `#142`. The CI pipeline ran unit tests, integration tests, SAST, dependency scanning, container scanning, and SBOM generation. A security reviewer approved the change because it touched authentication flow. The release manager approved production deployment after the pipeline passed.
 
-This one release can answer several audit questions. It shows controlled change management, secure review, automated testing, vulnerability management, segregation of duties, artifact integrity, deployment approval, and production traceability. The team does not need eight separate evidence rituals for those eight ideas. It needs one clean path through records that already exist.
+This one release can answer several audit questions. It shows controlled change management, secure review, automated testing, vulnerability management, segregation of duties, artifact integrity, deployment approval, and production traceability. One clean path through records can support several honest control answers.
 
 That path starts with mapping controls to the records the team can actually produce.
 
@@ -118,7 +121,7 @@ gh pr checks 142 \
   > evidence/release-2026.06.18/pr-142-checks.txt
 ```
 
-That export should supplement the live platform record rather than replace it. The best evidence packet includes links back to the original records, because reviewers often need to inspect timestamps, reviewer identities, and check conclusions directly.
+The first command creates the folder for the sample release. `gh pr view` saves structured pull request fields such as reviewer decisions, commits, file paths, merge time, and URL. `gh pr checks` saves the status checks that guarded the merge. Those exports should supplement the live platform record, because reviewers often need to inspect timestamps, reviewer identities, and check conclusions directly in the system of record.
 
 ## Security Scans as Verification Evidence
 <!-- section-summary: Scan reports prove that verification ran, while triage records explain what the team did with findings. -->
@@ -168,7 +171,7 @@ For Northstar, a clean scan can attach directly to the release packet. A finding
 
 A **release record** ties the engineering change to the production event. It answers a different question from the pull request. The pull request says, "This code change was reviewed and merged." The release record says, "This exact version was built, approved, and deployed to this environment."
 
-For Northstar Payments, the release record includes the release version, commit SHA, artifact digest, workflow run, approver, deployment environment, timestamp, and rollback reference. The artifact digest matters because it identifies the built package or image by content, not by a friendly name that someone could reuse. A container image tag like `latest` makes weak evidence. A digest like `sha256:...` gives a stable identifier.
+For Northstar Payments, the release record includes the release version, commit SHA, artifact digest, workflow run, approver, deployment environment, timestamp, and rollback reference. The **artifact digest** identifies the built package or image by content instead of by a friendly name that someone could reuse. A container image tag like `latest` makes weak evidence. A digest like `sha256:...` gives a stable identifier.
 
 Artifact provenance adds another layer. **Provenance** describes where an artifact came from: repository, commit, workflow, build runner, and build time. SLSA and GitHub artifact attestations give teams standard ways to express and verify that build origin. In plain language, provenance helps the team prove that the artifact in production came from the approved pipeline and commit.
 
@@ -230,6 +233,8 @@ gh run download 881245 \
   --dir evidence/release-2026.06.18/security-evidence
 ```
 
+`gh pr view` captures the reviewed change. `gh run view` captures the workflow run that built and tested the release. `gh run download` retrieves the workflow artifact named `security-evidence`, which contains the scan and SBOM files uploaded by CI. The run ID `881245` is the join point between the pull request, the workflow logs, and the downloaded files.
+
 The packet should also include a small manifest so the reviewer can see what was collected and whether any exported artifact changed later. A manifest works as a simple checksum index that makes the evidence folder easier to review.
 
 ```bash
@@ -246,7 +251,7 @@ gh api repos/northstar/payments/actions/runs/881245/artifacts \
   > evidence/release-2026.06.18/workflow-artifacts.json
 ```
 
-The manifest gives the audit packet a clean final step: collect the original records, preserve the files, hash the packet, and keep links back to the systems of record. If the audit asks for a second sample later, the team can repeat the same sequence instead of inventing a new process.
+The `find` pipeline lists every collected file, sorts the names, calculates SHA-256 checksums, and writes the checksum list into `MANIFEST.sha256`. The deployment API export searches deployment records for the same commit SHA. The workflow artifacts export records which CI artifacts existed for run `881245`. If the audit asks for a second sample later, the team can repeat the same sequence instead of inventing a new process.
 
 The index file can be simple:
 
@@ -278,7 +283,7 @@ Customer payment portal release for PAY-1842, deployed to production on 2026-06-
 Dependency scan reported no critical or high findings for production dependencies.
 ```
 
-The packet should also include the decision for every meaningful finding. If the scan found a vulnerable dependency, the evidence packet links to the vulnerability ticket. If the team accepted a temporary exception, the packet links to the exception record and its compensating controls. Evidence without decisions only proves that the team found something, not that it handled the risk.
+The packet should also include the decision for every meaningful finding. If the scan found a vulnerable dependency, the evidence packet links to the vulnerability ticket. If the team accepted a temporary exception, the packet links to the exception record and its compensating controls. Evidence with decisions proves that the team found the risk and handled it.
 
 ![Evidence packet infographic showing release records, pull request exports, CI logs, scan reports, SBOM, artifact digest, and deploy approval collected into a reviewer-ready folder](/content-assets/articles/article-devsecops-compliance-incident-readiness-compliance-as-evidence/evidence-packet.png)
 
@@ -287,7 +292,7 @@ _The packet gives reviewers one place to start, while the links and exports stil
 ## Keep Evidence Fresh Without Busywork
 <!-- section-summary: Evidence stays healthy when teams automate collection, keep records close to the workflow, and review samples before audit season. -->
 
-The hardest evidence problem is drift. A workflow changes, a scanner is replaced, a team renames an environment, or deployment approval moves to another tool. Six months later, the audit checklist still points to the old record. The fix is a lightweight evidence health check, not a quarterly panic.
+The hardest evidence problem is drift. A workflow changes, a scanner is replaced, a team renames an environment, or deployment approval moves to another tool. Six months later, the audit checklist still points to the old record. A lightweight evidence health check keeps that drift small.
 
 Northstar reviews the evidence map after major workflow changes and samples one release each month. The sample asks a few practical questions. Can the team trace ticket to pull request to CI run to artifact to deployment? Are required checks visible? Are scan artifacts retained long enough? Are vulnerability decisions linked? Are production approvers still reviewed?
 
@@ -306,11 +311,10 @@ Northstar now has a clear evidence path for normal releases. The next problem st
 
 The next article follows that alert through vulnerability triage and patching. We will use severity, exploitability, exposure, ownership, and patch deadlines to decide what the team needs to fix first and what proof it should keep.
 
----
-
-**References**
+## References
 
 - [NIST SSDF SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final)
+- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework)
 - [NIST SP 800-53 Rev. 5, Security and Privacy Controls for Information Systems and Organizations](https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final)
 - [GitHub Docs: About protected branches](https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 - [GitHub Docs: About status checks](https://docs.github.com/articles/about-status-checks)

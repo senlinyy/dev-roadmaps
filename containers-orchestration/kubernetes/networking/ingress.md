@@ -73,7 +73,7 @@ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -- 
 {"status":"ok","service":"progress-api"}
 ```
 
-That internal check matters because Ingress builds on top of the Service. A broken selector, a wrong `targetPort`, or missing ready Pods will still break the request after the edge route looks perfect. The clean flow is Service first, then Ingress.
+That internal check protects the rollout. Ingress builds on top of the Service, so a broken selector, a wrong `targetPort`, or missing ready Pods will still break the request after the edge route looks perfect. The clean flow is Service first, then Ingress.
 
 ## Ingress Object, IngressClass, and Controller
 <!-- section-summary: The Ingress object stores the desired HTTP rule, while an Ingress controller watches that object and configures real traffic handling. -->
@@ -107,6 +107,8 @@ There is also a 2026 controller footnote that matters for real production work. 
 
 Now we can write the first useful route. The DevPolaris web app calls `https://api.devpolaris.example/progress/me`, and that path should reach the `progress-api` Service in the `learning` namespace. The Ingress lives in the same namespace as the backend Service, so the backend reference can use the local Service name.
 
+Start with the object shell and the class. This says which controller should handle the route:
+
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -115,18 +117,30 @@ metadata:
   namespace: learning
 spec:
   ingressClassName: public
+```
+
+Then add the HTTP match. The **host** is the domain in the request, and the **path** is the URL prefix this API owns:
+
+```yaml
   rules:
     - host: api.devpolaris.example
       http:
         paths:
           - path: /progress
             pathType: Prefix
+```
+
+Finally add the backend Service. The backend points at the Service port named `http`, not at a Pod IP:
+
+```yaml
             backend:
               service:
                 name: progress-api
                 port:
                   name: http
 ```
+
+In the complete Ingress, those three snippets live together under `spec`.
 
 The `host` field matches the HTTP host that the browser sends. The `path` field matches the URL path. The backend points to the Service and a Service port. In this example, the backend uses the port name `http`, which matches the Service manifest from the previous section.
 
@@ -159,59 +173,26 @@ For the browser, the certificate must match the hostname. A request to `api.devp
 
 Kubernetes stores the certificate and private key in a TLS Secret. The Ingress `tls` block names the host and the Secret. The Secret must be in the same namespace as the Ingress. The Kubernetes API reference for [Ingress TLS](https://kubernetes.io/docs/reference/kubernetes-api/networking/ingress-v1/) also points out that Ingress TLS uses port 443 and can use SNI so different hosts can share the same TLS port when the controller supports it. **SNI**, or Server Name Indication, is the TLS handshake field where the client tells the edge which hostname it wants before HTTP routing starts.
 
+The TLS addition is small. It belongs under the same `spec` as the route:
+
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: progress-api
-  namespace: learning
-spec:
-  ingressClassName: public
-  tls:
-    - hosts:
-        - api.devpolaris.example
-      secretName: api-devpolaris-example-tls
-  rules:
-    - host: api.devpolaris.example
-      http:
-        paths:
-          - path: /progress
-            pathType: Prefix
-            backend:
-              service:
-                name: progress-api
-                port:
-                  name: http
+tls:
+  - hosts:
+      - api.devpolaris.example
+    secretName: api-devpolaris-example-tls
 ```
+
+This tells the controller to serve HTTPS for `api.devpolaris.example` using the certificate material in `api-devpolaris-example-tls`. The route rule still decides which Service receives `/progress`.
 
 In real clusters, teams often use **cert-manager** to create and renew that Secret. cert-manager's [Ingress usage documentation](https://cert-manager.io/docs/usage/ingress/) explains that annotating an Ingress can let ingress-shim create a Certificate resource for the `tls.secretName`. The issuer might use Let's Encrypt for a public domain, or a company certificate authority for internal hosts.
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
 metadata:
-  name: progress-api
-  namespace: learning
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
-spec:
-  ingressClassName: public
-  tls:
-    - hosts:
-        - api.devpolaris.example
-      secretName: api-devpolaris-example-tls
-  rules:
-    - host: api.devpolaris.example
-      http:
-        paths:
-          - path: /progress
-            pathType: Prefix
-            backend:
-              service:
-                name: progress-api
-                port:
-                  name: http
 ```
+
+That annotation is not a Kubernetes core field. cert-manager reads it, chooses the named issuer, creates a Certificate resource, and keeps the Secret renewed if the issuer flow succeeds.
 
 The important troubleshooting habit is to separate certificate readiness from backend readiness. A certificate error points to DNS, issuer, Secret, hostname, or controller TLS configuration. A `502` after a clean TLS handshake points farther inside the request path. The browser reports both as a broken API, but Kubernetes gives you different places to check.
 
@@ -374,7 +355,7 @@ This style of debugging keeps the layers separate. It also gives a clean inciden
 
 Ingress is a shared edge, so ownership has to be clear. The platform team usually owns the controller installation, controller upgrades, cloud load balancer settings, default certificates, controller logs, shared security policy, and DNS handoff. Application teams usually own their Ingress rules, Services, readiness probes, application paths, and tests for public routes.
 
-That split matters during changes. If the progress team changes `/progress` to `/learning-progress`, they own the client contract and the Ingress path update. If the platform team changes from one controller to another, they own annotation compatibility, timeout behavior, allowed body size, logging format, and migration checks.
+During changes, this ownership split tells each team which object to review. If the progress team changes `/progress` to `/learning-progress`, they own the client contract and the Ingress path update. If the platform team changes from one controller to another, they own annotation compatibility, timeout behavior, allowed body size, logging format, and migration checks.
 
 Annotations deserve special attention. They are how many controllers expose features beyond the standard Ingress fields, such as request timeouts, path rewrites, request body limits, rate limiting, authentication, or custom headers. Those settings can be necessary, but they are tied to the selected controller. A production review should list every annotation, why it exists, which controller supports it, and what test proves it still works.
 

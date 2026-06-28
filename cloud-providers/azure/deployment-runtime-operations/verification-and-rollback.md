@@ -85,6 +85,10 @@ watch_window:
 
 The exact numbers depend on the service. A high-traffic checkout API might need tighter thresholds and automated alerts. A low-traffic admin tool might need synthetic checks because real users arrive slowly. A risky migration might need a longer watch window because the failure appears after background jobs or delayed events run.
 
+![Watch window board showing owner, traffic level, smoke tests, error rate, latency, and release decision](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/watch-window-evidence.png)
+
+*A watch window is useful when it names the owner, traffic level, evidence, and decision instead of asking people to casually watch dashboards.*
+
 The useful habit is the same across those services: decide what evidence matters before traffic moves. A watch window gives the release owner a clear moment to continue, pause, roll back, or fix forward. Now we can talk about the layers of evidence inside that window.
 
 ## How To Run The Watch Window
@@ -103,6 +107,20 @@ az containerapp revision list \
   --resource-group rg-devpolaris-prod \
   --query "[].{name:name,active:active,trafficWeight:trafficWeight}" \
   --output table
+```
+
+The traffic table and revision table should agree. In this example, `v31` is active and serving 10 percent of traffic, so the watch window should filter telemetry by that candidate revision.
+
+```console
+RevisionName       Weight
+-----------------  ------
+orders-api--v30    90
+orders-api--v31    10
+
+Name             Active    TrafficWeight
+---------------  --------  -------------
+orders-api--v30  true      90
+orders-api--v31  true      10
 ```
 
 Then the release owner checks the direct health path for the candidate and stable paths. In a real system, those URLs might be a Container Apps revision label URL, an App Service staging slot URL, or a production URL with telemetry tags that identify the revision. The point is to check a user-facing endpoint rather than only the Azure resource page.
@@ -296,6 +314,10 @@ exceptions
 
 Telemetry also has a failure mode: it can go missing. A missing Application Insights connection string, broken Key Vault reference, sampling misconfiguration, or network issue can make the watch window look quiet. Quiet telemetry during a release should make the team cautious because the evidence layer itself is unhealthy.
 
+![Telemetry correlation path showing a failing request connected to trace, dependency, exception, and alert evidence](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/telemetry-correlation.png)
+
+*Release telemetry works best when one user request can connect request status, trace context, dependency calls, exceptions, and alerts.*
+
 When telemetry crosses a threshold, the team needs a recovery decision. That decision should protect users first and leave investigation for the stable period afterward.
 
 ## Rollback
@@ -341,6 +363,15 @@ az containerapp ingress traffic show \
   --name ca-orders-api-prod \
   --resource-group rg-devpolaris-prod \
   --output table
+```
+
+Healthy rollback output shows all new traffic returning to the stable revision. The candidate can remain active for investigation, but its traffic weight should be `0`.
+
+```console
+RevisionName       Weight
+-----------------  ------
+orders-api--v30    100
+orders-api--v31    0
 ```
 
 If the stable revision was deactivated earlier, the runbook needs to activate it before or during rollback. That is one reason release owners should keep the previous stable revision active through the watch window.
@@ -411,6 +442,10 @@ The decision depends on four questions. These questions give the release owner a
 
 The team should also record the decision time. Release incidents often become confusing later because people remember the same 20 minutes differently. A timestamped decision gives the post-release review a stable timeline.
 
+![Decision flow showing pause, rollback, or fix forward, followed by verification and evidence recording](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/decision-recovery-loop.png)
+
+*The release decision should lead to an action, a verification step, and a recorded evidence trail, not an open-ended debate during user impact.*
+
 After the decision, runtime operations continue. The service still needs hands-on care even after the team chooses continue, pause, rollback, or fix forward.
 
 ## Runtime Operations After the Decision
@@ -470,6 +505,22 @@ az webapp config appsettings list \
   --output table
 
 curl -fsS https://app-orders-api-prod.azurewebsites.net/healthz
+```
+
+The Container Apps output should still show `100` and `0` after a few minutes. The App Service output should show the recovered setting values, and the health endpoint should return the app-level checks that matter for this release.
+
+```console
+RevisionName       Weight
+-----------------  ------
+orders-api--v30    100
+orders-api--v31    0
+
+Name                            Value
+------------------------------  --------------------------------
+CHECKOUT_RECEIPT_RETRY_ENABLED  false
+ORDERS_DB_SERVER                sql-orders-prod.database.windows.net
+
+{"status":"ok","version":"2026.06.10","checks":{"sql":"ok","storage":"ok"}}
 ```
 
 Real traffic verification goes back to Application Insights. The release owner checks the same query that triggered the rollback, then compares the period before and after the action. The goal is to see new checkout requests landing on the stable revision and failures returning near baseline.

@@ -87,6 +87,12 @@ az disk show \
 
 That output answers practical questions. Which disk exists? How large is it? Which SKU pays for its performance envelope? Which VM owns it right now? What encryption setting protects it? These are boring questions in the best way. They turn "there is a disk somewhere" into a resource the team can operate.
 
+The review output should be boring and specific:
+
+| Name | Size | SKU | Attached to | Encryption |
+| --- | --- | --- | --- | --- |
+| `disk-orders-legacy-data-01` | `128` | `Premium_LRS` | VM resource ID for `vm-devpolaris-orders-legacy-01` | Platform-managed or approved customer-managed setting |
+
 ## Temporary Runtime Storage
 <!-- section-summary: Temporary runtime storage is scratch space for retryable work, so durable application data needs another home. -->
 
@@ -187,6 +193,12 @@ az storage share-rm show \
   --output table
 ```
 
+A useful result names the share and its operating contract:
+
+| Name | Quota | Protocol | Tier | Snapshot count |
+| --- | --- | --- | --- | --- |
+| `legacy-orders-share` | `128` | `SMB` | `TransactionOptimized` | At least one recent snapshot before a risky migration |
+
 Azure Files is a good migration tool when old software needs a shared folder while the team moves to a cleaner object-storage design. The worker can keep reading templates from `/mnt/legacy-orders` during the two-month migration, while new generated invoices already go to Blob Storage. That lets the team reduce risk without pretending the legacy app became cloud-native overnight.
 
 ![Infographic showing a legacy VM with an attached managed disk, an Azure Files share for shared templates, Blob Storage for new durable PDF invoices, and a reminder that temporary storage is retryable scratch only](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/legacy-storage-migration-map.png)
@@ -234,6 +246,8 @@ This table connects operations to application behavior. A share without consumer
 A **snapshot** is a point-in-time copy of a storage resource. Managed disks support snapshots. Azure Files supports share snapshots for SMB and NFS file shares. Snapshots help when an app deployment, script, or operator mistake damages files and the team needs an earlier copy.
 
 For `legacy-orders-share`, a snapshot before the migration release gives the team a recovery point for templates and shared files. If the new worker overwrites `invoice-template-v3.docx`, the team can inspect the snapshot and restore the older file. Microsoft documents Azure Files share snapshots as read-only point-in-time copies, and Azure Backup can schedule and retain snapshots for Azure file shares.
+
+Azure Files also has **file share soft delete**, which protects against deleting the whole share. That setting is useful if someone removes `legacy-orders-share` during cleanup and the team needs to undelete the share during the retention window. It should not replace snapshots or Azure Backup for file-level recovery, because the share-level soft delete story is different from restoring one overwritten template file.
 
 For `disk-orders-legacy-data-01`, a disk snapshot before a risky VM change can help create a recovery disk. The team still has to respect application consistency. A disk snapshot of a running app may capture a crash-consistent state. Some workloads need the app to flush writes, stop briefly, or use an application-aware backup path before the snapshot is a useful recovery point.
 
@@ -286,5 +300,6 @@ Next we look at Backups and Retention, where the storage question changes from "
 - [SMB file shares in Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/files-smb-protocol) - SMB scenarios, features, security, and protocol guidance.
 - [NFS file shares in Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/files-nfs-protocol) - NFS support and Linux-oriented file share guidance.
 - [Plan for an Azure Files deployment](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-planning) - Azure Files planning, soft delete, backup, and share snapshots.
+- [Prevent accidental deletion of Azure file shares](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-prevent-file-share-deletion) - File share soft delete behavior and retention planning.
 - [Use Azure Files share snapshots](https://learn.microsoft.com/en-us/azure/storage/files/storage-snapshots-files) - SMB and NFS share snapshot behavior and recovery uses.
 - [Understand Azure Files performance](https://learn.microsoft.com/en-us/azure/storage/files/understand-performance) - File share performance factors and workload tuning guidance.

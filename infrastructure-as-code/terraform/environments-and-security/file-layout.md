@@ -1,7 +1,7 @@
 ---
 title: "File Layout and Environment Isolation"
-description: "Organize your Terraform repository with a directory structure that keeps environments cleanly separated and scales with your team."
-overview: "Terraform file layout is an operations choice. This article shows a practical live/modules layout, where variables and backend settings live, how resources consume module inputs, and how plans prove you are targeting the right environment."
+description: "Directory-based environment isolation as the clear default for beginner Terraform projects and growing teams."
+overview: "Terraform file layout is an operations choice. This article starts with dev and prod needing different blast radius, then shows a practical live/modules layout that keeps backend state, provider targets, variables, credentials context, and reusable modules easy to review."
 tags: ["file layout", "environments", "organization", "repository", "terraform"]
 order: 2
 id: article-iac-terraform-environments-file-layout
@@ -9,29 +9,57 @@ id: article-iac-terraform-environments-file-layout
 
 ## Table of Contents
 
-1. [Why File Layout Matters](#why-file-layout-matters)
+1. [Why Layout Is a Safety Choice](#why-layout-is-a-safety-choice)
 2. [A Practical live/modules Repository](#a-practical-livemodules-repository)
-3. [The Environment Folder](#the-environment-folder)
-4. [The Shared Module Folder](#the-shared-module-folder)
+3. [What Lives in an Environment Folder](#what-lives-in-an-environment-folder)
+4. [What Lives in a Shared Module Folder](#what-lives-in-a-shared-module-folder)
 5. [How the Plan Proves the Target](#how-the-plan-proves-the-target)
 6. [Layout Rules That Age Well](#layout-rules-that-age-well)
 7. [Putting It All Together](#putting-it-all-together)
 
-## Why File Layout Matters
+The previous article focused on the identity Terraform uses for a run. The next safety question is where that run starts. A person can have the right credentials and still run Terraform from the wrong folder, load the wrong variables, or point at the wrong state file.
+
+This article uses a directory-first layout because it is the clearest default for beginners. Dev and prod get separate root folders, each folder owns its backend settings and input values, and shared modules stay in a separate `modules/` area. Workspaces come after this article because they are useful, but the directory shape gives a new team the easiest thing to review.
+
+## Why Layout Is a Safety Choice
 <!-- section-summary: File layout controls how easy it is to see the target environment, backend, variables, and reusable module boundaries. -->
 
-Terraform does not require one universal repository layout. The best layout makes the target environment obvious and keeps reusable code separate from environment-specific configuration.
+The billing team has two environments: dev and prod. Dev can tolerate mistakes. Prod holds real customer-facing infrastructure, stricter approvals, tighter access, and a larger blast radius.
 
-A risky layout hides production and development behind the same folder, same backend, and a pile of runtime flags. A safer layout lets a reviewer answer basic questions quickly: which environment is this, which backend state does it use, which account or subscription does it target, and which module code does it call?
+Terraform lets the team choose a repository layout, so choose a shape that makes the target obvious. A reviewer should be able to answer these questions quickly: which environment is changing, which state file will Terraform use, which account or subscription is targeted, and which shared modules are involved?
 
-For many teams, the clean starting point is a `live/` folder for environment stacks and a `modules/` folder for reusable building blocks.
+A directory-based layout puts those answers in visible files. `live/dev` can point at the development state backend and development provider target. `live/prod` can point at the production state backend and production provider target. The folder name, backend key, variable file, and plan output should all agree before anyone applies.
+
+The layout also shapes permissions. A protected production folder can require stricter code owners and CI approvals. A development folder can allow faster iteration. Shared modules can require module owners because a module change may affect several environments after each one plans.
 
 ## A Practical live/modules Repository
 <!-- section-summary: live folders hold deployable stacks, while modules hold reusable infrastructure code with inputs and outputs. -->
 
-A small repository can look like this:
+A common starting layout has two top-level ideas. `live/` contains runnable root modules. `modules/` contains reusable building blocks. The skeleton looks like this:
 
-```hcl
+```
+terraform/
+  live/
+    <environment>/
+      backend.hcl
+      main.tf
+      providers.tf
+      terraform.tfvars
+      variables.tf
+  modules/
+    <module-name>/
+      variables.tf
+      main.tf
+      outputs.tf
+```
+
+The concrete billing version adds `dev`, `prod`, and a reusable log bucket module:
+
+![Environment Directory Boundary](/content-assets/articles/article-iac-terraform-environments-file-layout/environment-directory-boundary.png)
+
+*The boundary view shows why environment folders, backend keys, credentials, and variable files need to point at the same target.*
+
+```
 terraform/
   live/
     dev/
@@ -39,11 +67,13 @@ terraform/
       main.tf
       providers.tf
       terraform.tfvars
+      variables.tf
     prod/
       backend.hcl
       main.tf
       providers.tf
       terraform.tfvars
+      variables.tf
   modules/
     log-bucket/
       variables.tf
@@ -52,14 +82,37 @@ terraform/
       outputs.tf
 ```
 
-Each folder under `live/` is a deployable root module. It has its own backend config, provider config, and environment values. The `modules/` folder contains reusable module code. The live folders call those modules with environment-specific inputs.
+Each folder under `live/` is a deployable root module. It has its own backend settings, provider configuration, variables, and module calls. The `modules/` folder contains reusable building blocks.
 
-This separation helps production review. A change under `modules/log-bucket` changes reusable code. A change under `live/prod` changes production wiring. A change under `live/dev` changes development wiring.
+This split gives changes a clear meaning. A change under `live/prod` changes production wiring. A change under `live/dev` changes development wiring. A change under `modules/log-bucket` changes shared module code, so every environment that calls it should run a plan before applying.
 
-## The Environment Folder
+As the repository grows, many teams add a second level for account, region, or stack:
+
+```
+terraform/
+  live/
+    prod/
+      eu-west-2/
+        network/
+        billing/
+        observability/
+    dev/
+      eu-west-2/
+        billing/
+  modules/
+    log-bucket/
+    service-network/
+    alarms/
+```
+
+The exact names vary, but the rule stays practical. Each deployable folder should map to one backend state record and one clear operational target.
+
+For a beginner project, the smaller shape is a safer starting point than the second tree. One `live/dev` folder, one `live/prod` folder, and one or two modules give the team enough structure without turning the repository into a maze. Deeper splits make sense only for real operational boundaries, such as a separate network stack, a separate account, or a service with a different release schedule.
+
+## What Lives in an Environment Folder
 <!-- section-summary: An environment folder chooses backend state, provider target, and module input values. -->
 
-In `live/prod/backend.hcl`:
+The production folder chooses the production state path. The backend file has one job: name the state target clearly.
 
 ```hcl
 bucket       = "dp-terraform-state-prod"
@@ -68,7 +121,34 @@ region       = "us-east-1"
 use_lockfile = true
 ```
 
-In `live/prod/terraform.tfvars`:
+`bucket` is the remote state bucket. `key` is the exact object path for the production state file, so a wrong key can make Terraform plan against the wrong history. `region` is where the backend lives. `use_lockfile = true` enables S3-native state locking, which creates a lock object next to the state path so two writers do not update the same state at the same time.
+
+The current Terraform S3 backend documentation lists S3 locking through `use_lockfile` and marks DynamoDB-based locking as deprecated. Older examples often use a DynamoDB lock table, so new layouts should prefer `use_lockfile = true` unless a migration requires both mechanisms for a while.
+
+Backend files should identify the state location, not contain long-lived backend credentials. Terraform stores the final merged backend configuration under `.terraform/` after `terraform init`, and saved plan files can carry backend configuration too. This means values such as `access_key`, `secret_key`, storage account keys, or tokens should come from the runner identity, cloud CLI profile, environment-based credential flow, or CI secret mechanism instead of being written into `backend.hcl`.
+
+A safe `backend.hcl` names the state target:
+
+```hcl
+bucket       = "dp-terraform-state-prod"
+key          = "infrastructure/billing/prod/terraform.tfstate"
+region       = "us-east-1"
+use_lockfile = true
+```
+
+A risky backend file adds secret material to the same place:
+
+```hcl
+bucket     = "dp-terraform-state-prod"
+key        = "infrastructure/billing/prod/terraform.tfstate"
+region     = "us-east-1"
+access_key = "AKIA..."
+secret_key = "..."
+```
+
+The risky version can leak through local `.terraform` metadata, shell history if passed as command-line `-backend-config` values, or saved plan artifacts. The AWS profile, OIDC-assumed role, or CI runner identity should authenticate to the backend instead.
+
+It also chooses production values:
 
 ```hcl
 environment    = "prod"
@@ -81,7 +161,7 @@ extra_tags = {
 }
 ```
 
-In `live/prod/main.tf`, the root module passes those values into the shared module:
+The root module passes those values into a shared module:
 
 ```hcl
 module "log_bucket" {
@@ -94,33 +174,61 @@ module "log_bucket" {
 }
 ```
 
-The environment folder does not define every S3 argument. It chooses the environment values and calls the module that knows how to build the logging bucket.
+The environment folder should make production choices visible: backend key, provider account or subscription, region, variable values, and module versions or sources. It should avoid hiding the important targeting details only inside CI scripts.
 
-## The Shared Module Folder
-<!-- section-summary: A shared module declares inputs, shapes locals, creates resources, and publishes outputs. -->
-
-Inside `modules/log-bucket/variables.tf`:
+Provider configuration belongs here too:
 
 ```hcl
-variable "environment" {
-  type = string
-}
+provider "aws" {
+  region = "us-east-1"
 
-variable "service_name" {
-  type = string
-}
-
-variable "retention_days" {
-  type = number
-}
-
-variable "extra_tags" {
-  type    = map(string)
-  default = {}
+  default_tags {
+    tags = {
+      environment = var.environment
+      service     = var.service_name
+      managed_by  = "terraform"
+    }
+  }
 }
 ```
 
-Inside `modules/log-bucket/locals.tf`:
+The root module should choose the provider target. A child module can stay reusable because it receives the provider configuration from the root run.
+
+## What Lives in a Shared Module Folder
+<!-- section-summary: A shared module declares inputs, shapes locals, creates resources, and publishes outputs. -->
+
+The shared module owns the repeated resource pattern. It receives values from the environment root and turns them into resources.
+
+![Shared Module Layout](/content-assets/articles/article-iac-terraform-environments-file-layout/shared-module-layout.png)
+
+*The module layout view separates reusable code from runnable environment roots, which keeps review focused on the target stack.*
+
+`variables.tf`:
+
+```hcl
+variable "environment" {
+  type        = string
+  description = "Environment name, such as dev or prod."
+}
+
+variable "service_name" {
+  type        = string
+  description = "Service name used in bucket naming and tags."
+}
+
+variable "retention_days" {
+  type        = number
+  description = "Number of days to keep log objects."
+}
+
+variable "extra_tags" {
+  type        = map(string)
+  description = "Additional tags applied to the log bucket."
+  default     = {}
+}
+```
+
+`locals.tf`:
 
 ```hcl
 locals {
@@ -137,7 +245,7 @@ locals {
 }
 ```
 
-Inside `modules/log-bucket/main.tf`:
+`main.tf`:
 
 ```hcl
 resource "aws_s3_bucket" "logs" {
@@ -159,29 +267,45 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 }
 ```
 
-Inside `modules/log-bucket/outputs.tf`:
+`outputs.tf`:
 
 ```hcl
 output "bucket_name" {
-  value = aws_s3_bucket.logs.bucket
+  value       = aws_s3_bucket.logs.bucket
+  description = "Name of the log bucket."
 }
 ```
 
-This gives you the full path. `live/prod/terraform.tfvars` supplies `environment` and `service_name`. `live/prod/main.tf` passes them into the module. The module locals build the bucket name. The resources consume the locals and variables. The output publishes the bucket name back to the root module.
+The value path is clear. `live/prod/terraform.tfvars` supplies `environment` and `service_name`. `live/prod/main.tf` passes them into the module. The module locals build names and tags. The resources consume those locals. The output returns the bucket name.
+
+Shared modules should avoid hardcoding backend names, provider credentials, workspace names, or production-only values. Those decisions belong in the root. The module should describe the resource pattern and accept the environment facts it needs through variables.
 
 ## How the Plan Proves the Target
 <!-- section-summary: A plan should show environment-specific names, tags, backend context, and module addresses that match the folder you intended to run. -->
 
-From `live/prod`, the commands should make the target obvious:
+From `live/prod`, the basic commands should be boring:
 
 ```bash
 terraform init -backend-config=backend.hcl
 terraform plan -var-file=terraform.tfvars
 ```
 
-The plan uses module addresses:
+`-backend-config=backend.hcl` points `init` at this environment's backend file. `-var-file=terraform.tfvars` loads the production input values for the plan. Together, those two flags say which state history Terraform reads and which environment values it evaluates.
 
-```hcl
+During `init`, Terraform should confirm the backend it configured:
+
+```console
+Initializing the backend...
+
+Successfully configured the backend "s3"! Terraform will automatically
+use this backend unless the backend configuration changes.
+```
+
+The success message only proves that the backend type initialized. The folder and backend key still need review because a valid backend can still be the wrong backend.
+
+The plan should show production names, tags, and module addresses:
+
+```console
   # module.log_bucket.aws_s3_bucket.logs will be created
   + resource "aws_s3_bucket" "logs" {
       + bucket = "dp-billing-prod-logs"
@@ -193,33 +317,67 @@ The plan uses module addresses:
           + "service"     = "billing"
         }
     }
-
-Changes to Outputs:
-  + log_bucket_name = "dp-billing-prod-logs"
 ```
 
-If you are in the production folder, the plan should show production names and tags. If it shows development names, check the variable file. If it shows a huge create plan, check the backend key. If it shows module paths you did not expect, check the source path.
+If a production plan shows development names, the variable file needs review. If it shows a large create plan for existing resources, the backend key needs review. If it uses a surprising module source path, the module call needs review before applying.
+
+Many CI jobs print context before the plan:
+
+```bash
+pwd
+echo "backend_key=infrastructure/billing/prod/terraform.tfstate"
+terraform workspace show
+terraform plan -var-file=terraform.tfvars
+```
+
+The output should help reviewers connect the folder, state target, workspace, and planned resources:
+
+```console
+/home/runner/work/devpolaris/terraform/live/prod
+backend_key=infrastructure/billing/prod/terraform.tfstate
+default
+```
+
+`pwd` should end in `live/prod`, the printed backend key should include `prod`, and the plan should show production names and tags. In a directory-first layout, many teams keep the workspace as `default` because the directory and backend key already provide the environment separation. The next article explains the cases where named workspaces add value.
+
+A strong plan review checks the whole chain:
+
+1. The working directory matches the intended environment.
+2. The backend key contains the same environment name.
+3. The provider account and region match the environment.
+4. The variable file values match the environment.
+5. The planned resource names, tags, and module addresses match the same target.
 
 ## Layout Rules That Age Well
 <!-- section-summary: Good layouts make environment context explicit, keep modules reusable, and avoid hiding backend or provider choices in scripts. -->
 
-Keep root modules deployable. A person should be able to enter `live/prod`, initialize the backend, run a plan, and understand the target without reading a custom wrapper script first.
+Root modules should stay deployable. A person should be able to enter `live/prod`, initialize the backend, run a plan, and understand the target without reverse engineering a wrapper script.
 
-Keep modules reusable. A module should declare inputs and outputs clearly, avoid hardcoding environment-specific names, and let root modules choose provider configuration and environment values.
+Modules should stay reusable. A module should declare inputs and outputs clearly, avoid hardcoded environment names, and let root modules choose provider configuration, backend state, and environment values.
 
-Keep backend config visible. Hidden backend flags in CI scripts make state targeting hard to review. A checked-in backend config template or environment-specific backend file gives reviewers something concrete to inspect.
+Backend config should stay visible. Hidden backend flags in CI make state targeting hard to review. A checked-in backend file or backend template gives reviewers something concrete to inspect.
 
-:::expand[When a layout is telling you to split a stack]{kind="pattern"}
-A root module can grow too large. If one plan touches networking, databases, Kubernetes clusters, monitoring, and app deploy roles together, every small change carries a huge blast radius. Slow plans and nervous reviews are signals that the stack boundary may be too broad.
+A stack split helps after one plan has too much blast radius. If one root manages networking, databases, clusters, monitoring, and application deploy roles together, small changes can produce slow plans and nervous reviews. Separate roots can help for parts with different owners, apply schedules, state access, or recovery procedures.
 
-Splitting a stack can help when parts have different owners, different apply schedules, different state access, or different recovery procedures. A network foundation stack can publish subnet IDs. An application stack can consume those IDs through variables or remote state data where the team accepts that coupling.
-
-The goal is not many folders for decoration. The goal is a state boundary that matches operational ownership and risk.
-:::
+File count alone is a weak reason to split a stack. The stronger reason is an operational boundary. Networking may have a rare apply schedule and tight permissions. Application buckets may change weekly. Observability dashboards may be owned by another team. Separate roots let each area have its own state, lock, approvals, and recovery runbook.
 
 ## Putting It All Together
 <!-- section-summary: Terraform layout should make the environment, backend, provider target, module source, and plan impact visible. -->
 
-A good Terraform layout answers operational questions quickly. The environment folder chooses the backend and values. The module folder defines reusable infrastructure. The plan shows the module address and evaluated environment values.
+File layout is part of Terraform safety. Dev and prod need different blast radius, so their state, variables, provider targets, and approvals should be easy to see. Shared modules still remove repetition, but environment roots decide where the change lands.
 
-For official reference, use Terraform's docs for [modules](https://developer.hashicorp.com/terraform/language/modules), [backends](https://developer.hashicorp.com/terraform/language/backend), [input variables](https://developer.hashicorp.com/terraform/language/values/variables), and [outputs](https://developer.hashicorp.com/terraform/language/values/outputs).
+![File Layout Summary](/content-assets/articles/article-iac-terraform-environments-file-layout/file-layout-summary.png)
+
+*The summary board collects the layout rules that make Terraform repositories safer as teams and environments grow.*
+
+The directory-first layout also prepares the next topic. Once the team understands environment folders and state keys, workspaces are clearer to judge as one state-separation tool among several.
+
+---
+
+**References**
+
+- [Terraform: Modules](https://developer.hashicorp.com/terraform/language/modules) - Explains root modules, child modules, module sources, inputs, and outputs.
+- [Terraform: Backend configuration](https://developer.hashicorp.com/terraform/language/backend) - Documents backend blocks and partial backend configuration.
+- [Terraform: S3 backend](https://developer.hashicorp.com/terraform/language/backend/s3) - Documents S3 backend settings, `use_lockfile`, S3 state locking, permissions, and DynamoDB locking deprecation.
+- [Terraform: Input variables](https://developer.hashicorp.com/terraform/language/values/variables) - Covers variable declarations, value assignment, and validation.
+- [Terraform: Output values](https://developer.hashicorp.com/terraform/language/values/outputs) - Documents module outputs and how values move between modules.

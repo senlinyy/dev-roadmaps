@@ -1,7 +1,7 @@
 ---
 title: "API Gateway"
-description: "Use Amazon API Gateway as a managed API boundary for HTTP, REST, and WebSocket APIs with routes, stages, integrations, authorization, throttling, private access, and observability."
-overview: "Application integration starts with the API boundary: the place where callers meet a stable contract before work reaches Lambda, containers, queues, events, or private services. This article follows an orders platform and explains how API Gateway handles routes, stages, integrations, authorizers, throttling, VPC links, logging, and the cases where ALB or Lambda Function URLs are a cleaner fit."
+description: "Use Amazon API Gateway as a managed request/response boundary for HTTP, REST, and WebSocket APIs."
+overview: "Application integration often starts with one caller needing an answer now. This article follows a lesson publishing API and shows how API Gateway handles routes, stages, Lambda and private integrations, authorizers, throttling, logs, and the cases where another AWS entry point fits better."
 tags: ["aws", "api-gateway", "http", "apis"]
 order: 2
 id: article-cloud-providers-aws-application-integration-api-gateway
@@ -15,354 +15,346 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is API Gateway](#what-is-api-gateway)
-3. [The Three API Types](#the-three-api-types)
-4. [How a Request Moves Through API Gateway](#how-a-request-moves-through-api-gateway)
-5. [Routes](#routes)
-6. [Stages](#stages)
-7. [Integrations](#integrations)
-8. [Authorizers](#authorizers)
-9. [Throttling, Usage Plans, and API Keys](#throttling-usage-plans-and-api-keys)
-10. [Private Integrations and VPC Links](#private-integrations-and-vpc-links)
-11. [A Small API Configuration](#a-small-api-configuration)
-12. [Observability](#observability)
-13. [When ALB or Lambda Function URLs Are Simpler](#when-alb-or-lambda-function-urls-are-simpler)
-14. [Putting It All Together](#putting-it-all-together)
-15. [What's Next](#whats-next)
+1. [The Request That Needs an Answer](#the-request-that-needs-an-answer)
+2. [What API Gateway Does](#what-api-gateway-does)
+3. [HTTP API, REST API, and WebSocket API](#http-api-rest-api-and-websocket-api)
+4. [Routes, Integrations, and Stages](#routes-integrations-and-stages)
+5. [Build a Small Publish API](#build-a-small-publish-api)
+6. [Call the API and Inspect the Route](#call-the-api-and-inspect-the-route)
+7. [Authorization and Backend Permissions](#authorization-and-backend-permissions)
+8. [Throttling, Logs, and Request IDs](#throttling-logs-and-request-ids)
+9. [Private Backends and VPC Links](#private-backends-and-vpc-links)
+10. [Where API Gateway Fits](#where-api-gateway-fits)
+11. [Putting It Together](#putting-it-together)
+12. [What's Next](#whats-next)
+13. [References](#references)
 
-## The Problem
-<!-- section-summary: Application integration often starts at a public API boundary that keeps callers away from backend wiring. -->
+## The Request That Needs an Answer
+<!-- section-summary: API Gateway fits the request/response part of application integration where the caller waits for a clear result. -->
 
-The Application Integration module is about connecting AWS application pieces without making every service call every other service directly. The first place this shows up is the API front door. A browser, a mobile app, a partner system, and a payment webhook all need a stable way to reach the orders platform, even while the backend changes behind the scenes.
+The orientation article started with Northstar Learn. An instructor clicks **Publish lesson**, and the browser needs a clear answer from the backend. The answer may say the lesson is ready and publishing has started, or it may say the video upload is missing.
 
-The orders team has a few different caller shapes. Customers need `GET /orders/{orderId}` from the web app. Checkout needs `POST /checkout`. A payment provider needs `POST /webhooks/payment` with a signed webhook header. A partner needs `GET /partner/exports/{exportId}`, but that partner should have a traffic limit. The actual order service runs privately in a VPC behind a load balancer, and one webhook handler runs as a Lambda function.
+That request is a **request/response API**. The browser sends a request, waits for a response, and uses the response to update the screen. This is the right place to talk about API Gateway because the first communication job is a synchronous API boundary.
 
-Without a managed API boundary, each backend has to carry too many jobs. Every service needs to know public paths, TLS, caller authentication, rate limits, partner quotas, request logging, and maybe a different network exposure story. The backend should focus on order rules: who owns the order, what the payment status means, and what data should be written. The API boundary should focus on the caller-facing contract and the first safe handoff.
+The API boundary should do edge work. It should receive HTTPS traffic, match the path and method, check the caller, apply basic protection, write useful access logs, and hand the request to the backend. The backend still owns the real lesson rules, such as whether the instructor can publish this specific lesson.
 
-That is the API Gateway job in this article. It gives the orders platform one controlled API surface, then connects each route to the right backend shape: Lambda for small handlers, HTTP services for container workloads, private integrations for VPC services, and AWS service integrations for direct AWS calls.
+The example API in this article has two routes:
 
-## What Is API Gateway
-<!-- section-summary: API Gateway is a managed API boundary that receives caller requests and hands them to configured backends. -->
+| Route | Caller need | Backend result |
+|---|---|---|
+| `POST /lessons/{lessonId}/publish` | Start publishing and get a tracking ID | `202 Accepted` with `publishRequestId` |
+| `GET /publish-requests/{publishRequestId}` | Show current publish progress | `200 OK` with status such as `VALIDATING`, `TRANSCODING`, or `PUBLISHED` |
 
-Amazon API Gateway is an AWS service for creating, publishing, securing, monitoring, and operating APIs. An API Gateway API gives callers an HTTPS endpoint. Behind that endpoint, AWS matches the request to a route, applies configured controls, calls an integration, and returns the response to the caller.
+This keeps the user-facing API small. The direct request starts or checks work. SQS, SNS, EventBridge, and Step Functions can handle the slower work after the API returns.
 
-The beginner-friendly definition is this: **API Gateway is a managed API boundary**. A boundary is the place where the outside request first meets your application rules. In the orders platform, callers use `https://api.example.com/orders/1042` while the order-read backend can move between Lambda, ECS, or a private service behind an internal load balancer.
+## What API Gateway Does
+<!-- section-summary: API Gateway gives callers one managed HTTPS surface before traffic reaches Lambda, containers, or private services. -->
 
-API Gateway is useful because API concerns repeat across many backends. The API needs a stable hostname, route table, deployment stage, authorization decision, throttling policy, logging format, and integration target. Keeping those concerns in one managed boundary gives the backend more room to stay focused on business behavior.
+Amazon API Gateway is an AWS service for creating, publishing, securing, monitoring, and operating APIs. A caller uses an HTTPS endpoint. API Gateway matches the request to a route, applies configured controls, calls an integration, and returns the response.
 
-The same few words show up in every API Gateway design. This vocabulary gives the rest of the article a shared map:
+The beginner definition is: **API Gateway is a managed API boundary**. A boundary is the place where outside callers meet a stable contract. In Northstar Learn, callers use `https://api.learn.example.com/lessons/lesson-1042/publish` while the backend can run as Lambda today and a private container service later.
 
-| Concept | Plain meaning | Orders example |
-| --- | --- | --- |
-| **API** | The caller-facing API surface | `orders-api` |
-| **Route** | The method and path a caller requests | `GET /orders/{orderId}` |
-| **Stage** | A named deployed version or environment | `dev`, `staging`, `prod` |
-| **Integration** | The backend target for a route | Lambda, ECS over VPC link, HTTP endpoint |
-| **Authorizer** | The caller check before integration | JWT authorizer for customers |
-| **Throttling** | Request-rate limits at the API layer | Partner export route limits |
-| **Usage plan** | Per-client quota and throttling for REST APIs | Partner API key metering |
+API Gateway often owns these jobs:
 
-The important split is ownership. API Gateway owns the API edge behavior. The backend owns the real business decision. If a customer is authenticated at API Gateway, the order service still checks that the customer owns `order-1042`. The boundary can reject obvious bad requests early, and the backend still protects domain data.
+| Job | Example in the lesson API |
+|---|---|
+| Public endpoint | `https://api.learn.example.com` |
+| Route table | `POST /lessons/{lessonId}/publish` |
+| Caller check | JWT authorizer for signed-in instructors |
+| Integration | Lambda function or private HTTP service |
+| Stage | `dev`, `staging`, or `prod` deployment settings |
+| Protection | Throttling, request limits, and optional AWS WAF with REST APIs |
+| Signals | Access logs, execution metrics, latency, and status codes |
 
-## The Three API Types
-<!-- section-summary: HTTP APIs fit many modern APIs, REST APIs carry the largest feature set, and WebSocket APIs handle long-lived two-way clients. -->
+The split matters in production. API Gateway can reject a request with a missing token, but the lesson service still checks that the instructor owns `lesson-1042`. Edge authorization and domain authorization work together because they answer different questions.
 
-API Gateway has three main API types: **HTTP APIs**, **REST APIs**, and **WebSocket APIs**. The names are a little confusing at first because REST APIs and HTTP APIs both receive HTTP requests. The practical choice comes from the features the API boundary needs.
+![The request path shows how a client call passes through route matching, authorization, backend integration, response handling, and request logging](/content-assets/articles/article-cloud-providers-aws-application-integration-api-gateway/api-gateway-request-path.png)
 
-**HTTP APIs** are usually the first option for a modern HTTP API that routes to Lambda or HTTP backends. They have a smaller feature surface and are designed for lower cost and lower latency than REST APIs. For the orders platform, `GET /orders/{orderId}` and `POST /checkout` can often begin as HTTP API routes if the team needs JWT authorization, Lambda integrations, HTTP integrations, stages, custom domains, access logs, and normal route matching.
+*The request path shows how a client call passes through route matching, authorization, backend integration, response handling, and request logging.*
 
-**REST APIs** are the older and larger API Gateway product. They are still important because they support features that HTTP APIs may not have, including API keys and usage plans, per-client throttling, request validation, request and response mapping options, caching, AWS WAF integration, and private API endpoint patterns. If the partner export API needs usage plans and API keys managed by API Gateway, REST API may be the better fit.
 
-**WebSocket APIs** handle long-lived two-way communication. A normal HTTP request has one request and one response. A WebSocket connection stays open so the client and backend can send messages over time. In an orders system, WebSockets might support live kitchen display updates, driver dispatch updates, or an operations dashboard that receives status messages without polling every few seconds.
+## HTTP API, REST API, and WebSocket API
+<!-- section-summary: API Gateway has three API types, and the right choice depends on the boundary features the caller needs. -->
 
-A better early design question is "Which boundary features does this API need?" A customer mobile API with JWT auth and Lambda handlers may fit HTTP API. A partner API with usage plans, API keys, request validation, and mature mapping controls may fit REST API. A live order-status screen with server-pushed updates may fit WebSocket API.
+API Gateway offers **HTTP APIs**, **REST APIs**, and **WebSocket APIs**. The names can feel close together because HTTP APIs and REST APIs both receive normal HTTP requests. The practical choice comes from the features your boundary needs.
 
-## How a Request Moves Through API Gateway
-<!-- section-summary: A request matches a deployed route, passes API-layer controls, reaches an integration, and returns through the same boundary. -->
+**HTTP APIs** fit many modern APIs that route to Lambda or HTTP backends. They support routes, stages, JWT authorizers, Lambda proxy integrations, HTTP integrations, custom domains, access logs, and CORS. They are often the clean first option for the Northstar lesson publish API.
 
-Following one request makes API Gateway easier to understand. Imagine the customer web app calls `GET /orders/order-1042` with a bearer token from the sign-in system. The DNS name points to API Gateway, and API Gateway receives the HTTPS request before any order service code runs.
+**REST APIs** are the older and larger API Gateway product. They matter when the API needs features such as API keys and usage plans, request validation, richer request and response mapping, API Gateway caching, or certain private API endpoint patterns. A partner publishing API with per-partner quotas may choose REST API because usage plans are part of that product.
 
-First, API Gateway looks at the deployed API and stage. The request has a method, path, headers, query string, and maybe a body. API Gateway checks whether the stage has a route that matches the method and path. If no deployed route matches, the backend never sees the request.
+**WebSocket APIs** handle long-lived two-way connections. A lesson editing screen might use WebSockets to receive live collaboration updates or publish progress without polling. The publish request in this article uses normal HTTP because the caller only needs a request and a response.
 
-Second, API Gateway applies configured boundary controls. This may include authorization, resource policies, request validation, throttling, usage-plan checks, and logging context. A bad token can stop at `401`. A caller without permission can stop at `403`. Too much traffic can stop at `429`. These failures are useful because they happen before the backend pays the cost.
+For this article, the example uses an HTTP API. It keeps the implementation focused on the request/response pattern without adding REST API-only features before they are needed.
 
-Third, API Gateway calls the integration for the route. With a Lambda proxy integration, API Gateway sends an event payload to the function. With an HTTP integration, it forwards an HTTP request to a configured endpoint. With a private integration, it sends traffic through a VPC link to a private backend such as an internal load balancer or service discovery target.
+## Routes, Integrations, and Stages
+<!-- section-summary: A route names the caller contract, an integration names the backend, and a stage exposes a deployed API environment. -->
 
-Fourth, the backend returns a response. API Gateway sends that response back through the API surface. The response can pass through mostly unchanged, or API Gateway can apply mapping and response configuration depending on the API type and integration style. For beginner systems, simple proxy-style integrations usually keep debugging clearer.
+A **route** is the method and path that API Gateway matches. `POST /lessons/{lessonId}/publish` is a route. The route key combines the HTTP method and the path pattern, so `GET /lessons/{lessonId}/publish` would be a different route.
 
-This flow also helps during incident response. A spike in `401` or `403` points toward caller identity or authorization. A spike in `429` points toward throttling or client retry behavior. A spike in `5XXError` with high integration latency points toward the backend handoff, Lambda errors, load balancer health, private networking, or backend timeouts.
+An **integration** is the backend target for a route. API Gateway can call a Lambda function, an HTTP endpoint, a private service through a VPC link, or an AWS service integration depending on the API type and configuration. In this article, `POST /lessons/{lessonId}/publish` calls a Lambda function named `publishLesson`.
 
-## Routes
-<!-- section-summary: Routes translate caller intent into the API Gateway behavior and integration that should handle the request. -->
+A **stage** exposes a deployed environment. A stage can hold settings such as auto-deploy, access logs, stage variables, and throttling depending on API type. For an HTTP API, a `$default` stage with auto-deploy is common in small examples, while production teams often use named stages and infrastructure as code to make changes reviewable.
 
-A **route** is the method-and-path pattern that API Gateway matches for an incoming request. In an HTTP API, route keys look like `GET /orders/{orderId}` or `POST /checkout`. The route tells API Gateway which authorizer, throttling settings, and integration belong to that caller action.
+This route-to-integration-to-stage path is the first thing to check during troubleshooting. If a caller gets a 404, route matching may be wrong. If API Gateway returns a 500, the integration or backend permission may be wrong. If one environment works and another fails, stage settings or deployment drift may be involved.
 
-Routes should describe caller intent. The route `GET /orders/{orderId}` says the caller wants to read one order. The route name can avoid exposing whether the backend is a Lambda function named `GetOrderFunction` or a container service named `orders-read-api`. That separation lets the team change the backend without changing the public API contract.
+![The layer view separates the route key, backend integration, and stage URL so the API shape is easier to review](/content-assets/articles/article-cloud-providers-aws-application-integration-api-gateway/routes-integrations-stages.png)
 
-A first route map for the orders API might look like this. Notice how each route records the caller and the boundary behavior before naming the backend:
+*The layer view separates the route key, backend integration, and stage URL so the API shape is easier to review.*
 
-| Route | Caller | Boundary behavior | Integration |
-| --- | --- | --- | --- |
-| `GET /orders/{orderId}` | Customer app | JWT authorizer | Lambda or private orders service |
-| `POST /checkout` | Customer app | JWT authorizer and strict body validation | Private checkout service |
-| `POST /webhooks/payment` | Payment provider | Lambda authorizer checks signature | Lambda webhook handler |
-| `GET /partner/exports/{exportId}` | Partner system | IAM or authorizer plus traffic limits | Private export service |
-| `$default` | Unknown callers | Controlled fallback response | Simple error handler |
 
-The route map is also a design review tool. A route with no clear caller probably needs more thinking. A route with a name tied to an internal implementation may create migration pain later. A route with no authorization decision should be intentionally public, such as a health check or public status endpoint, rather than accidentally open.
+## Build a Small Publish API
+<!-- section-summary: A minimal HTTP API connects a public route to a Lambda integration and exposes it through a stage. -->
 
-For WebSocket APIs, routes work a little differently. Instead of HTTP method and path, WebSocket routes use route keys such as `$connect`, `$disconnect`, `$default`, or an application message action. For example, a client might send a message with `"action": "subscribeToOrder"`, and API Gateway can route that message to the integration for order subscriptions.
-
-## Stages
-<!-- section-summary: Stages are named deployed views of an API, so each environment has clear release and operation settings. -->
-
-A **stage** is a named deployed view of an API. Common stage names are `dev`, `staging`, `prod`, `beta`, or `v1`. The stage gives callers and operators a concrete place where a specific API configuration is available.
-
-For HTTP APIs, a stage can use auto-deploy, which means route and integration changes are deployed automatically to that stage. That is convenient in development. Production teams usually treat stage changes as release events. They want to know which route table, authorizer, integration, and logging settings went live, and they want rollback to mean something concrete.
-
-For REST APIs, deployments and stages are more explicit. You create or update resources and methods, create a deployment, and associate that deployment with a stage. That extra ceremony can feel slower, but it also makes the deployed API snapshot easier to reason about for production change control.
-
-Stages also influence URLs. The default execute-api URL often includes the stage name, such as:
-
-```bash
-https://api-id.execute-api.us-east-1.amazonaws.com/prod/orders/order-1042
-```
-
-Many production APIs use a custom domain and base path mapping so callers see a cleaner URL:
-
-```bash
-https://api.example.com/orders/order-1042
-```
-
-That custom domain is still mapped to an API stage behind the scenes. The clean public URL is for callers. The stage is for deployment and operations. Keep stage names, logging, throttling, and backend targets understandable, because stage configuration often explains why `dev` works and `prod` behaves differently.
-
-## Integrations
-<!-- section-summary: Integrations are the backend handoff points, and the best integration style matches the route's workload shape. -->
-
-An **integration** is the backend target API Gateway calls after a route matches and API-layer controls pass. The integration can be a Lambda function, an HTTP endpoint, a private VPC backend, or certain AWS service actions. This is the handoff from "API boundary" to "application work."
-
-Lambda integrations are a common starting point for small handlers. The payment webhook route is a good example. API Gateway can receive `POST /webhooks/payment`, run an authorizer that checks the provider signature, and send the request to a Lambda function that records the payment event. Lambda fits because the work is event-like, bounded, and easy to run without managing servers.
-
-HTTP integrations fit services that already speak HTTP. The checkout service might run on ECS and expose `/checkout` behind a load balancer. API Gateway can route the public `POST /checkout` request to that HTTP backend. If the backend is private, API Gateway uses a VPC link, which we will cover soon.
-
-AWS service integrations let API Gateway call supported AWS APIs directly. They can be useful for narrow cases, such as sending a request to SQS or starting a Step Functions workflow without a custom Lambda in the middle. The tradeoff is that request mapping and permissions need careful review, because the API boundary is now directly invoking an AWS service action.
-
-The practical integration habit is to keep the first version boring. Proxy-style Lambda or HTTP integrations preserve the request shape and reduce mapping logic. Request and response transformations are powerful, especially in REST APIs, but heavy mapping can hide problems. A team should add mapping for a clear contract reason, such as removing a stage prefix, shaping a legacy backend response, or enforcing an external API schema.
-
-## Authorizers
-<!-- section-summary: Authorizers check caller trust at the API boundary before backend compute, connections, and application code run. -->
-
-An **authorizer** decides whether a caller can invoke an API route. It belongs at the API boundary because caller trust should be checked before the request consumes backend resources. API Gateway supports different authorization patterns depending on API type, including JWT authorizers, Lambda authorizers, IAM authorization, Cognito user pool authorizers, and resource policies.
-
-For the customer routes, a JWT authorizer is a natural fit. JWT means JSON Web Token. The customer signs in through an identity system, receives a token, and sends that token in the `Authorization` header. API Gateway verifies facts such as issuer, audience, expiration, and token claims before the route reaches the backend.
-
-For the payment webhook route, a Lambda authorizer may fit better. Many webhook providers sign the request with a shared secret and place the signature in a header. A Lambda authorizer can read the header, verify the signature, and return an allow or deny decision. The webhook handler still needs idempotency, because providers often retry the same webhook after timeouts or errors.
-
-For internal AWS callers, IAM authorization can be the cleanest option. A signed AWS request uses Signature Version 4, usually called SigV4. API Gateway checks that the caller has `execute-api` permission for the route. This fits service-to-service calls from AWS workloads that already use IAM roles and temporary credentials.
-
-Authorization at API Gateway and authorization inside the backend solve different parts of the problem:
-
-| Layer | Question | Orders example |
-| --- | --- | --- |
-| API Gateway authorizer | Is this caller trusted for this route? | Does the token come from the customer identity provider? |
-| Backend service | Is this caller allowed to use this specific object? | Does this customer own `order-1042`? |
-| IAM role | Can this runtime call AWS services? | Can the checkout service write to DynamoDB or send an SQS message? |
-
-That split matters. Passing the authorizer means the caller has a trusted identity or credential for the route. The backend still checks object-level rules, tenant boundaries, payment state, and business permissions.
-
-## Throttling, Usage Plans, and API Keys
-<!-- section-summary: Throttling protects downstream systems, while usage plans and API keys help identify and meter REST API clients. -->
-
-**Throttling** controls how quickly API Gateway accepts requests. It protects the application from sudden spikes and gives API owners a way to express traffic expectations. When a caller exceeds a configured limit, API Gateway can return `429 Too Many Requests` before the backend handles the request.
-
-For the orders platform, customer reads may allow high burst traffic during a sale. Partner export routes may need tighter limits because exports are heavier. Payment webhooks may need enough burst room for provider retries, but the webhook handler should still be idempotent so repeated delivery does not double-process a payment.
-
-Throttling exists at several layers. API Gateway has account-level and route or method-level controls depending on API type. REST APIs also support usage plans, which can attach throttling and quota settings to API keys for selected stages and methods. Backend services still need their own limits, timeouts, database connection pools, queue buffers, and retry discipline. API Gateway throttling is the first pressure valve alongside the backend reliability design.
-
-**Usage plans** and **API keys** need a careful explanation. In API Gateway REST APIs, an API key mainly identifies an API client for metering, throttling, and quota rules. It is useful for partner management. For example, `partner-northwind` can have one key and a monthly quota, while `partner-contoso` has a different key and a lower rate limit.
-
-An API key is easy to copy, paste, leak, and reuse. Strong caller trust usually comes from IAM authorization, JWTs, Cognito, Lambda authorizers, mutual TLS, or another real identity mechanism. Then an API key can add client identification and quota management where REST API usage plans are the right tool.
-
-AWS also documents usage-plan throttling and quotas as best-effort targets rather than guaranteed hard ceilings. That means a client may exceed a quota in some cases. If cost control or abuse prevention is critical, combine API Gateway limits with AWS WAF where appropriate, AWS Budgets and alarms, backend limits, and business-level controls.
-
-## Private Integrations and VPC Links
-<!-- section-summary: VPC links let API Gateway call private VPC backends while those backends stay off public endpoints. -->
-
-Many production backends should stay private. The orders service might run in ECS tasks inside private subnets behind an internal Application Load Balancer. Customers still need a public HTTPS API, while the service itself can stay away from public load balancers and public IP addresses.
-
-A **private integration** lets API Gateway connect a route to a private resource in a VPC. A **VPC link** is the managed network path API Gateway uses for that private integration. With current API Gateway private integration patterns, a VPC link can connect routes to private resources such as Application Load Balancers, Network Load Balancers, and AWS Cloud Map services, depending on API type and configuration.
-
-The shape for the orders service looks like this in plain terms. Each row has one networking job, from the public API edge to the private service:
-
-| Piece | Job |
-| --- | --- |
-| Public API Gateway endpoint | Receives `https://api.example.com/orders/1042` |
-| Authorizer and throttling | Checks caller and controls request pressure |
-| VPC link | Carries allowed API traffic into the VPC path |
-| Internal load balancer or Cloud Map service | Finds the private backend service |
-| ECS orders service | Runs the business logic and data checks |
-
-This pattern keeps the network boundary cleaner. The backend service stays private. API Gateway provides the public API contract. Security groups, listener rules, health checks, VPC link status, and backend routes still matter because private integration is real networking.
-
-There is another phrase that sounds similar: **private API**. A private REST API is callable only from inside a VPC through an interface VPC endpoint. That is a different design from a public API with a private integration. A public API with a private integration lets external callers reach selected private backend routes through API Gateway. A private API is for internal callers that should access API Gateway privately from a VPC.
-
-## A Small API Configuration
-<!-- section-summary: A production API usually starts from a route table, explicit authorization choices, integration targets, logs, and deployment stages. -->
-
-The practical build pass for an API Gateway service usually starts with a short design record before anyone writes infrastructure code. The orders team can write down the public routes, caller types, authorization pattern, backend target, and traffic expectation. That small table prevents the API from growing as a pile of unrelated console clicks.
-
-| Route | API type | Auth | Backend | Notes |
-| --- | --- | --- | --- | --- |
-| `GET /orders/{orderId}` | HTTP API | JWT authorizer | Lambda or private HTTP service | Backend checks order ownership |
-| `POST /checkout` | HTTP API | JWT authorizer | Private checkout service | Use idempotency key for retries |
-| `POST /webhooks/payment` | HTTP API or REST API | Lambda authorizer | Lambda function | Verify provider signature |
-| `GET /partner/exports/{exportId}` | REST API if usage plans are required | IAM or custom authorizer plus API key | Private export service | Apply partner quota and alarms |
-
-Infrastructure as code keeps the API repeatable. The exact resource names vary by tool, but this small CloudFormation-style example shows the shape of an HTTP API route, Lambda integration, stage, and access logging. The example leaves out some supporting resources, such as the Lambda function and log group definitions, so the important API pieces stay visible.
-
-```yaml
-Resources:
-  OrdersHttpApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: orders-api
-      ProtocolType: HTTP
-
-  ProdStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref OrdersHttpApi
-      StageName: prod
-      AutoDeploy: false
-      AccessLogSettings:
-        DestinationArn: !GetAtt OrdersApiAccessLogs.Arn
-        Format: >-
-          {"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","latency":"$context.responseLatency","integrationLatency":"$context.integrationLatency","error":"$context.error.message"}
-
-  GetOrderIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref OrdersHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetOrderFunction.Arn}/invocations
-      PayloadFormatVersion: "2.0"
-
-  GetOrderRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref OrdersHttpApi
-      RouteKey: GET /orders/{orderId}
-      AuthorizationType: JWT
-      AuthorizerId: !Ref CustomerJwtAuthorizer
-      Target: !Sub integrations/${GetOrderIntegration}
-
-  GetOrderInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref GetOrderFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${OrdersHttpApi}/*/GET/orders/*
-```
-
-There are a few practical details hiding inside this small example. `AutoDeploy: false` means production changes need an intentional deployment flow. The route has an authorizer attached instead of relying on the Lambda handler alone. The Lambda permission scopes API Gateway invocation to the API route pattern. The access log format includes request ID, route key, status, latency, integration latency, and error message so operators have something useful during the first incident.
-
-A Lambda handler for the route still validates the domain rule. The authorizer can prove the token is valid, but the function checks that the caller can read the requested order:
+The example assumes a Lambda function already exists:
 
 ```json
 {
-  "routeKey": "GET /orders/{orderId}",
-  "pathParameters": {
-    "orderId": "order-1042"
-  },
-  "requestContext": {
-    "authorizer": {
-      "jwt": {
-        "claims": {
-          "sub": "customer-991"
-        }
-      }
-    }
-  }
+  "functionName": "publishLesson",
+  "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:publishLesson",
+  "job": "Validate a lesson publish request, create a publish record, and return a tracking ID"
 }
 ```
 
-The handler uses `orderId` from the path and `sub` from the authorizer claims. It then loads the order and checks that `customer-991` owns it. That check belongs in the backend because API Gateway cannot know every business rule for every object.
+This JSON is not an API Gateway configuration. It describes the backend that API Gateway will call. The function name appears in the integration command, and the function job explains why the direct API returns quickly instead of performing every publishing step itself.
 
-## Observability
-<!-- section-summary: API Gateway observability combines access logs, metrics, tracing, CloudTrail, and backend correlation IDs. -->
+The command below creates an HTTP API. The CORS settings allow the browser app to send `POST` and `GET` requests from the learning site.
 
-Observability means the team can explain what happened after a request flows through the API. API Gateway gives several signals, and production teams usually combine them instead of relying on one dashboard.
+```bash
+aws apigatewayv2 create-api \
+  --name northstar-publish-api \
+  --protocol-type HTTP \
+  --cors-configuration '{"AllowOrigins":["https://learn.example.com"],"AllowMethods":["POST","GET"],"AllowHeaders":["authorization","content-type"]}'
+```
 
-**Access logs** record one line per request in a format you choose. For HTTP APIs and REST APIs, JSON access logs are usually easier to search than unstructured strings. A useful log line includes request ID, stage, route, status, source IP, user agent, response latency, integration latency, and error message. Avoid logging bearer tokens, API keys, full payment payloads, or customer personal data.
+Example output:
 
-**CloudWatch metrics** show API-level trends. Watch `Count` for traffic volume, `4XXError` for caller-side failures, `5XXError` for service-side failures, `Latency` for total API time, and `IntegrationLatency` for backend time. If total latency rises but integration latency stays flat, the issue may sit in API Gateway overhead, authorization, client behavior, or edge conditions. If integration latency rises, the backend handoff deserves attention.
+```json
+{
+  "ApiEndpoint": "https://a1b2c3d4.execute-api.us-east-1.amazonaws.com",
+  "ApiId": "a1b2c3d4",
+  "Name": "northstar-publish-api",
+  "ProtocolType": "HTTP"
+}
+```
 
-**Execution logs** exist for REST APIs and can help during deeper debugging, but they can get noisy and may expose sensitive data if configured carelessly. Access logs are usually the steady production signal. Execution logs are often a targeted troubleshooting tool.
+`ApiId` is the identifier used in later API Gateway commands. `ApiEndpoint` is the generated execute-api hostname. A production API usually maps a custom domain such as `api.learn.example.com`, but the generated endpoint is useful for early testing.
 
-**Tracing** with AWS X-Ray can connect API Gateway to downstream Lambda functions and services where supported. Tracing helps when one request crosses API Gateway, Lambda, service calls, and databases. The trace tells the team where the time went instead of forcing everyone to compare timestamps by hand.
+Next, the command below creates a Lambda proxy integration. `AWS_PROXY` means API Gateway sends the request event to Lambda using the standard proxy event shape, and Lambda returns the HTTP-style status code, headers, and body.
 
-**CloudTrail** records management-plane API Gateway activity, such as who changed an API, stage, deployment, or configuration. CloudTrail is useful when an API behavior changed and the team needs to know whether a deployment, route update, authorizer change, or stage setting caused it.
+```bash
+aws apigatewayv2 create-integration \
+  --api-id a1b2c3d4 \
+  --integration-type AWS_PROXY \
+  --integration-uri arn:aws:lambda:us-east-1:123456789012:function:publishLesson \
+  --payload-format-version 2.0
+```
 
-The practical production habit is to define alarms around symptoms callers feel. A high `5XXError` rate, sustained `Latency`, high `IntegrationLatency`, or sudden `429` spike should page or notify the owning team. Logs should let the team search by `requestId` and route key. Backend logs should include the API Gateway request ID or a propagated correlation ID so one request can be followed across the boundary.
+Example output:
 
-## When ALB or Lambda Function URLs Are Simpler
-<!-- section-summary: API Gateway earns its place for API management; ALB and Lambda Function URLs can be cleaner for narrower ingress jobs. -->
+```json
+{
+  "IntegrationId": "abc123",
+  "IntegrationType": "AWS_PROXY",
+  "IntegrationUri": "arn:aws:lambda:us-east-1:123456789012:function:publishLesson",
+  "PayloadFormatVersion": "2.0"
+}
+```
 
-API Gateway is powerful. The best architecture uses it for the jobs it is good at, and some workloads need an HTTP entry point without a full API management layer.
+The `IntegrationId` connects routes to this backend. Payload format `2.0` is the HTTP API Lambda proxy event format, so the Lambda handler should read fields such as `requestContext`, `pathParameters`, `headers`, and `body` from that event shape.
 
-An **Application Load Balancer**, or ALB, is often the direct fit for web services running on ECS, EKS, or EC2. ALB listeners receive HTTP or HTTPS traffic, listener rules route requests to target groups, and target groups send traffic to registered backends. If the orders platform only needs normal web traffic to containers, path-based routing, TLS termination, health checks, and load balancing, ALB may be the simpler front door.
+The route command connects the caller-facing route to the integration:
 
-API Gateway is stronger when the API boundary needs route-level authorizers, usage plans, API keys, request validation, stage-based API deployment, WebSocket routes, direct Lambda integrations, direct AWS service integrations, or a managed public API facade over private services. Those are API-management concerns, not just load-balancing concerns.
+```bash
+aws apigatewayv2 create-route \
+  --api-id a1b2c3d4 \
+  --route-key "POST /lessons/{lessonId}/publish" \
+  --target integrations/abc123
+```
 
-**Lambda Function URLs** are another small option. A function URL gives one Lambda function a dedicated HTTPS endpoint. It fits narrow internal tools, simple webhooks, prototypes, or single-function services where one function endpoint is enough. It has fewer API management features than API Gateway, so the application may need to carry more of the routing, authorization, throttling, and observability work itself.
+Example output:
 
-A simple decision table helps during design review. It keeps the team focused on the ingress job instead of the service name:
+```json
+{
+  "RouteId": "r-7k9m2",
+  "RouteKey": "POST /lessons/{lessonId}/publish",
+  "Target": "integrations/abc123"
+}
+```
 
-| Need | Good starting point |
-| --- | --- |
-| One Lambda function needs a direct HTTPS endpoint | Lambda Function URL |
-| Container web service needs HTTP load balancing and health checks | Application Load Balancer |
-| Public API needs route-level auth, stages, throttling, and logs | API Gateway |
-| Partner API needs API keys and usage plans | API Gateway REST API |
-| Browser or mobile API needs JWT auth and Lambda or HTTP routes | API Gateway HTTP API |
-| Live two-way client communication | API Gateway WebSocket API |
+The route key is the public contract. The target points to the integration. If the backend changes later, the public route can stay the same while the integration changes through reviewed infrastructure.
 
-The point is to choose the smallest boundary that still covers the real production requirements. If the requirements grow into API management, API Gateway has a clear role. If the requirements are just "send HTTPS traffic to this web service," ALB can keep the system easier to operate.
+The stage command exposes the API. Auto-deploy is useful for a small tutorial because route changes become available without a separate deployment command.
 
-## Putting It All Together
-<!-- section-summary: API Gateway gives the orders platform a stable API contract while each route connects to the right backend and control set. -->
+```bash
+aws apigatewayv2 create-stage \
+  --api-id a1b2c3d4 \
+  --stage-name prod \
+  --auto-deploy
+```
 
-The orders platform needed a managed boundary for several different callers. Customers call order and checkout routes. A payment provider calls a signed webhook route. A partner calls export routes with traffic expectations. Some work runs in Lambda. Some work runs inside a private VPC. Operators need logs, metrics, alarms, and deployment stages so production behavior can be explained.
+Example output:
 
-API Gateway handles that boundary. The **API** is the caller-facing contract. **Routes** connect methods and paths to intent. **Stages** make deployed states visible. **Integrations** hand requests to Lambda, HTTP services, private VPC backends, or AWS services. **Authorizers** check caller trust before backend work starts. **Throttling** protects downstream systems from request pressure. **Usage plans and API keys** help meter REST API clients, with the caution that API keys are client identifiers rather than strong authentication. **VPC links** let selected API routes reach private services without exposing those services directly.
+```json
+{
+  "AutoDeploy": true,
+  "StageName": "prod",
+  "StageVariables": {}
+}
+```
 
-The healthy shape is a clear split. API Gateway owns the first API decision. The backend owns business correctness. Observability connects both sides with logs, metrics, traces, request IDs, and alarms. Once that boundary exists, the next integration question appears naturally: what happens to work that should continue after the API responds?
+The final URL uses the generated endpoint plus the stage name and route path: `https://a1b2c3d4.execute-api.us-east-1.amazonaws.com/prod/lessons/lesson-1042/publish`.
+
+## Call the API and Inspect the Route
+<!-- section-summary: A working API should return an application response, and inspection commands should show the route-to-integration wiring. -->
+
+The `curl` command below sends a publish request. The idempotency key gives the backend a stable value it can use to avoid creating duplicate publish requests when a caller retries.
+
+```bash
+curl -i \
+  -X POST "https://a1b2c3d4.execute-api.us-east-1.amazonaws.com/prod/lessons/lesson-1042/publish" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer eyJhbGciOi..." \
+  -H "idempotency-key: publish-lesson-1042-2026-06-27" \
+  -d '{"requestedBy":"instructor-77"}'
+```
+
+Example response:
+
+```http
+HTTP/2 202
+content-type: application/json
+x-amzn-requestid: 9ef0d6c8-8b3b-49bd-9f2d-28d6ad7b0f42
+
+{
+  "publishRequestId": "pub-01JZ0Z9F4R3ZV6W5K1JXG9CN0P",
+  "lessonId": "lesson-1042",
+  "status": "ACCEPTED"
+}
+```
+
+The `202` status says the request was accepted and longer work will continue after the response. `publishRequestId` gives the UI a durable handle for progress. `x-amzn-requestid` helps connect a caller report to API Gateway logs and backend logs.
+
+The inspection command below asks API Gateway which routes exist. This is useful when the API returns 404 or when a route was expected in one stage but not another.
+
+```bash
+aws apigatewayv2 get-routes \
+  --api-id a1b2c3d4 \
+  --query 'Items[].{RouteKey:RouteKey,Target:Target}' \
+  --output table
+```
+
+Example output:
+
+```bash
+-------------------------------------------------------------
+|                         GetRoutes                         |
++-------------------------------------------+---------------+
+|                 RouteKey                  |    Target     |
++-------------------------------------------+---------------+
+| POST /lessons/{lessonId}/publish          | integrations/abc123 |
++-------------------------------------------+---------------+
+```
+
+The output proves that API Gateway knows the `POST` route and points it at the expected integration. If the route exists and the backend still receives nothing, the next checks are Lambda permission, authorizer behavior, and access logs.
+
+## Authorization and Backend Permissions
+<!-- section-summary: API Gateway can check the caller, and the backend must also allow API Gateway to invoke it. -->
+
+An **authorizer** checks the caller before the request reaches the integration. HTTP APIs commonly use JWT authorizers for identity providers that issue JSON Web Tokens. REST APIs can also use Lambda authorizers, IAM authorization, Cognito user pools, and API keys depending on the API design.
+
+In the lesson API, a JWT authorizer can verify that the request came from a signed-in instructor. The Lambda function still checks whether that instructor owns the lesson. The API boundary answers "is this caller authenticated enough to enter this API," and the backend answers "can this caller publish this exact lesson."
+
+There is another permission that beginners often miss. Lambda needs a resource-based permission statement allowing API Gateway to invoke the function. The command below grants that permission for this API route pattern.
+
+```bash
+aws lambda add-permission \
+  --function-name publishLesson \
+  --statement-id allow-api-gateway-publish-route \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4/*/POST/lessons/*/publish"
+```
+
+Example output:
+
+```json
+{
+  "Statement": "{\"Sid\":\"allow-api-gateway-publish-route\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"apigateway.amazonaws.com\"},\"Action\":\"lambda:InvokeFunction\",\"Resource\":\"arn:aws:lambda:us-east-1:123456789012:function:publishLesson\",\"Condition\":{\"ArnLike\":{\"AWS:SourceArn\":\"arn:aws:execute-api:us-east-1:123456789012:a1b2c3d4/*/POST/lessons/*/publish\"}}}"
+}
+```
+
+The statement lets API Gateway call only the matching function route source. If this permission is missing, API Gateway can match the route but fail when it tries to invoke Lambda. The caller may see a 500, and the API Gateway logs will point toward an integration permission problem.
+
+## Throttling, Logs, and Request IDs
+<!-- section-summary: Production APIs need limits and signals so teams can protect backends and debug real requests. -->
+
+Throttling limits how fast callers can send requests. This protects the backend from sudden bursts and gives teams a way to shape traffic. HTTP APIs support account-level and route-level throttling settings. REST APIs add usage plans and API keys for per-client quota and throttle management.
+
+For Northstar Learn, the public lesson publish route might have a lower rate limit than a read-only status route. Publishing starts expensive downstream work, so the API can protect the system from accidental repeated clicks, buggy clients, or automation loops.
+
+Access logs should include fields that connect the edge request to backend evidence. A useful log format includes request ID, route key, status, integration status, response latency, caller identity, source IP, and user agent. Teams often carry a correlation ID through API Gateway, Lambda, SQS messages, EventBridge events, and Step Functions executions.
+
+Here is a compact JSON access log shape:
+
+```json
+{
+  "requestId": "$context.requestId",
+  "routeKey": "$context.routeKey",
+  "status": "$context.status",
+  "integrationStatus": "$context.integrationStatus",
+  "responseLatency": "$context.responseLatency",
+  "sourceIp": "$context.identity.sourceIp",
+  "userAgent": "$context.identity.userAgent"
+}
+```
+
+Each value comes from API Gateway context variables. This is configuration for log formatting, not a client payload. The goal is to make one API request searchable in CloudWatch Logs when an instructor reports a failed publish attempt.
+
+## Private Backends and VPC Links
+<!-- section-summary: VPC links let API Gateway call private HTTP services without placing those services directly on the public internet. -->
+
+The example used Lambda because it keeps the first implementation small. Many production APIs call container services or internal HTTP services instead. The lesson service might run on ECS behind an internal load balancer in private subnets, with no public address of its own.
+
+For that shape, API Gateway can use a **VPC link**. A VPC link lets API Gateway reach private resources through supported load balancer patterns. The API stays public or controlled at the edge, while the backend service remains inside private networking.
+
+This design keeps ownership clear. API Gateway owns the public contract, authorizer, throttling, and access logs. The private service owns lesson publishing rules and database access. Security groups, load balancer health checks, service logs, and API Gateway logs all become part of the same request path.
+
+Private integrations deserve extra operational checks. If API Gateway returns integration timeouts, the issue may sit in target group health, security groups, DNS, container port mappings, or backend latency. The API boundary can show the failing route, but the VPC and service layers still need their own signals.
+
+## Where API Gateway Fits
+<!-- section-summary: API Gateway is the right entry point when API management features matter for the caller contract. -->
+
+API Gateway is a strong fit when the caller-facing API needs route management, authorizers, throttling, custom domains, stages, access logs, and integrations to Lambda or private HTTP services. It gives teams a managed API surface before requests enter application code.
+
+There are other AWS entry points that can be simpler for some workloads. An Application Load Balancer can be a good fit for browser traffic to a containerized web app with normal HTTP routing and load balancing needs. Lambda Function URLs can be a small entry point for a single Lambda function with a narrow use case. CloudFront can sit in front of APIs and static assets when global caching, edge controls, or unified domains matter.
+
+The decision should come from the caller contract. If the team needs API-specific controls and multiple backend integrations, API Gateway belongs in the conversation. If the team mainly needs load balancing for one web service, an Application Load Balancer may keep the design simpler.
+
+## Putting It Together
+<!-- section-summary: API Gateway handles the first synchronous boundary, while later integration services handle background work and downstream reactions. -->
+
+For Northstar Learn, API Gateway receives the instructor's publish request and routes it to a backend handler. The handler validates the request, creates a publish record, and returns a `202 Accepted` response with a `publishRequestId`. That is the request/response job.
+
+The handler should then hand slower work to the rest of the integration system. SQS can hold the video transcode job. SNS can fan out a final lesson-published notification. EventBridge can route product events across teams. Step Functions can coordinate the full publishing process when the sequence needs visible state and branching.
+
+The important boundary stays concrete: **API Gateway is for the caller request that needs an answer**. It should make the API contract safe and observable without turning one user click into every downstream operation.
+
+![The operations checklist summarizes the API controls that keep a public endpoint secure, observable, and connected to the right backend](/content-assets/articles/article-cloud-providers-aws-application-integration-api-gateway/api-operations-checklist.png)
+
+*The operations checklist summarizes the API controls that keep a public endpoint secure, observable, and connected to the right backend.*
+
 
 ## What's Next
+<!-- section-summary: The next article moves from direct request/response to durable background work with SQS. -->
 
-Checkout can answer the customer before every side effect finishes. Receipt email, export generation, fraud review, search indexing, and vendor retries need a place to wait safely after the API accepts the request. The next article covers messaging with SQS and SNS, where work can move through queues and topics instead of staying inside the caller's request.
+The publish API has now accepted the instructor request. The next problem is slower work. Video transcode, caption generation, thumbnail creation, and external checks should continue after the HTTP response. That is where Amazon SQS comes in.
 
----
+## References
 
-**References**
-
-- [What is Amazon API Gateway?](https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html) - Defines API Gateway as a service for creating, publishing, maintaining, monitoring, and securing REST, HTTP, and WebSocket APIs.
-- [Amazon API Gateway concepts](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-basic-concept.html) - Explains API Gateway concepts such as REST APIs, HTTP APIs, WebSocket APIs, deployments, stages, routes, API keys, and integrations.
-- [Choose between REST APIs and HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html) - Documents the feature differences between REST APIs and HTTP APIs, including API keys, per-client throttling, request validation, AWS WAF, and private endpoints.
-- [Create routes for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html) - Defines HTTP API routes as method and path mappings such as `GET /pets`.
-- [Stages for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-stages.html) - Describes stages as named lifecycle references for deployed APIs.
-- [Control access to HTTP APIs with JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html) - Explains JWT authorizers for HTTP APIs.
-- [Use API Gateway Lambda authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-use-lambda-authorizer.html) - Explains Lambda authorizers for custom authorization logic.
-- [Control access to HTTP APIs with IAM authorization](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html) - Documents SigV4 and `execute-api` permission requirements for IAM-authorized routes.
-- [Usage plans and API keys for REST APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html) - Documents usage plans, API keys, best practices, and best-effort quota behavior.
-- [Throttle requests to REST APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html) - Explains API Gateway throttling and quota behavior.
-- [Create private integrations for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-private.html) - Documents HTTP API private integrations through VPC links to private backends.
-- [Private integrations for REST APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/private-integration.html) - Documents REST API private integrations and VPC link support.
-- [Set up VPC links V2](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-vpc-links-v2.html) - Explains VPC links for connecting API routes to private VPC resources such as load balancers and ECS applications.
-- [Configure logging for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging.html) - Shows how HTTP API access logging is configured.
-- [Amazon API Gateway metrics and dimensions](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-metrics-and-dimensions.html) - Documents CloudWatch metrics such as `Count`, `4XXError`, `5XXError`, `Latency`, and `IntegrationLatency`.
-- [Variables for access logging](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-variables-for-access-logging.html) - Lists `$context` variables available in API Gateway access logs.
-- [Creating and managing Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html) - Documents Lambda function URLs as HTTPS endpoints for Lambda functions and compares them with API Gateway.
-- [What is an Application Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) - Explains ALB listeners, listener rules, and routing to registered targets.
+- [What is Amazon API Gateway?](https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html)
+- [Working with HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html)
+- [Working with REST APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-rest-api.html)
+- [Working with WebSocket APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html)
+- [API Gateway Lambda proxy integrations for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html)
+- [Controlling access to HTTP APIs with JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
+- [Using VPC links for HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vpc-links.html)

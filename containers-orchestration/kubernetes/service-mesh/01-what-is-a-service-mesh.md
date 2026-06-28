@@ -25,30 +25,15 @@ id: article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-m
 ## The Whole Picture First
 <!-- section-summary: A service mesh puts managed proxies on the request path so teams can control service-to-service traffic while application code stays focused on business logic. -->
 
-A **proxy** is a network helper that receives traffic for an application, applies rules, and forwards the traffic to the next place. A **service mesh** is an infrastructure layer for service-to-service communication that uses managed proxies to handle traffic policy, encryption, observability, and reliability behavior across many services. Your application still sends normal HTTP, gRPC, or TCP requests, but the mesh gives the platform team a consistent place to manage what happens to those requests.
+A familiar request path is enough to start. Service A calls service B over HTTP. In the online store, the `web` service receives a customer request and calls `checkout` at `http://checkout:8080`. Then `checkout` calls `inventory` to check stock. At this point, nothing sounds special. One service sends an HTTP request, another service returns an HTTP response.
 
-We will use a small online store for the whole article. The store has a `web` service that receives customer traffic, a `checkout` service that creates orders, and an `inventory` service that checks whether an item is in stock. In a quiet demo, `web` calls `checkout`, `checkout` calls `inventory`, and everything looks simple. In production, each call has failure modes: a slow inventory database, a checkout release with a bug, an overloaded Pod, a certificate rotation, or a retry storm that makes the outage worse.
+That simple path gets harder as the store grows. A checkout release may need 5% of traffic before the team trusts it with every order. A slow inventory response needs a timeout so `checkout` does not wait forever. A temporary network error may deserve one careful retry, while an overloaded service needs protection from too many retries. The security team also wants encrypted service-to-service traffic, a real caller identity, and access rules so a reporting job cannot call payment endpoints. The on-call team wants proxy logs and request metrics, and the platform team has to budget the extra CPU and memory used by the network layer.
 
-One naming detail helps before the article gets busy. A lowercase service means one application capability, such as checkout or inventory. A capital-S **Kubernetes Service** means the cluster object named `checkout` that callers use as a stable target. That distinction matters because the store application teams talk about services as business pieces, while the cluster uses Service objects so those pieces can find each other by name.
+A **proxy** is a network helper that receives traffic for an application, applies rules, and forwards the traffic to the next place. In the store, a proxy can sit beside `checkout`, see the request to `inventory`, record a log line, apply a timeout, and forward the request. A **service mesh** is a platform layer that manages those service-to-service proxies across many workloads. The application still sends normal HTTP, gRPC, or TCP requests, while the mesh gives the platform team one consistent place to manage traffic policy, encryption, identity, access control, observability, and reliability behavior.
 
-Here are the mesh-specific concepts before we start using them:
+One naming detail helps before the article gets busy. A lowercase service means one application capability, such as checkout or inventory. A capital-S **Kubernetes Service** means the cluster object named `checkout` that callers use as a stable target. The distinction is useful because the store application teams talk about services as business pieces, while the cluster uses Service objects so those pieces can find each other by name.
 
-| Concept | Plain definition | Store example |
-|---|---|---|
-| **Proxy** | A network process that receives traffic, applies rules, and forwards it. | A mesh proxy can record metrics, enforce encrypted service-to-service traffic, and forward the `checkout` to `inventory` call. |
-| **Service mesh** | A platform layer that manages service-to-service traffic through proxies and shared configuration. | The store team manages retries, timeouts, telemetry, and encrypted service-to-service traffic for `web`, `checkout`, and `inventory` in one mesh layer. |
-| **Istio** | A popular open source service mesh for Kubernetes. | Istio provides the mesh control plane, injection behavior, and traffic APIs for the store namespace. |
-| **Envoy** | The open source proxy Istio commonly uses to process mesh traffic. | Envoy proxies handle calls between `web`, `checkout`, and `inventory` after they join the mesh. |
-| **Data plane** | The proxies that sit on the traffic path and handle requests. | Envoy proxies process the calls between `web`, `checkout`, and `inventory`. |
-| **Control plane** | The management layer that watches the cluster and sends configuration to the proxies. | Istio's `istiod` tells the proxies which services exist and which traffic rules apply. |
-| **`istiod`** | Istio's main control-plane process. | `istiod` watches the store's Services, Pods, and traffic rules, then sends proxy configuration to Envoy. |
-| **Sidecar mode** | The Istio mode where an Envoy proxy container is added to each application Pod. | The `checkout` Pod contains the `checkout` app container and an `istio-proxy` container. |
-| **Sidecar proxy** | A proxy container that runs in the same Pod as an application container. | The `checkout` Pod contains the `checkout` app container and an `istio-proxy` container. |
-| **Admission webhook** | An API-server extension point that can inspect or change an object while the request is being accepted. | Istio's webhook participates when new Pods are created in a labeled namespace. |
-| **Mutating webhook** | A type of admission webhook that can edit an object before Kubernetes stores it. | Istio uses one to add proxy containers and mesh settings to new store Pods. |
-| **Traffic interception** | The redirection of application network traffic through the mesh proxy before it leaves or enters the application container. | A call from `checkout` to `inventory` is redirected through the local proxy first. |
-
-The order matters. Kubernetes already gives us Services and DNS, so one service can find another. The mesh builds on that base by placing proxies on the path. Once the proxies are on the path, the control plane can teach them how to route, retry, time out, encrypt, and report traffic.
+Keep the first picture small. Kubernetes already gives us Services and DNS, so one service can find another. A mesh builds on that base by putting managed proxies on the path. Once the proxies are on the path, a platform team can give them shared rules for routing, waiting limits, encryption, caller identity, access checks, and telemetry. The later sections name the Istio pieces that make this work.
 
 ![Service mesh big picture infographic showing web, checkout, and inventory Pods using Envoy sidecars while istiod pushes configuration above the Kubernetes Services and DNS layer](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-service-request-path.png)
 
@@ -59,11 +44,11 @@ The order matters. Kubernetes already gives us Services and DNS, so one service 
 
 In the store, `web` calls the `checkout` Service by DNS name, and Kubernetes sends the request toward one of the ready checkout Pods behind that Service. That layer answers the first question for the store: where should a caller send traffic for `checkout` right now?
 
-The mesh detail is what happens around that existing path. Istio watches the same Services, Pods, and EndpointSlices that Kubernetes already maintains. Application code keeps using familiar names such as `http://checkout:8080`, while the mesh control plane learns the backend list and sends that discovery data to Envoy proxies.
+Before the mesh, the request is still ordinary HTTP from application code to a Kubernetes Service name. Application code keeps using familiar names such as `http://checkout:8080`, and Kubernetes keeps updating the backend list as Pods appear, disappear, and become ready.
 
 The remaining behavior still needs a home: how long `web` should wait when `checkout` is slow, whether the call should be retried, whether traffic should shift gradually to `checkout-v2`, and whether service-to-service traffic should be encrypted. Application teams often add those behaviors inside each service with HTTP client libraries, shared SDKs, or framework middleware. That can work for a small system, and it gets messy when every team configures the same network behavior in a slightly different way.
 
-The online store makes the pain easy to see. If `inventory` slows down during a flash sale, `checkout` may hold open too many requests. If `web` retries too aggressively, it may create even more load on `checkout`. If you release a new `checkout` version, you may want 5% of traffic to test it before sending every customer through it. Kubernetes Services give you the stable address; the mesh gives you a shared traffic layer around that address.
+The online store makes the pain easy to see. If `inventory` slows down during a flash sale, `checkout` may hold open too many requests. If `web` retries too aggressively, it may create even more load on `checkout`. If you release a new `checkout` version, you may want 5% of traffic to test it before sending every customer through it. Kubernetes Services give you the stable address. The mesh adds a shared traffic layer around that address.
 
 ## What the Mesh Adds
 <!-- section-summary: The mesh gives platform-owned traffic behavior to services that still call each other using normal Kubernetes names. -->
@@ -92,7 +77,7 @@ This split is important in production. If the control plane has a problem, exist
 ## Sidecar Proxies and Admission Webhooks
 <!-- section-summary: In sidecar mode, Istio uses Kubernetes admission to add an Envoy proxy to new Pods in selected namespaces. -->
 
-A **sidecar proxy** is a proxy container that runs beside your application container in the same Pod. In Istio sidecar mode, that sidecar is usually an Envoy container named `istio-proxy`. The word sidecar matters because the proxy shares the Pod's network namespace with the application. That means the application container and the proxy container share the same Pod IP address and can communicate over local networking inside the Pod.
+A **sidecar proxy** is a proxy container that runs beside your application container in the same Pod. In Istio sidecar mode, that sidecar is usually an Envoy container named `istio-proxy`. The word sidecar is specific here: the proxy shares the Pod's network namespace with the application. That means the application container and the proxy container share the same Pod IP address and can communicate over local networking inside the Pod.
 
 In our store, a normal `checkout` Pod might start with one container:
 
@@ -222,7 +207,7 @@ Containers:
     Image: docker.io/istio/proxyv2:...
 ```
 
-Many production clusters use **Istio CNI** instead. CNI stands for Container Network Interface, which is the plugin system Kubernetes uses when it sets up Pod networking on a node. With Istio CNI, a privileged node-level agent handles the traffic redirection setup, so application Pods can avoid a privileged `istio-init` container for that job. This matters in restricted store clusters where security policy blocks application Pods from using capabilities such as `NET_ADMIN`.
+Many production clusters use **Istio CNI** instead. CNI stands for Container Network Interface, which is the plugin system Kubernetes uses when it sets up Pod networking on a node. With Istio CNI, a privileged node-level agent handles the traffic redirection setup, so application Pods can avoid a privileged `istio-init` container for that job. This helps restricted store clusters where security policy blocks application Pods from using capabilities such as `NET_ADMIN`.
 
 Across those setup styles, the proxy must be on the path. Once `checkout` traffic flows through Envoy, the mesh can collect request metrics, apply encrypted service-to-service traffic, use service discovery data, and later enforce routing rules. Without traffic interception, the proxy would just sit beside the app while the app talked directly to the network.
 
@@ -260,7 +245,7 @@ $ kubectl exec -n store mesh-curl -c mesh-curl -- \
 ok
 ```
 
-You can also test the internal call that matters most for the example, from `web` toward `checkout` or from `checkout` toward `inventory`:
+You can also test the internal call at the center of the example, from `web` toward `checkout` or from `checkout` toward `inventory`:
 
 ```bash
 $ kubectl exec -n store deploy/web -c web -- \

@@ -113,7 +113,13 @@ az containerapp create \
   --memory 1Gi
 ```
 
-This command tells Azure the runtime contract. The app needs to start from that image, bind to port `8080`, emit useful logs, and survive normal container restarts. Azure can add replicas up to the maximum, but each replica can only work if the container process starts correctly and listens where ingress sends traffic.
+```console
+Container app created. Latest revision: ca-orders-api-prod--0000001
+Ingress FQDN: ca-orders-api-prod.orange-field-4a1b2c3d.eastus.azurecontainerapps.io
+Provisioning state: Succeeded
+```
+
+This command tells Azure the runtime contract. The app needs to start from that image, bind to port `8080`, emit useful logs, and survive normal container restarts. The output gives the first revision name and public hostname, which become the first release and smoke-test evidence. Azure can add replicas up to the maximum, but each replica can only work if the container process starts correctly and listens where ingress sends traffic.
 
 That last sentence describes a common production story. A team can deploy a perfectly built image and still get `502` or `503` symptoms because the app listens on `3000` while Container Apps sends traffic to `8080`. The platform cannot guess the port from application code, so the target port is one of the first facts to check during a failed release.
 
@@ -157,6 +163,14 @@ az containerapp update \
   --name ca-orders-api-prod \
   --image acrorders.azurecr.io/orders-api:2026-06-11.2
 ```
+
+```console
+Name                Latest revision              Provisioning state
+------------------  ---------------------------  ------------------
+ca-orders-api-prod  ca-orders-api-prod--0000002  Succeeded
+```
+
+After the update, the release lead should write down the new revision name and compare it with logs and metrics. A revision name is more useful than a tag alone because traffic weights and logs can point at the exact runtime snapshot Azure created.
 
 Revision mode controls how many revisions can actively run. **Single revision mode** keeps the app on one active revision at a time. Azure keeps the old revision serving traffic until the new one is ready, then moves traffic to the new revision. This mode works well for simple services where each release replaces the previous one.
 
@@ -253,6 +267,18 @@ az containerapp secret set \
   --secrets "stripe-webhook-secret=keyvaultref:https://kv-orders-prod.vault.azure.net/secrets/stripe-webhook-secret,identityref:system"
 ```
 
+```console
+Name                         Identity type
+---------------------------  --------------
+ca-orders-api-prod           SystemAssigned
+
+Secret name                  Key Vault reference
+---------------------------  ---------------------------------------------------------------
+stripe-webhook-secret        https://kv-orders-prod.vault.azure.net/secrets/stripe-webhook-secret
+```
+
+The output should prove the identity exists and the secret points to Key Vault, while the secret value stays hidden. The next check is the target permission: the managed identity still needs the right Key Vault or Storage role assignment before the app can read the value at runtime.
+
 Identity also helps with image pulls from Azure Container Registry. Instead of storing registry credentials, the container app can use managed identity to authenticate to a private registry. That keeps the deployment path aligned with the same rule as runtime access: Azure identities and scoped role assignments beat long-lived passwords.
 
 Secrets and identity cover access to other services. Some systems also need helper runtime behavior for service-to-service calls, pub/sub, state, or bindings. That is where Dapr can enter the design.
@@ -279,7 +305,7 @@ Dapr is optional, so it belongs in the design because the system benefits from t
 
 That separation is practical during failed releases. If the system logs show `ErrImagePull`, the platform failed to pull the image from the registry. If the system logs show `ContainerCrashing`, the container started and exited repeatedly. If console logs show a database connection exception, the app process started but failed after it tried to reach a dependency.
 
-A live debugging session often begins with the log stream because it shows recent platform and console events without writing a full query. The team can stream console logs for the app and switch to system logs when the symptom points at image pulls, revision provisioning, scaling, or platform events.
+A live debugging session often starts with the log stream because it shows recent platform and console events without writing a full query. The team can stream console logs for the app and switch to system logs when the symptom points at image pulls, revision provisioning, scaling, or platform events.
 
 ```bash
 az containerapp logs show \
@@ -294,6 +320,14 @@ az containerapp logs show \
   --type system \
   --tail 100
 ```
+
+```console
+2026-06-11T09:17:42.391Z INFO  orders-api listening on 0.0.0.0:8080 revision=ca-orders-api-prod--0000002
+2026-06-11T09:17:45.104Z INFO  health check passed sql=ok storage=ok
+2026-06-11T09:17:48.882Z INFO  GET /healthz 200 18ms
+```
+
+Healthy console output shows the process listening on the same port that ingress targets, the revision that emitted the log, and a health check that matches the production dependency story. Suspicious output includes repeated startup messages, image pull errors in system logs, a different listening port, missing revision names, or secrets printed by the application.
 
 For historical analysis, Log Analytics queries help connect the same incident across revisions and replicas. This query shape gives the operator a compact view of system messages for one app, and the revision name keeps canary evidence separate from stable-release evidence.
 

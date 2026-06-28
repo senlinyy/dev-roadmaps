@@ -69,32 +69,23 @@ The shop team wants a clean starting point in the `app` namespace, so they begin
 
 Every NetworkPolicy has a **podSelector**. This selector chooses the Pods the policy applies to inside the policy's own namespace. If the policy lives in the `app` namespace, its `podSelector` selects Pods in `app` as protected targets; Pods in `web` or `data` need policies in their own namespaces. That namespaced boundary keeps ownership clearer, because the team that owns a namespace usually writes the policies for the Pods inside that namespace.
 
-Here is the `orders-api` Deployment shape we will use for the examples. The labels in this example give the policy something stable to follow during rollouts. A NetworkPolicy follows the labels that land on the Pods created from this template:
+Start with the Pod labels rather than the full Deployment. The labels in this example give the policy something stable to follow during rollouts. A NetworkPolicy follows the labels that land on the Pods created from this template:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: app
-spec:
-  selector:
-    matchLabels:
+template:
+  metadata:
+    labels:
       app.kubernetes.io/name: orders-api
       app.kubernetes.io/part-of: shop
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: orders-api
-        app.kubernetes.io/part-of: shop
-        app.kubernetes.io/component: api
-    spec:
-      containers:
-        - name: orders-api
-          image: ghcr.io/example/orders-api:1.8.4
-          ports:
-            - name: http
-              containerPort: 8080
+      app.kubernetes.io/component: api
+```
+
+The container also gives the API port a name. The NetworkPolicy examples use the numeric Pod port `8080`, while Services can still expose a friendlier caller port such as `80`:
+
+```yaml
+ports:
+  - name: http
+    containerPort: 8080
 ```
 
 The policy should select stable identity labels and avoid rollout-specific labels. Labels such as `pod-template-hash` change as ReplicaSets change, so they make fragile policies. Labels such as `app.kubernetes.io/name: orders-api` and `app.kubernetes.io/part-of: shop` describe the workload across rollouts, so they make better policy targets.
@@ -135,7 +126,7 @@ metadata:
 
 The namespace also needs a label, because a `podSelector` inside an ingress peer selects Pods in the policy's own namespace unless you combine it with a `namespaceSelector`. Kubernetes automatically sets the immutable `kubernetes.io/metadata.name` label on namespaces, so we can target the `web` namespace by that label. Many teams also add their own labels such as `team=commerce` or `environment=prod` for broader grouping.
 
-Here is the policy that allows the storefront to call `orders-api` on TCP 8080. The destination selection stays in `spec.podSelector`, and the allowed caller lives under `ingress.from`. This is the first allow rule that makes the earlier default deny safe for the real business path:
+Here is the policy in pieces. Start with the shell and the protected destination. The destination selection stays in `spec.podSelector`, and this policy protects matching Pods in the `app` namespace:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -149,6 +140,11 @@ spec:
       app.kubernetes.io/name: orders-api
   policyTypes:
     - Ingress
+```
+
+Then add the allowed source. The source is storefront Pods in the `web` namespace:
+
+```yaml
   ingress:
     - from:
         - namespaceSelector:
@@ -157,10 +153,17 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: storefront
+```
+
+Then add the destination port. This is the Pod port serving the API:
+
+```yaml
       ports:
         - protocol: TCP
           port: 8080
 ```
+
+In the complete policy, those three pieces live together. This is the first allow rule that makes the earlier default deny safe for the real business path.
 
 This policy protects `orders-api` because the policy lives in the `app` namespace and selects Pods with `app.kubernetes.io/name: orders-api`. It allows traffic from Pods named `storefront` in the namespace named `web`. It also limits that allowed traffic to TCP port 8080, which is the container port serving the API.
 
@@ -199,7 +202,7 @@ A practical egress policy usually starts by allowing DNS. In many clusters, Core
 kubectl -n kube-system get pods --show-labels -l k8s-app=kube-dns
 ```
 
-Here is an egress policy that allows `orders-api` to use DNS, reach PostgreSQL, and call the payment API. It keeps each destination in its own rule so the intent stays readable. The order of these rules helps the reader, while the final policy result still comes from the additive union of matching rules:
+Build the egress allow-list one destination at a time. The policy shell still selects `orders-api`, but now the selected Pods are the traffic source:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -213,6 +216,11 @@ spec:
       app.kubernetes.io/name: orders-api
   policyTypes:
     - Egress
+```
+
+The first egress rule allows DNS. It targets CoreDNS Pods in `kube-system` and allows both UDP and TCP port 53:
+
+```yaml
   egress:
     - to:
         - namespaceSelector:
@@ -226,6 +234,11 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+```
+
+The second rule allows PostgreSQL in the `data` namespace on TCP 5432:
+
+```yaml
     - to:
         - namespaceSelector:
             matchLabels:
@@ -236,6 +249,11 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+```
+
+The third rule allows the payment API in the `app` namespace on TCP 443:
+
+```yaml
     - to:
         - namespaceSelector:
             matchLabels:
@@ -248,7 +266,7 @@ spec:
           port: 443
 ```
 
-Each egress item is one allowed destination shape. The DNS rule allows UDP and TCP 53 to matching DNS Pods. The PostgreSQL rule allows TCP 5432 to `postgres` Pods in the `data` namespace. The payment rule allows TCP 443 to `payments-api` Pods in the `app` namespace. Other outbound connections from `orders-api` are denied because egress is now isolated and only listed destinations are allowed.
+In the complete policy, those three `egress` items sit under the same policy shell. Each egress item is one allowed destination shape. The DNS rule allows UDP and TCP 53 to matching DNS Pods. The PostgreSQL rule allows TCP 5432 to `postgres` Pods in the `data` namespace. The payment rule allows TCP 443 to `payments-api` Pods in the `app` namespace. Other outbound connections from `orders-api` are denied because egress is now isolated and only listed destinations are allowed.
 
 External destinations are trickier. NetworkPolicy can use `ipBlock` with CIDR ranges, which works best for stable IP ranges outside the cluster. Many payment APIs and SaaS services use changing IP ranges, CDNs, or private endpoints, so hardcoding a small public CIDR can turn into fragile operations work. Teams often combine NetworkPolicy with a stable egress gateway, cloud firewall, NAT control, service mesh egress policy, or provider-specific private connectivity for those cases.
 
@@ -351,22 +369,23 @@ The shop now has enough pieces to write the final shape for `orders-api`. The fi
 ## Putting It All Together
 <!-- section-summary: A complete NetworkPolicy design protects a workload by selecting the Pods, allowing required ingress, and allowing required egress. -->
 
-Here is the final picture for the shop app. The arrows show allowed paths, and the dotted lines show traffic that should time out after the policies apply. By this point, every arrow has already appeared in one of the ingress or egress examples above:
+Here is the final picture for the shop app. By this point, every allowed path has already appeared in one of the ingress or egress examples above:
 
-```mermaid
-graph LR
-    Storefront[storefront Pods<br/>namespace: web] -->|TCP 8080| Orders[orders-api Pods<br/>namespace: app]
-    Orders -->|UDP/TCP 53| DNS[CoreDNS Pods<br/>namespace: kube-system]
-    Orders -->|TCP 5432| Postgres[postgres Pods<br/>namespace: data]
-    Orders -->|TCP 443| Payments[payments-api Pods<br/>namespace: app]
-    Monitoring[metrics collector<br/>namespace: monitoring] -->|TCP 9090| Orders
-    Debug[random debug Pod] -. denied .-> Orders
-    Orders -. denied .-> Internet[random external IP]
-```
+| Path | Direction | Decision |
+|---|---|---|
+| `storefront` in `web` -> `orders-api` in `app` on TCP `8080` | Ingress | Allow |
+| `metrics collector` in `monitoring` -> `orders-api` in `app` on TCP `9090` | Ingress | Allow |
+| `orders-api` -> CoreDNS in `kube-system` on UDP/TCP `53` | Egress | Allow |
+| `orders-api` -> PostgreSQL in `data` on TCP `5432` | Egress | Allow |
+| `orders-api` -> `payments-api` in `app` on TCP `443` | Egress | Allow |
+| Random debug Pod -> `orders-api` | Ingress | Deny |
+| `orders-api` -> random external IP | Egress | Deny |
 
 The policy set has one main job: protect `orders-api` without breaking the real app flow. The ingress side allows the storefront to reach the API on 8080 and the monitoring collector to scrape metrics on 9090. The egress side allows DNS, the database, and the payment API. Everything else is outside the intended access path.
 
 The manifests can live as separate policy objects so each rule has a clear name and owner. Separate policies also make rollbacks smaller. Since policies are additive, splitting them keeps the same final allow result as long as the selectors and directions match.
+
+The first object selects `orders-api` and isolates both directions:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -381,7 +400,11 @@ spec:
   policyTypes:
     - Ingress
     - Egress
----
+```
+
+The second object adds the inbound business and monitoring paths:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -414,7 +437,11 @@ spec:
       ports:
         - protocol: TCP
           port: 9090
----
+```
+
+The third object adds the outbound dependencies:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -461,7 +488,7 @@ spec:
           port: 443
 ```
 
-The first object selects `orders-api` and isolates both directions. The second object adds the inbound business and monitoring paths. The third object adds the outbound dependencies. Since NetworkPolicies are additive, these three objects combine into one allowed traffic set for the selected Pods.
+Since NetworkPolicies are additive, these three objects combine into one allowed traffic set for the selected Pods.
 
 This is the working pattern most teams use. The team selects one workload with stable labels, turns on default deny for the direction it wants to control, and adds the required sources, destinations, and ports as explicit allow rules. The team proves one allowed path and one denied path before moving on. After that evidence is in place, the same sequence can be repeated for the next workload.
 

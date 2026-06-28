@@ -9,486 +9,357 @@ id: article-containers-orchestration-kubernetes-packaging-helm-releases-and-roll
 
 ## Table of Contents
 
-1. [A Release Is an Installed Chart](#a-release-is-an-installed-chart)
-2. [Installing devpolaris-orders-api](#installing-devpolaris-orders-api)
-3. [Verifying Kubernetes Objects After Install](#verifying-kubernetes-objects-after-install)
-4. [Upgrading a Release](#upgrading-a-release)
-5. [History, Status, Values, and Manifests](#history-status-values-and-manifests)
-6. [When Helm Succeeds and Pods Stay Unready](#when-helm-succeeds-and-pods-stay-unready)
-7. [Rolling Back to an Earlier Revision](#rolling-back-to-an-earlier-revision)
-8. [Wait, Atomic, and Rollback-on-Failure](#wait-atomic-and-rollback-on-failure)
-9. [Release Records for Production Teams](#release-records-for-production-teams)
+1. [A Release Is The Cluster Record](#a-release-is-the-cluster-record)
+2. [Install The First Revision](#install-the-first-revision)
+3. [Verify Kubernetes After Helm Returns](#verify-kubernetes-after-helm-returns)
+4. [Upgrade Creates A New Revision](#upgrade-creates-a-new-revision)
+5. [Inspect Values, Manifest, And History](#inspect-values-manifest-and-history)
+6. [Diagnose A Failed Upgrade](#diagnose-a-failed-upgrade)
+7. [Roll Back To A Previous Revision](#roll-back-to-a-previous-revision)
+8. [Use Atomic Upgrades Carefully](#use-atomic-upgrades-carefully)
+9. [Production Release Runbook](#production-release-runbook)
 10. [What's Next](#whats-next)
 
-## A Release Is an Installed Chart
-<!-- section-summary: A Helm release is the named cluster installation of a chart, values, namespace, and revision history. -->
+## A Release Is The Cluster Record
+<!-- section-summary: A Helm release records one installed chart, one release name, one namespace, chosen values, rendered manifests, and revision history. -->
 
-The previous article focused on values because values decide what a chart renders. The next step is what happens after Helm sends that rendered YAML to Kubernetes. Helm creates a **release**, which is the cluster-side record for one installed chart with one release name, one namespace, one set of values, and a sequence of revisions.
+Imagine production is running revision `2`, and the new image starts failing readiness checks. The team needs a fast answer: which chart, which values, and which rendered manifests were running before the bad change? One release record gives Helm enough history to inspect the current state and roll back to an earlier revision.
 
-For `devpolaris-orders-api`, the chart might live at `./charts/orders-api`. The production release name might be `orders`, and the namespace might be `devpolaris-prod`. That combination lets Helm find the production installation later.
+A **Helm release** is the cluster-side record created when Helm installs a chart. The release has a name, namespace, values, rendered manifests, status, and revision history. Helm stores that record so operators can inspect, upgrade, and roll back the same application later.
 
-The same chart can have multiple releases. This table shows the same chart source installed for different operational targets.
+For `devpolaris-orders-api`, the team might use release name `orders` in namespace `devpolaris-prod`. The chart source lives at `./charts/orders-api`, and the production inputs live in `environments/prod.values.yaml`. Helm combines those pieces and records revision `1` after install.
 
-| Release | Namespace | Purpose |
+Keep these words separate:
+
+| Term | Plain-English meaning | Orders API example |
 |---|---|---|
-| `orders` | `devpolaris-staging` | Staging release with release-candidate images |
-| `orders` | `devpolaris-prod` | Production release with approved images |
-| `orders-pr-184` | `devpolaris-pr-184` | Temporary preview release for one pull request |
+| Chart | Package source | `./charts/orders-api` |
+| Values | Inputs for one target | `environments/prod.values.yaml` |
+| Release | Installed chart record | `orders` in `devpolaris-prod` |
+| Revision | One saved release version | revision `1`, revision `2`, revision `3` |
+| Rollback | Return to an earlier saved manifest | revision `2` returns to revision `1` output |
 
-Release name and namespace work together. A team can reuse the name `orders` in staging and production because the namespace separates them. That also means every operational command should include `--namespace` or `-n`, especially during an incident.
-
-```bash
-helm list --all-namespaces --filter '^orders$'
-```
-
-```
-NAME    NAMESPACE             REVISION  UPDATED                  STATUS    CHART
-orders  devpolaris-staging    7         2026-06-16 09:21:04 UTC  deployed  orders-api-0.3.0
-orders  devpolaris-prod       3         2026-06-16 10:05:18 UTC  deployed  orders-api-0.3.0
-```
-
-That output tells the operator there are two releases with the same name. The production release exists in `devpolaris-prod`, so the rest of the production commands in this article carry that namespace explicitly.
+Release name and namespace work together. A team can use release name `orders` in staging and production as long as the namespaces differ. During incidents, every command should include `--namespace` or `-n` so the operator inspects the intended release.
 
 ![Helm release timeline showing install revision one, upgrade revision two, rollback revision three, stored manifest, and namespace](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/helm-release-timeline.png)
 
 *A Helm release is easier to operate when the team sees the name, namespace, stored manifests, and revision timeline as one connected record.*
 
-## Installing devpolaris-orders-api
-<!-- section-summary: Helm install creates the first release revision and applies the chart's rendered Kubernetes objects to the chosen namespace. -->
+## Install The First Revision
+<!-- section-summary: helm install renders the chart, sends the manifests to Kubernetes, and stores revision one for later operations. -->
 
-**Installing** a chart creates the first revision of a release. Helm renders the chart with the chosen values, sends the rendered objects to the Kubernetes API, and stores release metadata so future commands can inspect, upgrade, or roll back the release.
+**Installing** a chart creates the first release revision. Helm renders the chart with the chosen values, sends the rendered objects to the Kubernetes API, and stores release metadata.
 
-For the orders API, the production install uses the chart path and the production values file. The command also creates the namespace when the namespace is missing.
+Start by rendering for review.
 
 ```bash
-helm install orders ./charts/orders-api \
-  --namespace devpolaris-prod \
-  --create-namespace \
-  -f environments/prod.values.yaml
+$ helm template orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  > rendered/orders-api-prod.yaml
 ```
 
+Then install with an explicit release name and namespace.
+
+```bash
+$ helm install orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  -n devpolaris-prod \
+  --create-namespace
 ```
+
+A successful install prints release status.
+
+```bash
 NAME: orders
-LAST DEPLOYED: Tue Jun 16 10:05:18 2026
+LAST DEPLOYED: Tue Jun 16 10:24:31 2026
 NAMESPACE: devpolaris-prod
 STATUS: deployed
 REVISION: 1
 ```
 
-This output confirms that Helm created revision `1` for the `orders` release. It also says `STATUS: deployed`, which means Helm completed the install operation from its point of view. The Kubernetes workload still deserves direct verification because controllers continue working after Helm returns.
+`STATUS: deployed` means Helm completed its operation from Helm's point of view. Kubernetes controllers still need to create Pods, update readiness, and attach endpoints. Treat Helm output as the first signal, then verify Kubernetes directly.
 
-A production team usually renders the chart before the install command reaches the cluster. That gives reviewers the exact YAML that Helm will apply.
+## Verify Kubernetes After Helm Returns
+<!-- section-summary: Helm status and Kubernetes rollout status answer different production questions, so a healthy release checks both. -->
 
-```bash
-helm template orders ./charts/orders-api \
-  --namespace devpolaris-prod \
-  -f environments/prod.values.yaml \
-  > rendered/prod-orders-api.yaml
-```
+**Release verification** means checking both Helm and Kubernetes. Helm tells you whether the release operation completed. Kubernetes tells you whether the workload reached the desired state and can receive traffic.
 
-The rendered file should show the expected Deployment, Service, ConfigMap, and routing object. If the chart uses Ingress, reviewers should see an Ingress host. If the platform uses Gateway API, reviewers should see the Gateway-related route object the chart owns.
-
-## Verifying Kubernetes Objects After Install
-<!-- section-summary: Helm reports release success, while kubectl confirms that the live Deployment, Service, ConfigMap, and routing objects match the release intent. -->
-
-After install, the operator should verify the Kubernetes objects that the release manages. Helm applied the manifests, and now Kubernetes controllers reconcile those objects. The Deployment controller creates ReplicaSets and Pods, the Service selects Pods by labels, and the Ingress or Gateway controller configures routing.
-
-Good charts put Helm's standard labels on objects. The label `app.kubernetes.io/instance=orders` gives the team a reliable way to query the resources that belong to the release.
+Check Helm status first.
 
 ```bash
-kubectl get deploy,svc,configmap,ingress \
-  -n devpolaris-prod \
-  -l app.kubernetes.io/instance=orders
-```
-
-```
-NAME                                            READY   UP-TO-DATE   AVAILABLE
-deployment.apps/orders-devpolaris-orders-api    3/3     3            3
-
-NAME                                      TYPE        CLUSTER-IP     PORT(S)
-service/orders-devpolaris-orders-api      ClusterIP   10.96.44.20    8080/TCP
-
-NAME                                               DATA   AGE
-configmap/orders-devpolaris-orders-api-config      2      2m
-
-NAME                                             CLASS   HOSTS
-ingress.networking.k8s.io/orders-devpolaris-orders-api   nginx   orders.devpolaris.example
-```
-
-The Deployment line checks workload health. `3/3` ready means three desired Pods are ready from the Deployment controller's view. The Service line confirms the stable cluster endpoint exists on port `8080`, and the ConfigMap line confirms the plain runtime configuration object exists.
-
-The next check follows the rollout directly. It waits for the Deployment controller to report that the desired Pods are ready.
-
-```bash
-kubectl rollout status deployment/orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  --timeout=5m
-```
-
-```
-deployment "orders-devpolaris-orders-api" successfully rolled out
-```
-
-The rollout check matters because Helm and Kubernetes answer different questions. Helm answers whether the release operation finished. Kubernetes answers whether the workload reached the desired state. A production release needs both answers before the team treats the install as healthy.
-
-## Upgrading a Release
-<!-- section-summary: Helm upgrade renders the chart again with new chart source or values, applies the result, and creates the next release revision. -->
-
-After the first install, normal delivery uses **upgrade**. A Helm upgrade takes the same release name and namespace, renders the chart again, applies changes to the cluster, and records a new revision. The upgrade might change chart templates, values, the container image tag, or some combination of those.
-
-For a normal orders API release, the production values file might change only the image tag. The pull request should make that release intent obvious.
-
-```diff
- image:
--  tag: "2026.06.16.1"
-+  tag: "2026.06.16.2"
-```
-
-The upgrade command uses the same release name, chart path, namespace, and values file. Keeping those inputs consistent helps Helm update the existing release instead of creating a separate installation.
-
-```bash
-helm upgrade orders ./charts/orders-api \
-  --namespace devpolaris-prod \
-  -f environments/prod.values.yaml
-```
-
-```
-Release "orders" has been upgraded. Happy Helming!
+$ helm status orders -n devpolaris-prod
 NAME: orders
 NAMESPACE: devpolaris-prod
 STATUS: deployed
-REVISION: 2
+REVISION: 1
 ```
 
-Helm now reports revision `2`. The team should verify that Kubernetes actually received the new image and completed the rollout.
-
-```bash
-kubectl get deployment orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-```
-
-```
-ghcr.io/devpolaris/orders-api:2026.06.16.2
-```
+Then check the Deployment rollout.
 
 ```bash
-kubectl rollout status deployment/orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  --timeout=5m
+$ kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
+deployment "devpolaris-orders-api" successfully rolled out
 ```
 
-```
-deployment "orders-devpolaris-orders-api" successfully rolled out
+Check the Pods and Service endpoints.
+
+```bash
+$ kubectl get pods -l app.kubernetes.io/name=devpolaris-orders-api -n devpolaris-prod
+NAME                                      READY   STATUS    RESTARTS   AGE
+devpolaris-orders-api-6d7f87b6d9-9q8tz    1/1     Running   0          2m
+devpolaris-orders-api-6d7f87b6d9-m2z4k    1/1     Running   0          2m
+
+$ kubectl get endpoints devpolaris-orders-api -n devpolaris-prod
+NAME                    ENDPOINTS                       AGE
+devpolaris-orders-api   10.42.1.18:8080,10.42.2.9:8080  2m
 ```
 
-This verification closes the gap between Helm release state and live workload state. If Helm shows revision `2` but the Deployment still shows the previous image, the operator should investigate namespace mix-ups, another controller changing the Deployment, or a GitOps reconciler applying a different source of truth.
+The endpoints output proves the Service has Pod IPs behind it. If endpoints show `<none>`, traffic cannot reach the Pods through that Service.
+
+Finish with a small application check.
+
+```bash
+$ curl -fsS https://orders.devpolaris.example/health/ready
+ok
+```
 
 ![Release verification path showing helm upgrade, Deployment, ready Pods, working Service, and smoke test checks](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/release-verification-path.png)
 
 *Helm can record a successful revision, but operators still need Kubernetes readiness and a small application check to prove the release actually works.*
 
-## History, Status, Values, and Manifests
-<!-- section-summary: Helm inspection commands answer different questions about revision timeline, release state, supplied values, and stored rendered manifests. -->
+## Upgrade Creates A New Revision
+<!-- section-summary: helm upgrade renders new manifests, applies them, and stores a new revision in release history. -->
 
-Once a release has a few revisions, Helm's inspection commands become part of normal operations. **History** shows the timeline. **Status** shows the current release summary. **Get values** shows the user-supplied inputs Helm recorded. **Get manifest** shows the rendered YAML Helm stored for the release.
+**Upgrading** a release means changing an existing Helm release. A normal upgrade uses the same release name and namespace, a chart source, and the values for the new release. Helm renders the new manifests, applies them, and stores the next revision.
 
-During a production incident, the timeline usually comes first. It gives the operator revision numbers and recent release actions.
-
-```bash
-helm history orders -n devpolaris-prod
-```
-
-```
-REVISION  UPDATED                   STATUS      CHART           APP VERSION  DESCRIPTION
-1         Tue Jun 16 10:05:18 2026  superseded  orders-api-0.3.0 2026.06.16   Install complete
-2         Tue Jun 16 10:28:41 2026  deployed    orders-api-0.3.0 2026.06.16   Upgrade complete
-```
-
-This table says revision `2` is current and revision `1` still exists as an earlier point in the release history. That gives the operator a rollback target if revision `2` causes a production problem.
-
-`helm status` gives the current release state. It is the quick check for the release Helm currently considers deployed.
+The orders API team can upgrade the production image tag in `prod.values.yaml`, then render for review.
 
 ```bash
-helm status orders -n devpolaris-prod
+$ helm template orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  > rendered/orders-api-prod.yaml
 ```
 
+Apply the upgrade with `--wait` so Helm waits for supported resources to report readiness.
+
+```bash
+$ helm upgrade orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  -n devpolaris-prod \
+  --wait \
+  --timeout 5m
 ```
+
+Successful output names the new revision.
+
+```bash
+Release "orders" has been upgraded. Happy Helming!
 NAME: orders
-LAST DEPLOYED: Tue Jun 16 10:28:41 2026
 NAMESPACE: devpolaris-prod
 STATUS: deployed
 REVISION: 2
 ```
 
-`helm get values` answers which user-supplied values Helm recorded for the release. This is useful when an upgrade command used several values files or command-line overrides.
+`--wait` gives Helm a stronger signal than a quick apply, but operators should still run the Kubernetes checks from the previous section. The application may pass Kubernetes readiness and still fail a business smoke test, such as placing a test order against a downstream dependency.
+
+## Inspect Values, Manifest, And History
+<!-- section-summary: Helm inspection commands show which values and rendered manifests belong to each release revision. -->
+
+**Release history** is the list of saved revisions for one Helm release. It helps operators answer what changed and which revision can be used for rollback.
 
 ```bash
-helm get values orders -n devpolaris-prod
+$ helm history orders -n devpolaris-prod
+REVISION  UPDATED                  STATUS      CHART             APP VERSION
+1         Tue Jun 16 10:24:31 2026 deployed    orders-api-0.1.0  2026.06.16.1
+2         Tue Jun 16 11:08:44 2026 deployed    orders-api-0.1.1  2026.06.16.2
 ```
 
-```yaml
+Use `helm get values` to inspect the values recorded for the release.
+
+```bash
+$ helm get values orders -n devpolaris-prod
 replicaCount: 3
 image:
-  tag: "2026.06.16.2"
-config:
-  logLevel: info
-  catalogUrl: http://catalog-api.devpolaris-prod.svc.cluster.local:8080
+  tag: 2026.06.16.2
 ingress:
-  enabled: true
   host: orders.devpolaris.example
 ```
 
-`helm get manifest` answers what Helm stored after rendering. That stored YAML helps the team compare Helm's view with live Kubernetes objects.
+Use `helm get manifest` to inspect the rendered manifests stored in the release record.
 
 ```bash
-helm get manifest orders -n devpolaris-prod | grep -n "image:\\|replicas:\\|host:"
+$ helm get manifest orders -n devpolaris-prod \
+  | grep -n "kind: Deployment\\|image:\\|replicas:"
+1:kind: Deployment
+10:  replicas: 3
+34:          image: ghcr.io/devpolaris/orders-api:2026.06.16.2
 ```
 
-```
-12:  replicas: 3
-33:          image: "ghcr.io/devpolaris/orders-api:2026.06.16.2"
-86:    - host: "orders.devpolaris.example"
-```
+Those commands are useful during incidents. They show the release record Helm knows about. Operators should still compare with live Kubernetes objects when diagnosing drift or controller behavior.
 
-The last view comes from Kubernetes itself. It shows whether the Deployment controller has observed the latest desired state.
+## Diagnose A Failed Upgrade
+<!-- section-summary: A failed upgrade needs Helm status, Kubernetes rollout details, events, logs, and the rendered manifest path. -->
+
+A **failed upgrade** means Helm could not complete the release operation, or the release completed while the workload later failed verification. The diagnosis should move from Helm record to Kubernetes object to application evidence.
+
+Imagine revision `2` changes the image to `2026.06.16.2`. The new image requires `ORDERS_EVENT_TOPIC`, but production values do not provide that setting. The YAML renders cleanly, and the API server accepts it. The Pods start, then the readiness endpoint refuses traffic.
+
+Start with Helm status.
 
 ```bash
-kubectl get deployment orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  -o jsonpath='{.metadata.generation}{" "}{.status.observedGeneration}{" "}{.status.readyReplicas}{"\n"}'
+$ helm status orders -n devpolaris-prod
+NAME: orders
+STATUS: failed
+REVISION: 2
 ```
 
-```
-5 5 3
-```
-
-Those three numbers mean the Deployment controller observed the latest Deployment generation and has three ready replicas. Helm history, Helm status, stored values, stored manifest, and live Kubernetes state now tell one consistent story.
-
-## When Helm Succeeds and Pods Stay Unready
-<!-- section-summary: A Helm operation can complete while the application still fails readiness, so release diagnosis must follow the Kubernetes workload path. -->
-
-A common production surprise looks like this: Helm reports `deployed`, but users still see failures. This can happen when Kubernetes accepts the Deployment object, creates Pods, and then the application fails its readiness checks. A plain Helm upgrade can finish before the workload proves it can serve traffic.
-
-Imagine the orders API image `2026.06.16.2` now requires `ORDERS_EVENT_TOPIC`, but the production ConfigMap lacks that key. The upgrade applies cleanly because the YAML is valid. The new Pods start, read configuration, and then the readiness endpoint refuses traffic because the app has no event topic for publishing order events.
+Check rollout details.
 
 ```bash
-helm upgrade orders ./charts/orders-api \
-  --namespace devpolaris-prod \
-  -f environments/prod.values.yaml
+$ kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
+Waiting for deployment "devpolaris-orders-api" rollout to finish:
+1 out of 3 new replicas have been updated...
 ```
 
-```
-Release "orders" has been upgraded. Happy Helming!
-```
-
-The Kubernetes rollout shows the real problem. It connects the release to the Deployment controller instead of stopping at Helm output.
+Look at Pods and events.
 
 ```bash
-kubectl rollout status deployment/orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  --timeout=60s
+$ kubectl get pods -l app.kubernetes.io/name=devpolaris-orders-api -n devpolaris-prod
+NAME                                      READY   STATUS    RESTARTS   AGE
+devpolaris-orders-api-75d56c8847-2v9dp    0/1     Running   3          4m
+
+$ kubectl describe pod devpolaris-orders-api-75d56c8847-2v9dp -n devpolaris-prod
+Readiness probe failed: missing ORDERS_EVENT_TOPIC
 ```
 
-```
-Waiting for deployment "orders-devpolaris-orders-api" rollout to finish: 1 out of 3 new replicas have been updated...
-error: timed out waiting for the condition
-```
-
-Now the operator follows Pods, events, and logs. This path usually turns a vague release failure into a specific application or configuration problem.
+Then inspect application logs.
 
 ```bash
-kubectl get pods \
-  -n devpolaris-prod \
-  -l app.kubernetes.io/instance=orders
+$ kubectl logs deployment/devpolaris-orders-api -n devpolaris-prod --tail=20
+ERROR config: ORDERS_EVENT_TOPIC is required before accepting traffic
 ```
 
-```
-NAME                                             READY   STATUS    RESTARTS
-orders-devpolaris-orders-api-6cb66d5f98-kj42m    0/1     Running   0
-orders-devpolaris-orders-api-76fdcc9c98-bz6ph    1/1     Running   0
-orders-devpolaris-orders-api-76fdcc9c98-hz2cv    1/1     Running   0
-```
+The evidence now points to a missing configuration value, not a chart install problem. The team can roll back, then add the value and schema check before retrying.
 
-```bash
-kubectl describe pod orders-devpolaris-orders-api-6cb66d5f98-kj42m \
-  -n devpolaris-prod
-```
+## Roll Back To A Previous Revision
+<!-- section-summary: helm rollback applies the stored manifest from an earlier revision and records a new revision for the rollback action. -->
 
-```
-Readiness probe failed: HTTP probe failed with statuscode: 503
-```
+**Rollback** tells Helm to return a release to the rendered manifest from an earlier revision. The command takes the release name and a revision number. Helm applies the older stored manifest and records a new revision for the rollback operation.
+
+List history before rolling back.
 
 ```bash
-kubectl logs orders-devpolaris-orders-api-6cb66d5f98-kj42m \
-  -n devpolaris-prod \
-  --tail=30
+$ helm history orders -n devpolaris-prod
+REVISION  STATUS      CHART             APP VERSION
+1         deployed    orders-api-0.1.0  2026.06.16.1
+2         failed      orders-api-0.1.1  2026.06.16.2
 ```
 
-```
-2026-06-16T10:33:14Z startup check failed: ORDERS_EVENT_TOPIC is required
-```
-
-At this point, the team has a values or application compatibility problem. The fast recovery path might roll back to revision `1`. The lasting fix should add the missing ConfigMap value, update the chart schema if needed, render the diff, and release again after review.
-
-## Rolling Back to an Earlier Revision
-<!-- section-summary: Helm rollback applies the stored manifest from an earlier revision and records that recovery as a new release revision. -->
-
-**Rollback** tells Helm to return a release to the rendered manifest from an earlier revision. The command takes the release name and a revision number. Helm then applies the older stored manifest and records a new revision for the rollback action.
-
-If revision `2` introduced the missing event-topic configuration problem, revision `1` is the last known healthy target. The rollback command names that earlier revision directly.
+Roll back to revision `1`.
 
 ```bash
-helm rollback orders 1 -n devpolaris-prod
-```
-
-```
+$ helm rollback orders 1 -n devpolaris-prod --wait --timeout 5m
 Rollback was a success! Happy Helming!
 ```
 
-The history now shows a new current revision. It proves the recovery action has its own audit trail.
+History now shows a new revision for the rollback action.
 
 ```bash
-helm history orders -n devpolaris-prod
+$ helm history orders -n devpolaris-prod
+REVISION  STATUS      CHART             APP VERSION
+1         superseded  orders-api-0.1.0  2026.06.16.1
+2         failed      orders-api-0.1.1  2026.06.16.2
+3         deployed    orders-api-0.1.0  2026.06.16.1
 ```
 
-```
-REVISION  STATUS      DESCRIPTION
-1         superseded  Install complete
-2         superseded  Upgrade complete
-3         deployed    Rollback to 1
-```
-
-The important detail is revision `3`. Revision `2` remains in history, and Helm creates revision `3` whose rendered content matches revision `1`. That keeps the recovery action visible in history.
-
-The same Kubernetes verification still applies. The command checks that the live Deployment now points at the image from the known healthy revision.
+Verify the workload again.
 
 ```bash
-kubectl get deployment orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+$ kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
+deployment "devpolaris-orders-api" successfully rolled out
+
+$ curl -fsS https://orders.devpolaris.example/health/ready
+ok
 ```
 
-```
-ghcr.io/devpolaris/orders-api:2026.06.16.1
-```
+Rollback restores the Kubernetes manifests Helm manages. Database migrations, queue messages, cache writes, and downstream changes need separate recovery plans. Production rollback plans should name those application-level risks before the release.
+
+## Use Atomic Upgrades Carefully
+<!-- section-summary: Atomic upgrades can recover failed Helm operations, but teams still need clear timeout, readiness, and follow-up practices. -->
+
+`--atomic` tells `helm upgrade` to roll back changes if the upgrade fails. Helm also waits for readiness when `--atomic` is present. Many teams include `--wait` and `--timeout` anyway so the command states the intended release behavior plainly.
 
 ```bash
-kubectl rollout status deployment/orders-devpolaris-orders-api \
-  -n devpolaris-prod \
-  --timeout=5m
-```
-
-```
-deployment "orders-devpolaris-orders-api" successfully rolled out
-```
-
-Then the application check confirms that traffic can work again. It checks the app's own readiness path after Kubernetes finishes the rollout.
-
-```bash
-curl -fsS https://orders.devpolaris.example/health/ready
-```
-
-```json
-{
-  "status": "ready",
-  "database": "ok",
-  "events": "ok"
-}
-```
-
-Rollback recovers the Kubernetes manifests that Helm manages. Application-level verification still matters because smoke tests cover database migrations, queue compatibility, cache state, and downstream service behavior. The release owner should open the follow-up fix while the incident details are still fresh.
-
-## Wait, Atomic, and Rollback-on-Failure
-<!-- section-summary: Waiting makes Helm care about readiness, while atomic or rollback-on-failure behavior tries to recover automatically when readiness fails. -->
-
-The readiness problem above shows why many production Helm commands include **wait** behavior. With `--wait`, Helm watches supported Kubernetes resources and waits until they report ready, up to the configured timeout. That connects the Helm command more closely to the Deployment rollout instead of stopping after the API server accepts the objects.
-
-For Helm 3, production teams often combine `--wait`, `--timeout`, and `--atomic`. The command expresses both a readiness timeout and an automatic recovery policy.
-
-```bash
-helm upgrade orders ./charts/orders-api \
-  --namespace devpolaris-prod \
+$ helm upgrade orders ./charts/orders-api \
   -f environments/prod.values.yaml \
+  -n devpolaris-prod \
   --wait \
   --timeout 5m \
   --atomic
 ```
 
-If the new Pods never become ready within five minutes, Helm marks the upgrade as failed and rolls back the changes from the failed upgrade. Helm 3 also sets `--wait` automatically when `--atomic` is present, but many teams include both flags because the command then states the intent clearly.
-
-The failure output might look like this. It tells the operator that Helm tried to recover because readiness missed the timeout.
-
-```
-Error: release orders failed, and has been rolled back due to atomic being set:
-timed out waiting for the condition
-```
-
-Current Helm 4 documentation uses `--rollback-on-failure` for the same production idea. If the team runs Helm 4, the command should match the local `helm upgrade --help` output and the official Helm 4 docs. The operational goal stays the same: the release command should fail loudly when readiness fails and should attempt an automatic recovery path.
+Failure output can look like this.
 
 ```bash
-helm upgrade orders ./charts/orders-api \
-  --namespace devpolaris-prod \
-  -f environments/prod.values.yaml \
-  --rollback-on-failure \
-  --timeout 5m
+Error: UPGRADE FAILED: timed out waiting for the condition
+Release "orders" has been rolled back due to atomic being set
 ```
 
-Waiting improves the release signal, but it relies on the workload's readiness signals. If the app reports ready before it can process real orders, Helm will trust that signal. This is why teams pair Helm flags with meaningful readiness probes and a small smoke test after the command completes.
+Atomic rollback is useful for readiness failures. It should not replace release review, rendered diff, smoke tests, or incident notes. If an upgrade fails, the follow-up work should still explain what failed and what will change before retry.
 
-`--wait-for-jobs` matters when a chart runs Helm hook Jobs or release Jobs that must complete before the team treats the release as done. A migration Job, for example, should have a clear timeout and a recovery plan. Helm can wait for the Job, but the team still needs to decide what a failed migration means for rollback.
-
-## Release Records for Production Teams
-<!-- section-summary: A release record connects Helm revision data with Git, image, rendered output, Kubernetes verification, and smoke-test evidence. -->
-
-Helm history gives a useful revision timeline, but a production release record should carry more context. The next engineer needs to know which Git commit produced the chart, which image tag ran, which values file supplied the inputs, which command executed, and which verification checks passed.
-
-A concise release record for the orders API can look like this. The fields connect the Helm command to Git, Kubernetes, and the application check.
-
-```
-Service: devpolaris-orders-api
-Namespace: devpolaris-prod
-Helm release: orders
-Helm revision: 2
-Chart: orders-api-0.3.0
-Git commit: 9b7c21e
-Values file: environments/prod.values.yaml
-Image: ghcr.io/devpolaris/orders-api:2026.06.16.2
-Command: helm upgrade orders ./charts/orders-api -n devpolaris-prod -f environments/prod.values.yaml --wait --timeout 5m --atomic
-Rendered diff: image tag changed from 2026.06.16.1 to 2026.06.16.2
-Kubernetes verification: Deployment rolled out, 3/3 Pods ready, Service port 8080 present
-Smoke test: /health/ready returned 200
-```
-
-Automation can create this record, and a human can enrich it during unusual releases. The important point is that the release evidence connects Helm state to live Kubernetes state. A revision number alone forces the next person to reconstruct too much under pressure.
-
-During rollback, the record should include the target revision and the reason. The note should also name the follow-up change that prevents the same failure from returning.
-
-```
-Rollback record
-
-Service: devpolaris-orders-api
-Namespace: devpolaris-prod
-Helm release: orders
-Command: helm rollback orders 1 -n devpolaris-prod
-New Helm revision: 3
-Rollback target: revision 1
-Reason: revision 2 image required ORDERS_EVENT_TOPIC, and production values lacked that key
-Verification: Deployment rolled out, image returned to 2026.06.16.1, /health/ready returned 200
-Follow-up: add ORDERS_EVENT_TOPIC value, schema requirement, and release test before retry
-```
-
-This habit turns release operations into a trail that people can trust. It also makes post-incident review fairer because the team can see the exact input, output, and verification path instead of guessing from memory.
+For the missing `ORDERS_EVENT_TOPIC` example, the follow-up should add the production config value, add a schema requirement, and add a release test that catches the missing topic before upgrade time.
 
 ![Rollback on failure flow showing unready Pods, wait timeout, atomic recovery, previous revision, and release record](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/rollback-on-failure.png)
 
 *Rollback works best when readiness failure, recovery command, previous revision, and release record all point to the same production story.*
 
+## Production Release Runbook
+<!-- section-summary: A production Helm runbook records render, upgrade, verification, rollback, and follow-up commands in one place. -->
+
+A **release runbook** is the written sequence the operator follows during a release. It should name commands, expected evidence, and rollback steps. During an incident, the runbook helps the team work from facts instead of memory.
+
+For the orders API, the runbook can stay compact.
+
+```yaml
+Release:
+  name: orders
+  namespace: devpolaris-prod
+  chart: ./charts/orders-api
+  values: environments/prod.values.yaml
+Preflight:
+  - helm lint ./charts/orders-api -f environments/prod.values.yaml
+  - helm template orders ./charts/orders-api -f environments/prod.values.yaml > rendered/prod.yaml
+Upgrade:
+  - helm upgrade orders ./charts/orders-api -f environments/prod.values.yaml -n devpolaris-prod --wait --timeout 5m --atomic
+Verify:
+  - helm status orders -n devpolaris-prod
+  - kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
+  - curl -fsS https://orders.devpolaris.example/health/ready
+Rollback:
+  - helm history orders -n devpolaris-prod
+  - helm rollback orders <revision> -n devpolaris-prod --wait --timeout 5m
+```
+
+After a rollback, record what happened.
+
+```yaml
+IncidentNote:
+  release: orders
+  failedRevision: 2
+  rollbackRevision: 3
+  command: helm rollback orders 1 -n devpolaris-prod --wait --timeout 5m
+  reason: image 2026.06.16.2 required ORDERS_EVENT_TOPIC
+  verification: /health/ready returned 200 after rollback
+  followUp: add value, schema requirement, and release test
+```
+
+This habit turns Helm operations into evidence the next person can trust. It also keeps the chart, values, release record, Kubernetes rollout, and application smoke test tied together.
+
 ## What's Next
 
-You now have the main release loop: render values, install or upgrade, inspect Helm history and status, verify Kubernetes objects, and roll back when a release revision needs recovery. That loop is the practical center of Helm operations for a service like `devpolaris-orders-api`.
+You now have the main Helm operations loop: render values, install or upgrade, inspect Helm history and status, verify Kubernetes objects, and roll back when a release revision needs recovery. That loop is the practical center of Helm operations for a service like `devpolaris-orders-api`.
 
-The next article shifts to Kustomize, because some teams prefer valid Kubernetes YAML with overlays instead of Helm templates and release records. The same render-first habit stays in place, but the source files, review flow, and rollback story look different.
+The next article shifts to Kustomize. Some teams prefer valid Kubernetes YAML with overlays instead of Helm templates and release records. The same render-first habit stays in place, but the source files, review flow, and rollback story look different.
 
 ---
 

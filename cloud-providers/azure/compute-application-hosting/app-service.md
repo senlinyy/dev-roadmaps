@@ -188,7 +188,16 @@ az webapp config appsettings list \
   --output table
 ```
 
-The healthy result shows `ORDERS_DB_HOST` and `ORDERS_DB_PASSWORD` as slot settings, while `FEATURE_CHECKOUT_V2` can move with the release when that is the intended behavior. That small check catches the common mistake where a database value exists, but it follows the code during a swap instead of staying with the environment.
+```console
+Name                         SlotSetting
+---------------------------  -----------
+FEATURE_CHECKOUT_V2          False
+ORDERS_DB_HOST               True
+ORDERS_DB_PASSWORD           True
+WEBSITE_NODE_DEFAULT_VERSION False
+```
+
+The healthy result shows `ORDERS_DB_HOST` and `ORDERS_DB_PASSWORD` as slot settings, while `FEATURE_CHECKOUT_V2` can move with the release when that is the intended behavior. The output should not expose the secret value itself. It should prove the setting names exist and that environment-specific values stay attached to the right slot during a swap.
 
 Settings explain what the process knows. The next question is how the process proves who it is when it calls Key Vault, Storage, SQL, or another Azure service. That is where managed identity enters the story.
 
@@ -217,6 +226,33 @@ database_password = client.get_secret("orders-db-password").value
 ```
 
 Under the hood, App Service exposes managed identity environment values such as `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`. SDKs use those values to request a token from the local platform endpoint, and Microsoft Entra ID issues a token for the app's managed identity. Your application sends that token to Key Vault or another target service, and that target service checks whether the identity has the required permission.
+
+The runtime check has two sides. First confirm the Web App has an identity, then confirm the target resource grants that identity the role the code needs.
+
+```bash
+az webapp identity show \
+  --resource-group rg-orders-prod-eus \
+  --name app-orders-api-prod \
+  --query "{principalId:principalId,tenantId:tenantId,type:type}"
+
+az role assignment list \
+  --assignee 11111111-2222-3333-4444-555555555555 \
+  --scope /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-orders-prod-eus/providers/Microsoft.KeyVault/vaults/kv-orders-prod \
+  --query "[].{role:roleDefinitionName,scope:scope}" \
+  --output table
+```
+
+```console
+PrincipalId                           TenantId                              Type
+------------------------------------  ------------------------------------  --------------
+11111111-2222-3333-4444-555555555555  99999999-8888-7777-6666-555555555555 SystemAssigned
+
+Role                    Scope
+----------------------  ------------------------------------------------------------------------
+Key Vault Secrets User  .../resourceGroups/rg-orders-prod-eus/providers/Microsoft.KeyVault/vaults/kv-orders-prod
+```
+
+The first command proves Azure created the workload identity for the app. The second command proves Key Vault has a role assignment for that principal at the expected scope. If production logs show `403` from Key Vault, this pair of checks tells the operator whether the app lacks an identity or the target vault lacks authorization for that identity.
 
 Now the app can receive configuration and call other Azure services through Azure-managed credentials. The next production problem is release safety. A team needs a way to start the new version, warm it, check it, and then move traffic while customers continue using the current version.
 
@@ -262,7 +298,19 @@ az webapp deployment slot swap \
   --target-slot production
 ```
 
-The values here become operational evidence. `staging` is the release target, `/healthz` is the health contract, and `production` is the traffic target after validation. If `/healthz` fails, the team fixes the staging candidate and leaves production untouched.
+```console
+{
+  "status": "ok",
+  "version": "2026.06.11",
+  "checks": {
+    "configuration": "ok",
+    "sql": "ok",
+    "keyVault": "ok"
+  }
+}
+```
+
+The values here become operational evidence. `staging` is the release target, `/healthz` is the health contract, and `production` is the traffic target after validation. The health response should name the deployed version and the dependency checks that matter for this API without printing secrets. If `/healthz` fails, the team fixes the staging candidate and leaves production untouched.
 
 Slots solve release movement. Networking decides who can reach the app and what the app can reach, so that is the next piece.
 

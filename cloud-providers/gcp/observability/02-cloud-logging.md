@@ -33,6 +33,9 @@ The difference between a weak log and a useful log is the difference between a s
 
 Logs also need care because they are searchable records. A production team keeps access tokens, card numbers, raw passwords, session cookies, private keys, and full personal records out of logs. The goal is enough detail to investigate, with enough discipline to keep telemetry from turning into a data leak.
 
+![Infographic comparing a weak unstructured log with a structured log that includes severity, route, release, error code, trace ID, and revision.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-logging/structured-log-evidence.png)
+*Structured logs give responders stable fields to filter, group, and connect to traces. The exact wording can vary by language, but the field discipline is the part that matters.*
+
 ## Writing Structured Application Logs
 <!-- section-summary: Structured JSON logs give Cloud Logging fields that responders can filter, group, route, and connect to traces. -->
 
@@ -129,6 +132,45 @@ gcloud logging read \
   --format=json
 ```
 
+This first query is intentionally resource-first. `resource.type="cloud_run_revision"` keeps the search on Cloud Run revision logs. The service, location, and revision labels point at the deployed code that started receiving traffic. The timestamp range keeps the result inside the first incident window, and `--limit=50` prevents a live incident terminal from flooding the screen.
+
+A suspicious result repeats the same error shape:
+
+```json
+[
+  {
+    "timestamp": "2026-06-14T14:04:12.221Z",
+    "severity": "ERROR",
+    "resource": {
+      "labels": {
+        "service_name": "checkout-api",
+        "revision_name": "checkout-api-00042-n9p",
+        "location": "us-central1"
+      }
+    },
+    "jsonPayload": {
+      "message": "payment provider rejected checkout request",
+      "error_code": "provider_timeout",
+      "release": "2026-06-14.3",
+      "checkout_id": "chk_9f21"
+    },
+    "trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736"
+  },
+  {
+    "timestamp": "2026-06-14T14:04:18.904Z",
+    "severity": "ERROR",
+    "jsonPayload": {
+      "message": "payment authorization timed out after provider retry",
+      "error_code": "provider_timeout",
+      "release": "2026-06-14.3",
+      "checkout_id": "chk_9f22"
+    }
+  }
+]
+```
+
+Healthy output might have no rows for this revision, or it might show a small number of unrelated handled errors. Suspicious output clusters around the same revision, release, route, and error code during the same minutes that Cloud Monitoring shows `5xx` traffic.
+
 After that first pass, the team can ask more specific application questions. The next query filters for the error code that appears in structured logs:
 
 ```bash
@@ -142,6 +184,17 @@ gcloud logging read \
   --limit=20 \
   --format='table(timestamp,severity,jsonPayload.checkout_id,jsonPayload.payment_provider,trace)'
 ```
+
+The second query changes the question from "what errors happened on this revision?" to "how often do we see the payment timeout pattern?" The `jsonPayload.error_code` and `jsonPayload.release` filters depend on the application writing stable structured fields.
+
+```console
+TIMESTAMP                    SEVERITY  CHECKOUT_ID  PAYMENT_PROVIDER  TRACE
+2026-06-14T14:04:12.221Z     ERROR     chk_9f21     stripe            projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736
+2026-06-14T14:04:18.904Z     ERROR     chk_9f22     stripe            projects/shop-prod/traces/68b7a1d1f9304c87b6c5e3b8ad44a612
+2026-06-14T14:04:25.019Z     ERROR     chk_9f23     stripe            projects/shop-prod/traces/7c3e2a4b99f54e13a6b7c0d19012ab44
+```
+
+Healthy output after a rollback should shrink quickly or stop entirely. Suspicious output keeps adding new checkout IDs with the same provider and release, which means customers are still hitting the failing path.
 
 That table gives the incident channel a short evidence list: time, severity, checkout ID, provider, and trace. The table output works well for quick triage, while JSON output works better when a responder needs to inspect the full envelope or paste a precise entry into the incident notes.
 
@@ -158,6 +211,18 @@ gcloud logging read \
   --project=shop-prod \
   --format='table(timestamp,resource.labels.service_name,severity,jsonPayload.message,jsonPayload.dependency)'
 ```
+
+The trace query is useful after the team finds one representative failed checkout. The filter asks Cloud Logging for every log entry whose `trace` field matches that request, regardless of which service wrote it.
+
+```console
+TIMESTAMP                    SERVICE_NAME    SEVERITY  MESSAGE                                           DEPENDENCY
+2026-06-14T14:04:11.902Z     checkout-api    INFO      checkout request received
+2026-06-14T14:04:12.004Z     inventory-api   INFO      inventory reservation completed                   inventory
+2026-06-14T14:04:12.221Z     checkout-api    ERROR     payment authorization timed out after retry        payment-provider
+2026-06-14T14:04:12.236Z     checkout-api    ERROR     returning checkout failure response
+```
+
+Healthy trace-linked logs show a complete request story with normal dependency messages and a success response. Suspicious output has a gap where a downstream service failed to preserve context, repeated `ERROR` rows, or an error message that appears before the final HTTP `500`.
 
 The result should show related log entries from `checkout-api` and any other service that preserved the same trace context. If `inventory-api` and `payment-worker` also write trace-linked logs, the team can read the request story across services without guessing from timestamps.
 
@@ -186,7 +251,32 @@ gcloud logging read \
   --format=json
 ```
 
+The audit query searches the Admin Activity log stream. `protoPayload.serviceName="run.googleapis.com"` focuses on Cloud Run API activity, and `protoPayload.methodName:"UpdateService"` captures service update calls. The time window starts before the metric spike so the team can see changes that happened just before customers noticed errors.
+
+```json
+[
+  {
+    "timestamp": "2026-06-14T13:58:44.312Z",
+    "protoPayload": {
+      "authenticationInfo": {
+        "principalEmail": "ci-deploy@shop-prod.iam.gserviceaccount.com"
+      },
+      "methodName": "google.cloud.run.v2.Services.UpdateService",
+      "resourceName": "namespaces/shop-prod/services/checkout-api",
+      "requestMetadata": {
+        "callerSuppliedUserAgent": "google-cloud-sdk gcloud/527.0.0"
+      }
+    }
+  }
+]
+```
+
+Healthy output shows an expected deployment principal and a resource name that matches the planned release. Suspicious output shows a different principal, an unplanned update, repeated service changes, or nearby changes to secrets, IAM, networking, or environment variables that could explain the runtime errors.
+
 The important fields in the result are usually `protoPayload.authenticationInfo.principalEmail`, `protoPayload.methodName`, `protoPayload.resourceName`, request metadata, and timestamps. If the principal is `ci-deploy@shop-prod.iam.gserviceaccount.com`, the team can connect the runtime symptom to the deployment pipeline. If the principal is a human administrator, the incident notes should record the change path and approval context.
+
+![Infographic showing audit log deployment evidence at 13:58 followed by runtime application errors at 14:04 and 14:05.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-logging/audit-runtime-timeline.png)
+*Audit logs and application logs answer different questions. The suspicious pattern is a production update immediately before repeated runtime errors in the same incident window.*
 
 Audit logs also support compliance and security review. A central platform or security team might route Admin Activity and Policy Denied logs from many projects into a central BigQuery dataset. Application teams can still query their project logs during incidents, while security keeps a longer organization-wide history.
 
@@ -208,6 +298,16 @@ gcloud logging sinks create checkout-api-errors \
     severity>=ERROR'
 ```
 
+The destination names a central log bucket. The `--log-filter` controls which entries route to that bucket, so this sink sends only Cloud Run error logs for `checkout-api`. The command creates routing; it does not automatically grant the sink writer access to the destination.
+
+```console
+Created [https://logging.googleapis.com/v2/projects/shop-prod/sinks/checkout-api-errors].
+Please remember to grant `serviceAccount:service-123456789012@gcp-sa-logging.iam.gserviceaccount.com`
+the Logging Bucket Writer role on the destination.
+```
+
+Healthy setup output includes a writer identity that the team then grants on the destination bucket. Suspicious setup is a sink that exists but has permission errors, because the Log Router will match entries and then fail to write them where the incident team expects them.
+
 For audit evidence, an organization or folder sink can centralize records across many projects. This pattern helps when every product team owns its own project, but security needs one place to review production changes:
 
 ```bash
@@ -218,6 +318,15 @@ gcloud logging sinks create org-admin-activity-to-bq \
   --log-filter='logName:"cloudaudit.googleapis.com%2Factivity"'
 ```
 
+The `--organization` flag moves the routing rule above one project, and `--include-children` includes projects under that organization. The filter selects Admin Activity logs, which are the first control-plane change evidence many incident and security reviews need.
+
+```console
+Created [https://logging.googleapis.com/v2/organizations/123456789012/sinks/org-admin-activity-to-bq].
+Writer identity: serviceAccount:o123456789012-987654@gcp-sa-logging.iam.gserviceaccount.com
+```
+
+Healthy output gives security a writer identity to grant on the BigQuery dataset. Suspicious output is less about the command text and more about the design: an organization sink without `--include-children` may miss child project logs, and an overly broad filter may export far more data than the team intended.
+
 After creating a sink, the team has to grant the sink writer identity permission on the destination. This is a common setup miss. The command output shows a service account for the sink, and that service account needs the right destination role, such as permission to write to a BigQuery dataset or a logging bucket.
 
 Retention belongs in the design conversation too. A short retention window saves cost but can erase evidence needed for a slow customer report, compliance request, or monthly reliability review. A long retention window helps investigations but can increase cost and data exposure. The practical pattern is to choose retention by log class: hot operational logs, security audit logs, debug logs, and long-term compliance exports usually deserve different policies.
@@ -225,7 +334,7 @@ Retention belongs in the design conversation too. A short retention window saves
 ## Log-Based Metrics
 <!-- section-summary: Log-based metrics turn repeated log patterns into alertable numbers when a direct application metric is missing. -->
 
-Sometimes a log pattern needs to become a number. A **log-based metric** counts or measures log entries that match a filter. For `checkout-api`, the team can count payment provider timeout logs even before the application exposes a custom metric for that exact failure.
+Sometimes a team needs a number from a repeated log pattern. A **log-based metric** counts or measures log entries that match a filter. For `checkout-api`, the team can count payment provider timeout logs even before the application exposes a custom metric for that exact failure.
 
 Here is a counter metric for the incident pattern:
 
@@ -238,9 +347,20 @@ gcloud logging metrics create checkout_payment_provider_timeouts \
     jsonPayload.error_code="provider_timeout"'
 ```
 
+The metric counts log entries that match the incident pattern. `resource.type` and `service_name` keep the metric scoped to one Cloud Run service, while `jsonPayload.error_code` depends on the structured log field the application emits.
+
+```console
+Created metric [checkout_payment_provider_timeouts].
+```
+
+After a few matching logs arrive, the metric appears in Cloud Monitoring as a user-defined logging metric. Healthy output after a fix shows the time series dropping to zero. Suspicious output keeps increasing while the `5xx` ratio stays high, which means the error pattern still reaches production.
+
 This metric gives Cloud Monitoring a time series based on matching log entries. The team can put the time series on a dashboard or create an alert if the count rises above a threshold. This is useful when the application already emits reliable structured logs and the team needs an alert quickly.
 
 Log-based metrics still need care. They depend on ingestion and log shape, so a code change that renames `jsonPayload.error_code` can break the metric. They also count events after the application emits logs, so they should complement direct service metrics such as request count, error rate, latency, and saturation. They fit important business or error patterns that logs can express cleanly.
+
+![Infographic showing incoming operational errors, audit logs, and debug noise routed through Log Router filters into log buckets, BigQuery, short retention, and a log-based metric.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-logging/log-routing-plan.png)
+*Routing is part of incident design. Operational errors need fast search, audit logs need longer review paths, and noisy debug entries usually need tighter retention.*
 
 ## Putting It All Together
 <!-- section-summary: Logging turns the incident into searchable evidence, and routing keeps that evidence available for the right team. -->

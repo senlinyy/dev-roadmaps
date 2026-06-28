@@ -43,29 +43,8 @@ A **subnet**, also called a **subnetwork**, is an IP address range inside a VPC 
 
 Here is the part that often surprises beginners: a **GCP VPC network is a global resource**, and **subnets are regional resources**. The network object can contain subnets in many regions. A subnet still lives in one region, such as `us-central1` or `europe-west2`, and VMs can attach only to subnets in the same region as the VM zone.
 
-```mermaid
-flowchart TB
-    VPC["VPC network: food-prod-vpc<br/>global resource"]:::network
-
-    subgraph US["Region: us-central1"]
-        USSubnet["Subnet: app-us-central1<br/>10.20.10.0/24"]:::subnet
-        USApi["API VM<br/>10.20.10.12"]:::vm
-    end
-
-    subgraph EU["Region: europe-west2"]
-        EUSubnet["Subnet: worker-europe-west2<br/>10.20.40.0/24"]:::subnet
-        EUWorker["Worker VM<br/>10.20.40.8"]:::vm
-    end
-
-    VPC --> USSubnet
-    VPC --> EUSubnet
-    USSubnet --> USApi
-    EUSubnet --> EUWorker
-
-    classDef network fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef subnet fill:#173f35,stroke:#20c997,stroke-width:2px,color:#fff
-    classDef vm fill:#2a2a2a,stroke:#f7c948,stroke-width:2px,color:#fff
-```
+![A generated infographic showing one global VPC network containing regional subnet pools and private workload IPs.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-gcp-networking-mental-model/vpc-map.png)
+*The network is the global container, while each region contributes its own subnet pools and workload addresses.*
 
 For the food delivery app, that means the team can keep one production VPC network and place the API in `us-central1` while placing a data export worker in `europe-west2`. The two regional subnets sit inside the same global network. Google Cloud creates subnet routes so resources in those subnets have private routing paths, and firewall rules still decide which packets are allowed.
 
@@ -108,6 +87,9 @@ Here is a practical GKE-flavored version of the same production subnet:
 | `pods` secondary range | `10.21.0.0/20` | Pod alias IPs |
 | `services` secondary range | `10.22.0.0/24` | Kubernetes Service IPs |
 
+![A generated infographic showing primary and secondary subnet ranges with a warning about overlapping office networks.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-gcp-networking-mental-model/subnet-ranges.png)
+*Primary ranges, secondary ranges, and connected office ranges all need to fit together before workloads depend on them.*
+
 Primary and secondary ranges must be unique across the VPC network where Google Cloud requires uniqueness. Google Cloud also checks for conflicts with existing subnet ranges and certain connected ranges. This matters during hybrid networking. If the company office uses `10.20.0.0/16` over Cloud VPN and the GCP production VPC also uses `10.20.0.0/16`, private routing turns into an address conflict. The packet destination no longer tells the network which side owns the address.
 
 There is also a lifecycle detail that saves future pain. After a subnet is created, the primary IPv4 range can be expanded, while replacement or shrinking is unavailable. Secondary ranges have their own constraints, especially when resources already use them. Production teams usually allocate ranges with enough room for growth, then document why each range exists.
@@ -143,23 +125,8 @@ Google Cloud also adds a system-generated IPv4 **default route** when a VPC netw
 
 Here is the food delivery app again:
 
-```mermaid
-flowchart LR
-    Web["Web VM<br/>10.20.10.15"]:::vm
-    API["API VM<br/>10.20.20.9"]:::vm
-    NAT["Cloud NAT<br/>outbound translation"]:::network
-    Internet["External package repo<br/>public IPv4"]:::external
-    RouteAPI["Subnet route<br/>10.20.20.0/24"]:::route
-    DefaultRoute["Default route<br/>0.0.0.0/0"]:::route
-
-    Web --> RouteAPI --> API
-    API --> DefaultRoute --> NAT --> Internet
-
-    classDef vm fill:#2a2a2a,stroke:#f7c948,stroke-width:2px,color:#fff
-    classDef route fill:#173f35,stroke:#20c997,stroke-width:2px,color:#fff
-    classDef network fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef external fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-```
+![A generated infographic showing subnet routes for private traffic and a default route through Cloud NAT for outbound internet access.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-gcp-networking-mental-model/route-paths.png)
+*Routes choose the next hop: private subnet routes keep application traffic inside the VPC, while the default route supports approved outbound paths such as Cloud NAT.*
 
 Routes and firewalls work together. The subnet route may provide a path from the web VM to the API VM, while the firewall rules decide whether TCP traffic to the API port is allowed. The default route may provide a path from an internal VM to external IPv4 addresses through Cloud NAT, while firewall egress rules can still restrict what leaves the VM.
 
@@ -192,6 +159,15 @@ gcloud compute networks create food-prod-vpc \
   --bgp-routing-mode=global
 ```
 
+The important flags are `--subnet-mode=custom`, which prevents automatic regional subnet creation, and `--bgp-routing-mode=global`, which lets dynamic routes learned in one region apply across the VPC when hybrid routing arrives later. A healthy create returns an operation that finishes with `status: DONE`:
+
+```yaml
+name: operation-1749821005123-5f8a
+operationType: insert
+status: DONE
+targetLink: projects/food-prod/global/networks/food-prod-vpc
+```
+
 Then the team creates the regional subnets. The API subnet includes secondary ranges for a future GKE cluster, and the subnets enable Private Google Access so internal-IP VMs can reach supported Google APIs through the private path:
 
 ```bash
@@ -211,6 +187,14 @@ gcloud compute networks subnets create subnet-api-us-central1 \
   --enable-private-ip-google-access
 ```
 
+The important fields are `--range` for normal VM interface addresses, `--secondary-range` for alias IP use cases such as GKE Pods and Services, and `--enable-private-ip-google-access` for Google API reachability from internal-IP workloads. The expected operation output should point at the subnetwork and finish successfully:
+
+```yaml
+operationType: insert
+status: DONE
+targetLink: projects/food-prod/regions/us-central1/subnetworks/subnet-api-us-central1
+```
+
 If internal-only VMs need outbound internet access for package updates or external APIs, Cloud NAT gives them an outbound path without assigning external IP addresses to every VM. Cloud NAT uses Cloud Router as its control resource:
 
 ```bash
@@ -226,6 +210,8 @@ gcloud compute routers nats create food-prod-nat-us-central1 \
   --nat-all-subnet-ip-ranges \
   --auto-allocate-nat-external-ips
 ```
+
+`--nat-all-subnet-ip-ranges` means the NAT can cover every subnet range in the region, including primary and secondary ranges. `--auto-allocate-nat-external-ips` lets Google Cloud allocate NAT addresses automatically. In stricter production environments, teams often reserve and name NAT IPs instead so allowlists and change reviews have stable addresses.
 
 The Terraform version keeps the same design in reviewable code:
 
@@ -299,6 +285,30 @@ gcloud compute routes list \
   --filter='network~food-prod-vpc' \
   --format='table(name,destRange,nextHopGateway,nextHopInstance,nextHopIp,nextHopVpnTunnel,priority)'
 ```
+
+Example healthy output should show custom subnet mode, global routing, explicit subnet ranges, Private Google Access enabled, and a default internet route if the outbound design needs it:
+
+```yaml
+name: food-prod-vpc
+autoCreateSubnetworks: false
+routingConfig:
+  routingMode: GLOBAL
+```
+
+```console
+NAME                    REGION       IP_CIDR_RANGE   PRIVATE_IP_GOOGLE_ACCESS  SECONDARY_IP_RANGES
+subnet-web-us-central1  us-central1  10.20.10.0/24   True
+subnet-api-us-central1  us-central1  10.20.20.0/24   True                      [{rangeName: pods, ipCidrRange: 10.21.0.0/20}, {rangeName: services, ipCidrRange: 10.22.0.0/24}]
+```
+
+```console
+NAME                            DEST_RANGE     NEXT_HOP_GATEWAY                  PRIORITY
+default-route-0-0-0-0-0         0.0.0.0/0      default-internet-gateway          1000
+food-prod-vpc-subnet-api-route  10.20.20.0/24                                    0
+food-prod-vpc-subnet-web-route  10.20.10.0/24                                    0
+```
+
+If the subnet list shows `False` for Private Google Access, private VMs may fail Google API calls later. If the routes list lacks the expected subnet route, check whether the subnet was created in the intended VPC. If the default route is missing, Cloud NAT cannot send ordinary outbound IPv4 traffic unless another route supplies that path.
 
 This setup still needs firewall rules, load balancer design, DNS, and private service access before the app is production-ready. The value of this first shape is that the address plan, regional placement, API private access, and outbound path are explicit.
 

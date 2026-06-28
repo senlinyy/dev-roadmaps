@@ -1,8 +1,8 @@
 ---
 title: "AWS Core Services by Job"
-description: "Core AWS service families mapped to traffic, compute, state, access, signals, and operations."
-overview: "A production AWS app is a chain of service jobs. This first article walks through networking, traffic, compute, state, access, secrets, observability, releases, budgets, backups, and a practical diagnostic path for a public ECS app."
-tags: ["aws", "foundations", "ecs", "s3", "iam", "cloudwatch", "rds"]
+description: "Core AWS service families mapped to traffic, compute, network boundaries, data, access, signals, cost, and recovery."
+overview: "A first AWS app needs a clear job for each service. This article starts with a small localhost app, then maps the same app to common AWS services before later articles handle service-specific configuration."
+tags: ["aws", "foundations", "ec2", "ecs", "lambda", "s3", "iam", "cloudwatch", "rds"]
 order: 1
 id: article-cloud-iac-cloud-providers-core-services
 aliases:
@@ -15,437 +15,249 @@ aliases:
 
 ## Table of Contents
 
-1. [AWS Services by Job](#aws-services-by-job)
-2. [The App We Will Follow](#the-app-we-will-follow)
-3. [Networking: VPCs, Subnets, Routes, and Security Groups](#networking-vpcs-subnets-routes-and-security-groups)
-4. [Traffic: Route 53, ALB, and Target Groups](#traffic-route-53-alb-and-target-groups)
-5. [Compute: ECS Fargate, Task Definitions, and ECR](#compute-ecs-fargate-task-definitions-and-ecr)
-6. [State: RDS and S3](#state-rds-and-s3)
-7. [Access and Secrets: IAM Roles and Secrets Manager](#access-and-secrets-iam-roles-and-secrets-manager)
-8. [Signals: CloudWatch and CloudTrail](#signals-cloudwatch-and-cloudtrail)
-9. [Operations: Budgets and AWS Backup](#operations-budgets-and-aws-backup)
-10. [A Request-Path Diagnostic Walkthrough](#a-request-path-diagnostic-walkthrough)
-11. [Putting It All Together](#putting-it-all-together)
-12. [References](#references)
+1. [Start With the Local App](#start-with-the-local-app)
+2. [Compute: Where the Code Runs](#compute-where-the-code-runs)
+3. [Traffic: How Users Reach the App](#traffic-how-users-reach-the-app)
+4. [Network Boundaries: What Stays Private](#network-boundaries-what-stays-private)
+5. [State: Rows, Files, and Background Work](#state-rows-files-and-background-work)
+6. [Access and Secrets: How Services Trust Each Other](#access-and-secrets-how-services-trust-each-other)
+7. [Signals: What the System Tells You](#signals-what-the-system-tells-you)
+8. [Cost and Recovery: Owning the App After Launch](#cost-and-recovery-owning-the-app-after-launch)
+9. [A First Debugging Path](#a-first-debugging-path)
+10. [What's Next](#whats-next)
+11. [References](#references)
 
-## AWS Services by Job
-<!-- section-summary: Core AWS services line up around the jobs a running application needs: traffic, compute, state, access, signals, and operations. -->
+## Start With the Local App
+<!-- section-summary: AWS service names map cleanly to jobs your local app already has. -->
 
-AWS has a lot of service names, and beginners often try to memorize the catalog one product at a time. That gets tiring quickly because the same application may involve Route 53, VPC, ALB, ECS, Fargate, ECR, RDS, S3, IAM, Secrets Manager, CloudWatch, CloudTrail, Budgets, and AWS Backup before it serves a single customer request.
+Picture a small app running on your laptop. It is called `northstar-photos`, and it lets users create a profile, upload an avatar, and browse a simple gallery. During development, the whole thing may fit into one terminal window: `npm run dev`, a local Postgres database, an `uploads/` folder, and a browser tab at `http://localhost:3000`.
 
-The first pass through AWS Foundations groups those services by job. One group creates the private network boundary. One group accepts public traffic. One group runs code. One group stores state. One group grants access and delivers secrets. One group records signals. One group keeps the system affordable, recoverable, and ready for operations.
+That local setup hides many jobs inside one machine. The web process receives requests. The database stores rows. The folder stores files. Your shell has credentials. The terminal prints logs. Your laptop network decides who can connect. One person owns all the pieces, and the app has no real production traffic yet.
 
-Think about what happens when a customer opens a checkout page. DNS has to find the public entry point. The load balancer has to accept the request and choose a healthy target. Compute has to run the application process. The application has to read and write data. The runtime needs permissions and secrets. Logs and audit events need to explain what happened. Budgets and backups need to protect the system outside the happy path.
+AWS splits those jobs apart because production adds pressure. Users need a stable public address. The app needs a place to run after your laptop closes. The database needs backups. Uploaded files need durable storage. The app needs permission to call AWS services without a secret key pasted into code. Operators need logs, metrics, cost alerts, and a restore plan.
 
-That chain is the point of this article. We are going to follow one small app through the core AWS jobs, then use the same chain as a debugging runbook. After that, the module can talk about where those resources belong and how to identify the exact target during real work.
+This article uses one question all the way through: **which job does this AWS service perform for the app?** That question keeps the first AWS map readable. A beginner can understand the shape of a production app before memorizing every service name.
 
-## The App We Will Follow
-<!-- section-summary: A small public checkout API gives us one consistent production scenario for mapping services and debugging a request path. -->
+| App job | Local version | Common AWS service family |
+|---|---|---|
+| Run code | A process on your laptop | EC2, ECS with Fargate, Lambda |
+| Receive public traffic | `localhost:3000` | Route 53, Certificate Manager, Application Load Balancer |
+| Keep boundaries | Home network and one machine | VPC, subnets, route tables, security groups |
+| Store rows | Local Postgres or SQLite | RDS, DynamoDB |
+| Store files | `uploads/` folder | S3 |
+| Send background work | In-process jobs or a local worker | SQS, EventBridge, Lambda, ECS workers |
+| Grant access | Local credentials | IAM roles and policies |
+| Store secrets | `.env` file | Secrets Manager, SSM Parameter Store |
+| Watch behavior | Terminal output | CloudWatch, CloudTrail, X-Ray, OpenTelemetry |
+| Control spend and restore data | Notes and manual checks | Cost Explorer, Budgets, AWS Backup, service backups |
 
-Our scenario is Northstar Shop, a small ecommerce app with a public checkout API. Customers visit `shop.example.com`, place orders, and receive receipt PDFs. The company is small enough that one team owns the whole stack, but the app still needs normal production pieces: public traffic handling, private compute, persistent data, secrets, logs, cost alerts, and backups.
+The rest of this article walks through those jobs in the order a request usually touches them. We start with the code, then add the public door, then protect the private parts, then give the app data, permissions, signals, and recovery.
 
-The request path looks like this in plain language. A customer browser resolves DNS through Route 53. The request reaches an Application Load Balancer in public subnets. The load balancer forwards traffic to healthy ECS Fargate tasks in private subnets. The task reads database credentials from Secrets Manager, writes order rows to RDS PostgreSQL, writes receipt objects to S3, and sends logs to CloudWatch Logs.
+## Compute: Where the Code Runs
+<!-- section-summary: Compute services provide CPU, memory, storage, and network access for application code. -->
 
-Around that request path, the platform has supporting services. ECR stores the container image that ECS pulls during deployment. IAM roles decide what the task and the ECS agent can do. CloudTrail records AWS API activity. Budgets alert the team before costs surprise finance. AWS Backup protects RDS and other supported data resources with central backup plans.
+The first production question for `northstar-photos` is simple: where does the web process run? On your laptop, the process uses your CPU and memory. In AWS, **compute** means the service family that gives your code CPU, memory, storage, and network placement inside an AWS account.
 
-This app is small on purpose. A bigger company may add CloudFront, WAF, API Gateway, SQS, SNS, DynamoDB, ElastiCache, Step Functions, or multiple accounts. The same job-based map still helps because every extra service joins the request path for a reason.
+**Amazon EC2** gives you virtual servers. You choose a machine image, pick an instance type, install packages, run your app, patch the operating system, and decide how the process restarts after failure. EC2 works well when a team wants server-level control, needs special software on the host, or runs workloads that fit a traditional server operations style.
 
-![Infographic showing a Northstar Shop request moving through Route 53, an Application Load Balancer, ECS Fargate, RDS, S3, IAM, Secrets Manager, CloudWatch, CloudTrail, Budgets, and Backup](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-service-request-path.png)
+**Amazon ECS** runs containers. A container packages the app and its runtime dependencies into an image, then ECS starts copies of that image as tasks. With **AWS Fargate**, AWS provides the server capacity behind those tasks, so the team focuses on the image, CPU and memory size, networking, ports, permissions, and logs.
 
-*The service map keeps the application path visible: public traffic enters through DNS and the load balancer, compute runs privately, durable state lives outside the task, and signals plus operations surround the request.*
+**AWS Lambda** runs a function for a specific event. It fits bounded work such as resizing an image after upload, reacting to an S3 event, processing a queue message, or running a small API handler. A long-running web app can run on Lambda through specific patterns, but a normal server process or container service often gives beginners a clearer starting point.
 
-## Networking: VPCs, Subnets, Routes, and Security Groups
-<!-- section-summary: Networking defines where workloads live, which routes they can use, and which private connections can reach each service. -->
+For the first production version of `northstar-photos`, the team might choose ECS with Fargate because the app already builds a Docker image and listens on port `3000`. A later ECS article can walk through the real task definition, service, cluster, deployment circuit breaker, health checks, and capacity options. Here, the useful level of detail is the planning shape.
 
-The first job is the private network boundary. A **Virtual Private Cloud**, or **VPC**, is a private network space inside one AWS Region. It gives your resources IP ranges, subnets, route tables, and network controls so the application can separate public entry points from private workloads and data stores.
-
-For Northstar, the VPC usually has at least two Availability Zones because production systems need more than one physical failure zone. Each Availability Zone has a public subnet for load balancer nodes and a private application subnet for ECS tasks. The RDS database uses private database subnets, often with route tables that have no direct internet route.
-
-Subnets are ranges of IP addresses inside the VPC. A **public subnet** has a route to an internet gateway and hosts resources that need public entry, such as an Application Load Balancer. A **private application subnet** hosts resources such as ECS tasks that initiate outbound connections through a NAT gateway or VPC endpoints. A **database subnet** hosts RDS and accepts traffic only from the application layer.
-
-Route tables decide where network traffic goes. The public subnet route table has a default route to the internet gateway. The private application route table may send internet-bound traffic to a NAT gateway, or send AWS service traffic through VPC endpoints where the team has configured them. The database subnet route table usually keeps routing narrow so the database only participates in private VPC traffic.
-
-Security groups act like stateful firewalls around resources. The ALB security group allows inbound HTTPS from the internet. The ECS task security group allows inbound traffic from the ALB security group on the application port. The RDS security group allows inbound PostgreSQL only from the ECS task security group. That chain gives the database a private path from the app while keeping public clients away from it.
-
-Here are the kinds of CLI checks an on-call engineer uses during a networking question:
-
-```bash
-aws ec2 describe-subnets \
-  --filters "Name=tag:Application,Values=northstar-shop" \
-  --query 'Subnets[].{SubnetId:SubnetId,Az:AvailabilityZone,Cidr:CidrBlock,Name:Tags[?Key==`Name`].Value|[0]}' \
-  --output table
-
-aws ec2 describe-route-tables \
-  --filters "Name=tag:Application,Values=northstar-shop" \
-  --query 'RouteTables[].{RouteTableId:RouteTableId,Routes:Routes[].{Destination:DestinationCidrBlock,Target:GatewayId || NatGatewayId || VpcEndpointId}}'
-
-aws ec2 describe-security-groups \
-  --group-ids sg-0123456789abcdef0 \
-  --query 'SecurityGroups[].IpPermissions'
+```yaml
+app: northstar-photos
+runtime: ECS service on Fargate
+image: northstar/photos:2026-06-24.1
+container_port: 3000
+cpu: 0.5 vCPU
+memory: 1 GB
+copies: 2
+logs: CloudWatch Logs group for the web service
 ```
 
-Networking sets the stage. Once the private boundary exists, the next job is getting a public browser request to the right private workload without exposing every workload directly to the internet.
+This sketch belongs in the first article because it shows the decisions every compute option must answer. `runtime` names where the code runs. `image` names the deployable artifact. `container_port` tells the traffic layer where the app listens. `cpu`, `memory`, and `copies` describe the amount of work the app can handle. `logs` tells the team where the process output goes after the laptop terminal disappears.
 
-## Traffic: Route 53, ALB, and Target Groups
-<!-- section-summary: Traffic services turn a public name into a healthy private application target through DNS, listeners, rules, and health checks. -->
+The same job could use EC2 or Lambda in a different app. A legacy app that needs direct host access may start on EC2. A thumbnail generator may run as Lambda. A containerized web app with several long-running copies often starts on ECS with Fargate. The service choice changes, but the compute job stays the same: **run the code in a controlled place**.
 
-The traffic job starts with DNS. **Amazon Route 53** can host DNS records for a domain, and those records tell a customer browser where `shop.example.com` should go. In many web apps, the record points to an Application Load Balancer rather than to one fixed server IP, because the load balancer has multiple nodes and AWS manages their addresses.
+## Traffic: How Users Reach the App
+<!-- section-summary: Traffic services give users a stable name, encrypted connection, and healthy route into compute. -->
 
-An **Application Load Balancer**, or **ALB**, accepts HTTP and HTTPS traffic. It has listeners, rules, certificates, and target groups. A listener receives traffic on a port such as 443. A rule decides where to send the request based on host, path, or other HTTP details. A target group contains the private targets that can serve the request.
+Once the app runs in AWS, users still need a stable way to reach it. A single task or server can receive traffic, but its private IP can change during deployment, scaling, or replacement. Production traffic needs a public name, HTTPS, and a routing layer that sends requests only to healthy app copies.
 
-For Northstar, the ALB might listen on HTTPS port 443 and forward `/api/checkout/*` to an ECS target group. ECS registers each running Fargate task with the target group by private IP and port. The ALB sends health checks to a path such as `/healthz`, and only healthy targets receive normal traffic.
+**Amazon Route 53** handles DNS. DNS maps a name such as `photos.example.com` to the AWS entry point for the app. For a beginner, DNS is the public address book: the browser asks where `photos.example.com` lives, and Route 53 answers with the target AWS should use.
 
-Health checks deserve extra attention because they connect traffic and compute. A container can start successfully and still fail ALB health checks if the target group uses the wrong port, the health path returns `500`, the security group blocks the ALB, or the app needs too long to warm up. ECS service events usually tell you when the service keeps replacing tasks because the load balancer marks them unhealthy.
+**AWS Certificate Manager**, often shortened to ACM, manages TLS certificates for supported AWS services. TLS is the security layer behind HTTPS. The certificate proves the site identity to the browser and helps encrypt traffic between the user and the AWS entry point.
 
-Common traffic checks look like this:
+**Elastic Load Balancing** receives user traffic and spreads it across healthy targets. For a normal HTTP app, an **Application Load Balancer** is a common choice. It listens on ports such as `443`, checks a path such as `/health`, and forwards requests to the app copies that pass the health check.
 
-```bash
-dig +short shop.example.com
+For `northstar-photos`, the public path might look like this:
 
-aws elbv2 describe-load-balancers \
-  --names northstar-prod-alb \
-  --query 'LoadBalancers[].{Arn:LoadBalancerArn,DNS:DNSName,Scheme:Scheme,VpcId:VpcId,State:State.Code}' \
-  --output table
+| Step | Service job | Example |
+|---|---|---|
+| Public name | Give users one stable address | Route 53 record for `photos.example.com` |
+| HTTPS | Protect browser traffic | ACM certificate for `photos.example.com` |
+| Routing | Receive requests and choose targets | Application Load Balancer listener on `443` |
+| Health check | Avoid broken app copies | Target group calls `/health` |
+| Runtime target | Serve the request | ECS tasks listening on port `3000` |
 
-aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/northstar-checkout/abc123 \
-  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
-  --output table
-```
+The health check matters because deployment constantly changes compute underneath the public address. One ECS task can stop and another can start with a different private IP. Users keep using the same domain name while the load balancer updates its target list behind the scenes.
 
-If DNS and the ALB look healthy, the investigation moves inward. The load balancer can only forward to tasks that exist, listen on the expected port, and pass health checks. That takes us to compute.
+A useful first `/health` endpoint proves the app process can answer a simple request. As the app grows, teams often separate a lightweight liveness check from a readiness check that confirms required dependencies such as database connectivity or critical configuration. The load balancer should get a fast and reliable answer, because that answer controls whether real user traffic reaches the target.
 
-## Compute: ECS Fargate, Task Definitions, and ECR
-<!-- section-summary: Compute services run the application process, and ECS Fargate connects container images, task definitions, services, and deployments. -->
+![The request path shows how DNS, HTTPS entry, load balancing, private compute, data storage, IAM, and logs cooperate for one small production app](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-service-request-path.png)
 
-**Compute** means the part of AWS that runs your code. AWS gives teams several compute styles. EC2 gives virtual servers. Lambda runs event-driven functions. ECS runs containers, and **AWS Fargate** lets ECS run those containers without your team managing the underlying EC2 hosts.
+*The request path shows how DNS, HTTPS entry, load balancing, private compute, data storage, IAM, and logs cooperate for one small production app.*
 
-Northstar uses ECS Fargate because the checkout API is a long-running container service. The team builds a Docker image, pushes it to Amazon ECR, and points an ECS task definition at that image. ECS then starts tasks from the task definition and keeps the service at the desired number of running tasks.
 
-An **ECS task definition** is the blueprint for a task. It names the container image, CPU, memory, container port, environment variables, log configuration, task role, and execution role. A **task** is a running copy of that blueprint. An **ECS service** keeps a chosen number of tasks running, replaces failed tasks, and coordinates deployments with the load balancer.
+## Network Boundaries: What Stays Private
+<!-- section-summary: VPC, subnets, routing, and security groups let public traffic reach the app while databases stay private. -->
 
-Amazon ECR stores the container image. During deployment, the ECS agent uses the task execution role to pull the image from ECR and send logs to CloudWatch. The application code uses the task role to call services such as S3, Secrets Manager, or DynamoDB. Those two roles are easy to confuse, and the difference matters during incidents.
+Traffic gives the app a public door. The next job is deciding which parts should stay behind that door. Users need to reach the load balancer from the internet, while the database should only accept traffic from the app layer. AWS uses **Amazon VPC** for this private network boundary.
 
-The compute runbook checks image, service, task, and event state together:
+A **VPC** is a private network space inside an AWS Region. It has an IP range, subnets, route tables, gateways, and security controls. A **subnet** is a smaller IP range inside one Availability Zone. Public subnets usually hold resources that need a route to the internet, such as a load balancer. Private subnets usually hold application tasks, servers, databases, caches, and workers.
 
-```bash
-aws ecr describe-images \
-  --repository-name northstar/checkout-api \
-  --image-ids imageTag=2026-06-13.1 \
-  --query 'imageDetails[].{Digest:imageDigest,Pushed:imagePushedAt,Size:imageSizeInBytes}' \
-  --output table
+For a beginner production layout, `northstar-photos` might use two public subnets and two private application subnets across two Availability Zones. The load balancer sits in the public subnets. The ECS tasks sit in private application subnets. The database sits in private database subnets. This layout lets the public internet reach the load balancer while the database only receives traffic from approved internal callers.
 
-aws ecs describe-services \
-  --cluster northstar-prod \
-  --services checkout-api \
-  --query 'services[].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition,Events:events[0:5].message}' \
-  --output table
+| Layer | Placement | Main inbound rule |
+|---|---|---|
+| Application Load Balancer | Public subnets in two Availability Zones | Internet to HTTPS `443` |
+| Web app tasks | Private application subnets | Load balancer security group to app port `3000` |
+| RDS database | Private database subnets | App security group to database port `5432` |
+| S3 bucket | Regional service outside your subnets | IAM permission, optionally private VPC endpoint access |
 
-aws ecs list-tasks \
-  --cluster northstar-prod \
-  --service-name checkout-api \
-  --desired-status RUNNING
-```
+**Security groups** act like virtual firewalls attached to load balancers, instances, tasks, and databases. Strong rules name the layer that should talk instead of a broad internet range. For example, the database security group can allow inbound PostgreSQL on port `5432` from the app security group. New tasks can come and go, but the rule still follows the app layer.
 
-When the running tasks list looks wrong, task details show stopped reasons, container exit codes, network attachments, and health status. That is where image pull errors, app boot errors, missing secrets, and failing health checks often surface.
+Route tables and gateways decide where network traffic can go. A public subnet usually has a route to an internet gateway. A private subnet may use a NAT gateway for outbound internet access or a VPC endpoint for private access to services such as S3. Those choices affect security, cost, and troubleshooting, so network design gets its own deeper articles later in the roadmap.
 
-```bash
-aws ecs describe-tasks \
-  --cluster northstar-prod \
-  --tasks arn:aws:ecs:us-east-1:123456789012:task/northstar-prod/0123456789abcdef0 \
-  --query 'tasks[].{LastStatus:lastStatus,Health:healthStatus,StoppedReason:stoppedReason,Containers:containers[].{Name:name,ExitCode:exitCode,Reason:reason,Health:healthStatus}}'
-```
+## State: Rows, Files, and Background Work
+<!-- section-summary: Data services split relational rows, object files, and asynchronous work into services designed for each access pattern. -->
 
-Compute can run perfectly and still fail the customer request if the app cannot persist data. That is why the next job is state.
+The local app used a database and an `uploads/` folder. Production keeps the same ideas, but the storage jobs need clearer ownership. **State** means data the app must keep after a request finishes, after a process restarts, or after a deployment replaces every running copy.
 
-## State: RDS and S3
-<!-- section-summary: State services store durable business data outside ephemeral compute tasks, with RDS for relational data and S3 for objects. -->
+**Amazon RDS** manages relational databases such as PostgreSQL and MySQL. Relational data works well for users, profiles, permissions, billing records, audit events, and other records where the app needs transactions, constraints, joins, and SQL queries. For `northstar-photos`, RDS can store users, gallery records, upload metadata, and references to the files stored elsewhere.
 
-**State** means data that must survive after a task stops. ECS tasks come and go during deployments, scaling, health check failures, and host maintenance. Customer orders, receipt files, session records, and audit exports need services that persist beyond the life of one running container.
+**Amazon DynamoDB** manages key-value and document-style tables. It fits access patterns where the app can ask direct questions such as "give me the profile summary for this user ID" or "give me the upload job status for this job ID." DynamoDB can scale very far, but the table design depends heavily on the exact reads and writes the app needs.
 
-Northstar uses **Amazon RDS for PostgreSQL** for order rows. RDS is a managed relational database service, so AWS handles the database infrastructure while the team still chooses engine type, instance size, storage, networking, backups, maintenance windows, and high availability settings. The application connects to a database endpoint over the private network and uses SQL transactions for checkout writes.
+**Amazon S3** stores objects such as images, exports, logs, backups, reports, and static assets. S3 uses buckets and object keys rather than folders on a disk. The app might upload `profiles/user-123/avatar.png` to a private bucket, then store that key in an RDS row with the owning user ID and content type.
 
-Northstar uses **Amazon S3** for receipt PDFs and batch exports. S3 stores objects inside buckets, and each object has a key. This shape fits files and exports well because the app writes a complete receipt object such as `receipts/2026/06/order-12345.pdf`, then later reads that object by key.
+**Amazon SQS** and **Amazon EventBridge** help with work that should happen outside the user request. When a user uploads an avatar, the web app can store the original file, create a database row, and send a message for a worker to resize the image. The user request can finish quickly while background compute handles slower processing.
 
-The state checks ask different questions for each service. For RDS, the team checks instance status, endpoint, Multi-AZ setting, backup retention, storage, recent events, and connection-related CloudWatch metrics. For S3, the team checks bucket existence, location, encryption, public access block, lifecycle rules, and whether the task role can access the expected prefix.
+| Need | Good first AWS fit | What the app stores or sends |
+|---|---|---|
+| User records and gallery metadata | RDS PostgreSQL | Rows with user IDs, file keys, timestamps, and status |
+| Uploaded images | S3 | Private objects such as `profiles/user-123/avatar.png` |
+| Fast lookup by one key | DynamoDB | Profile summaries, idempotency keys, job status |
+| Background processing | SQS plus Lambda or ECS worker | "Resize this uploaded image" messages |
 
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier northstar-orders-prod \
-  --query 'DBInstances[].{Status:DBInstanceStatus,Endpoint:Endpoint.Address,Port:Endpoint.Port,MultiAZ:MultiAZ,BackupRetention:BackupRetentionPeriod,Storage:AllocatedStorage}' \
-  --output table
+The important beginner detail is that S3 object storage and database rows usually work together. The database should store the facts the app queries, while S3 stores the larger file content. If the database says an image exists, the restore plan should prove the S3 object still exists too.
 
-aws s3api head-bucket --bucket northstar-receipts-prod
+## Access and Secrets: How Services Trust Each Other
+<!-- section-summary: IAM roles and secrets services let the app call AWS APIs without permanent keys in code. -->
 
-aws s3api get-bucket-encryption \
-  --bucket northstar-receipts-prod
+The app now runs, receives traffic, sits in private subnets, and stores data. It still needs permission to call AWS services. During local development, a `.env` file or AWS CLI profile may feel enough. In production, hardcoded keys create a long-lived secret that can leak through logs, images, tickets, screenshots, or source control.
 
-aws s3api get-public-access-block \
-  --bucket northstar-receipts-prod
-```
+**AWS IAM** answers who is calling AWS and what that caller can do. An **IAM role** is an AWS identity that can receive temporary credentials. For application code, that means an ECS task, EC2 instance, or Lambda function can call AWS APIs without storing a permanent access key in the application.
 
-A real production habit is to check state from both directions. The infrastructure team confirms that RDS and S3 look healthy from AWS. The application team checks logs for connection pool errors, timeout errors, `AccessDenied`, missing object keys, and database migration errors. Both sides matter because a healthy database can still reject traffic from the wrong security group or bad password.
-
-State leads naturally into permissions and secrets. The checkout task needs a database password, and it needs permission to read that secret and write to the receipt bucket. Those are access jobs.
-
-## Access and Secrets: IAM Roles and Secrets Manager
-<!-- section-summary: IAM roles grant short-lived AWS permissions to workloads, while Secrets Manager stores sensitive values such as database credentials. -->
-
-**IAM roles** give AWS workloads permissions without embedding long-lived access keys in the application. In ECS, the task role is the identity your application code uses when it calls AWS APIs. If the checkout container writes receipts to S3 or reads a secret from Secrets Manager, those permissions belong on the task role.
+For `northstar-photos`, the web app role might have permission to read and write objects under `s3://northstar-photos-prod/profiles/`, read one database secret, and write logs. It should have no permission to delete unrelated buckets, change IAM policies, or read every secret in the account. That is the start of **least privilege**, which means each identity gets only the permissions needed for its job.
 
-The **task execution role** has a different job. ECS and Fargate use it to pull the container image from ECR, fetch some configured secrets, and send logs through the configured driver. The application code should rely on the task role for its own AWS calls. Keeping those roles separate makes policy review cleaner because infrastructure plumbing and business logic use different permissions.
-
-**AWS Secrets Manager** stores sensitive values such as database passwords, API keys, OAuth client secrets, and rotation metadata. The app should receive a reference to a secret, not a plain password stored in a repository or container image. For a database-backed app, the task role can receive permission to read one secret ARN, and the application can load that value at startup or through the SDK.
-
-Here is a small task-role policy for the Northstar checkout API. It grants access to one secret and one S3 bucket prefix, which matches the app's real job.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ReadDatabaseSecret",
-      "Effect": "Allow",
-      "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:northstar/prod/orders-db-AbCdEf"
-    },
-    {
-      "Sid": "WriteReceiptObjects",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject"
-      ],
-      "Resource": "arn:aws:s3:::northstar-receipts-prod/receipts/*"
-    },
-    {
-      "Sid": "ListReceiptPrefix",
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::northstar-receipts-prod",
-      "Condition": {
-        "StringLike": {
-          "s3:prefix": "receipts/*"
-        }
-      }
-    }
-  ]
-}
-```
+**AWS Secrets Manager** and **AWS Systems Manager Parameter Store** store sensitive configuration such as database passwords, API tokens, and signing keys. Secrets Manager adds managed rotation features and metadata that help teams review changes. Parameter Store can work well for simpler configuration values and some secret use cases. The main idea is the same: the app fetches sensitive values through its role instead of carrying them in source code.
 
-During a permission incident, the team checks the role ARNs, attached policies, secret metadata, and policy simulation results. They avoid printing secret values into terminals and tickets because the goal is to prove access, rotation, and ARN scope without spreading the sensitive value.
+For ECS, beginners often see two role names and wonder why both exist. The **task execution role** lets ECS pull the container image and send logs for the platform work around the task. The **task role** is the identity the application code uses inside the running container. Keeping those jobs separate helps reviewers see which permissions belong to the platform and which belong to the app.
 
-```bash
-aws iam get-role \
-  --role-name northstar-checkout-task-prod \
-  --query 'Role.{Arn:Arn,RoleId:RoleId,Path:Path}'
+Access design also connects to the data design from the previous section. A private S3 bucket can stay private while the application checks the user and then creates a short-lived pre-signed URL for one object. The user receives time-limited access to the specific file, while the bucket stays private by default.
 
-aws secretsmanager describe-secret \
-  --secret-id arn:aws:secretsmanager:us-east-1:123456789012:secret:northstar/prod/orders-db-AbCdEf \
-  --query '{Name:Name,ARN:ARN,RotationEnabled:RotationEnabled,LastChangedDate:LastChangedDate}'
+![The role boundary shows why the app should receive narrow runtime permissions instead of long-lived keys or broad account access](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/task-role-boundary.png)
 
-aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::123456789012:role/service/northstar-checkout-task-prod \
-  --action-names secretsmanager:GetSecretValue s3:PutObject \
-  --resource-arns arn:aws:secretsmanager:us-east-1:123456789012:secret:northstar/prod/orders-db-AbCdEf arn:aws:s3:::northstar-receipts-prod/receipts/test.pdf
-```
+*The role boundary shows why the app should receive narrow runtime permissions instead of long-lived keys or broad account access.*
 
-![Infographic separating the ECS task execution role from the application task role, with ECR pulls and log delivery on one side and secret reads plus S3 writes on the other](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/task-role-boundary.png)
 
-*The split between the execution role and the task role keeps platform plumbing separate from the permissions the application code uses during normal business work.*
-
-Permissions and secrets explain whether the app can do its job. When something still fails, signals tell us what the app and AWS APIs actually did.
+## Signals: What the System Tells You
+<!-- section-summary: Logs, metrics, traces, and audit events show runtime behavior and AWS control-plane changes. -->
 
-## Signals: CloudWatch and CloudTrail
-<!-- section-summary: CloudWatch shows workload metrics and logs, while CloudTrail shows AWS API activity and control-plane changes. -->
+After launch, the team needs evidence. A local terminal gave one stream of logs. A production system has many moving parts, so the signals need structure. **Observability** is the practice of collecting useful evidence from the app and platform so the team can understand behavior during normal operation and incidents.
 
-**Signals** are the evidence a system leaves while it runs. Without signals, debugging turns into guessing. In AWS, the two beginner services to know first are Amazon CloudWatch and AWS CloudTrail, because together they answer many application and platform questions.
+**Amazon CloudWatch** collects logs, metrics, alarms, and dashboards. Logs explain individual events, such as a request failing with `AccessDenied`. Metrics explain patterns, such as rising latency, CPU, memory, 5xx responses, database connections, or queue depth. Alarms watch selected metrics and notify the team when a threshold or anomaly needs attention.
 
-**Amazon CloudWatch** collects metrics, logs, alarms, dashboards, and events from many AWS services. For ECS Fargate, the task definition can use the `awslogs` log driver so container stdout and stderr go to CloudWatch Logs. The team can then tail logs during an incident, search error text, and connect application errors with deployment times.
+**AWS CloudTrail** records AWS API activity. If someone changes a security group, updates an ECS service, edits a bucket policy, rotates a secret, or modifies a database, CloudTrail can show the event, caller, time, source, and request details. CloudWatch helps explain what the workload experienced. CloudTrail helps explain what changed in AWS.
 
-```bash
-aws logs tail /aws/ecs/northstar/checkout-api \
-  --since 30m \
-  --follow
-```
+**Traces** show the path of one request through multiple services. AWS X-Ray and OpenTelemetry can connect a browser request to the app, then to RDS, S3, a queue, or another service. Many teams use OpenTelemetry instrumentation because it is an open standard and can send data to AWS tools or third-party observability platforms.
 
-CloudWatch metrics help with service-level symptoms. ALB metrics can show `HTTPCode_Target_5XX_Count` or target response time. ECS metrics can show CPU and memory pressure. RDS metrics can show database connections, CPU, storage, and latency. A dashboard brings those signals together so the team can see whether the problem lives at the edge, compute, database, or downstream service.
+A useful first dashboard for `northstar-photos` groups signals by job:
 
-**AWS CloudTrail** records AWS API activity. If someone changed a security group, updated an ECS service, edited a secret, or modified a bucket policy, CloudTrail helps identify the API call, caller, time, source IP, and request details. CloudTrail is especially useful when the symptom appears right after a deployment or manual console change.
+| Job | First signals to watch | Why the team cares |
+|---|---|---|
+| Traffic | ALB request count, target 5xx count, target response time | Shows whether users reach healthy targets |
+| Compute | Running task count, CPU, memory, restarts | Shows whether the app has enough runtime capacity |
+| Data | RDS connections, CPU, storage, slow queries | Shows whether database pressure affects requests |
+| Files | S3 errors, object count, bucket size | Shows whether uploads and storage trends look normal |
+| Background work | Queue depth, oldest message age, worker errors | Shows whether async work keeps up |
+| Changes | CloudTrail deployment, policy, network, and secret events | Shows what changed before symptoms appeared |
 
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateService \
-  --start-time 2026-06-13T08:00:00Z \
-  --end-time 2026-06-13T12:00:00Z \
-  --max-results 20
-```
+The app should also write structured logs. A useful log event includes a timestamp, request ID, route or operation name, safe user identifier, status code, duration, and error code. This gives responders a way to connect a user report, a load balancer metric, an app log, and a database symptom without guessing.
 
-CloudWatch and CloudTrail answer different questions. CloudWatch tells the team what the workload experienced. CloudTrail tells the team what AWS control-plane actions happened. Good incident response usually checks both because an application error and a platform change often line up in time.
+## Cost and Recovery: Owning the App After Launch
+<!-- section-summary: Cost and recovery services help teams keep the app affordable, tagged, backed up, and restorable. -->
 
-Signals help during incidents, and operations services help outside incidents. The next job is keeping the platform financially visible and recoverable.
+The first successful deployment creates two quiet responsibilities. The team needs to know what the app costs, and the team needs to know how to recover important data. These jobs matter early because cost and recovery plans are much cheaper to set up before the incident or surprise bill.
 
-## Operations: Budgets and AWS Backup
-<!-- section-summary: Operations services keep the application sustainable by alerting on cost risk and centralizing backup plans for supported resources. -->
-
-Operations work keeps the app healthy after the first deployment. For a small team, two services deserve early attention: **AWS Budgets** and **AWS Backup**. They do different jobs, but both protect the team from painful surprises.
-
-AWS Budgets tracks cost and usage against thresholds. Northstar might create one monthly cost budget for the production account, another budget filtered to `Application=northstar-shop`, and alerts at 50, 80, and 100 percent of the expected monthly spend. Budget alerts help the team notice runaway logs, oversized NAT gateway traffic, accidental test clusters, or a database class that someone scaled up and forgot.
-
-```bash
-aws budgets describe-budgets \
-  --account-id 123456789012 \
-  --query 'Budgets[].{Name:BudgetName,Type:BudgetType,Limit:BudgetLimit.Amount,Unit:BudgetLimit.Unit,TimeUnit:TimeUnit}' \
-  --output table
-```
-
-AWS Backup centralizes backup plans for supported services. A backup plan defines rules such as schedule, retention, backup vault, and copy behavior. For Northstar, the team may rely on RDS automated backups for point-in-time recovery and also use AWS Backup for central policy, reporting, cross-account copy, or compliance workflows where those requirements apply.
-
-```bash
-aws backup list-backup-plans \
-  --query 'BackupPlansList[].{Name:BackupPlanName,PlanId:BackupPlanId,Version:VersionId}' \
-  --output table
-
-aws backup list-backup-jobs \
-  --by-resource-arn arn:aws:rds:us-east-1:123456789012:db:northstar-orders-prod \
-  --query 'BackupJobs[0:5].{State:State,Created:CreationDate,Completed:CompletionDate,Resource:ResourceArn}'
-```
-
-Backups need restore practice. A green backup job only proves AWS created a recovery point. The team still needs a periodic restore exercise in a non-production environment, a documented recovery time objective, and a tested application-level validation step. For an ecommerce app, that might mean restoring a database snapshot, running migrations, checking a sample order query, and confirming the app can start against the restored endpoint.
-
-These operations services round out the service map. Now we can use the whole chain as a diagnostic path when the public app fails.
-
-## A Request-Path Diagnostic Walkthrough
-<!-- section-summary: A request-path runbook follows the customer request from DNS to ALB, ECS, state, access, secrets, signals, image release, cost, and backup evidence. -->
-
-The incident starts at 09:18. Customers report that checkout returns `503 Service Unavailable`. The team has one goal: follow the request path in order and stop at the first layer that shows evidence. This keeps the debugging conversation grounded because every check asks, "Can the request move to the next job?"
+**AWS Cost Explorer** helps analyze spend by service, account, Region, usage type, and tags. **AWS Budgets** sends alerts when cost or usage crosses a threshold. For `northstar-photos`, a first production budget might track the whole workload, and a second budget might watch a noisy area such as NAT Gateway data processing, CloudWatch Logs ingestion, or RDS storage.
 
-First, the team checks DNS and the load balancer. If DNS points to the wrong load balancer, every deeper service can look healthy while customers still fail. If the ALB exists but target health is failing, the investigation moves to target group health instead of RDS or S3.
+Tags make cost ownership possible. A simple tag set such as `Service=northstar-photos`, `Environment=prod`, and `Owner=platform-learning` lets Cost Explorer and reports group spend by workload. Without tags, a monthly bill can turn into a service-name puzzle with no clear owner.
 
-```bash
-dig +short shop.example.com
+Recovery starts with the data map. RDS can use automated backups, snapshots, and point-in-time recovery. S3 can use versioning, lifecycle rules, replication, and retention controls where the workload needs them. AWS Backup can centralize backup policy and reporting for supported services. The feature name matters less than the proof that the app can restore the data users care about.
 
-aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/northstar-checkout/abc123 \
-  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
-  --output table
-```
+A practical restore test for `northstar-photos` might restore an RDS snapshot into a non-production environment, start the app against that restored database, open a sample profile, and confirm the S3 object keys referenced by the database still point to real objects. That test connects database backup, object storage, app configuration, and access permissions into one user-visible result.
 
-The target group says every target is unhealthy with a health check timeout. That points inward to ECS tasks and networking. The responder checks whether the ECS service has running tasks, recent deployment events, and task stopped reasons.
+Cost and recovery also shape service choices. A NAT gateway can solve outbound access for private subnets, but it can create surprise data processing costs. Detailed logs help operations, but unlimited retention can grow the bill. Multi-AZ databases improve availability, but they cost more than a single instance. A real team writes these choices down so future responders understand the tradeoffs.
 
-```bash
-aws ecs describe-services \
-  --cluster northstar-prod \
-  --services checkout-api \
-  --query 'services[].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition,Events:events[0:8].message}'
+## A First Debugging Path
+<!-- section-summary: A beginner troubleshooting path follows the failing job from traffic to compute, data, permissions, and signals. -->
 
-aws ecs list-tasks \
-  --cluster northstar-prod \
-  --service-name checkout-api \
-  --desired-status STOPPED \
-  --query 'taskArns[0:5]'
-```
+Now the service map can do useful work. Imagine users report that avatar uploads fail. The app still loads, sign-in works, and existing gallery images show up, but new uploads return an error. A beginner might jump straight to S3 because uploads involve files. A steadier path follows the jobs in order and lets the evidence move the investigation.
 
-The ECS service shows a new task definition revision and repeated messages about failing load balancer health checks. The team describes one stopped task and sees the container exited after a database connection error. Now the request path has moved from traffic to compute to state.
+| Check | Evidence | What it means |
+|---|---|---|
+| Traffic | The load balancer shows healthy targets and normal request count | Users can reach the app, so the public door is probably working |
+| Compute | The app tasks are running and CPU/memory look normal | The web process is alive, so the failure may sit deeper in the request |
+| Logs | CloudWatch Logs show `AccessDenied` during `PutObject` | The app reached AWS, but the call lacked permission |
+| Access | The app role allows `s3:PutObject` under `profile/*` | The policy names the wrong prefix for current uploads |
+| Data | New code writes to `profiles/2026/06/` | The app and policy disagree about the object path |
+| Change history | CloudTrail shows a deployment shortly before the errors | The new image introduced the changed object prefix |
+| Fix evidence | Policy updated in IaC, app redeployed, upload succeeds, logs stay clean | The team confirmed the failing job and the recovery signal |
 
-```bash
-aws logs tail /aws/ecs/northstar/checkout-api \
-  --since 45m \
-  --filter-pattern '"database connection"'
-```
+This walkthrough uses evidence rather than a long command sequence. In real work, a responder may use the AWS Console, CLI, dashboards, logs queries, IaC diffs, deployment records, and CloudTrail events. The important habit is to name the job that is failing before changing resources.
 
-The logs show `password authentication failed`. That suggests a secret, configuration, or database credential change. The team checks the secret metadata without printing the secret value, then checks CloudTrail for recent secret changes.
+Notice how the service names connect instead of floating around as trivia. Route 53 and the load balancer handled the public path. ECS or EC2 ran the code. S3 stored the object. IAM allowed or denied the call. CloudWatch showed the runtime error. CloudTrail explained the recent AWS change. The article did its job if those names now have a place in the request path.
 
-```bash
-aws secretsmanager describe-secret \
-  --secret-id northstar/prod/orders-db \
-  --query '{ARN:ARN,RotationEnabled:RotationEnabled,LastChangedDate:LastChangedDate,LastRotatedDate:LastRotatedDate}'
+![The summary groups core AWS services by the job they do so a beginner can choose the next evidence layer during an incident](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-services-summary.png)
 
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateSecret \
-  --start-time 2026-06-13T08:30:00Z \
-  --end-time 2026-06-13T09:30:00Z \
-  --max-results 10
-```
+*The summary groups core AWS services by the job they do so a beginner can choose the next evidence layer during an incident.*
 
-CloudTrail shows an approved secret rotation at 09:03. The next question is whether the database accepted the new credential and whether the running task loaded the expected secret. The RDS check shows the database is available, so the team checks task definition environment and secret references.
 
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier northstar-orders-prod \
-  --query 'DBInstances[].{Status:DBInstanceStatus,Endpoint:Endpoint.Address,Port:Endpoint.Port}'
+## What's Next
+<!-- section-summary: The next articles zoom into the service families one layer at a time. -->
 
-aws ecs describe-task-definition \
-  --task-definition northstar-checkout-api:42 \
-  --query 'taskDefinition.containerDefinitions[].secrets'
-```
+You now have the first AWS service map for a small production app. The goal was to know what job each service family performs and where it appears in a request path, so later service details have a place to land.
 
-The task definition still references the old secret path. The fix is a deployment change, not a database repair. The team updates the task definition through IaC, deploys the new ECS service revision, and watches target health move from unhealthy to healthy.
-
-```bash
-aws ecs describe-services \
-  --cluster northstar-prod \
-  --services checkout-api \
-  --query 'services[].deployments[].{Status:status,TaskDefinition:taskDefinition,Desired:desiredCount,Running:runningCount}'
-
-aws elbv2 describe-target-health \
-  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/northstar-checkout/abc123 \
-  --query 'TargetHealthDescriptions[].TargetHealth.State'
-```
-
-After customer traffic recovers, the team finishes the operational checks. They confirm the deployed image digest from ECR, verify no unusual budget spike came from the incident, and confirm the latest RDS backup or recovery point exists before closing the incident. Those checks may sound separate from the 503, but they catch the side effects that incidents often leave behind.
-
-```bash
-aws ecr describe-images \
-  --repository-name northstar/checkout-api \
-  --image-ids imageTag=2026-06-13.2 \
-  --query 'imageDetails[].{Digest:imageDigest,Pushed:imagePushedAt}'
-
-aws budgets describe-budgets \
-  --account-id 123456789012 \
-  --query 'Budgets[?BudgetName==`northstar-prod-monthly`]'
-
-aws backup list-recovery-points-by-backup-vault \
-  --backup-vault-name prod-primary \
-  --by-resource-arn arn:aws:rds:us-east-1:123456789012:db:northstar-orders-prod \
-  --query 'RecoveryPoints[0:3].{Status:Status,Created:CreationDate,Resource:ResourceArn}'
-```
-
-This walkthrough shows why the service map is practical. The team did not jump randomly between services. They followed the request through traffic, compute, state, access, secrets, signals, release evidence, cost, and backup evidence until the failing link showed itself.
-
-## Putting It All Together
-<!-- section-summary: The core AWS services form one production chain, and each service family has a clear job during build, deploy, debug, and recovery work. -->
-
-Northstar Shop uses many AWS services, and each one has a job in the production chain. VPC, subnets, route tables, and security groups create the private network boundary. Route 53, ALB, listeners, and target groups move public requests to healthy private targets.
-
-ECS Fargate runs the checkout container. ECR stores the image that ECS deploys. RDS stores order records, and S3 stores receipt objects. IAM roles grant the workload scoped AWS permissions, while Secrets Manager stores the database credential. CloudWatch shows logs and metrics, and CloudTrail shows API activity. Budgets and AWS Backup protect cost visibility and recovery.
-
-The same map helps during incidents. A `503` starts at DNS and ALB health, then moves to ECS tasks, logs, database connectivity, secrets, IAM, CloudTrail, and release evidence. A receipt upload failure starts at application logs, S3 permissions, bucket settings, task role policy, and CloudTrail. A surprise bill starts at tags, Cost Explorer, Budgets, and the resources attached to the service chain.
-
-That is the working pattern for AWS foundations. The service names matter because each name points to a job the application needs. After the service jobs are clear, the next question is placement: which account, Region, Availability Zones, and subnets should hold each piece of the app. Then resource identity gives the team exact ARNs, service IDs, names, and tags for safe production changes.
-
-![Six-panel summary infographic for AWS core services by job: traffic, compute, state, access, signals, and operations](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-services-summary.png)
-
-*The article summary groups the core services by production job so a new AWS service name lands inside a working category instead of a loose catalog list.*
+The next AWS articles can go deeper one layer at a time. Networking can explain VPCs, subnets, routes, NAT, endpoints, and security groups. Compute can expand the ECS planning sketch into real services and task definitions. Identity can unpack IAM roles, policies, and temporary credentials. Storage and operations can turn the first S3, RDS, CloudWatch, cost, and recovery ideas into working production patterns.
 
 ## References
 
-- [Amazon VPC route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html) - Documents route tables, destinations, and route targets for VPC networking.
-- [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) - Explains public and private NAT gateway behavior for private subnet egress.
-- [What is Amazon Route 53](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html) - Defines Route 53 DNS service concepts, hosted zones, and routing support.
-- [Use load balancing to distribute Amazon ECS service traffic](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html) - Explains ECS service integration with Elastic Load Balancing.
-- [Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Documents ALB target group health checks and target health.
-- [Troubleshooting service load balancers in Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/troubleshoot-service-load-balancers.html) - Covers common ECS load balancer configuration problems.
-- [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html) - Defines task definitions, tasks, and task configuration.
-- [What is Amazon ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html) - Defines Amazon Elastic Container Registry repositories, image storage, and container image distribution.
-- [IAM roles for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-ecs-iam-role-overview.html) - Explains ECS task roles, task execution roles, and related ECS role types.
-- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Documents how containers receive permissions from the ECS task role.
-- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) - Documents the role ECS agents use to pull images, publish logs, and access required AWS services.
-- [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html) - Documents ECS log delivery to CloudWatch Logs with the `awslogs` driver.
-- [What is AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) - Defines Secrets Manager secret storage, retrieval, rotation, and access behavior.
-- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html) - Defines S3 buckets, objects, and object storage concepts.
-- [What is Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html) - Defines Amazon RDS managed relational database engines and service responsibilities.
-- [Introduction to Amazon RDS backups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html) - Explains RDS automated backups and point-in-time recovery concepts.
-- [Logging Amazon CloudWatch API and console operations with AWS CloudTrail](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/logging_cw_api_calls.html) - Explains CloudTrail logging for CloudWatch API and console operations and data-event notes.
-- [Managing your costs with AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html) - Documents AWS Budgets cost and usage tracking.
-- [What is AWS Backup?](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html) - Explains AWS Backup as a centralized backup service across supported resources.
+- [What is Amazon EC2?](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html)
+- [What is Amazon Elastic Container Service?](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html)
+- [What is AWS Lambda?](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)
+- [What is Amazon Route 53?](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html)
+- [What is AWS Certificate Manager?](https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html)
+- [What is an Application Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html)
+- [What is Amazon VPC?](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html)
+- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)
+- [What is Amazon Relational Database Service?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
+- [What is Amazon DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html)
+- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html)
+- [What is AWS Secrets Manager?](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)
+- [What is Amazon CloudWatch?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html)
+- [What is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)
+- [Analyzing your costs and usage with AWS Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)
+- [What is AWS Backup?](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html)

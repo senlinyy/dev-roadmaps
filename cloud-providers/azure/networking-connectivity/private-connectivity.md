@@ -93,6 +93,33 @@ az network private-endpoint create \
 
 The values in that command become the review evidence later. `pe-orders-sql` is the object responders inspect. `snet-private-endpoints` is where the private IP comes from. `devpolaris-orders-sql` is the only SQL server this endpoint is meant to reach. If any of those names point to the wrong environment, the app may have a private path that is perfectly healthy and still wrong.
 
+After creation, verify the connection state and private DNS hints. The endpoint resource lives in the network resource group because it is part of the VNet design, even though the SQL server lives in the data resource group.
+
+```bash
+az network private-endpoint show \
+  --resource-group rg-devpolaris-network-prod \
+  --name pe-orders-sql \
+  --query "{state:provisioningState,status:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status,groupIds:privateLinkServiceConnections[0].groupIds,customDns:customDnsConfigs}"
+```
+
+Example output:
+
+```json
+{
+  "state": "Succeeded",
+  "status": "Approved",
+  "groupIds": ["sqlServer"],
+  "customDns": [
+    {
+      "fqdn": "devpolaris-orders-sql.database.windows.net",
+      "ipAddresses": ["10.30.40.7"]
+    }
+  ]
+}
+```
+
+That output tells the team three things: Azure created the endpoint, the service owner approved the private-link connection, and the endpoint knows the private address DNS should return. DNS still gets its own check because the app subnet has to receive that answer from its resolver path.
+
 That last sentence introduces the next layer. The private endpoint is the local network object, but Azure still needs a platform path from that object to the managed service. That platform path is Private Link.
 
 ## Private Link
@@ -151,6 +178,38 @@ az network private-endpoint dns-zone-group create \
 
 The app still uses `devpolaris-orders-sql.database.windows.net` in its connection string. The private DNS zone changes the answer inside the linked VNet, so the same service name lands on `10.30.40.7` for the production app. That is why teams verify DNS from the client network before changing SQL firewall rules.
 
+Verify the zone group on the endpoint and the A record in the private zone. The zone group tells Azure which private DNS zone should receive endpoint records, and the A record is the concrete answer clients need.
+
+```bash
+az network private-endpoint dns-zone-group show \
+  --resource-group rg-devpolaris-network-prod \
+  --endpoint-name pe-orders-sql \
+  --name default \
+  --query "{zones:privateDnsZoneConfigs[].privateDnsZoneId}"
+
+az network private-dns record-set a show \
+  --resource-group rg-devpolaris-network-prod \
+  --zone-name privatelink.database.windows.net \
+  --name devpolaris-orders-sql \
+  --query "aRecords[].ipv4Address"
+```
+
+Example output:
+
+```json
+{
+  "zones": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/privateDnsZones/privatelink.database.windows.net"
+  ]
+}
+```
+
+```json
+[
+  "10.30.40.7"
+]
+```
+
 Hybrid networks add one more step. On-premises DNS servers need a way to resolve Azure private zones, so teams commonly use **Azure DNS Private Resolver** with inbound endpoints and conditional forwarding. The on-premises resolver forwards `privatelink.database.windows.net` queries to Azure, Azure resolves the private zone, and the on-premises client receives the private endpoint IP.
 
 DNS and access control stay separate. A successful DNS lookup proves that a name exists and that the resolver returned an address. The remaining questions stay open: private endpoint approval, route table behavior, service firewall acceptance, and identity permission for the database or secret.
@@ -169,6 +228,43 @@ For the orders system, the desired state is straightforward. Azure SQL should ac
 Network access and identity authorization answer different questions. The network path answers, "Can a packet reach the service front door through an approved path?" Identity answers, "Is this caller allowed to perform this operation on this resource?" A managed identity with `Key Vault Secrets User` still needs a reachable network path, and a private endpoint path still needs an identity with permission to read the secret.
 
 This separation explains a lot of real outages. A private endpoint may show `Approved`, DNS may return `10.30.40.7`, and the app may still fail because the managed identity lacks database permissions. Another app may have perfect identity permissions and still fail because its subnet resolves the public endpoint while the SQL server public network access is closed.
+
+Resource firewall checks should be read-only during an incident. These commands show the network exposure for the three orders dependencies without changing service access.
+
+```bash
+az sql server show \
+  --resource-group rg-devpolaris-data-prod \
+  --name devpolaris-orders-sql \
+  --query "{publicNetworkAccess:publicNetworkAccess}"
+
+az storage account show \
+  --resource-group rg-devpolaris-data-prod \
+  --name stordersprod \
+  --query "{publicNetworkAccess:publicNetworkAccess,defaultAction:networkRuleSet.defaultAction,bypass:networkRuleSet.bypass}"
+
+az keyvault show \
+  --resource-group rg-devpolaris-data-prod \
+  --name kv-orders-prod \
+  --query "{publicNetworkAccess:properties.publicNetworkAccess,defaultAction:properties.networkAcls.defaultAction,bypass:properties.networkAcls.bypass}"
+```
+
+Example output:
+
+```json
+{
+  "publicNetworkAccess": "Disabled"
+}
+```
+
+```json
+{
+  "publicNetworkAccess": "Disabled",
+  "defaultAction": "Deny",
+  "bypass": "AzureServices"
+}
+```
+
+Healthy output depends on the design, but sensitive production services should not show public access open by accident. If the output says public network access is enabled and the default action allows all networks, the private endpoint may exist while the service still accepts a broader public path.
 
 Now we can place service endpoints properly. They also secure Azure service access from a subnet, but they work differently from private endpoints and show up in many older designs.
 
@@ -201,6 +297,29 @@ Service endpoints cover traffic from Azure subnets. For on-premises clients, tea
 
 At this point, the service access choice is clearer. Private endpoints give the strongest resource-specific private path. Service endpoints give a simpler subnet trust path for supported services. Both still depend on VNet reachability when clients live in another VNet or on-premises network.
 
+When a legacy subnet uses service endpoints, verify the subnet setting directly. This check proves whether the subnet advertises service endpoint identity for Storage and whether a service endpoint policy narrows the allowed storage targets.
+
+```bash
+az network vnet subnet show \
+  --resource-group rg-devpolaris-network-prod \
+  --vnet-name vnet-devpolaris-prod \
+  --name snet-orders-api \
+  --query "{serviceEndpoints:serviceEndpoints[].service,endpointPolicies:serviceEndpointPolicies[].id}"
+```
+
+Example output:
+
+```json
+{
+  "serviceEndpoints": ["Microsoft.Storage"],
+  "endpointPolicies": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/serviceEndpointPolicies/sep-orders-storage"
+  ]
+}
+```
+
+If the team expected a private endpoint design, this output should usually be empty or unrelated to the sensitive service path. If the team expected a service endpoint design, the storage account firewall should also contain the matching VNet rule.
+
 ## VNet And Hybrid Reach
 <!-- section-summary: Private endpoints can serve same-VNet, peered-VNet, VPN, and ExpressRoute clients when routing, DNS, and address spaces line up. -->
 
@@ -227,7 +346,7 @@ Private endpoint evidence usually comes first. The endpoint should point to the 
 
 ```bash
 az network private-endpoint show \
-  --resource-group rg-devpolaris-data-prod \
+  --resource-group rg-devpolaris-network-prod \
   --name pe-orders-sql \
   --query "{status:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status,groupIds:privateLinkServiceConnections[0].groupIds,customDns:customDnsConfigs}"
 ```
@@ -257,6 +376,14 @@ az network private-dns record-set a show \
   --query "aRecords[].ipv4Address"
 ```
 
+Example output:
+
+```json
+[
+  "10.30.40.7"
+]
+```
+
 ```bash
 az network private-dns link vnet list \
   --resource-group rg-devpolaris-network-prod \
@@ -264,10 +391,30 @@ az network private-dns link vnet list \
   --query "[].{name:name,vnet:virtualNetwork.id,registration:registrationEnabled}"
 ```
 
+Example output:
+
+```json
+[
+  {
+    "name": "link-vnet-devpolaris-prod",
+    "vnet": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/virtualNetworks/vnet-devpolaris-prod",
+    "registration": false
+  }
+]
+```
+
 Client-side DNS evidence matters too. The lookup should come from the same subnet, VM, container environment, or jump host that represents the failing workload. A lookup from a laptop proves the laptop's resolver path, while a lookup from the app subnet proves the app's resolver path.
 
 ```bash
 nslookup devpolaris-orders-sql.database.windows.net
+```
+
+Example output:
+
+```console
+Name:    devpolaris-orders-sql.privatelink.database.windows.net
+Address: 10.30.40.7
+Aliases: devpolaris-orders-sql.database.windows.net
 ```
 
 The important answer is the private endpoint IP, such as `10.30.40.7`. If the app gets a public answer, the next fix belongs in private DNS zone links, custom DNS forwarding, or Azure DNS Private Resolver. Opening a wider SQL firewall rule at that moment would treat the symptom and leave the private path broken.
@@ -281,11 +428,26 @@ az sql server show \
   --query "publicNetworkAccess"
 ```
 
+Example output:
+
+```json
+"Disabled"
+```
+
 ```bash
 az storage account show \
   --resource-group rg-devpolaris-data-prod \
   --name stordersprod \
   --query "{publicNetworkAccess:publicNetworkAccess,defaultAction:networkRuleSet.defaultAction}"
+```
+
+Example output:
+
+```json
+{
+  "publicNetworkAccess": "Disabled",
+  "defaultAction": "Deny"
+}
 ```
 
 After DNS and service settings, look at the packet path. Effective routes on the client NIC, NSG flow logs, Azure Firewall logs, and packet capture from a test VM can show whether traffic actually leaves for the private endpoint and whether replies return. A clean private endpoint with broken routing still fails like any other TCP path.

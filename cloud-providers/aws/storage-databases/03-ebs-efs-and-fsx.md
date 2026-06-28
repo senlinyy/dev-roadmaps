@@ -12,230 +12,345 @@ aliases:
   - cloud-providers/aws/storage-databases/ebs-and-efs-storage-attached-to-compute.md
   - cloud-providers/aws/storage-databases/ebs-efs-and-fsx.md
 ---
-
 ## Table of Contents
 
-1. [When Apps Need a Filesystem](#when-apps-need-a-filesystem)
-2. [EBS for Block Storage Attached to One Placement](#ebs-for-block-storage-attached-to-one-placement)
-3. [EFS for Shared Linux File Storage](#efs-for-shared-linux-file-storage)
-4. [FSx for Managed Specialist Filesystems](#fsx-for-managed-specialist-filesystems)
-5. [Mounting, Networking, and Access Control](#mounting-networking-and-access-control)
-6. [Backups, Snapshots, and Performance Signals](#backups-snapshots-and-performance-signals)
-7. [Choosing Between EBS, EFS, and FSx](#choosing-between-ebs-efs-and-fsx)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [When an API Is the Wrong Shape](#when-an-api-is-the-wrong-shape)
+2. [EBS for One Attached Disk](#ebs-for-one-attached-disk)
+3. [EFS for Shared Linux Files](#efs-for-shared-linux-files)
+4. [FSx for Specialist Filesystems](#fsx-for-specialist-filesystems)
+5. [Network and Permission Design](#network-and-permission-design)
+6. [Backups and Performance](#backups-and-performance)
+7. [Choosing Between Them](#choosing-between-them)
+8. [References](#references)
 
-## When Apps Need a Filesystem
+## When an API Is the Wrong Shape
 <!-- section-summary: EBS, EFS, and FSx exist for workloads that need disk or filesystem behavior instead of an object API. -->
 
-The previous article focused on S3, where applications store whole objects through an API. That works beautifully for invoices, photos, logs, exports, and archives. Some software still expects the operating system to give it a mounted disk or a shared folder. The code calls `open()`, `read()`, `write()`, `rename()`, and `fsync()`. The storage choice must fit that interface.
+Maple Market already uses S3 for uploaded return photos. Then a search service needs a local index directory, a group of web servers needs shared uploaded assets during a migration, and an old Windows reporting app expects an SMB file share. These workloads want disks or filesystems, not object API calls.
 
-Maple Market has three workloads like this. Its admin search service keeps a local index on a fast disk. Its warehouse workers share a Linux folder of imported supplier files. Its finance department has an old Windows application that reads reports from an SMB file share joined to Active Directory. Those three needs all sound like "storage," but each one needs a different AWS service.
+AWS has several storage services for this shape. **Amazon EBS** gives an EC2 instance a block volume that looks like a disk. **Amazon EFS** gives Linux clients a managed NFS filesystem that multiple clients can mount. **Amazon FSx** gives managed filesystems for specific ecosystems such as Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
 
-**Amazon EBS** provides block storage volumes for EC2 instances. Block storage means the operating system receives a virtual disk and formats it with a filesystem such as XFS, ext4, or NTFS. **Amazon EFS** provides a managed shared Linux filesystem over NFS, so many compute clients can mount the same file tree. **Amazon FSx** provides managed filesystems for specific ecosystems, including Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
+The service choice starts with the interface the application expects. Does it need one disk, shared Linux files, Windows shares, high-performance compute files, or ONTAP-style enterprise features?
 
-The useful question is: **does the application need a disk, a shared Linux filesystem, or a specialist managed filesystem?** Once that question is clear, the service choice gets much easier. The remaining design work is placement, permissions, backup, and performance.
+That interface choice matters because the operating model changes. A disk attached to one EC2 instance has instance placement and snapshot questions. A shared Linux filesystem has mount targets, NFS security groups, POSIX permissions, and throughput questions. A Windows share has SMB, Active Directory, Windows ACLs, and backup questions. The application interface tells you which operational checklist to use.
 
-![AWS filesystem choice map comparing EBS for one EC2 disk, EFS for shared Linux NFS, and FSx for managed SMB, Lustre, and ONTAP use cases](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/filesystem-choice-map.png)
-
-*EBS, EFS, and FSx solve different operating-system storage expectations.*
-
-## EBS for Block Storage Attached to One Placement
+## EBS for One Attached Disk
 <!-- section-summary: EBS gives one compute placement a durable block device that behaves like a local disk to the operating system. -->
 
-Amazon Elastic Block Store, usually called **EBS**, gives EC2 instances durable block volumes. After an EBS volume attaches to an instance, the operating system sees it like a disk. The instance can partition it, format it, mount it, and write files to it. Under the hood, AWS provides network-attached block storage that persists independently from the instance lifecycle.
+**Amazon EBS** provides block storage volumes for EC2 instances. After attachment, the operating system sees a device such as `/dev/nvme1n1`. You create a filesystem, mount it, and use normal file paths.
 
-Maple Market's search index is a good EBS example. The search service runs on one EC2 instance at a time. It needs low-latency local filesystem calls and lots of small writes while it builds an index. S3 would force the application to rewrite whole objects. EFS would add shared-filesystem network behavior the service does not need. EBS gives the instance a disk-like target that fits the software.
+For the search service, EBS can store an index on one EC2 instance. The volume lives in one Availability Zone, so the EC2 instance must be in the same zone. If the instance fails, you can attach the volume to another compatible instance in that zone, or restore a snapshot to a new volume.
 
-The important placement rule is that an EBS volume lives in one Availability Zone. A volume in `us-east-1a` attaches to EC2 instances in `us-east-1a`. If the workload moves to another zone, the team usually restores or creates a volume from a snapshot in the target zone. This matters for disaster recovery, Auto Scaling, and manual replacement work.
-
-Teams also choose a **volume type**. General purpose SSD volumes are common for everyday boot volumes and application disks. Provisioned IOPS SSD volumes fit workloads that need predictable high I/O performance. Throughput optimized HDD and cold HDD volumes fit large sequential workloads where cost per GiB matters more than small random I/O. The exact type should come from measured IOPS, throughput, latency, and cost needs, not from guessing.
-
-Here is what the setup flow looks like on a Linux EC2 instance after a new empty EBS volume is attached as `/dev/nvme1n1`. The commands show the operating system view of the AWS volume.
+Basic Linux setup after attaching a new volume might look like this:
 
 ```bash
-lsblk
 sudo mkfs -t xfs /dev/nvme1n1
 sudo mkdir -p /var/lib/search-index
 sudo mount /dev/nvme1n1 /var/lib/search-index
-df -h /var/lib/search-index
 ```
 
-For a production host, the mount should survive reboot. Teams usually add an `/etc/fstab` entry using the filesystem UUID instead of a device name, because device names can change across boots. The entry also makes replacement work easier to audit:
+`mkfs -t xfs` creates an XFS filesystem on the attached block device, so verify the device and volume ID before running it. `mkdir -p` creates the mount directory if it does not already exist. `mount` attaches the filesystem at that directory. A quick follow-up such as `df -h /var/lib/search-index` should show the mounted volume and available space.
+
+A healthy `df` check after the mount might look like this:
+
+```bash
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme1n1    100G  4.2G   96G   5% /var/lib/search-index
+```
+
+The important fields are `Filesystem`, which should match the expected device, and `Mounted on`, which should match the application path. If the mount path still shows the root disk, the app may write index data to the wrong volume.
+
+EBS is a good fit when one compute placement needs durable disk behavior, predictable performance, snapshots, and encryption. Use EFS or FSx when many servers need to write the same files at the same time.
+
+Add a persistence entry after mounting so the volume returns after reboot. The exact `/etc/fstab` line depends on the device name and filesystem, but the launch checklist should include formatting only once, mounting on boot, testing a reboot, and confirming the application starts after the mount is present. Formatting the wrong device is a real production mistake, so verify the device and volume ID before running `mkfs`.
+
+Volume type matters because each type has a different performance shape. `gp3` is a common general-purpose starting point because size, IOPS, and throughput can be configured. `io2` fits workloads that need higher sustained IOPS and stronger durability characteristics. Throughput-oriented volume types fit large sequential workloads better than small random database-style I/O. The app owner should know whether the disk waits come from IOPS, throughput, queue depth, or the instance's own EBS bandwidth limit.
+
+A practical EC2 boot path records the volume by filesystem UUID instead of a changing device name:
 
 ```bash
 sudo blkid /dev/nvme1n1
-sudo sh -c 'echo "UUID=11111111-2222-3333-4444-555555555555 /var/lib/search-index xfs defaults,nofail 0 2" >> /etc/fstab'
+echo 'UUID=11111111-2222-3333-4444-555555555555 /var/lib/search-index xfs defaults,nofail 0 2' | sudo tee -a /etc/fstab
 sudo mount -a
+df -h /var/lib/search-index
 ```
 
-EBS gives one compute placement a durable disk. When many compute clients need the same file tree, Maple Market needs a different service.
+`blkid` prints the filesystem UUID. The `/etc/fstab` line uses that UUID because Linux device names can change across boots. `tee -a` appends the mount entry to the file with elevated permissions, `mount -a` tests all configured mounts, and `df -h` should show `/var/lib/search-index` mounted with human-readable size and free-space values.
 
-## EFS for Shared Linux File Storage
+The `nofail` option can keep the instance booting if the extra data volume is absent, but the application may still fail if that directory is required. For critical disks, add a service dependency or startup check so the app refuses traffic until the mount is present.
+
+![The storage choice map separates block volumes, shared Linux filesystems, and specialist managed filesystems by how applications access them](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/filesystem-choice-map.png)
+
+*The storage choice map separates block volumes, shared Linux filesystems, and specialist managed filesystems by how applications access them.*
+
+
+## EFS for Shared Linux Files
 <!-- section-summary: EFS gives Linux clients a managed NFS filesystem that can be mounted by many compute resources. -->
 
-Amazon Elastic File System, usually called **EFS**, provides shared file storage for Linux-style workloads. It uses the NFS protocol, so EC2 instances, ECS tasks, EKS pods, Lambda functions, and some on-premises clients can mount the same filesystem and use normal file paths.
+**Amazon EFS** provides managed NFS file storage. Multiple EC2 instances, ECS tasks, EKS pods, Lambda functions, and other supported compute services can mount the same filesystem. It grows and shrinks as files are added or removed.
 
-Maple Market's warehouse workflow fits EFS. Several worker tasks need to read supplier import files from the same directory while another job writes new files into that directory. The workers already use file paths, and rewriting the old workflow to use S3 object calls would take more time than the team has. EFS gives the team a managed shared filesystem while the application remains mostly unchanged.
+For Maple Market, EFS can help during a migration where several web servers still expect a shared upload directory. Each server mounts the filesystem and reads or writes normal paths. The service handles storage capacity management.
 
-EFS is elastic. The filesystem can grow and shrink as files are added and removed, and teams do not provision a fixed disk size in the same way they do for EBS. That helps with shared workloads where capacity grows unpredictably. EFS also has performance and throughput modes, so production teams still need to watch throughput, client count, metadata-heavy operations, and latency.
-
-Access to EFS comes through **mount targets** in a VPC. A mount target is an elastic network interface in a subnet. Clients mount the filesystem through those network interfaces. Security groups control which clients can reach the NFS port. For a regional filesystem, teams usually place mount targets in multiple Availability Zones so clients can use a local network path in each zone.
-
-EFS **access points** give applications a controlled entry point into a filesystem. An access point can enforce a root directory and POSIX user/group settings for a workload. That is useful when many applications share one filesystem but each application should land in its own path with predictable Linux permissions.
-
-A typical Linux mount uses the EFS mount helper from `amazon-efs-utils`. The helper supports TLS mounts and the EFS-specific options teams normally want.
+A typical mount command looks like this:
 
 ```bash
-sudo mkdir -p /mnt/supplier-files
-sudo mount -t efs -o tls fs-1234567890abcdef0:/ /mnt/supplier-files
-df -h /mnt/supplier-files
+sudo mount -t efs -o tls fs-12345678:/ /mnt/shared-uploads
 ```
 
-EFS helps with shared Linux file paths. The next workload, Maple Market's old finance application, needs Windows SMB and directory integration. That points to FSx.
+`-t efs` uses the EFS mount helper, `-o tls` encrypts traffic in transit, `fs-12345678:/` mounts the filesystem root, and `/mnt/shared-uploads` is the local path. Verify the mount with `df -h /mnt/shared-uploads` or by writing a small test file from one client and reading it from another authorized client.
 
-## FSx for Managed Specialist Filesystems
+EFS access involves network and filesystem permissions. Security groups must allow NFS port `2049` from clients to mount targets. POSIX ownership and permissions still matter inside the filesystem. IAM authorization and access points can help standardize how applications enter the filesystem.
+
+Mount targets are the network anchors. Create them in the Availability Zones where clients run so clients can mount locally and avoid cross-zone dependency. EFS access points are useful when each application should enter a fixed directory with a fixed POSIX identity, such as `/supplier-imports` as UID `10001`. That keeps shared storage from turning into one writable root directory for every service.
+
+EFS performance has its own vocabulary. Throughput can scale with stored data or use configured throughput, depending on the mode. Small-file-heavy workloads can spend more time on metadata operations than on large reads and writes. A shared upload directory during a migration may be fine, while a high-volume build cache or image-processing scratch space may need measurement before production.
+
+Containers need the mount path wired into their runtime definition. An ECS task using EFS might declare a volume and mount it into the container:
+
+```json
+{
+  "volumes": [
+    {
+      "name": "supplier-imports",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-12345678",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-0123456789abcdef0",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "mountPoints": [
+        {
+          "sourceVolume": "supplier-imports",
+          "containerPath": "/mnt/supplier-imports"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Read the fragment from storage outward:
+
+| Field | What it tells the reader |
+|---|---|
+| `fileSystemId` | The EFS filesystem that will be mounted. |
+| `transitEncryption` | ECS should use encrypted NFS traffic between the task and EFS. |
+| `accessPointId` | The task enters through a controlled EFS access point instead of the filesystem root. |
+| `authorizationConfig.iam` | IAM authorization is enabled, so the task role must be allowed to use that access point. |
+| `sourceVolume` | The container mount refers back to the named ECS volume. |
+| `containerPath` | The application sees the mounted files at `/mnt/supplier-imports`. |
+
+The network still matters. The task security group needs a path to the EFS mount target security group on NFS port `2049`, and the mount targets should exist in the same AZs as the tasks. The full ECS task-definition shape belongs in the ECS article; the storage point here is how a filesystem ID, access point, IAM authorization setting, and container path combine into one usable directory.
+
+## FSx for Specialist Filesystems
 <!-- section-summary: FSx provides managed filesystems for established ecosystems such as Windows File Server, Lustre, NetApp ONTAP, and OpenZFS. -->
 
-Amazon FSx is a family of managed filesystems. Instead of giving you one generic shared filesystem, FSx gives you managed versions of established filesystem ecosystems. That matters when the application needs a specific protocol, performance model, feature set, or administrative toolchain.
+**Amazon FSx** is a family of managed filesystems for specific needs. FSx for Windows File Server provides SMB file shares for Windows workloads and Active Directory integration. FSx for Lustre supports high-performance file access for compute-heavy workloads. FSx for NetApp ONTAP and FSx for OpenZFS support teams with those filesystem expectations.
 
-**FSx for Windows File Server** provides managed Windows file storage over SMB. It integrates with Microsoft Active Directory, supports Windows ACLs, and fits applications that expect Windows file shares. Maple Market's old finance reporting tool can keep using a path like `\\fileserver\finance\reports` while AWS operates the file server infrastructure.
+The old Windows reporting app is a clear FSx for Windows File Server candidate. It expects an SMB share, Windows permissions, and domain integration. Rewriting the app to use S3 may be a project for later, but a managed Windows file share can unblock migration.
 
-**FSx for Lustre** provides a high-performance parallel filesystem often used for high-performance computing, machine learning, media processing, and large scratch workloads. It can connect with S3 data repositories, which helps when large datasets live in S3 but processing needs fast filesystem access.
-
-**FSx for NetApp ONTAP** provides managed NetApp ONTAP features in AWS. Teams use it when they already depend on ONTAP capabilities such as snapshots, clones, multiprotocol access, storage efficiency, or existing NetApp operational practices.
-
-**FSx for OpenZFS** provides managed OpenZFS file storage with features familiar to teams that already use ZFS-style snapshots, clones, and data management. It fits workloads that need OpenZFS behavior without running and patching file servers themselves.
-
-Here is what Maple Market's finance share could look like with FSx for Windows File Server. The file system is joined to AWS Managed Microsoft AD or a self-managed Active Directory domain, because Windows users and groups need to authenticate through the domain. The FSx security group allows SMB traffic on TCP 445 from the finance application and approved Windows jump host security groups. The share path is published as something like `\\maple-fsx.corp.example.com\finance\reports`, and Windows ACLs give `MAPLE\FinanceReportsWriters` write access while `MAPLE\FinanceReportReaders` gets read access.
-
-The operating plan should name backups and a client validation check. FSx for Windows File Server supports automatic daily backups and manual backups, and many teams also manage backup policy through AWS Backup. After migration, a finance user or test Windows instance can map the share and write a small validation file:
+A Windows client might map the share like this:
 
 ```powershell
-New-PSDrive -Name Z -PSProvider FileSystem -Root "\\maple-fsx.corp.example.com\finance\reports"
-Get-ChildItem Z:\
-"migration-check" | Out-File Z:\migration-check.txt
-Get-Content Z:\migration-check.txt
+New-PSDrive -Name M -PSProvider FileSystem -Root "\\amznfsxexample.corp.local\share" -Persist
 ```
 
-That small check proves DNS, domain authentication, SMB network access, share permissions, and file write behavior at the same time. It is a better launch signal than only seeing the FSx file system marked available in the AWS console.
+`-Name M` creates the `M:` drive mapping, `-PSProvider FileSystem` says this is a filesystem drive, `-Root` is the SMB UNC path, and `-Persist` keeps the mapping for the user session. A quick `Get-PSDrive M` should show the mapped share and provider.
 
-The FSx decision often starts outside AWS. If the application, vendor, or operations team already names SMB, Lustre, ONTAP, or OpenZFS as a requirement, FSx is usually the first AWS family to review. EFS is simpler for general shared Linux files. FSx fits more specific filesystem expectations.
+Choose FSx when the workload's filesystem ecosystem is the requirement. The value comes from protocol compatibility, permissions, performance behavior, and managed operations for that filesystem type.
 
-## Mounting, Networking, and Access Control
+For FSx for Windows File Server, review the domain join and the user path together. A working file system in the AWS console is only one part. A Windows client should resolve the share name, authenticate through the domain, reach TCP `445`, map the share, read expected files, and write only where its Windows ACL allows it.
+
+The FSx family names matter:
+
+| FSx option | Typical reason to choose it |
+| --- | --- |
+| FSx for Windows File Server | Windows SMB shares, Active Directory, Windows ACLs, lift-and-shift reporting apps |
+| FSx for Lustre | High-performance file access for analytics, machine learning, simulation, or S3-linked processing |
+| FSx for NetApp ONTAP | Teams that already depend on ONTAP features, snapshots, clones, or multi-protocol enterprise storage patterns |
+| FSx for OpenZFS | ZFS-style snapshots, cloning, and file workflows with managed AWS operations |
+
+Choosing FSx should start with the application protocol and operating expectation. A Windows reporting tool needs SMB and Windows identity. A compute job may need Lustre throughput. An enterprise migration may need ONTAP behavior because other tooling and teams already rely on it.
+
+## Network and Permission Design
 <!-- section-summary: Attached and shared storage must be designed with placement, subnets, security groups, IAM, and filesystem permissions together. -->
 
-EBS, EFS, and FSx all touch compute, so storage design has to include placement and networking. This is different from S3, where the application calls a regional API endpoint and IAM policy carries most of the access story.
+Disk and filesystem storage lives on network paths. EBS attaches inside one Availability Zone. EFS uses mount targets in subnets, usually across multiple Availability Zones. FSx file systems create network endpoints in selected subnets.
 
-For **EBS**, placement starts with the Availability Zone. The EC2 instance and the EBS volume need to be in the same zone for normal attachment. The operating system controls filesystem permissions after the volume is mounted. IAM controls who can create, attach, detach, snapshot, and delete volumes through AWS APIs, but Linux or Windows permissions control what application processes can do on the mounted filesystem.
+Security groups should describe the client relationship. EFS mount targets allow NFS `2049` from the application security group. FSx for Windows allows SMB `445` from approved Windows clients. EBS access is tied to the EC2 instance attachment and operating system permissions.
 
-For **EFS**, placement starts with VPC mount targets. Clients need network reachability to a mount target, usually through private subnets and security groups. Linux permissions still matter after mount. EFS access points can enforce application-specific paths and POSIX identities, which helps keep one application's files away from another application's files.
+IAM and filesystem permissions work together. EFS can use IAM authorization for mounts, while POSIX user and group permissions still control file operations. FSx for Windows uses Windows ACLs and Active Directory identity. Real designs document both the AWS network path and the filesystem permission path.
 
-For **FSx**, the access model depends on the filesystem type. Windows File Server uses SMB, Active Directory, Windows ACLs, and network security controls. Lustre has its own client and mount flow. ONTAP and OpenZFS have their own protocol and management details. The AWS layer creates and protects the managed filesystem, while the filesystem's native permission model still matters.
+A good design sentence is specific: "warehouse tasks mount EFS through access point `fsap-...` at `/supplier-imports`, the task security group can reach EFS mount targets on TCP `2049`, and the container writes as UID `10001` only under that directory." That statement is much easier to review than "the app uses EFS."
 
-This is why a production design should name both AWS access and OS access. A good design note says: "the warehouse ECS tasks mount EFS through an access point at `/supplier-imports`, the task security group can reach EFS mount targets on NFS, and the application runs as UID 10001 with write permission only under its directory." That statement is much clearer than "we use EFS."
+Use this review shape when a team asks for mounted storage:
 
-![Mount and network access map showing EBS in the same Availability Zone, EFS mount targets on NFS 2049, FSx SMB share on 445, and security group controls](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/mount-network-access.png)
+| Question | EBS | EFS | FSx |
+| --- | --- | --- | --- |
+| Which compute can attach or mount it? | One instance or specific attachment pattern | Many supported Linux clients | Clients supported by the chosen filesystem |
+| Which network path is required? | Instance placement in the same AZ | NFS to mount targets | SMB, Lustre, ONTAP, or OpenZFS endpoints |
+| Which permission layer controls files? | OS users and disk permissions | POSIX, access points, optional IAM mount auth | Filesystem-specific identity such as Windows ACLs |
+| How is recovery tested? | Snapshot restored to a new volume | Backup restored to a test filesystem or path | Backup restored and mounted by a test client |
 
-*Mounted storage needs placement, network access, and filesystem permissions in the same review.*
+![The mount access view shows how clients, mount targets, security groups, access points, and POSIX permissions all affect shared file access](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/mount-network-access.png)
 
-## Backups, Snapshots, and Performance Signals
+*The mount access view shows how clients, mount targets, security groups, access points, and POSIX permissions all affect shared file access.*
+
+
+## Backups and Performance
 <!-- section-summary: Disk and filesystem services need recovery copies and performance monitoring because they sit directly on application request paths. -->
 
-EBS, EFS, and FSx store data that applications often depend on during runtime, so the day-two work matters. The team needs to know how to recover data, how to replace failed compute, and how to notice performance pressure before users notice it.
+EBS snapshots provide point-in-time backups for volumes. AWS Backup can manage backup plans across EBS, EFS, FSx, and other services. For EFS and FSx, backup policies should match the business recovery target and retention needs.
 
-EBS uses **snapshots** for point-in-time backup copies. Snapshots are incremental, so later snapshots store changed blocks after the earlier snapshot. A snapshot can create a new volume, and that volume can attach to a replacement instance in the right Availability Zone. For an application with active writes, teams should think about consistency before snapshotting. Some workloads need filesystem flushes, application quiescing, database-native backup coordination, or AWS Backup plans.
+Performance is different for each service. EBS volume type, size, IOPS, and throughput shape disk behavior. EFS performance depends on throughput mode, access pattern, and filesystem size or configured throughput. FSx performance depends on the filesystem family and provisioned settings.
 
-EFS and FSx can use AWS Backup for supported backup workflows. The exact features vary by filesystem type, so teams should check the current AWS docs and test restore procedures. For shared filesystems, restore testing should include permissions and mount behavior, not only file existence. A restored share that loses critical ACLs can still break the application.
-
-Performance checks depend on the service. For EBS, teams watch volume queue length, throughput, IOPS, latency, burst balance where relevant, and instance-level limits. For EFS, teams watch throughput, percent I/O limit, client connections, metadata-heavy operations, and mount errors. For FSx, teams watch the metrics and health signals for the chosen filesystem type.
-
-A small restore drill is worth doing before launch. Maple Market can create a test file, run a backup, delete or corrupt the test file, restore into a separate location, mount it from a test client, and verify the file contents and permissions. That drill proves the recovery path with the same tools the team would use during an incident.
-
-The production review should also include direct AWS checks. For EBS, the team can record the volume type, attachment, encryption, and snapshot path:
+Useful checks include:
 
 ```bash
 aws ec2 describe-volumes \
-  --filters Name=tag:Service,Values=search-index \
-  --query 'Volumes[].{VolumeId:VolumeId,Type:VolumeType,Size:Size,Az:AvailabilityZone,Encrypted:Encrypted,Attachments:Attachments[].InstanceId}'
+  --filters Name=tag:App,Values=search \
+  --query 'Volumes[].{Volume:VolumeId,Type:VolumeType,Size:Size,IOPS:Iops,Throughput:Throughput,Encrypted:Encrypted,State:State,Instance:Attachments[0].InstanceId}'
 
-aws ec2 create-snapshot \
-  --volume-id vol-0123456789abcdef0 \
-  --description "search-index pre-release recovery check"
-```
+aws efs describe-file-systems \
+  --query 'FileSystems[].{FileSystem:FileSystemId,State:LifeCycleState,Encrypted:Encrypted,ThroughputMode:ThroughputMode,SizeBytes:SizeInBytes.Value}'
 
-For EFS, the team can prove that mount targets exist in the intended subnets and that the application has an access point:
-
-```bash
-aws efs describe-mount-targets \
-  --file-system-id fs-1234567890abcdef0 \
-  --query 'MountTargets[].{MountTargetId:MountTargetId,SubnetId:SubnetId,LifeCycleState:LifeCycleState,IpAddress:IpAddress}'
-
-aws efs describe-access-points \
-  --file-system-id fs-1234567890abcdef0 \
-  --query 'AccessPoints[].{AccessPointId:AccessPointId,Root:RootDirectory.Path,PosixUser:PosixUser}'
-```
-
-For FSx, the check depends on the filesystem family, but the first signal is the filesystem state, subnet placement, and backup configuration:
-
-```bash
 aws fsx describe-file-systems \
-  --file-system-ids fs-0abc123def4567890 \
-  --query 'FileSystems[].{Type:FileSystemType,Lifecycle:Lifecycle,Subnets:SubnetIds,Storage:StorageCapacity,Backup:AutomaticBackupRetentionDays}'
+  --query 'FileSystems[].{FileSystem:FileSystemId,Type:FileSystemType,Lifecycle:Lifecycle,Capacity:StorageCapacity,Subnets:SubnetIds}'
 ```
 
-These commands connect the design to evidence. A diagram may say "EFS is multi-AZ," but the mount-target output shows which subnets are actually ready. A backup policy may say "FSx is protected," but the filesystem output shows whether automatic backups are configured on the live resource.
+The EBS command uses a tag filter to find volumes for the search app. The `--query` keeps the output focused on fields operators usually need first: type, size, IOPS, throughput, encryption, state, and attached instance. The EFS and FSx commands use the same idea so the response is small enough to read during an incident.
 
-## Choosing Between EBS, EFS, and FSx
+Example output for the three checks might look like this:
+
+```json
+[
+  {
+    "Volume": "vol-0123456789abcdef0",
+    "Type": "gp3",
+    "Size": 100,
+    "IOPS": 3000,
+    "Throughput": 125,
+    "Encrypted": true,
+    "State": "in-use",
+    "Instance": "i-0123456789abcdef0"
+  }
+]
+```
+
+```json
+[
+  {
+    "FileSystem": "fs-12345678",
+    "State": "available",
+    "Encrypted": true,
+    "ThroughputMode": "elastic",
+    "SizeBytes": 21474836480
+  }
+]
+```
+
+```json
+[
+  {
+    "FileSystem": "fs-0abc123def4567890",
+    "Type": "WINDOWS",
+    "Lifecycle": "AVAILABLE",
+    "Capacity": 1024,
+    "Subnets": ["subnet-0aaa1111", "subnet-0bbb2222"]
+  }
+]
+```
+
+For EBS, confirm the volume is attached to the expected instance and that the performance fields match the workload. For EFS, confirm the file system is available, encrypted, and using the intended throughput mode. For FSx, confirm the filesystem family, lifecycle state, capacity, and subnet placement before debugging the application.
+
+Also monitor from the application side. Cloud metrics can show storage throughput, but application latency tells you whether users are waiting on disk or filesystem operations.
+
+A restore drill should prove more than file existence. For EBS, restore a snapshot to a new volume, attach it to a test instance, mount it read-only where appropriate, and verify the application can read expected data. For EFS or FSx, restore into a separate location or test file system and verify permissions, ownership, share access, and sample application behavior.
+
+Performance symptoms also point to different checks. EBS latency can come from volume type, IOPS, throughput, queue depth, or instance limits. EFS latency can come from many small file operations, throughput mode, cross-AZ access, or client mount behavior. FSx checks depend on the filesystem family, such as SMB sessions and Windows ACLs for FSx for Windows or metadata-heavy workloads for Lustre and OpenZFS.
+
+During an incident, collect the service metric and the client symptom together. A CloudWatch graph that shows throughput is useful, and a timed application read or write tells you whether users are waiting on storage. Storage incidents are easier to solve when the team can connect the AWS service limit to the actual file path the app uses.
+
+Useful evidence might include:
+
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EBS \
+  --metric-name VolumeQueueLength \
+  --dimensions Name=VolumeId,Value=vol-0123456789abcdef0 \
+  --start-time 2026-06-24T10:00:00Z \
+  --end-time 2026-06-24T10:30:00Z \
+  --period 60 \
+  --statistics Average Maximum
+
+aws efs describe-mount-targets \
+  --file-system-id fs-12345678
+```
+
+The first command checks whether an EBS volume has a queue building up. A short response can look like this:
+
+```json
+{
+  "Label": "VolumeQueueLength",
+  "Datapoints": [
+    {
+      "Timestamp": "2026-06-24T10:12:00+00:00",
+      "Average": 0.8,
+      "Maximum": 4.0,
+      "Unit": "Count"
+    }
+  ]
+}
+```
+
+`Average` shows the typical queue depth during the period, while `Maximum` catches spikes. Queue length alone does not diagnose the cause, but it tells the team whether requests are waiting on the volume.
+
+The EFS command shows where mount targets exist:
+
+```json
+{
+  "MountTargets": [
+    {
+      "MountTargetId": "fsmt-0123456789abcdef0",
+      "FileSystemId": "fs-12345678",
+      "SubnetId": "subnet-0aaa1111",
+      "LifeCycleState": "available",
+      "AvailabilityZoneName": "us-east-1a"
+    }
+  ]
+}
+```
+
+If clients run in an Availability Zone with no nearby mount target, the team has a placement problem to investigate before changing application code.
+
+## Choosing Between Them
 <!-- section-summary: The best choice comes from the filesystem behavior the workload needs, then placement, sharing, performance, and operations narrow it further. -->
 
-Here is the short comparison Maple Market can use during design review. It starts with the interface the workload expects, then maps that interface to the AWS service family.
+Choose EBS when one EC2 instance needs a durable disk. Choose EFS when many Linux clients need shared NFS file paths. Choose FSx when the workload needs a managed specialist filesystem such as SMB, Lustre, ONTAP, or OpenZFS.
 
-| Need | Usually review first | Why |
-|---|---|---|
-| One EC2 instance needs a durable disk | EBS | It behaves like a block device attached to the instance |
-| A boot volume or application disk needs snapshot recovery | EBS | Volumes and snapshots fit host-level disk management |
-| Many Linux clients need the same file tree | EFS | It provides managed shared NFS file storage |
-| Containers or Lambda need a shared Linux path | EFS | It can mount from supported compute services through VPC access |
-| Windows applications need SMB and Active Directory | FSx for Windows File Server | It gives managed Windows file shares and Windows permissions |
-| HPC or ML jobs need a high-performance parallel filesystem | FSx for Lustre | It fits large parallel file workloads and S3-linked datasets |
-| Existing NetApp operations need ONTAP features | FSx for NetApp ONTAP | It provides managed ONTAP capabilities in AWS |
-| OpenZFS features matter to the workload | FSx for OpenZFS | It gives managed OpenZFS file storage |
+Then check placement and operations. Does the storage need multiple Availability Zones? Which clients mount it? Which security groups allow the protocol? Which identity system controls file permissions? Which backup plan has been restored in a test? Which metric tells you the workload is close to a limit?
 
-One anti-pattern deserves a clear callout. Teams sometimes use EBS for data that many instances need to share. That usually creates a fragile handoff because normal EBS volumes attach to one instance for normal read/write use. If many clients need the same files, EFS or FSx usually fits better. EBS shines when one compute placement needs a disk.
+For Maple Market, the search index uses EBS, the migration upload directory uses EFS, and the old Windows reporting app uses FSx for Windows File Server. S3 still handles object uploads. The services work together because each one matches a different application interface.
 
-Another common mistake is choosing EFS just because it feels flexible. Shared filesystems are useful, but they introduce network dependency, permission coordination, and shared-state behavior. If the application can use S3 objects cleanly, S3 is often simpler for files that do not need POSIX filesystem semantics.
+Two mistakes show up often. The first is using EBS as shared storage for several instances, which creates fragile handoffs because normal EBS use is one compute placement. The second is choosing EFS because it seems flexible when S3 object storage would be simpler for whole-file workflows. Choose the storage interface the application really needs, then accept the operations that come with it.
 
-## Putting It All Together
-<!-- section-summary: EBS, EFS, and FSx cover disk and filesystem workloads that object storage and databases do not naturally serve. -->
+![The review summary compares EBS, EFS, and FSx by attachment model, sharing pattern, backup needs, and operational owner](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/attached-storage-review.png)
 
-Maple Market now has a clean split. The search index uses EBS because it needs one fast block volume attached to one EC2 placement. The warehouse import workers use EFS because several Linux tasks need the same shared directory. The finance reporting application uses FSx for Windows File Server because it needs SMB, Windows permissions, and directory integration.
+*The review summary compares EBS, EFS, and FSx by attachment model, sharing pattern, backup needs, and operational owner.*
 
-The operating plan is part of the decision. EBS needs volume type, Availability Zone placement, snapshots, mount persistence, and instance replacement steps. EFS needs mount targets, access points, security groups, throughput monitoring, and backup tests. FSx needs the right filesystem family, network access, native permissions, backups, and service-specific metrics.
 
-The storage service should match the interface the application expects. Object API points to S3. SQL points to RDS or Aurora. Key-based item access points to DynamoDB. Disk and filesystem behavior points to EBS, EFS, and FSx.
+## References
 
-![Attached storage review checklist covering interface, placement, mount path, security group, backup, and performance signals](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/attached-storage-review.png)
-
-*A mounted filesystem still needs a written operating plan before production traffic uses it.*
-
-## What's Next
-<!-- section-summary: The next article moves from filesystems to relational databases for structured business records. -->
-
-Mounted storage solves disk and shared-file problems. The checkout system still needs tables, constraints, transactions, and SQL. The next article covers relational databases with RDS and Aurora.
-
----
-
-**References**
-
-- [What is Amazon EBS?](https://docs.aws.amazon.com/ebs/latest/userguide/what-is-ebs.html) - Defines EBS volumes as block storage for EC2 instances.
-- [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html) - Explains attachment behavior, durability, and live modification options for current-generation volumes.
-- [Amazon EBS volume types](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volume-types.html) - Documents SSD and HDD volume type choices and performance characteristics.
-- [Amazon EBS snapshots](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-snapshots.html) - Covers point-in-time incremental backup behavior.
-- [Make an Amazon EBS volume available for use](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-using-volumes.html) - Shows formatting, mounting, and filesystem setup after volume attachment.
-- [What is Amazon EFS?](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) - Describes elastic shared file storage and supported compute clients.
-- [How Amazon EFS works](https://docs.aws.amazon.com/efs/latest/ug/how-it-works.html) - Explains mounting EFS through VPC mount targets and NFS.
-- [Amazon EFS access points](https://docs.aws.amazon.com/efs/latest/ug/efs-access-points.html) - Documents application-specific entry points and POSIX identity controls.
-- [Amazon FSx Documentation](https://docs.aws.amazon.com/fsx/) - Provides official guides for FSx filesystem types including Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
-- [What is FSx for Windows File Server?](https://docs.aws.amazon.com/fsx/latest/WindowsGuide/what-is.html) - Explains managed Windows file shares, SMB access, backups, and Active Directory integration.
-- [Working with Microsoft Active Directory for FSx for Windows File Server](https://docs.aws.amazon.com/fsx/latest/WindowsGuide/aws-ad-integration-fsxW.html) - Documents domain join behavior and file or folder access control through Active Directory identities.
+- [Amazon EBS documentation](https://docs.aws.amazon.com/ebs/latest/userguide/what-is-ebs.html)
+- [Amazon EBS documentation: Volume types](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volume-types.html)
+- [Amazon EBS documentation: Snapshots](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-snapshots.html)
+- [Amazon EFS documentation](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html)
+- [Amazon EFS documentation: Access points](https://docs.aws.amazon.com/efs/latest/ug/efs-access-points.html)
+- [Amazon FSx for Windows File Server documentation](https://docs.aws.amazon.com/fsx/latest/WindowsGuide/what-is.html)

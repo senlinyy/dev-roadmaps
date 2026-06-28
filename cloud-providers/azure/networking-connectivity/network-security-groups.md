@@ -82,7 +82,7 @@ When both subnet and NIC NSGs exist, Azure evaluates both. For inbound traffic, 
 
 *Inbound traffic reaches the subnet NSG first, outbound traffic reaches the NIC NSG first, and a deny at either checkpoint stops the flow.*
 
-This dual-check behavior explains a very common support ticket. The subnet NSG allows port `443`, but a NIC NSG still blocks it. The developer sees one allow rule and feels stuck, while Azure sees two rule lists and requires both of them to allow the flow.
+This dual-check behavior explains a very common support ticket. The subnet NSG allows port `443`, but a NIC NSG still blocks it. The developer sees one allow rule and keeps looking in the wrong place, while Azure sees two rule lists and requires both of them to allow the flow.
 
 ## Rule Shape
 <!-- section-summary: An NSG rule is a packet match record with source, destination, ports, protocol, direction, action, and priority. -->
@@ -126,6 +126,33 @@ az network nsg rule create \
 ```
 
 The rule controls network reachability. If a user lacks permission to place an order, the API still rejects the request after the packet arrives. Application trust belongs to app authorization, while the NSG answers whether the entry component can open the TCP connection to the API port.
+
+Verify the rule after creating it. The important fields are the priority, source prefix, destination role, port, and action, because those fields decide whether the entry component can start the flow.
+
+```bash
+az network nsg rule show \
+  --resource-group rg-devpolaris-network-prod \
+  --nsg-name nsg-orders-api \
+  --name allow-entry-to-orders-api-https \
+  --query "{priority:priority,direction:direction,access:access,source:sourceAddressPrefixes,destinationAsgs:destinationApplicationSecurityGroups[].id,ports:destinationPortRanges}"
+```
+
+Example output:
+
+```json
+{
+  "priority": 100,
+  "direction": "Inbound",
+  "access": "Allow",
+  "source": ["10.30.1.0/24"],
+  "destinationAsgs": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
+  ],
+  "ports": ["443"]
+}
+```
+
+Healthy output proves the rule is narrow and points at the application role. A suspicious result would use source `*`, destination `*`, or a priority that sits below a broad deny rule.
 
 ## Priority and First Match
 <!-- section-summary: Azure checks custom NSG rules from lower priority number to higher priority number, and the first matching rule wins. -->
@@ -188,6 +215,31 @@ az network nsg rule create \
 
 This rule needs careful review because it changes the subnet from open internal communication to explicit inbound communication. That is usually the right direction for production tiers, but the team has to account for health probes, admin paths, monitoring agents, private endpoints, and service-specific requirements before closing the space.
 
+After adding a broad custom deny, check its priority. It should sit after the specific allows and before the default `AllowVNetInBound` rule at priority `65000`.
+
+```bash
+az network nsg rule show \
+  --resource-group rg-devpolaris-network-prod \
+  --nsg-name nsg-orders-api \
+  --name deny-api-inbound-remaining \
+  --query "{priority:priority,access:access,direction:direction,source:sourceAddressPrefix,destination:destinationAddressPrefix,ports:destinationPortRange}"
+```
+
+Example output:
+
+```json
+{
+  "priority": 4096,
+  "access": "Deny",
+  "direction": "Inbound",
+  "source": "*",
+  "destination": "*",
+  "ports": "*"
+}
+```
+
+This output is healthy only when the expected allow rules above it already cover gateway, health probe, admin, and monitoring paths. A broad deny with no matching allows creates clean-looking security and broken traffic.
+
 ## Stateful Flows
 <!-- section-summary: NSGs keep flow records, so response traffic for an allowed connection can return without a matching reverse rule. -->
 
@@ -234,6 +286,23 @@ az network nic update \
 ```
 
 ASGs shine when rules describe long-lived workload roles. For Azure services that hide their network interfaces, service-specific subnet rules, private endpoint policies, IP prefixes, or service tags may fit better. The useful habit stays the same: write rules around the role and path you intend, then use the Azure construct that can express that path cleanly.
+
+For VM-backed workloads, verify membership from the NIC. The ASG should appear on the IP configuration that carries the workload traffic.
+
+```bash
+az network nic show \
+  --resource-group rg-devpolaris-compute-prod \
+  --name nic-orders-api-prod-001 \
+  --query "ipConfigurations[].applicationSecurityGroups[].id"
+```
+
+Example output:
+
+```json
+[
+  "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
+]
+```
 
 ## Service Tags and Augmented Rules
 <!-- section-summary: Service tags represent Azure-managed address groups, and augmented rules reduce repeated rules for ports and address ranges. -->
@@ -289,6 +358,33 @@ az network nic list-effective-nsg \
   --name nic-orders-api-prod-001
 ```
 
+The full output is large, so responders usually pull out the applied NSG names and the rule rows that match the failing path. The useful evidence should read like this:
+
+```json
+[
+  {
+    "association": "Subnet",
+    "networkSecurityGroup": "nsg-orders-api",
+    "rule": "allow-entry-to-orders-api-https",
+    "access": "Allow",
+    "direction": "Inbound",
+    "source": "10.30.1.0/24",
+    "destination": "asg-orders-api",
+    "ports": "443"
+  },
+  {
+    "association": "Subnet",
+    "networkSecurityGroup": "nsg-orders-api",
+    "rule": "deny-api-inbound-remaining",
+    "access": "Deny",
+    "direction": "Inbound",
+    "source": "*",
+    "destination": "*",
+    "ports": "*"
+  }
+]
+```
+
 **IP flow verify** is a Network Watcher check that asks Azure about one specific packet shape. You give it direction, protocol, local address and port, remote address and port, and the target VM or NIC. Azure returns whether that packet would be allowed or denied and which rule made the decision.
 
 ```bash
@@ -300,6 +396,17 @@ az network watcher test-ip-flow \
   --vm /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-compute-prod/providers/Microsoft.Compute/virtualMachines/vm-orders-api-prod-001 \
   --nic nic-orders-api-prod-001
 ```
+
+Example output:
+
+```json
+{
+  "access": "Allow",
+  "ruleName": "UserRule_allow-entry-to-orders-api-https"
+}
+```
+
+If the same test returns `Deny`, the `ruleName` gives the next clue. A custom deny points to a local rule change. A default deny means no custom allow matched. A security admin rule can mean the organization-level policy blocked the packet before the local NSG rule could help.
 
 These tools change the troubleshooting conversation. Instead of saying "the NSG looks fine," the team can ask a precise question: can `10.30.1.10` start inbound TCP to `10.30.2.20:443`, and which rule decides? That one question includes the source, destination, protocol, port, direction, and actual Azure evaluation result.
 

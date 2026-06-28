@@ -27,9 +27,13 @@ aliases:
 ## The API Server Checkpoint
 <!-- section-summary: Admission control checks a Kubernetes request after identity and permissions are known, before the object is stored. -->
 
+A release pull request adds a Deployment manifest for `devpolaris-orders-api`, and the reviewer spots a mutable image tag: `ghcr.io/devpolaris/orders-api:latest`. The best time to catch that mistake is before the Pod exists. Admission gives the cluster a pre-flight check for the manifest itself.
+
 **Admission control** is the checkpoint inside the Kubernetes API server that inspects a request before Kubernetes stores the object. A developer runs `kubectl apply`, a GitOps controller syncs a manifest, or a CI job updates a Deployment. The API server authenticates the caller, checks permissions, and then runs admission checks against the object being created or updated.
 
 Use `devpolaris-orders-api` in the `orders` namespace as the running example. The service deploys checkout code, so a bad manifest can affect real customers quickly. Admission policies can stop unsafe changes such as running privileged containers, missing owner labels, using images from unknown registries, or deploying by a mutable tag like `latest`.
+
+Here is the concrete policy idea. A CI service account may have permission to update Deployments in `orders`, but admission can still reject the object if the container image lacks an immutable digest, the owner label is missing, or the Pod security settings allow privilege escalation. The request is allowed to reach the checkpoint, and the object shape decides whether it passes.
 
 ![API server checkpoint showing authentication, authorization, mutating admission, validating admission, storing in etcd, and rejection with a reason](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/api-server-checkpoint.png)
 
@@ -61,7 +65,7 @@ If `can-i` says no, the fix is in RBAC or the caller identity. If `can-i` says y
 
 Kubernetes admission has two broad behaviors. **Mutating admission** can change an object before it is stored. **Validating admission** can allow or reject the object after mutation has run. Many real clusters use both, with mutation for simple defaults and validation for rules that define the boundary.
 
-For example, a platform team might add a default label to objects in the `orders` namespace, then validate that every Deployment includes required labels and safe Pod settings. The order matters because validation sees the final object after mutation.
+For example, a platform team might add a default label to objects in the `orders` namespace, then validate that every Deployment includes required labels and safe Pod settings. Validation sees the final object after mutation, so the order changes what the policy evaluates.
 
 | Admission type | What it does | Example for `devpolaris-orders-api` |
 |----------------|--------------|--------------------------------------|

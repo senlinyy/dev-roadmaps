@@ -76,6 +76,24 @@ An **Azure subscription** is the container for Azure billing, quotas, and resour
 
 That trust relationship shows up during normal work. Maya signs in through `devpolaris.com`, and Azure can use that tenant identity while checking access to `sub-orders-prod`. The same tenant can support development, staging, and production subscriptions, so the company can reuse one workforce identity system across Azure environments.
 
+For a startup, this is usually the first identity inventory worth writing down. The inventory gives every later access request a stable home and keeps people from mixing directory objects with Azure resource scopes.
+
+```yaml
+identity_boundary:
+  tenant_name: devpolaris.com
+  tenant_id: 8f8f2c2a-1111-4444-aaaa-123456789abc
+  production_subscription: sub-orders-prod
+  production_resource_group_scope: /subscriptions/sub-orders-prod/resourceGroups/rg-orders-prod
+  primary_groups:
+    support: grp-orders-support
+    engineering: grp-orders-engineers
+  workload_identities:
+    runtime_api: mi-orders-api-prod
+    deploy_pipeline: spn-orders-deploy-prod
+```
+
+The tenant ID names the directory that issues tokens. The subscription and resource group scope name where Azure resources live. The group and workload identity names tell reviewers which principals should appear in later role assignments, sign-in logs, and activity records.
+
 The tenant boundary also explains a serious migration problem. If a subscription moves to a different directory, Azure role assignments tied to users, groups, service principals, and managed identities can lose their meaning because the trusted directory changed. That is why tenant and subscription changes usually need access planning, Key Vault checks, managed identity checks, and rollback notes.
 
 Now the Orders team has a trusted directory and subscriptions that rely on it. The next concept is the most familiar caller in the directory: a person.
@@ -104,7 +122,7 @@ Groups also make reviews clearer. A reviewer can ask who owns `grp-orders-suppor
 
 A **device identity** is a Microsoft Entra ID object for a laptop, desktop, phone, or other device. Device identity gives the sign-in system facts about the machine, such as whether it is registered, joined, managed, or compliant through device management. A support app that handles customer orders can care about those facts because a sign-in from a managed company laptop carries different evidence than a sign-in from an unknown browser on a personal machine.
 
-For `orders-admin-web`, the team might require Maya to use MFA and a compliant company device. Maya's password proves one thing, her group membership proves her job role, and the device record adds another signal about the workstation. Those pieces together make human access feel less like a single password check and more like a full sign-in decision.
+For `orders-admin-web`, the team might require Maya to use MFA and a compliant company device. Maya's password proves one thing, her group membership proves her job role, and the device record adds another signal about the workstation. The final sign-in decision uses all three pieces: the person, the job group, and the machine evidence.
 
 People, groups, and devices cover the human side of the Orders system. The running software has its own access problem, because APIs, deployment jobs, background workers, and scripts also need to prove identity without turning every config file into a secret drawer.
 
@@ -163,6 +181,25 @@ A simplified service principal record for the Orders dashboard might look like t
 ```
 
 The `appId` is the client ID from the app registration. The `objectId` names this exact service principal object in this tenant. Azure role assignments, Microsoft Graph queries, audit logs, and troubleshooting screens often care about the object ID because that is the specific principal receiving access.
+
+An operator can inspect the tenant-local service principal before assigning access. This read-only check is useful because it confirms the app ID and object ID before anyone grants a role at a resource scope.
+
+```bash
+az ad sp show \
+  --id 0f4c7a29-2222-5555-bbbb-23456789abcd \
+  --query "{displayName:displayName, appId:appId, objectId:id, accountEnabled:accountEnabled}"
+```
+
+The output should name the expected dashboard service principal. If the `appId` matches the app registration but the `objectId` differs from the one in an access ticket, the ticket may be pointing at the wrong tenant-local object.
+
+```json
+{
+  "displayName": "orders-admin-web",
+  "appId": "0f4c7a29-2222-5555-bbbb-23456789abcd",
+  "objectId": "9b7e2a10-3333-6666-cccc-3456789abcde",
+  "accountEnabled": true
+}
+```
 
 Service principals give software a proper identity, and they can still use secrets or certificates. The Orders API runs inside Azure, so it can use a stronger pattern for many Azure-to-Azure calls. Azure can create and protect the workload identity, and the app can ask for tokens through the hosting environment.
 
@@ -250,6 +287,24 @@ The basic shape of a policy sounds like an if-and-then decision, and the portal 
 **MFA**, or multifactor authentication, means the user supplies another proof beyond the password. That proof might be a passkey, hardware security key, authenticator prompt, or one-time code. For a production support app, MFA helps reduce the chance that a stolen password opens a full working dashboard session.
 
 Conditional Access also needs operational discipline. Teams usually test new policies in report-only mode, exclude carefully controlled emergency access accounts, and inspect sign-in logs after a confusing prompt or block. The policy gives the organization control, and the logs give the team evidence about which signals and controls affected a sign-in.
+
+For the Orders support dashboard, the evidence can stay small. The reviewer wants to see the user, app, policy result, MFA result, and device result in the same record. A simplified sign-in log row might look like this:
+
+```json
+{
+  "userPrincipalName": "maya@devpolaris.com",
+  "appDisplayName": "orders-admin-web",
+  "conditionalAccessStatus": "success",
+  "appliedPolicies": ["Require MFA and compliant device for Orders support"],
+  "authenticationRequirement": "multiFactorAuthentication",
+  "deviceDetail": {
+    "isCompliant": true,
+    "trustType": "Microsoft Entra joined"
+  }
+}
+```
+
+Healthy output shows the expected application, the expected policy, MFA, and the managed device signal. A suspicious row would show a different app, an excluded policy, a failed MFA step, or a device that is missing compliance evidence.
 
 At this point the Orders team can identify Maya, check her group, evaluate her device, require MFA, and issue tokens. The remaining access question moves to authorization, because a token that proves Maya signed in still has to meet a permission rule before she can view production data or change Azure resources.
 

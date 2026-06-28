@@ -54,6 +54,9 @@ That service gives us a real path through IAM. A single denied Secret Manager re
 | **Guardrail** | A policy that limits or blocks access | Deny policy or principal access boundary |
 | **Evidence** | The explanation used for debugging | Policy Troubleshooter output and audit logs |
 
+![IAM request path](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-request-path.png)
+*Every IAM decision follows the same request path: identify the caller, name the permission, locate the resource, check applicable allow bindings, then review guardrails and evidence.*
+
 ## Principals: Who Is Calling
 <!-- section-summary: A principal is the authenticated identity in an IAM decision, and finding the exact principal is the first step in every access investigation. -->
 
@@ -103,6 +106,9 @@ For `devpolaris-orders-api`, a practical first pass looks like this:
 | Write order export files | Bucket `devpolaris-order-exports-prod` | Bucket-level binding |
 | Publish order events | Topic `order-events` | Topic-level binding |
 | Connect to Cloud SQL | Instance `orders-prod` | Project-level Cloud SQL connectivity grant in `projects/devpolaris-prod` |
+
+![IAM grant scope map](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-grant-scope-map.png)
+*The same role can have a very different blast radius depending on where the binding lives, so production reviews should ask for the smallest supported scope first.*
 
 ## Permissions and Roles: What the Caller Needs
 <!-- section-summary: Google Cloud APIs check granular permissions, and IAM grants those permissions through role bundles. -->
@@ -222,6 +228,19 @@ gcloud secrets add-iam-policy-binding orders-db-password \
   --role="roles/secretmanager.secretAccessor"
 ```
 
+You would run this when the audit log or Policy Troubleshooter shows that the Cloud Run runtime service account lacks payload access to this one secret. The `orders-db-password` argument is the secret receiving the binding, `--project` selects the owning project, `--member` names the exact runtime principal, and `--role` grants the predefined role that contains `secretmanager.versions.access`.
+
+The command prints the updated allow policy. A healthy result should show the runtime service account under `roles/secretmanager.secretAccessor` on the secret policy, not a broad project-level policy:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+  role: roles/secretmanager.secretAccessor
+etag: BwYF4K8q6yA=
+version: 1
+```
+
 This binds the Secret Accessor role to the runtime service account on one secret. After IAM propagation, the same Secret Manager request has the principal, permission, role, binding, and scope lined up. The application can read `orders-db-password`, and the rest of the project secrets stay outside its grant.
 
 The other service permissions follow the same pattern. The runtime service account needs `roles/storage.objectCreator` on `devpolaris-order-exports-prod` so it can create export objects. It needs `roles/pubsub.publisher` on `order-events` so it can publish messages. It needs `roles/cloudsql.client` in `projects/devpolaris-prod` so Cloud SQL connectors or the Cloud SQL Auth Proxy can connect to `orders-prod`.
@@ -240,7 +259,27 @@ gcloud beta policy-intelligence troubleshoot-policy iam \
   --permission="secretmanager.versions.access"
 ```
 
+You would run this before changing IAM because it asks Google Cloud to evaluate the exact access tuple from the failing request. The resource argument uses the full resource name from the audit log, `--principal-email` names the caller without the `serviceAccount:` prefix, and `--permission` names the granular API permission that failed.
+
+The output is intentionally evidence-heavy. In a missing-binding case, expect a denied result with an explanation that no allow binding grants the permission to the runtime account:
+
+```yaml
+access: DENIED
+explainedPolicies:
+- fullResourceName: //secretmanager.googleapis.com/projects/devpolaris-prod/secrets/orders-db-password
+  bindingExplanations:
+  - role: roles/secretmanager.secretAccessor
+    relevance: HIGH
+    memberships:
+      serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com:
+        membership: NOT_INCLUDED
+errors: []
+```
+
 The useful output includes more than the final allowed or denied result. The explanation shows whether an allow policy contains a relevant binding, whether the binding includes the principal, whether the role includes the permission, whether a condition evaluated to true, whether a deny rule matched, and whether a principal access boundary allowed the resource. That evidence can point to "the binding names the deployer service account instead of the runtime service account."
+
+![IAM debug evidence board](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-debug-evidence-board.png)
+*A denied request should turn into an evidence board: the troubleshooter result, the audit log caller, and the binding check all need to point at the same principal, permission, and resource.*
 
 Audit logs add another layer of evidence. An Admin Activity or Data Access log entry can show the request time, caller, method, resource, and error details. Troubleshooting from a log entry gives Policy Troubleshooter more request context for conditions, which helps when a condition depends on time, tags, resource attributes, or other request facts.
 

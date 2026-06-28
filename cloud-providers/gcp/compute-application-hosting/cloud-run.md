@@ -45,20 +45,8 @@ A **revision** is an immutable snapshot of the service's deployable configuratio
 
 Here is the service shape the Orders team is working with. The image feeds the service, the service owns revisions, and traffic rules decide which revision receives requests.
 
-```mermaid
-flowchart LR
-    Image["Container image<br/>orders-api:a3f8c2d"]
-    Service["Cloud Run service<br/>orders-api"]
-    Rev1["Revision<br/>orders-api-00041"]
-    Rev2["Revision<br/>orders-api-00042"]
-    Traffic["Traffic rules<br/>95% / 5%"]
-
-    Image --> Service
-    Service --> Rev1
-    Service --> Rev2
-    Traffic --> Rev1
-    Traffic --> Rev2
-```
+![Cloud Run image, service, revision, and traffic shape](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/cloud-run-release-shape.png)
+*The image is the deployable package, the service holds the runtime contract, and traffic rules choose which immutable revision receives requests.*
 
 This separation gives the Orders team a safer release workflow. They can build one image, deploy it as a new revision, verify it with no traffic or a small percentage of traffic, and move customers back to the previous revision quickly if errors rise. Before that workflow works, the container has to satisfy Cloud Run's runtime contract.
 
@@ -124,6 +112,18 @@ gcloud run deploy orders-api \
 
 This command creates or updates the `orders-api` service in `us-central1`, points it at a specific image tag, and attaches the runtime identity. The `--no-allow-unauthenticated` flag keeps invocation behind IAM, which fits a backend called by another trusted service or by a frontend edge that handles authentication separately.
 
+Healthy output confirms that Cloud Run created a revision and routed traffic. The service URL is real, but private invocation still requires IAM because of `--no-allow-unauthenticated`.
+
+```console
+Deploying container to Cloud Run service [orders-api] in project [orders-prod] region [us-central1]
+OK Deploying new service... Done.
+  OK Creating Revision...
+  OK Routing traffic...
+Done.
+Service [orders-api] revision [orders-api-00041-stable] has been deployed and is serving 100 percent of traffic.
+Service URL: https://orders-api-7a2b3c-uc.a.run.app
+```
+
 A public API might intentionally use `--allow-unauthenticated`, but that choice grants the Cloud Run Invoker role to public callers. The Orders team should make that decision in the service design, not by accepting a CLI prompt during a late deploy. For customer-facing checkout, many teams put Cloud Load Balancing, Identity-Aware Proxy, API Gateway, or application-level authentication in front of the backend depending on the wider architecture. After the first deploy, the team needs a release process, and Cloud Run revisions plus traffic splits give them that process.
 
 ## Revisions, Traffic Splits, and Rollback
@@ -144,12 +144,23 @@ gcloud run deploy orders-api \
 
 That creates a revision and gives it a tag URL for direct verification. The team can check startup, logs, health, and a small internal smoke test before it reaches the main service URL. This is deployment without release.
 
+```console
+Service [orders-api] revision [orders-api-00042-canary] has been deployed and is serving 0 percent of traffic.
+Tag URL: https://canary---orders-api-7a2b3c-uc.a.run.app
+```
+
 The revision list shows the named targets available for traffic. This gives the operator the exact revision names to use in rollout and rollback commands.
 
 ```bash
 gcloud run revisions list \
   --service=orders-api \
   --region=us-central1
+```
+
+```console
+REVISION                  ACTIVE  SERVICE     DEPLOYED                 DEPLOYED BY
+orders-api-00042-canary   yes     orders-api  2026-06-27 20:13:42 UTC  ci-deploy@orders-prod.iam.gserviceaccount.com
+orders-api-00041-stable   yes     orders-api  2026-06-26 18:02:17 UTC  ci-deploy@orders-prod.iam.gserviceaccount.com
 ```
 
 When the canary looks healthy, a gradual traffic split might send a small percentage to the new revision. The percentages below keep most checkout traffic on the stable revision while the team watches the canary.
@@ -160,6 +171,14 @@ gcloud run services update-traffic orders-api \
   --to-revisions=orders-api-00041-stable=95,orders-api-00042-canary=5
 ```
 
+```console
+Updating traffic...
+Done.
+Traffic:
+  95% orders-api-00041-stable
+   5% orders-api-00042-canary
+```
+
 If error rates rise, rollback is a traffic update to the previous revision. The rollback command routes all requests back to the revision that was serving before the canary.
 
 ```bash
@@ -168,7 +187,17 @@ gcloud run services update-traffic orders-api \
   --to-revisions=orders-api-00041-stable=100
 ```
 
+```console
+Updating traffic...
+Done.
+Traffic:
+  100% orders-api-00041-stable
+```
+
 Traffic rollback is fast because the old revision still exists as a target. The team still watches startup latency, database pressure, and logs after the rollback, because instances for the old revision may need to start again and downstream systems may still be recovering from the bad release. Traffic controls handle release safety, and scaling controls protect the rest of the system while the service is running.
+
+![Cloud Run safe release and rollback loop](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/cloud-run-safe-release-loop.png)
+*A safe Cloud Run release separates deploy, verification, small traffic exposure, and rollback evidence instead of treating deploy as the whole release.*
 
 ## Concurrency and Downstream Protection
 <!-- section-summary: Concurrency decides how many requests one instance can handle, and that setting must match database pools and external dependency limits. -->
@@ -213,6 +242,9 @@ gcloud run services update orders-api \
   --region=us-central1 \
   --min-instances=1
 ```
+
+![Cloud Run runtime controls around downstream systems](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/cloud-run-runtime-controls.png)
+*Concurrency, max instances, min instances, and service account identity are runtime controls around the same container, and each one protects a different downstream dependency.*
 
 Minimum instances are useful, but they are still managed instances. The application should start cleanly, handle restarts, and expose useful health behavior. A warm instance is a latency tool, not a replacement for good startup code and safe retries. Scaling limits protect capacity, and runtime identity protects access.
 
@@ -299,6 +331,22 @@ gcloud run revisions list \
 gcloud run services logs read orders-api \
   --region=us-central1 \
   --limit=50
+```
+
+Useful output has three different kinds of evidence: service URL and traffic, revision status, and logs tied to requests. In this example the canary is receiving five percent of traffic and the latest logs show both a successful request and one payment dependency error.
+
+```console
+URL: https://orders-api-7a2b3c-uc.a.run.app
+Traffic:
+  95% orders-api-00041-stable
+   5% orders-api-00042-canary
+
+REVISION                  ACTIVE  TRAFFIC
+orders-api-00042-canary   yes     5
+orders-api-00041-stable   yes     95
+
+2026-06-27T20:20:31Z INFO  request_id=req-8f31 order_id=ORD-10492 status=202 revision=orders-api-00042-canary
+2026-06-27T20:21:04Z ERROR request_id=req-8f44 order_id=ORD-10496 dependency=payment-provider error=timeout
 ```
 
 For deeper filtering, the team can query Cloud Logging directly. The resource filter narrows the result to Cloud Run revisions for this service.

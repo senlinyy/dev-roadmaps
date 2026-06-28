@@ -55,6 +55,9 @@ The small vocabulary below keeps the rest of the article clear. We will use thes
 
 For a beginner, the useful way to think about this is simple. The secret name is the stable place your workload asks for, and the version is the exact value it receives. The release process decides which version the workload should use.
 
+![Secret version rollout](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-version-rollout.png)
+*Secret rotation is easier to review when the stable secret, immutable versions, alias move, runtime rollout, and rollback path are shown as one release flow.*
+
 ## Runtime Access From Cloud Run, GKE, and Compute Engine
 <!-- section-summary: Google Cloud workloads use their runtime identity to retrieve secrets through Secret Manager integrations or the Secret Manager API. -->
 
@@ -73,7 +76,32 @@ gcloud run services update devpolaris-orders-api \
   --update-secrets=ORDERS_DB_PASSWORD=orders-db-password:current
 ```
 
+Run the first command when the runtime service account needs payload access to this one secret. The `--member` flag names the Cloud Run identity, and `--role` grants the permission bundle that includes `secretmanager.versions.access`. Run the second command when the Cloud Run service should consume the secret through an environment variable. The `--service-account` flag confirms the runtime identity, and `--update-secrets` maps `ORDERS_DB_PASSWORD` to the `current` alias.
+
+Healthy output from the binding should show the runtime account under Secret Accessor:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com
+  role: roles/secretmanager.secretAccessor
+etag: BwYF4oQnK2M=
+version: 1
+```
+
+Healthy output from the service update should show a new revision:
+
+```yaml
+Deploying...
+OK Deploying new revision... Done.
+Traffic:
+  100% LATEST (currently devpolaris-orders-api-00017-bxq)
+```
+
 That example uses the alias `current` as the version selector. Since Cloud Run environment variables are resolved when an instance starts, the rollout should create a new revision or restart instances after the alias moves. For services that mount secrets as files, the application should read the file at the point it opens a new database connection rather than caching the value forever.
+
+![Runtime secret access](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/runtime-secret-access.png)
+*Cloud Run, GKE, and Compute Engine can all reach Secret Manager through their runtime identities, while the secret payload stays out of images, logs, Terraform outputs, and copied environment files.*
 
 For **GKE**, there are two common patterns. A pod can call the Secret Manager API through a client library while authenticated with Workload Identity Federation for GKE, or it can use the Secret Manager add-on to mount secrets as volumes in pods. The important distinction for beginners is that a Secret Manager secret and a Kubernetes `Secret` object are separate things, even though the names sound similar.
 
@@ -136,6 +164,18 @@ gcloud run services update devpolaris-orders-api \
   --update-secrets=ORDERS_DB_PASSWORD=orders-db-password:current
 ```
 
+The version-add command runs inside the rotation workflow after the database has a new credential ready. `--data-file` reads the payload from a controlled file so the password does not appear in shell history. The alias update moves the release pointer to version `8`, and the Cloud Run update rolls a revision that resolves `current` at startup.
+
+Expected output should show the new version and then the alias update:
+
+```yaml
+Created version [8] of the secret [orders-db-password].
+
+Updated secret [orders-db-password].
+versionAliases:
+  current: '8'
+```
+
 The file path in that example is deliberately boring and local to the secure rotation worker. The password value should come from a controlled password generator or database rotation workflow, and the value should stay out of shell history, build logs, pull requests, Slack messages, and incident notes.
 
 ## Rotation Schedules and Pub/Sub Notifications
@@ -152,6 +192,21 @@ gcloud secrets update orders-db-password \
   --topics=projects/PROJECT_ID/topics/secret-rotation-events \
   --next-rotation-time="2026-07-01T09:00:00Z" \
   --rotation-period="2592000s"
+```
+
+Create the topic once so Secret Manager has a place to publish rotation and lifecycle events. The secret update then links the topic, sets the next due time, and sets the rotation period in seconds. `2592000s` is 30 days, and the timestamp should match the team's planned rotation window.
+
+Healthy output should show the topic and the secret rotation fields:
+
+```yaml
+Created topic [projects/PROJECT_ID/topics/secret-rotation-events].
+
+name: projects/PROJECT_ID/secrets/orders-db-password
+rotation:
+  nextRotationTime: '2026-07-01T09:00:00Z'
+  rotationPeriod: 2592000s
+topics:
+- name: projects/PROJECT_ID/topics/secret-rotation-events
 ```
 
 Pub/Sub also helps with normal lifecycle evidence. Secret Manager can publish events when versions are added, enabled, disabled, destroyed, or scheduled for destruction, and rotation events arrive as `SECRET_ROTATE`. A security team can use those events to start verification jobs, alert on unexpected version changes, or create change tickets automatically.
@@ -173,6 +228,16 @@ gcloud secrets versions disable 7 \
 
 gcloud secrets versions destroy 7 \
   --secret=orders-db-password
+```
+
+Disable the old version after the new version has soaked and the team no longer wants normal runtime traffic to use version `7`. Destroy it only after the recovery window and release record support that cleanup. The `--secret` flag keeps the version number tied to the right secret.
+
+Expected output should make the state change visible:
+
+```yaml
+Disabled version [7] of the secret [orders-db-password].
+
+Destroyed version [7] of the secret [orders-db-password].
 ```
 
 The restore path is simple while destruction is still scheduled. Enabling or disabling a scheduled version cancels the scheduled destruction and restores the version to that chosen state. In a real incident, the important part is the release record: the team should know that version `7` is the rollback value and that it remains inside the recovery window.
@@ -220,6 +285,18 @@ gcloud run revisions list \
   --format="table(metadata.name,status.conditions[0].status,traffic.percent)"
 ```
 
+Run the first command to prove which version the `current` alias points to without printing the password. Run the second command to prove which Cloud Run revisions are serving traffic after the alias move. The `--format` flags keep the release evidence small enough to paste into a ticket safely.
+
+Expected output might look like this:
+
+```yaml
+8
+
+NAME                                  STATUS  TRAFFIC
+devpolaris-orders-api-00017-bxq       True    100
+devpolaris-orders-api-00016-pdk       True    0
+```
+
 The audit log evidence should focus on `AccessSecretVersion` entries for the runtime service account and the expected version. Secret Manager audit logs use the service name `secretmanager.googleapis.com`, and `AccessSecretVersion` is the method that reads the payload. The log entry gives the caller, resource, method, timestamp, and request context without needing the password value in the release ticket.
 
 ```bash
@@ -231,6 +308,25 @@ protoPayload.authenticationInfo.principalEmail="devpolaris-orders-runtime@PROJEC
 ' \
   --limit=20 \
   --format=json
+```
+
+The logging command is read-only evidence collection. The filter selects Secret Manager payload reads for version `8` by the runtime service account, `--limit` keeps the output bounded, and `--format=json` preserves fields for audit review.
+
+A useful result should show the method, caller, resource, and timestamp while omitting the payload:
+
+```json
+[
+  {
+    "protoPayload": {
+      "authenticationInfo": {
+        "principalEmail": "devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com"
+      },
+      "methodName": "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion",
+      "resourceName": "projects/PROJECT_ID/secrets/orders-db-password/versions/8"
+    },
+    "timestamp": "2026-07-01T09:18:44.219Z"
+  }
+]
 ```
 
 The database verification should also avoid payloads. For a PostgreSQL-style database, the release record can include a query that proves the application connected as the expected database user and stayed healthy after the traffic shift. The result should show connection metadata and counts only.
@@ -245,6 +341,16 @@ from pg_stat_activity
 where application_name = 'devpolaris-orders-api'
 group by usename, application_name, state;
 ```
+
+This SQL query runs in the database, not in Secret Manager. It verifies runtime behavior after the secret alias moved by counting active application connections. A healthy result shows the expected application name and database user without exposing the password:
+
+| usename | application_name | state | connection_count |
+|---|---|---|---:|
+| orders_app_b | devpolaris-orders-api | active | 12 |
+| orders_app_b | devpolaris-orders-api | idle | 38 |
+
+![Secret rotation evidence](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-rotation-evidence.png)
+*Good rotation evidence proves the alias target, serving revision, audit-log caller, and database behavior while keeping the secret value out of human-readable artifacts.*
 
 That is strong runtime evidence. It shows the service connected after the alias moved to version `8`, it gives operations a concrete query to repeat, and it leaves the secret payload out of every human-readable artifact.
 

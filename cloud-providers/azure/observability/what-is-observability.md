@@ -31,20 +31,20 @@ When you run an app on your laptop, debugging feels direct. You can look at the 
 
 The article will use one running example the whole way through. A small commerce team has an `orders-api` hosted on Azure App Service. The API accepts `POST /checkout`, writes the order to Azure SQL Database, uploads an invoice PDF to Blob Storage, reads a secret from Key Vault, and sends a message to Service Bus so the warehouse can pack the order.
 
-One afternoon, support says that some customers can pay but never receive a receipt. The Azure portal still shows the App Service as running. CPU looks normal, memory looks normal, and the database has not gone offline. Those resource facts matter, but they do not answer the real production question: what happened to the checkout request that failed?
+One afternoon, support says that some customers can pay but never receive a receipt. The Azure portal still shows the App Service as running. CPU looks normal, memory looks normal, and the database has stayed online. Those resource facts matter, while the real production question remains open: what happened to the checkout request that failed?
 
 That question introduces the main pieces in this article. **Telemetry** is the evidence a system emits while it runs. **Logs** describe events, **metrics** measure numbers over time, **traces** follow one request across services, and **alerts** turn important changes into notifications or automation. **Observability** is the practice of designing the app and the Azure resources so those signals can answer real questions during an incident.
 
 ## What Is Observability
 <!-- section-summary: Observability means a production system leaves enough connected evidence for engineers to explain a failure from the outside. -->
 
-**Observability** means your system emits enough useful evidence that engineers can understand its behavior from the outside. In Azure, that evidence usually flows through Azure Monitor, Log Analytics workspaces, Application Insights, metrics, dashboards, alert rules, and action groups. The tool names come later; the important idea starts with the evidence.
+**Observability** means your system emits enough useful evidence that engineers can understand its behavior from the outside. In Azure, that evidence usually flows through Azure Monitor, Log Analytics workspaces, Application Insights, metrics, dashboards, alert rules, and action groups. The tool names come later; the important idea is the evidence.
 
 For the checkout example, a useful observability setup can show that `POST /checkout` started at `10:24:18`, the Azure SQL insert succeeded, the Blob Storage upload returned `403 AuthorizationPermissionMismatch`, and the API returned HTTP `500` after throwing `ReceiptUploadError`. That is a much better incident conversation than "the app is broken" because the team can focus on storage permissions, managed identity, and the exact operation that failed.
 
 Older server monitoring usually focused on machine health: CPU, memory, disk, process uptime, and network reachability. Those checks still matter because a saturated database or exhausted worker pool can break a service. Modern cloud systems also need workflow evidence because a resource can stay online while a user transaction fails because of identity, networking, bad configuration, slow dependencies, or application code.
 
-A helpful beginner rule is to separate **resource health** from **workflow health**. Resource health asks whether the hosting layer can run. Workflow health asks whether users can complete the thing they came to do. The `orders-api` needs both because a healthy App Service instance does not prove that checkout, invoice upload, and warehouse handoff are working together.
+A helpful beginner rule is to separate **resource health** from **workflow health**. Resource health asks whether the hosting layer can run. Workflow health asks whether users can complete the thing they came to do. The `orders-api` needs both because a healthy App Service instance still leaves checkout, invoice upload, and warehouse handoff unproven.
 
 Here is a small structured log from the checkout failure. The exact logging library can vary, but the shape of the event is the important part. The example below uses stable fields that can travel into Application Insights or a Log Analytics workspace:
 
@@ -88,7 +88,7 @@ The names can feel crowded at first, so the simple map below keeps the first pas
 | **Azure Monitor Metrics** | Numeric time-series storage | HTTP failures, CPU, SQL DTU, queue length, and latency appear as charts |
 | **Alerts and action groups** | The notification and response loop | A high checkout failure rate sends an alert to the on-call channel |
 
-![Azure Monitor evidence hub showing orders-api, Azure SQL, Blob Storage, Service Bus, logs, metrics, traces, alerts, Application Insights, Log Analytics, and Metrics plus Alerts](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/azure-monitor-evidence-hub.png)
+![Azure Monitor evidence hub showing orders-api, generic resource dependencies, logs, metrics, traces, alerts, Application Insights, Log Analytics, and Metrics plus Alerts](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/azure-monitor-evidence-hub.png)
 
 *Azure Monitor helps when application code, Azure resources, and dependency calls send their signals into shared places for investigation, charts, and alerts.*
 
@@ -142,7 +142,7 @@ useAzureMonitor({
 });
 ```
 
-That small code path does not design every log field for you. It starts the application telemetry pipeline so requests, dependencies, exceptions, traces, and metrics can flow into Application Insights. The team still needs useful names, useful custom properties, and careful filtering so telemetry explains production behavior without collecting secrets or noisy low-value events.
+That small code path only opens the application telemetry pipeline so requests, dependencies, exceptions, traces, and metrics can flow into Application Insights. The team still needs useful names, useful custom properties, and careful filtering so telemetry explains production behavior without collecting secrets or noisy low-value events.
 
 ## Correlation Across One Request
 <!-- section-summary: Correlation gives separate telemetry rows the same operation identity, which lets engineers rebuild one customer journey. -->
@@ -175,7 +175,18 @@ union AppRequests, AppDependencies, AppExceptions, AppTraces
 | project TimeGenerated, Type, Name, ResultCode, Success, DurationMs, Message
 ```
 
-This query gives the team a chronological view of one failed checkout. The result can show that the API started normally, Azure SQL succeeded, Blob Storage rejected the upload, and the application threw an exception after that dependency call. The team now has a path from user symptom to failing dependency.
+The query uses `let` so the operation ID appears once, then `union` reads the common Application Insights tables together. `order by TimeGenerated asc` matters because the team wants the story in the same order the request experienced it. `project` trims the output to the fields that belong in an incident note.
+
+A useful result might look like this:
+
+| TimeGenerated | Type | Name | ResultCode | Success | Message |
+|---|---|---|---|---|---|
+| `10:24:18.090` | `AppRequests` | `POST /checkout` | `500` | `false` | |
+| `10:24:18.214` | `AppDependencies` | `SQL InsertOrder` | `0` | `true` | |
+| `10:24:18.381` | `AppDependencies` | `Blob Put invoice` | `403` | `false` | |
+| `10:24:18.452` | `AppExceptions` | `ReceiptUploadError` | | `false` | `invoice upload failed` |
+
+This result gives the team a chronological view of one failed checkout. The API started normally, Azure SQL succeeded, Blob Storage rejected the upload, and the application threw an exception after that dependency call. The team now has a path from user symptom to failing dependency.
 
 Correlation also helps across teams. The application engineer can show the storage engineer the operation ID, time range, target storage account, and result code. The storage engineer can query resource logs around the same time and resource. That shared evidence makes the conversation concrete.
 
@@ -190,16 +201,16 @@ A dashboard should show both resource and workflow health. CPU, memory, and data
 
 An **action group** defines the response path after the alert fires. It can send email, SMS, push notifications, webhooks, Logic Apps, Azure Functions, ITSM incidents, or Event Hub messages. For the checkout API, a critical alert might notify the on-call engineer and trigger a webhook that opens an incident with the dashboard, time range, and KQL query attached.
 
-Good alerting starts from user impact. A page for every short CPU spike trains the team to ignore noise. A page for checkout failure rate, sustained HTTP `5xx`, or a queue that has stopped draining tells the team that customers need attention. Lower-level resource alerts can still exist, but many of them belong on dashboards or tickets rather than high-priority paging.
+Good alerting is based on user impact. A page for every short CPU spike trains the team to ignore noise. A page for checkout failure rate, sustained HTTP `5xx`, or a queue that has stopped draining tells the team that customers need attention. Lower-level resource alerts can still exist, but many of them belong on dashboards or work items rather than high-priority paging.
 
 This connects back to the four signals. Metrics make fast alert conditions. Logs make precise alert conditions. Traces explain the request path after someone opens the incident. Dashboards keep the team oriented while they decide whether to roll back, change a role assignment, scale out, or fix code.
 
 ## A Practical First Setup
 <!-- section-summary: A useful first observability setup covers application telemetry, resource routing, business metrics, and a small number of high-signal alerts. -->
 
-A beginner Azure observability setup does not need every possible signal on day one. It needs enough evidence for the first serious incident. For the `orders-api`, that means the team can answer four questions: are customers succeeding, which dependency failed, what changed recently, and who needs to respond?
+A beginner Azure observability setup needs a focused first set of signals instead of every possible signal on day one. It needs enough evidence for the first serious incident. For the `orders-api`, that means the team can answer four questions: are customers succeeding, which dependency failed, what changed recently, and who needs to respond?
 
-A practical setup usually starts with **Application Insights** for the application. The API should emit request, dependency, exception, trace, and custom event telemetry. Important custom properties include operation name, order ID or a safe internal order reference, tenant or region when useful, dependency target, and failure category. Sensitive data such as card numbers, access tokens, customer secrets, and full personal records should stay out of telemetry.
+A practical setup usually uses **Application Insights** for the application. The API should emit request, dependency, exception, trace, and custom event telemetry. Important custom properties include operation name, order ID or a safe internal order reference, tenant or region when useful, dependency target, and failure category. Sensitive data such as card numbers, access tokens, customer secrets, and full personal records should stay out of telemetry.
 
 The next piece is a **Log Analytics workspace** as the central query location. Application Insights telemetry can land there, and selected resource logs from Azure SQL, Blob Storage, Key Vault, Service Bus, networking components, and other production dependencies can land there as well. The workspace gives the team one place to query cross-service evidence.
 
@@ -214,7 +225,7 @@ Here is a compact starter checklist. It keeps the first setup focused on evidenc
 | Application Insights connected to the API | Shows requests, dependencies, exceptions, traces, and operation correlation |
 | Log Analytics workspace | Gives one query location for app and resource evidence |
 | Diagnostic settings on key resources | Sends detailed resource logs from storage, database, identity-adjacent, and messaging services |
-| Custom workflow metrics | Shows whether users can complete checkout, not only whether resources are alive |
+| Custom workflow metrics | Shows whether users can complete checkout and whether the supporting resources are healthy |
 | High-signal alert rules | Pages the team for sustained user impact instead of noisy resource blips |
 | Action group with a tested path | Sends the alert to the right humans or automation when it matters |
 
@@ -234,11 +245,11 @@ The last habit is writing incident notes from telemetry. A useful note includes 
 ## Putting It All Together
 <!-- section-summary: Azure observability connects application behavior, resource behavior, and response paths into one production feedback loop. -->
 
-Observability in Azure starts with a simple production reality: after deployment, the team needs evidence from outside the running process. Azure Monitor provides the shared platform for that evidence, and the rest of the names describe where each signal comes from and how engineers use it.
+Observability in Azure comes from a simple production reality: after deployment, the team needs evidence from outside the running process. Azure Monitor provides the shared platform for that evidence, and the rest of the names describe where each signal comes from and how engineers use it.
 
 Logs explain individual events. Metrics show numeric behavior over time. Traces connect the steps of one request. Alerts decide when telemetry requires action. Log Analytics gives teams KQL over logs and traces. Application Insights adds application-level telemetry and correlation. Diagnostic settings route resource logs from Azure services into the places where teams can query, alert, archive, or forward them.
 
-For the `orders-api`, that means the team can move from "customers do not get receipts" to a specific timeline: checkout request failed, SQL succeeded, Blob Storage rejected invoice upload, the app threw `ReceiptUploadError`, and a recent role assignment or storage rule needs review. That is the practical value of observability. It turns a vague production symptom into evidence the team can act on.
+For the `orders-api`, that means the team can move from "customers miss receipts" to a specific timeline: checkout request failed, SQL succeeded, Blob Storage rejected invoice upload, the app threw `ReceiptUploadError`, and a recent role assignment or storage rule needs review. That is the practical value of observability. It turns a vague production symptom into evidence the team can act on.
 
 ![First production observability loop showing application instrumentation, resource log routing, workflow metrics, and alert response around incident evidence](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/observability-production-loop.png)
 

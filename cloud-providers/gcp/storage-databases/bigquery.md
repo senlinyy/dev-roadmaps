@@ -37,16 +37,8 @@ BigQuery fits this work because it separates storage and compute. BigQuery store
 
 Here is the flow we will follow through the article:
 
-```mermaid
-graph LR
-    App[Checkout service] --> PubSub[Pub/Sub topic]
-    App --> Files[Cloud Storage event files]
-    PubSub --> Raw[BigQuery raw events table]
-    Files --> Raw
-    Raw --> Clean[Cleaned events table]
-    Clean --> Views[Analytics views]
-    Views --> BI[Dashboards and analysts]
-```
+![BigQuery event pipeline](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-event-pipeline.png)
+*Checkout events usually move through an ingestion path before analysts see them. Raw tables preserve arrival details, clean tables make the data trustworthy, and views publish the business-facing shape.*
 
 The picture starts with one checkout event. Before the team can ingest it, they need a place to put it and a table contract that says what each row contains.
 
@@ -72,6 +64,25 @@ bq --location=US mk \
 ```
 
 The location choice deserves real attention. A dataset's location affects where BigQuery stores and runs work for that data. Real teams choose locations for latency, data residency, and governance. A European customer-events dataset often belongs in `EU` or a European region, while a United States analytics dataset might live in `US`. Mixing locations casually leads to awkward query and transfer work later.
+
+The `bq mk` output confirms the dataset path. The follow-up `bq show` proves the location and description, which matters because a dataset location cannot be changed in place after production data lands there.
+
+```console
+Dataset 'northstar-prod:analytics_raw' successfully created.
+
+bq show --format=prettyjson northstar-prod:analytics_raw
+```
+
+```json
+{
+  "datasetReference": {
+    "datasetId": "analytics_raw",
+    "projectId": "northstar-prod"
+  },
+  "description": "Raw checkout and business events",
+  "location": "US"
+}
+```
 
 Now the team needs a table. A good event table stores business fields plus pipeline fields that help with debugging and deduplication. `event_id` gives every event a stable identity. `event_timestamp` records when the checkout action happened. `ingested_at` records when the row arrived in BigQuery. Those two times differ when mobile clients reconnect late or a backfill runs after an incident.
 
@@ -115,6 +126,30 @@ bq load \
 
 Batch loading also gives the team a clean backfill path. If the application missed events during a deploy, the team can replay files into a specific date partition and compare counts against the source system. That matters in production because analytics bugs often show up as quiet number drift during a business review.
 
+The load job output should say `DONE`, and the details should show input files, output rows, and bad records. Beginners should learn to check that row count before trusting a dashboard.
+
+```console
+Upload complete.
+Waiting on bqjob_r34b6c2f0d9a7_00000190e0... (3s) Current status: DONE
+
+bq show -j --format=prettyjson bqjob_r34b6c2f0d9a7_00000190e0
+```
+
+```json
+{
+  "status": {
+    "state": "DONE"
+  },
+  "statistics": {
+    "load": {
+      "inputFiles": "24",
+      "outputRows": "1843921",
+      "badRecords": "0"
+    }
+  }
+}
+```
+
 For live events, Pub/Sub gives the checkout service a durable event stream. BigQuery can receive Pub/Sub messages through a **BigQuery subscription** when the messages already match the destination table and need little transformation. This removes the need to run a separate subscriber application for simple export cases.
 
 ```bash
@@ -123,6 +158,22 @@ gcloud pubsub subscriptions create checkout-events-to-bigquery \
   --bigquery-table=northstar-prod:analytics_raw.checkout_events \
   --use-topic-schema \
   --write-metadata
+```
+
+The important flags are `--bigquery-table`, which names the table that consumes messages; `--use-topic-schema`, which asks Pub/Sub to use the topic schema as the table contract; and `--write-metadata`, which adds Pub/Sub metadata fields for debugging delivery. A read-back should show the table, topic, and state.
+
+```bash
+gcloud pubsub subscriptions describe checkout-events-to-bigquery \
+  --format='yaml(topic,bigqueryConfig.table,bigqueryConfig.useTopicSchema,bigqueryConfig.writeMetadata,state)'
+```
+
+```yaml
+topic: projects/northstar-prod/topics/checkout-events
+bigqueryConfig:
+  table: projects/northstar-prod/datasets/analytics_raw/tables/checkout_events
+  useTopicSchema: true
+  writeMetadata: true
+state: ACTIVE
 ```
 
 When the data needs richer processing, Dataflow usually enters the story. Dataflow can read from Pub/Sub, validate payloads, add lookup data, window events by event time, route bad records to a dead-letter topic, and write clean rows to BigQuery. This helps when the checkout event needs enrichment from a merchant table or when the team wants an hourly aggregate table for dashboards.
@@ -169,6 +220,9 @@ A healthy event table design usually follows this pattern:
 
 Good layout helps, but a warehouse still needs budget guardrails. The next section follows the same query into BigQuery's cost and compute controls.
 
+![BigQuery table design](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-table-design.png)
+*Partitioning narrows the dates BigQuery reads, and clustering helps it skip blocks inside those dates. The dry run estimate gives the analyst a cost signal before the query runs.*
+
 ## Query Cost, Slots, and Guardrails
 <!-- section-summary: BigQuery costs and speed depend on bytes read, query shape, and available slots, so production teams add limits before analysts make mistakes. -->
 
@@ -186,6 +240,13 @@ bq query \
      AND event_timestamp < TIMESTAMP("2026-06-15 00:00:00+00")'
 ```
 
+A dry run does not return rows. It returns an estimate, and that estimate is the beginner-friendly signal. A small query over one day might scan megabytes or a few gigabytes; a missing partition filter can jump to terabytes.
+
+```console
+Query successfully validated. Assuming the tables are not modified,
+running this query will process 314572800 bytes of data.
+```
+
 The second guardrail is a maximum bytes billed limit. This tells BigQuery to fail the job if it would exceed the configured limit. Analysts can still explore, and one missing filter fails before it quietly scans a huge table.
 
 ```bash
@@ -197,6 +258,13 @@ bq query \
    WHERE event_timestamp >= TIMESTAMP("2026-06-14 00:00:00+00")
      AND event_timestamp < TIMESTAMP("2026-06-15 00:00:00+00")
    GROUP BY payment_provider'
+```
+
+If the query would cross the limit, BigQuery fails before charging for the full scan. That failure is useful because it points directly to a missing filter or a table design problem.
+
+```console
+Error in query string: Query exceeded limit for bytes billed: 5000000000.
+31415926535 or higher required.
 ```
 
 The third guardrail is a curated layer. Dashboards should rarely hit the raw event firehose directly. A scheduled query can build a smaller hourly table, and a dashboard can read that table instead of recalculating from raw rows every minute.
@@ -307,6 +375,23 @@ FROM `northstar-prod.analytics_marts.checkout_events_clean`
 FOR SYSTEM_TIME AS OF TIMESTAMP('2026-06-14 10:30:00+00');
 ```
 
+The restore query is consumed by BigQuery as a new table write. The verification query should compare row counts and a few business totals before anyone points dashboards at the recovered table.
+
+```sql
+SELECT
+  COUNT(*) AS recovered_rows,
+  COUNTIF(status = 'payment_failed') AS recovered_failures
+FROM `northstar-prod.analytics_marts.checkout_events_clean_recovered`;
+```
+
+```console
++----------------+--------------------+
+| recovered_rows | recovered_failures |
++----------------+--------------------+
+|        1843921 |              28391 |
++----------------+--------------------+
+```
+
 Time travel is a short recovery tool. Long-term recovery usually comes from stronger habits: immutable raw files in Cloud Storage, table snapshots for important cutovers, scheduled exports for compliance, and tested replay jobs. Northstar Shop keeps raw event files for the retention period required by policy, then rebuilds curated tables from raw events when a transform bug affects more than the time travel window.
 
 Recovery also includes ownership. Every important dataset should have labels, documented owners, and alerting for failed scheduled queries or failed ingestion jobs. Data incidents often start quietly: a dashboard number drops to zero, a partition stops receiving rows, or a schema update silently sends records to an error table. The warehouse needs the same operational care as application services.
@@ -321,6 +406,9 @@ Datasets separate raw and curated work. Tables carry explicit schemas, pipeline 
 The data layer also has a safety story. Deduplication chooses one curated row per event. Late-arrival rules reprocess recent partitions. Views publish useful business answers without exposing raw customer fields. IAM grants write access to services, transform access to data engineers, and read access to analysts. Time travel, snapshots, raw-file retention, and replay jobs give the team recovery options when the numbers go wrong.
 
 That is the BigQuery pattern in practical terms: keep customer-facing requests fast in the operational database, then send durable business facts into BigQuery so the organization can ask large historical questions safely. The warehouse earns its place when the team can trust both the numbers and the operating path that produced them.
+
+![BigQuery operating loop](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-operating-loop.png)
+*The operating loop repeats: load data, validate schema and counts, guard query cost, share curated views, watch jobs, and keep a recovery path ready for bad loads or bad transforms.*
 
 ## What's Next
 <!-- section-summary: The next storage article moves from analytical tables to attached disks and shared filesystems for VM-based workloads. -->

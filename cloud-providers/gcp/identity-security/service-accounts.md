@@ -38,6 +38,9 @@ This article follows one practical setup. The application is `devpolaris-orders-
 
 The important split is simple: **runtime identity** handles what the app can do after it starts, and **deploy identity** handles what the release system can change while shipping the app. Mixing those two creates messy permissions, noisy logs, and risky escalation paths. Keeping them separate makes the access story easier to inspect during normal operations and during incidents.
 
+![Runtime and deploy identity split](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/runtime-deploy-identity-split.png)
+*The deploy identity changes the Cloud Run service, while the runtime identity calls APIs after the container starts. Keeping those lanes separate gives logs and reviews a clean story.*
+
 ## Service Accounts as Principals and Resources
 <!-- section-summary: A service account can call APIs as a principal, and it also has its own IAM policy that controls who can attach or impersonate it. -->
 
@@ -59,6 +62,19 @@ gcloud secrets add-iam-policy-binding orders-db-password \
   --role="roles/secretmanager.secretAccessor"
 ```
 
+Run this command when the runtime service account needs to read the payload of this one secret. The `--member` value is the caller that will appear in audit logs, and `--role` grants the predefined permission bundle that includes `secretmanager.versions.access`.
+
+Expected output should show the service account in the secret's policy:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+  role: roles/secretmanager.secretAccessor
+etag: BwYF4b9tL7E=
+version: 1
+```
+
 Here is the service-account-resource side for Cloud Run deployment. The deployer receives permission on the runtime service account, because attaching a service account to a Cloud Run revision requires permission to act as that service account:
 
 ```bash
@@ -67,6 +83,17 @@ gcloud iam service-accounts add-iam-policy-binding \
   --project=devpolaris-prod \
   --member="serviceAccount:deployer-ci@devpolaris-prod.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
+```
+
+This command changes the IAM policy on the service account resource itself. The target service account appears as the first argument, while `--member` names the deployer that may attach it to Cloud Run. A healthy result should show the deployer under `roles/iam.serviceAccountUser` on `orders-api-runtime@...`:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:deployer-ci@devpolaris-prod.iam.gserviceaccount.com
+  role: roles/iam.serviceAccountUser
+etag: BwYF4cK0m2Q=
+version: 1
 ```
 
 Those two bindings solve different problems. The first binding lets the running Orders API read a secret. The second binding lets the deployment identity attach the runtime identity to a Cloud Run service. If the second binding gets granted too broadly, a person or pipeline can attach a powerful service account to compute they control and then run code with that service account's access.
@@ -90,6 +117,17 @@ gcloud run deploy devpolaris-orders-api \
   --service-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
 ```
 
+You would run this from the deployment identity after the deployer has permission to update the service and attach the runtime service account. The `--image` value selects the container artifact, and `--service-account` is the runtime identity that the new revision will use after it starts.
+
+The deploy output should name the service URL and show the deployment succeeded:
+
+```yaml
+Deploying container to Cloud Run service [devpolaris-orders-api] in project [devpolaris-prod] region [us-central1]
+OK Deploying new service revision... Done.
+Service [devpolaris-orders-api] revision [devpolaris-orders-api-00042-qmz] has been deployed.
+URL: https://devpolaris-orders-api-7a2kucx3uq-uc.a.run.app
+```
+
 Cloud Run services with no explicit service account fall back to a default Compute Engine service account. That default account often carries more access than one application needs, especially in older projects where automatic Editor grants still exist. A named runtime identity gives the Orders API a smaller permission boundary and clearer logs.
 
 Compute Engine uses the same idea with VMs. A VM can have one attached service account at a time, and applications on the VM can use that attached account to call Google Cloud APIs. Compute Engine also has **access scopes**, which can further limit OAuth-based API access, so the usual modern setup grants the VM the `cloud-platform` scope and controls real access with IAM roles on the service account.
@@ -102,6 +140,16 @@ gcloud compute instances create orders-worker-1 \
   --scopes=https://www.googleapis.com/auth/cloud-platform
 ```
 
+The `--service-account` flag attaches the VM runtime identity, and `--scopes` leaves enough OAuth room for Google API calls while IAM roles still decide what the account can do. A healthy create command prints the VM, zone, status, and external or internal addresses:
+
+```yaml
+NAME: orders-worker-1
+ZONE: us-central1-a
+MACHINE_TYPE: e2-medium
+STATUS: RUNNING
+SERVICE_ACCOUNT: orders-worker-runtime@devpolaris-prod.iam.gserviceaccount.com
+```
+
 Cloud Functions also has a runtime service account. For current Cloud Run functions, each function can run as a named service account, and the deploy command can set it with `--service-account`. Event handlers usually need narrower access than a full API backend, so a function that only processes order events can use `orders-events-runtime@...` instead of sharing the Orders API account.
 
 ```bash
@@ -112,6 +160,16 @@ gcloud functions deploy orders-on-payment-settled \
   --runtime=nodejs22 \
   --trigger-topic=payment-settled \
   --service-account=orders-events-runtime@devpolaris-prod.iam.gserviceaccount.com
+```
+
+Here `--gen2` deploys the current Cloud Run functions generation, `--trigger-topic` connects the function to the event source, and `--service-account` sets the identity used by the function code. The output should show an active service config and the chosen service account:
+
+```yaml
+buildConfig:
+  runtime: nodejs22
+serviceConfig:
+  serviceAccountEmail: orders-events-runtime@devpolaris-prod.iam.gserviceaccount.com
+state: ACTIVE
 ```
 
 GKE has one extra layer because Kubernetes also has service accounts. A Pod runs as a **Kubernetes ServiceAccount**, and Google Cloud IAM can recognize that Kubernetes identity through Workload Identity Federation for GKE. That lets Pods call Google Cloud APIs without node-level keys and without every Pod sharing the node's service account.
@@ -134,6 +192,15 @@ gcloud auth application-default login \
   --impersonate-service-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
 ```
 
+Run this on a developer workstation when local code should use short-lived credentials for the same runtime service account Cloud Run uses. The developer signs in as a human first, and IAM checks whether that human can impersonate `orders-api-runtime@...`.
+
+Successful setup writes a local ADC file and warns that the generated file uses impersonation:
+
+```yaml
+Credentials saved to file: [/Users/maya/.config/gcloud/application_default_credentials.json]
+These credentials will impersonate service account [orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com].
+```
+
 After that setup, application code stays simple. A Node.js service can create a client without loading a JSON key path, because ADC handles the authentication lookup:
 
 ```js
@@ -147,6 +214,11 @@ const [version] = await secrets.accessSecretVersion({
 
 const databasePassword = version.payload?.data?.toString("utf8");
 ```
+
+This code is consumed by the Orders API at runtime. The important part is what is missing: there is no key filename, no password printed to logs, and no conditional branch for local versus Cloud Run authentication. ADC supplies the credential source around the code.
+
+![ADC credential lookup](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/adc-credential-lookup.png)
+*ADC keeps authentication outside application code, but the lookup order matters because an environment variable can override the runtime identity you expected.*
 
 The same code works in Cloud Run because ADC reaches the metadata server and receives credentials for `orders-api-runtime@...`. It works in a properly configured CI job because ADC can read a Workload Identity Federation credential configuration and exchange the CI provider's token for Google credentials. This keeps authentication outside the application code, where security teams and platform teams can manage it.
 
@@ -171,6 +243,15 @@ For day-to-day `gcloud` work, impersonation can happen per command. The followin
 gcloud storage buckets list \
   --project=devpolaris-prod \
   --impersonate-service-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+```
+
+The `--impersonate-service-account` flag makes this one command request short-lived credentials for the runtime account. The output should reflect the runtime account's permissions, so seeing only the approved buckets is a useful check:
+
+```yaml
+---
+name: gs://devpolaris-order-exports-prod
+location: US-CENTRAL1
+storageClass: STANDARD
 ```
 
 For release automation, `deployer-ci@devpolaris-prod.iam.gserviceaccount.com` is usually the right impersonation target. The deployer can update Cloud Run, write a new revision, read deployment metadata, and attach `orders-api-runtime@...`. The runtime account keeps the permissions the running application needs, like reading a secret or publishing an event.
@@ -200,6 +281,21 @@ For the Orders API, a legacy migration usually starts with inventory. List the k
 gcloud iam service-accounts keys list \
   --iam-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com \
   --project=devpolaris-prod
+```
+
+This inventory command is read-only and should run before migration work. `--iam-account` selects the service account being inspected. A healthy keyless runtime usually has no user-managed keys:
+
+```yaml
+Listed 0 items.
+```
+
+If a legacy key exists, the output gives the key ID and creation time the team needs for the migration ticket:
+
+```yaml
+KEY_ID: 4f7a8b2c9d0e1234567890abcdef1234567890ab
+CREATED_AT: 2024-11-02T18:41:13Z
+EXPIRES_AT: 9999-12-31T23:59:59Z
+DISABLED: False
 ```
 
 After the application runs successfully on attached identity or federation, the old key should leave circulation. A key that remains "just in case" often turns into the credential everyone forgets until a leak or audit finds it. Organization policies can help by blocking new key creation and key upload across production projects, with documented exceptions for the few systems that still need them.
@@ -235,6 +331,17 @@ gcloud iam workload-identity-pools providers create-oidc github-devpolaris-order
   --attribute-condition="assertion.repository_owner=='devpolaris' && assertion.repository=='devpolaris/devpolaris-orders-api' && assertion.ref=='refs/heads/main'"
 ```
 
+This creates the trust rule for the external CI issuer. `--issuer-uri` names the token issuer, `--attribute-mapping` copies trusted token claims into IAM attributes, and `--attribute-condition` rejects jobs outside the approved owner, repository, and branch.
+
+Expected output should show the provider name, issuer, and state:
+
+```yaml
+name: projects/123456789012/locations/global/workloadIdentityPools/ci-prod/providers/github-devpolaris-orders
+issuerUri: https://token.actions.githubusercontent.com/
+state: ACTIVE
+attributeCondition: assertion.repository_owner=='devpolaris' && assertion.repository=='devpolaris/devpolaris-orders-api' && assertion.ref=='refs/heads/main'
+```
+
 The service account policy then allows only the matching federated principal set to impersonate `deployer-ci@...`. The project number belongs in the principal identifier, and the role goes on the service account resource:
 
 ```bash
@@ -243,6 +350,17 @@ gcloud iam service-accounts add-iam-policy-binding \
   --project=devpolaris-prod \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/ci-prod/attribute.repository/devpolaris/devpolaris-orders-api"
+```
+
+This binding is consumed during impersonation. The member string selects identities from the pool whose mapped `attribute.repository` equals the repository path, and `roles/iam.workloadIdentityUser` lets those identities impersonate the deployer service account. The updated policy should include that principal set under the role:
+
+```yaml
+bindings:
+- members:
+  - principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/ci-prod/attribute.repository/devpolaris/devpolaris-orders-api
+  role: roles/iam.workloadIdentityUser
+etag: BwYF4hW9vjs=
+version: 1
 ```
 
 The GitHub workflow then asks GitHub for an ID token and lets the Google auth action create a credential configuration file. Tools that understand ADC, including `gcloud`, client libraries, and Terraform, can use that file during the job:
@@ -271,6 +389,11 @@ jobs:
             --service-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
 ```
 
+The workflow consumes the provider and service-account binding from the previous commands. `id-token: write` allows the job to request an OIDC token, `workload_identity_provider` points at the provider resource, and `service_account` selects the deployer identity that the job will impersonate. The deploy step then attaches the separate runtime identity to the service.
+
+![Keyless CI/CD federation](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/keyless-cicd-federation.png)
+*A keyless deployment starts with the CI system's own short-lived token, maps trusted claims, impersonates the deployer, and leaves runtime API access with the runtime service account.*
+
 GitLab CI follows the same idea with the `https://gitlab.com` issuer and GitLab ID token claims such as `namespace_id`, `project_id`, `environment`, and `ref_path`. A good production condition uses stable IDs and the deployment environment, for example accepting only jobs from the approved group and the `production` environment. The job writes the ID token to a temporary file, writes a Workload Identity Federation credential configuration, and points `GOOGLE_APPLICATION_CREDENTIALS` at that configuration for the duration of the job.
 
 HCP Terraform also uses OIDC, usually with issuer `https://app.terraform.io`. Terraform workspaces should map stable claims such as `terraform_organization_id` and `terraform_workspace_id`, then restrict the provider to the production workspace. Google Cloud documents one important detail here: HCP Terraform uses service account impersonation rather than direct resource access, so the workspace identity needs `roles/iam.workloadIdentityUser` on the deployer service account.
@@ -286,9 +409,11 @@ The key names matter. A **Kubernetes ServiceAccount** is a Kubernetes object suc
 
 Direct resource access gives IAM roles to the Kubernetes principal identifier. For an Orders API Pod in namespace `orders` using Kubernetes ServiceAccount `orders-api`, the principal identifier follows this shape:
 
-```bash
+```console
 principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/devpolaris-prod.svc.id.goog/subject/ns/orders/sa/orders-api
 ```
+
+That principal string is copied into IAM bindings. The project number identifies the workload identity pool, and the `subject/ns/orders/sa/orders-api` suffix identifies the Kubernetes namespace and ServiceAccount.
 
 A secret binding can then target that Kubernetes principal directly:
 
@@ -298,6 +423,8 @@ gcloud secrets add-iam-policy-binding orders-db-password \
   --member="principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/devpolaris-prod.svc.id.goog/subject/ns/orders/sa/orders-api" \
   --role="roles/secretmanager.secretAccessor"
 ```
+
+This direct binding lets the Kubernetes ServiceAccount read the secret without impersonating an IAM service account. The output should show the Kubernetes principal under Secret Accessor on `orders-db-password`.
 
 The impersonation pattern links the Kubernetes ServiceAccount to an IAM service account. The Kubernetes principal receives `roles/iam.workloadIdentityUser` on `orders-api-runtime@...`, and the Pod receives Google credentials through the GKE metadata server. This pattern helps when a library, tool, or audit convention expects an IAM service account email as the final caller.
 
@@ -311,6 +438,12 @@ gcloud iam service-accounts add-iam-policy-binding \
 kubectl annotate serviceaccount orders-api \
   --namespace=orders \
   iam.gke.io/gcp-service-account=orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+```
+
+The first command grants impersonation on the IAM service account resource. The annotation tells GKE which IAM service account the Kubernetes ServiceAccount should impersonate. A healthy annotation command confirms the object was changed:
+
+```yaml
+serviceaccount/orders-api annotated
 ```
 
 The usual production checklist has four parts. The cluster and node pools use the GKE metadata server. The Pod spec sets `serviceAccountName: orders-api`. IAM grants access to the Kubernetes principal or grants impersonation on the target IAM service account. The application uses ADC, so the code never loads a mounted key file.
@@ -336,10 +469,15 @@ spec:
           image: us-central1-docker.pkg.dev/devpolaris-prod/orders/devpolaris-orders-api:2026-06-14
 ```
 
+This manifest is consumed by the Kubernetes Deployment controller. The `serviceAccountName` field is the key identity field: every Pod created from this template runs as the `orders/orders-api` Kubernetes ServiceAccount, which is the identity IAM bindings or annotations refer to.
+
+![GKE workload identity choices](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/gke-workload-identity-choices.png)
+*GKE can grant access directly to the Kubernetes principal or let that principal impersonate an IAM service account; both paths keep JSON keys out of Pods.*
+
 This keeps GKE permissions at the Pod level instead of the node level. If one namespace needs Secret Manager access and another namespace only needs Pub/Sub publishing, their Kubernetes ServiceAccounts can receive different IAM bindings. A compromised Pod then carries the permissions of its own service account rather than the combined permissions of every workload on the node.
 
 ## Debugging Service Account Access Failures
-<!-- section-summary: Access failures become easier to debug when you separate caller identity, resource role, service-account-resource permissions, runtime attachment, and policy guardrails. -->
+<!-- section-summary: Access failures are easier to debug when you separate caller identity, resource role, service-account-resource permissions, runtime attachment, and policy guardrails. -->
 
 The common production error sounds like this: "this service account cannot access that resource." The fix starts by turning that sentence into the same IAM questions every time. Which principal made the call, which permission did the API require, which resource received the request, and which policy allowed or blocked it?
 
@@ -352,11 +490,30 @@ gcloud run services describe devpolaris-orders-api \
   --format="value(template.serviceAccount)"
 ```
 
+Run this first when a Cloud Run access failure appears, because it verifies the runtime identity actually attached to the deployed service. A healthy output for our scenario is a single email:
+
+```yaml
+orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+```
+
 Cloud Audit Logs usually answer the caller question during a real failure. Filter for the principal email, the denied status, and the target service. A `PERMISSION_DENIED` entry that shows `deployer-ci@...` means the deployment identity made the denied call. A denied entry that shows `orders-api-runtime@...` means the running application made the denied call.
 
-```bash
+```logging
 protoPayload.authenticationInfo.principalEmail="orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com"
 protoPayload.status.code=7
+```
+
+Use this as the core of a Logs Explorer query, then add a time window and service name. A matching result should show `status.code=7`, the caller, the method, and the resource that rejected the request:
+
+```yaml
+protoPayload:
+  authenticationInfo:
+    principalEmail: orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
+  methodName: google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion
+  resourceName: projects/devpolaris-prod/secrets/orders-db-password/versions/5
+  status:
+    code: 7
+    message: Permission denied
 ```
 
 The missing permission comes next, because role names can hide the exact failing API check. Secret Manager secret access uses a permission such as `secretmanager.versions.access`. Cloud Storage object reads use storage object permissions. Cloud Run deployment needs Cloud Run permissions, and attaching a service account also needs permission on the service account resource. Error messages often name the exact missing permission, and that name tells you which role or custom role to inspect.
@@ -367,6 +524,22 @@ The resource boundary comes after the permission. A role on the project may appl
 gcloud secrets get-iam-policy orders-db-password \
   --project=devpolaris-prod \
   --format=json
+```
+
+Run this after you know the failing resource is the secret. The `--format=json` flag keeps the output easy to diff or feed into review tooling. A healthy policy includes the runtime account under Secret Accessor:
+
+```json
+{
+  "bindings": [
+    {
+      "members": [
+        "serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/secretmanager.secretAccessor"
+    }
+  ],
+  "etag": "BwYF4iU7VqM="
+}
 ```
 
 After that, check the service account as a resource. A failed Cloud Run deploy might have nothing to do with Secret Manager. The deployer could be missing `roles/iam.serviceAccountUser` on `orders-api-runtime@...`, so it cannot attach that identity to the revision. A failed WIF job could be missing `roles/iam.workloadIdentityUser` on `deployer-ci@...`, so the external principal cannot impersonate the deployer service account.

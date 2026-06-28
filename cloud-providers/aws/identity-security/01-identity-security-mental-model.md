@@ -32,10 +32,14 @@ aliases:
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
 
-## The Root User
-<!-- section-summary: The account begins with one identity that owns everything, so daily AWS work needs a safer access path. -->
+This article builds the AWS access picture in layers. First comes the account owner, then named people, then groups, then the problem with long-lived access keys. After that, roles and Identity Center give the safer daily pattern: short-lived sessions for humans, applications, and automation. Policies describe what those sessions may do, least privilege keeps the permission small, and MFA protects the sign-in path.
 
-The moment you create an AWS account, you get a **root user**. This identity has unrestricted access to everything in the account: every service, every resource, every billing configuration. A normal IAM policy cannot limit what this identity can do. It can delete infrastructure, close the account, change billing settings, and recover access after an IAM lockout.
+The example is a small team building an image upload service. Alice is the first administrator, Bob is an application developer, Carlos runs the deployment scripts, and Diana reviews security evidence. The application stores images in S3, runs thumbnail code in Lambda, and later grows into multiple accounts. The names are simple, but they match a real production question: which identity should each person or workload use, and how much access should that identity receive?
+
+## The Root User
+<!-- section-summary: The account has one identity that owns everything, so daily AWS work needs a safer access path. -->
+
+Imagine that same tiny company opening its first AWS account. The moment that account exists, it has a **root user**. This identity has unrestricted access to everything in the account: every service, every resource, every billing configuration. A normal IAM policy cannot limit what this identity can do. It can delete infrastructure, close the account, change billing settings, and recover access after an IAM lockout.
 
 Think of it like the master key to a building. You need it to exist. You might need it in a real emergency, like when the only remaining administrators are locked out. But you do not carry a master key around for daily work. You lock it away.
 
@@ -59,7 +63,7 @@ But here's the thing. You just created three sets of long-lived credentials that
 We'll come back to why that is dangerous. First, deal with the more immediate headache: what happens when the team goes from 3 users to 15?
 
 ## IAM Groups
-<!-- section-summary: Groups reduce repeated permission work when teams grow, but they do not remove the underlying static credentials. -->
+<!-- section-summary: Groups reduce repeated permission work when teams grow, while the underlying static credentials remain. -->
 
 With 3 users, you can manage permissions individually. Attach a policy to Alice, copy a similar one to Bob, make a small exception for Carlos. With 15 users, this falls apart fast.
 
@@ -146,6 +150,8 @@ Trust policy, telling AWS that EC2 instances can assume this role:
 }
 ```
 
+The trust policy is the entry rule for the role. `Principal` names the trusted caller, and in this case the trusted caller is the EC2 service. `Action` is `sts:AssumeRole` because the caller is asking AWS STS for a temporary role session. This policy does not grant S3 access by itself. It only says EC2 is allowed to enter the role.
+
 Permission policy, granting the role access to a specific S3 bucket:
 
 ```json
@@ -167,7 +173,7 @@ Permission policy, granting the role access to a specific S3 bucket:
 }
 ```
 
-Notice the two-ARN pattern for S3. The bucket ARN without a suffix allows `ListBucket` on the bucket itself. The ARN with `/*` allows `GetObject` on the objects inside. Omitting either one is a common reason for staring at `AccessDenied` even when the policy looks close.
+The permission policy answers the second question: what can the role session do after EC2 enters the role? `Action` names the S3 API permissions. `Resource` names the bucket and object paths. The bucket ARN without a suffix allows `ListBucket` on the bucket itself. The ARN with `/*` allows `GetObject` on the objects inside. Omitting either one is a common reason for staring at `AccessDenied` even when the policy looks close.
 
 You attach this role to the EC2 instance through an **instance profile**, which is the wrapper EC2 uses to place an IAM role on an instance. The AWS SDK running on that instance automatically fetches temporary credentials from the instance metadata service, uses them to call S3, and refreshes them before they expire. No keys in config files. No secrets to rotate. No credentials that outlast the runtime that needed them.
 
@@ -262,6 +268,11 @@ So now you know how permissions are expressed. Policies define what is allowed. 
 
 To answer that, use least privilege.
 
+![The request gate shows how AWS checks the caller, action, resource, context, and policy result before allowing an API call](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-request-gate.png)
+
+*The request gate shows how AWS checks the caller, action, resource, context, and policy result before allowing an API call.*
+
+
 ## Least Privilege
 <!-- section-summary: Least privilege starts broad only when needed, then narrows access to the actions and resources actually used. -->
 
@@ -269,11 +280,13 @@ To answer that, use least privilege.
 
 A practical way to get there is to narrow access in stages.
 
-**Phase 1: Start with a broad but temporary starting point.** When a new Lambda function needs S3 access in a development account, you might start with read access to S3 so the team can prove the workflow. That read access is broader than the final policy should be, but it gets the first version moving in a low-risk place.
+**Phase 1: Use a broad but temporary starting point.** When a new Lambda function needs S3 access in a development account, you might use read access to S3 so the team can prove the workflow. That read access is broader than the final policy should be, but it gets the first version moving in a low-risk place.
 
 **Phase 2: Monitor actual usage.** CloudTrail records API calls. After the function has been running through normal workflows for a few weeks, you have data on which S3 actions it really uses and which buckets it touches.
 
 **Phase 3: Generate a scoped policy.** IAM Access Analyzer can review CloudTrail activity and generate a policy template based on the actions the identity actually used. Access Analyzer is AWS tooling for analyzing policies and access paths. Review still matters, but the reviewer now has evidence instead of guesses.
+
+The review step is where teams keep the generated policy from becoming a rubber stamp. A generated draft might show `s3:PutObject` because the Lambda function wrote uploads during the observation window, but a human still checks the bucket ARN, object prefix, KMS key path, and whether the action happened in development or production. For a sensitive workflow, the team can test the narrowed policy in a development account, run the normal upload path, and then check CloudTrail again before moving the policy to production.
 
 **Phase 4: Review and maintain.** Use IAM last accessed information to spot permissions that have not been used. If a role has had `dynamodb:DeleteTable` for six months and never used it, remove it. DynamoDB is AWS's managed table-like database. Permissions drift over time, so schedule reviews.
 
@@ -380,6 +393,8 @@ For IAM users, you can enforce MFA through policy. Here is a pattern that denies
 
 This forces users to configure MFA before they can do anything else. When they sign in without MFA, the only actions available are the ones needed to set up MFA. Once MFA is active, the condition no longer matches, the deny does not apply, and their normal permissions can take effect.
 
+The important field is `NotAction`. This deny applies to every action except the small list needed for MFA setup and session creation. `BoolIfExists` checks the MFA context on the request and treats missing MFA context as a match for the deny. The review question for this policy is practical: can a new user still enroll MFA, and can a user without MFA do anything beyond that setup path?
+
 ## Putting It All Together
 <!-- section-summary: The full IAM model locks root away, replaces static secrets with sessions, and uses policies to control each request. -->
 
@@ -436,6 +451,16 @@ The diagram connects the pieces in the order we introduced them.
 Compare this to the original pile of IAM users with long-lived keys. The improved model changes daily operations. Onboarding takes minutes instead of a manual IAM checklist. Offboarding stops new access from one directory change. Incident response goes from "find every copy of the leaked key" to "the session expired and the role has one narrow policy."
 
 IAM is the access foundation that keeps AWS manageable after more people, workloads, accounts, and automation start using it.
+
+![The summary connects root protection, human access, workload roles, policy decisions, MFA, and least privilege into one IAM review path](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/identity-security-summary.png)
+
+*The summary connects root protection, human access, workload roles, policy decisions, MFA, and least privilege into one IAM review path.*
+
+![The foundation summary keeps the core IAM ideas together: protected root access, human sessions, workload roles, policies, MFA, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-access-foundation-summary.png)
+
+*The foundation summary keeps the core IAM ideas together: protected root access, human sessions, workload roles, policies, MFA, and least privilege.*
+
+
 
 ## What's Next
 <!-- section-summary: The next article turns the model into daily access flows for engineers, applications, containers, and pipelines. -->

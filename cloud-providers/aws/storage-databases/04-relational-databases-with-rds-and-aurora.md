@@ -12,36 +12,54 @@ aliases:
   - cloud-providers/aws/storage-databases/rds-relational-databases.md
   - cloud-providers/aws/storage-databases/relational-databases-with-rds-and-aurora.md
 ---
-
 ## Table of Contents
 
-1. [When Data Needs Rules](#when-data-needs-rules)
-2. [RDS as Managed Relational Databases](#rds-as-managed-relational-databases)
-3. [Aurora as a Clustered Relational Engine](#aurora-as-a-clustered-relational-engine)
-4. [Network, Credentials, and Connections](#network-credentials-and-connections)
-5. [Backups, Multi-AZ, and Read Scaling](#backups-multi-az-and-read-scaling)
-6. [Schema Changes in Production](#schema-changes-in-production)
-7. [Operating Signals and Day-Two Work](#operating-signals-and-day-two-work)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Start With Checkout Records](#start-with-checkout-records)
+2. [Why Relational Databases Fit](#why-relational-databases-fit)
+3. [RDS for Managed Engines](#rds-for-managed-engines)
+4. [Aurora for AWS-Designed Relational Clusters](#aurora-for-aws-designed-relational-clusters)
+5. [Private Access and Credentials](#private-access-and-credentials)
+6. [Backups, Multi-AZ, and Read Scaling](#backups-multi-az-and-read-scaling)
+7. [Schema Changes](#schema-changes)
+8. [Operating Checklist](#operating-checklist)
+9. [References](#references)
 
-## When Data Needs Rules
+## Start With Checkout Records
 <!-- section-summary: Relational databases fit business records that need transactions, constraints, joins, and flexible SQL queries. -->
 
-Maple Market's checkout workflow has a very different data shape from product photos. A photo can sit in S3 as one object. An order is a group of related facts: customer, order header, line items, payment attempt, inventory reservation, shipping address, refund state, and audit trail. Those facts need rules.
+Maple Market's checkout workflow has several records that must agree. An order is created, payment is authorized, inventory is reserved, and an invoice event is saved. If payment fails, the order should not look paid. If inventory cannot be reserved, the payment should not quietly continue.
 
-A **relational database** stores structured records in tables and lets the application connect records through keys and constraints. A customer row can own many order rows. An order row can own many order item rows. A payment row can point back to the order it belongs to. SQL gives the application a query language for reading and joining those records.
+This is why relational databases are still common in cloud systems. They give applications **transactions**, **constraints**, **indexes**, and **SQL queries**. A transaction lets several changes commit together or roll back together. Constraints protect rules such as unique order numbers or required customer IDs. Indexes help queries find rows efficiently.
 
-The most important feature for checkout is the **transaction**. A transaction groups several database changes into one unit of work. Maple Market can create the order, insert the order items, record the payment authorization, and reserve inventory in one transaction. If a step fails, the database can roll the group back so the system avoids half-written orders.
+A small order lookup might look like this:
 
-Here is a small version of that shape. The schema shows why keys and constraints matter for order data.
+```sql
+select o.id, o.status, p.status as payment_status, o.created_at
+from orders o
+join payments p on p.order_id = o.id
+where o.id = 'ord_123';
+```
+
+This data shape needs relationships and correctness more than simple key lookup speed. That points toward RDS or Aurora.
+
+The important beginner move is to keep the database responsible for rules that protect money and customer state. The application can validate inputs, but the database should also protect unique order IDs, required fields, foreign key relationships, and transactional updates. That gives the system a second line of defense when retries, deploys, or background jobs behave badly.
+
+## Why Relational Databases Fit
+<!-- section-summary: The database engine protects relationships between rows while the application still owns schema design and release safety. -->
+
+A relational database stores structured rows in tables. Tables can reference each other. The database can enforce primary keys, foreign keys, uniqueness, and transactional changes. SQL lets the team ask new questions without creating a new access path for every query.
+
+For Maple Market, `orders`, `order_items`, `payments`, and `inventory_reservations` are related. The team wants a transaction around checkout and reports that join the records later. A document store or key-value table might handle some flows, but the relational fit is strong because the records need constraints and joins.
+
+The managed service reduces infrastructure work while the application team still designs tables, writes migrations, adds indexes, reviews slow queries, handles connection pooling, and protects credentials.
+
+A small schema shows the shape:
 
 ```sql
 create table orders (
   id uuid primary key,
   customer_id uuid not null,
   status text not null,
-  total_cents integer not null,
   created_at timestamptz not null default now()
 );
 
@@ -49,81 +67,65 @@ create table order_items (
   id uuid primary key,
   order_id uuid not null references orders(id),
   sku text not null,
-  quantity integer not null,
-  unit_price_cents integer not null
+  quantity integer not null check (quantity > 0)
 );
 ```
 
-The `order_items.order_id` reference protects the relationship. An item must point to an existing order. That kind of rule belongs in the database when it protects money, inventory, compliance, or customer-visible state.
+The foreign key and check constraint protect the data when application code changes, a worker retries, or an admin script runs during an incident.
 
-AWS gives teams two main managed relational paths in this module: Amazon RDS and Amazon Aurora. Both run relational databases, but they package the infrastructure differently.
+![The transaction map shows why relational databases fit workflows that need consistent updates across related records](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/checkout-transaction-map.png)
 
-![Checkout transaction map showing order, items, payment, and inventory records committing or rolling back together](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/checkout-transaction-map.png)
+*The transaction map shows why relational databases fit workflows that need consistent updates across related records.*
 
-*Checkout data needs all related records to succeed together or fail together.*
 
-## RDS as Managed Relational Databases
+## RDS for Managed Engines
 <!-- section-summary: RDS runs familiar relational database engines while AWS handles much of the host, backup, patching, and failover work. -->
 
-Amazon Relational Database Service, usually called **RDS**, runs managed relational databases. You choose an engine such as PostgreSQL, MySQL, MariaDB, Oracle, Microsoft SQL Server, or Db2 where supported. AWS provisions the database instance, storage, networking surface, backups, monitoring integration, and many maintenance operations.
+**Amazon RDS** runs managed relational database engines such as PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, and Db2 depending on current AWS support and Region. AWS handles much of the infrastructure work: provisioning, backups, patching options, monitoring integration, and Multi-AZ deployment options.
 
-RDS reduces infrastructure work. The team does not install the database server on a raw EC2 instance, write its own backup scripts, manually replace failed disks, or build every failover process from scratch. AWS handles much of that operational layer. The application team still owns the schema, indexes, SQL queries, migrations, credentials, capacity choices, and data correctness.
+RDS is a good fit when the team wants a familiar engine with managed operations. If the app already uses PostgreSQL, RDS for PostgreSQL lets the team keep normal PostgreSQL behavior while reducing server management work.
 
-That boundary matters. If Maple Market writes a slow query with a missing index, RDS will faithfully run the slow query. If a migration drops a column the application still reads, RDS will not know the release plan. If a connection pool opens too many sessions, the database can still hit connection pressure. Managed infrastructure does not remove database engineering.
+A minimal creation command for a private PostgreSQL database might include a DB subnet group, no public accessibility, and storage encryption:
 
-When creating an RDS database, teams choose several things. These choices shape cost, performance, recovery, and access before the first table is created.
+```bash
+aws rds create-db-instance \
+  --db-instance-identifier maple-prod-postgres \
+  --engine postgres \
+  --db-instance-class db.m7g.large \
+  --allocated-storage 100 \
+  --db-subnet-group-name maple-prod-db-subnets \
+  --vpc-security-group-ids sg-0mapledb \
+  --no-publicly-accessible \
+  --storage-encrypted
+```
 
-| Choice | What it controls |
-|---|---|
-| Engine and version | SQL dialect, features, extension support, upgrade path |
-| Instance class | CPU, memory, network capacity, and connection headroom |
-| Storage type and size | IOPS, throughput, growth, and cost behavior |
-| VPC and subnet group | Which private subnets host database network interfaces |
-| Security groups | Which clients can reach the database port |
-| Backups and retention | Restore window and snapshot behavior |
-| Maintenance window | When AWS can apply approved maintenance work |
-| Monitoring | Metrics, logs, performance insights, and alarms |
+`--db-instance-identifier` names the database instance in RDS. `--engine` selects PostgreSQL in this example. `--db-instance-class` chooses the compute size. `--allocated-storage` sets the initial storage size in GiB. `--db-subnet-group-name` places the database in the approved private database subnets. `--vpc-security-group-ids` attaches the database security group. `--no-publicly-accessible` keeps it off the public internet, and `--storage-encrypted` enables storage encryption.
 
-For new designs, teams usually choose current SSD-backed RDS storage options such as general purpose or provisioned IOPS storage based on measured needs. AWS documentation now marks magnetic storage as previous-generation or deprecated, so it should not be the default choice for a new production database.
+Real production creation also needs parameter groups, backup windows, maintenance windows, monitoring choices, and secrets handling.
 
-RDS is the managed path for familiar database engines. Aurora is also relational, but its storage and cluster architecture are different enough to explain separately.
+The RDS creation choices shape future work. Engine version controls extension support and upgrade planning. Instance class controls CPU, memory, and connection headroom. Storage type and size control IOPS, throughput, and growth. The DB subnet group controls private placement. The maintenance window controls when approved service work can happen. Infrastructure code should make these choices visible instead of leaving them as console defaults.
 
-## Aurora as a Clustered Relational Engine
+## Aurora for AWS-Designed Relational Clusters
 <!-- section-summary: Aurora is a MySQL-compatible and PostgreSQL-compatible relational engine with a distributed cluster storage design. -->
 
-Amazon Aurora is a managed relational database engine compatible with MySQL and PostgreSQL. Compatibility means many existing tools, drivers, and SQL habits can carry over, depending on engine version and feature use. Aurora still lives under the RDS service family in the AWS console and APIs, but the engine architecture differs from standard RDS engines.
+**Amazon Aurora** is AWS's relational database engine with MySQL-compatible and PostgreSQL-compatible editions. Aurora uses a cluster design with distributed storage and separate writer and reader endpoints.
 
-Aurora uses a **DB cluster**. A cluster has a distributed cluster volume and one or more DB instances attached to it. One instance is the writer. Reader instances can serve read traffic and can be promoted during failover. The cluster volume stores data across multiple Availability Zones, and the Aurora storage layer handles replication and repair work behind the service boundary.
+Aurora can help when a workload needs relational behavior, managed high availability, and read scaling through replicas. The application still uses MySQL or PostgreSQL-compatible drivers, but the operations model differs from a single RDS instance.
 
-This architecture changes how teams think about scale and failover. In a standard RDS PostgreSQL deployment, scaling reads usually means adding read replicas that replicate from the source database. In Aurora, reader instances attach to the cluster storage design and use cluster endpoints such as writer and reader endpoints. Applications should connect to the right endpoint for the job.
+Choose Aurora when the workload benefits from its cluster model, availability features, replica behavior, or performance profile. For small workloads, standard RDS may be simpler and cheaper.
 
-Aurora often fits Maple Market if the checkout database needs strong relational behavior plus higher read scale, faster failover characteristics, or Aurora-specific features. Standard RDS still fits many production systems very well, especially when the team wants a familiar managed engine shape and does not need Aurora-specific architecture.
+Aurora applications should use the right endpoint. Write traffic uses the writer endpoint. Read-heavy traffic can use a reader endpoint when the application tolerates replica lag. Checkout confirmation often reads from the writer immediately after a write, while dashboards or support views may tolerate a reader. That endpoint choice belongs in application configuration and runbooks.
 
-Here is the beginner comparison. The point is to decide which operating shape fits the workload, not to rank one service above the other.
-
-| Need | RDS | Aurora |
-|---|---|---|
-| Familiar managed engine | Strong fit | Strong fit for MySQL/PostgreSQL-compatible workloads |
-| Engine variety | More engine families | MySQL-compatible and PostgreSQL-compatible |
-| Storage model | DB instance storage model | Distributed cluster volume |
-| Read scaling | Read replicas where supported | Reader instances and reader endpoint |
-| Failover model | Multi-AZ options by deployment type | Cluster failover among instances |
-| Operational feel | Closer to a managed traditional database | More cluster-oriented |
-
-Aurora is still a relational database. It still needs schema design, indexes, query review, migrations, credentials, backups, and connection planning.
-
-## Network, Credentials, and Connections
+## Private Access and Credentials
 <!-- section-summary: Production relational databases need private network paths, managed secrets, and connection controls before traffic arrives. -->
 
-A production database should have a clear access path. Maple Market's checkout database belongs in private subnets. The application service should connect from its own private runtime through security groups. The database should avoid direct public exposure for normal application traffic.
+A production database should sit in private database subnets. The database security group should allow the application security group on the database port. Avoid public accessibility unless there is a reviewed and temporary operational reason.
 
-The main AWS network pieces are **DB subnet groups** and **security groups**. A DB subnet group tells RDS which subnets it can use. Security groups control which sources can connect to the database port. A common setup allows inbound PostgreSQL traffic from the application service security group and from a narrow operations access path, while every other source stays outside the database port.
+Credentials should live in a managed secret store such as AWS Secrets Manager. Applications read the secret through their task or instance role. Rotation can be added when the engine, app, and operational process support it.
 
-Credentials need the same care. A database password sitting in a container image, GitHub secret, or shared `.env` file creates avoidable risk. In AWS production systems, teams commonly store database credentials in AWS Secrets Manager, grant the application role permission to read the specific secret, and load the value at runtime. Where supported, Secrets Manager can help with password rotation.
+Connection counts need planning. Web apps can create too many database connections during traffic spikes. Use application pooling, RDS Proxy where it fits, and database limits that match the engine. A connection storm can take down a healthy database.
 
-Connection counts can surprise teams. Relational databases allocate memory and process resources for connections. If Maple Market scales from 5 application tasks to 80 tasks and each task opens 50 connections, the database may spend more energy managing sessions than serving useful queries. This is why applications use connection pools, and why some AWS architectures add **RDS Proxy** between serverless or bursty applications and the database.
-
-An application configuration might look like this. The values make the runtime endpoint, secret source, and pool behavior visible.
+An application config should name the database endpoint, secret source, and pool limit clearly:
 
 ```bash
 DATABASE_HOST=orders.cluster-abc123.us-east-1.rds.amazonaws.com
@@ -133,126 +135,167 @@ DATABASE_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/or
 DATABASE_POOL_MAX=15
 ```
 
-That small configuration names the endpoint, database, secret source, and connection pool limit. The code should fetch the secret through the AWS SDK using the runtime role, create a bounded pool, and fail startup if required configuration is missing. This is ordinary engineering work, but it prevents a lot of late-night database incidents.
+The app should fetch credentials through its runtime role, create a bounded pool, and fail startup when required settings are missing. That is ordinary code, and it prevents many database incidents.
 
-![Private database path showing app tasks, task role, Secrets Manager, RDS Proxy, security group, Multi-AZ, and RDS or Aurora in private subnets](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/private-database-path.png)
+RDS Proxy can help when many short-lived connections create pressure on the database, especially from Lambda or bursty application fleets. It sits between the application and the database, pools connections, and integrates with Secrets Manager for credentials. The application still needs correct transaction behavior and timeout handling because a proxy cannot repair inefficient SQL or unbounded connection use.
 
-*The database path combines network access, secret access, and connection control.*
+```bash
+aws rds describe-db-proxies \
+  --db-proxy-name maple-orders-proxy \
+  --region us-east-1 \
+  --query 'DBProxies[].{Name:DBProxyName,Status:Status,Endpoint:Endpoint,Auth:Auth}'
+```
+
+A healthy response is short enough to read during a deploy:
+
+```json
+[
+  {
+    "Name": "maple-orders-proxy",
+    "Status": "available",
+    "Endpoint": "maple-orders-proxy.proxy-abc123.us-east-1.rds.amazonaws.com",
+    "Auth": [
+      {
+        "AuthScheme": "SECRETS",
+        "SecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/orders-db",
+        "IAMAuth": "DISABLED"
+      }
+    ]
+  }
+]
+```
+
+`Status` should be `available` before the application depends on the proxy. `Endpoint` is the hostname the app connects to instead of the database endpoint. `Auth` shows how the proxy is configured to use Secrets Manager or IAM authentication. Empty output usually means the proxy name, account, or Region is wrong.
+
+For a beginner, the key idea is simple: the database has a finite number of connections. Every web worker, Lambda invocation, background job, and admin script can compete for that limit. Pool settings are production configuration, not small code details.
+
+![The private database path shows how app subnet placement, security groups, Secrets Manager, and IAM/KMS permissions protect database access](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/private-database-path.png)
+
+*The private database path shows how app subnet placement, security groups, Secrets Manager, and IAM/KMS permissions protect database access.*
+
 
 ## Backups, Multi-AZ, and Read Scaling
 <!-- section-summary: Availability, historical recovery, and read capacity solve different database problems and need separate design choices. -->
 
-Database resilience has a few layers, and each layer solves a different problem. **Backups** help recover historical data. **Multi-AZ** helps with infrastructure availability. **Read replicas or reader instances** help with read scale and sometimes regional read locality. Mixing these up leads to weak recovery plans.
+Backups, Multi-AZ, and read replicas solve different problems. Automated backups and point-in-time recovery help restore from mistakes, corruption, or bad deploys. Multi-AZ deployment helps availability when an instance or Availability Zone has a problem. Read replicas help some read-heavy workloads by moving read queries away from the writer.
 
-RDS automated backups support point-in-time recovery inside the configured retention window. RDS stores transaction logs so a team can restore to a new database at a specific time within that window. Aurora has its own backup behavior around the cluster volume and point-in-time restore. The important production habit is the same: pick a retention window, document the restore process, and test restore into a non-production target.
+Write these choices separately in the design review:
 
-Multi-AZ deployments help the database stay available during host, storage, or Availability Zone problems. A Multi-AZ DB instance deployment maintains a standby DB instance in another Availability Zone for failover support. Multi-AZ DB cluster deployments use a writer and two readable standby instances in separate Availability Zones for supported engines. Aurora clusters use their own cluster architecture and failover behavior. These designs protect uptime, but they are live copies of current state, so bad application writes can still replicate.
+- Recovery: point-in-time restore target, backup retention, restore test schedule.
+- Availability: Multi-AZ or Aurora cluster design, failover expectations, maintenance window.
+- Read scale: replica purpose, query routing, replica lag tolerance.
 
-Read scaling is its own design. RDS read replicas and Aurora reader instances can move read-heavy work away from the writer. Maple Market might send dashboard reads or product browsing queries to a reader while checkout writes stay on the writer. The application needs to understand that read replicas can have lag, so a user who just placed an order may need to read from the writer for the immediate confirmation path.
+A backup setting needs a tested restore beside it. Practice restoring into a new database and running validation queries so the team knows the runbook works.
 
-Backup, availability, and read scale should each appear in the design. A short written note keeps the team from treating one feature as a substitute for another.
+High availability and historical recovery should not be mixed together. Multi-AZ helps the service fail over when infrastructure has a problem. Automated backups and snapshots help restore older data after a bad write, bad deploy, or accidental delete. A bad `delete from orders` can replicate to every live copy, so the restore plan still matters.
 
-```markdown
-Recovery: automated backups retained for approved window; monthly restore drill into staging
-Availability: Multi-AZ enabled for production writer path
-Read scale: dashboard queries use reader endpoint; checkout confirmation reads writer
+A restore drill should have a target and a query. For example, restore the database to a new instance at yesterday 13:00, connect from a private test client, and run a small set of business checks:
+
+```sql
+select count(*) from orders where created_at::date = date '2026-06-23';
+select status, count(*) from payments group by status;
+select max(created_at) from inventory_reservations;
 ```
 
-That plain note prevents the common mistake of treating one resilience feature as if it solved every resilience problem. It also gives on-call engineers a faster way to understand why the database was built this way.
+The point is to prove that the restored database is usable, not merely that AWS created a new instance. After a restore, the team still needs subnet access, security group access, credentials, parameter settings, and a plan for copying selected data back or switching a test application to the restored database.
 
-## Schema Changes in Production
+## Schema Changes
 <!-- section-summary: Safe schema changes use staged migrations so old and new application versions can run during a deployment. -->
 
-Relational databases make it easy to protect data with schema rules. They also make deployments more sensitive because application code and schema must stay compatible while releases roll through. Maple Market cannot break checkout because one app task still expects an old column while another task writes the new shape.
+Relational databases need safe schema releases. A risky migration can block writes, break old application versions, or hold locks during peak traffic. Treat migrations like production code.
 
-The safest habit is **expand and contract**. The first step expands the schema in a backward-compatible way, often with a new nullable column, new table, or new index while old code still works. The next application release writes both old and new shapes or reads from the new shape with fallback. A backfill job updates existing rows after that. After the system runs safely and all old code is gone, the final step contracts the schema by removing the old column or old path.
+A safer pattern is expand, deploy, backfill, switch, and contract. Add a nullable column first. Deploy code that writes both old and new fields. Backfill in batches. Switch reads after validation. Remove the old column in a later release.
 
-For example, Maple Market wants to store invoice delivery state separately from order status. A safer first migration adds a new column without breaking old reads. The existing application can keep running while the new column appears:
-
-```sql
-alter table orders
-add column invoice_delivery_status text;
-
-create index concurrently idx_orders_invoice_delivery_status
-on orders (invoice_delivery_status);
-```
-
-Then the application starts writing `invoice_delivery_status` for new orders and a backfill job updates older rows in batches. The batch size should be tested against production-like data.
+Example first step:
 
 ```sql
-with batch as (
-  select id
-  from orders
-  where invoice_delivery_status is null
-    and status = 'invoiced'
-  order by created_at
-  limit 1000
-)
-update orders
-set invoice_delivery_status = 'sent'
-from batch
-where orders.id = batch.id;
+alter table orders add column fulfillment_status text;
+create index concurrently idx_orders_fulfillment_status on orders (fulfillment_status);
 ```
 
-The exact SQL batching pattern varies by engine. The important idea is that backfills should be measured, restartable, and gentle on production. Large locks, table rewrites, and long transactions can hurt live traffic. Teams should test migrations on production-like data, review query plans, and keep rollback steps ready before the release window.
+The exact syntax depends on the engine. PostgreSQL supports `concurrently` for some index operations, while other engines use different online DDL behavior. Always test the migration on production-like data volume.
 
-Schema changes are where database engineering meets deployment engineering. RDS and Aurora provide managed infrastructure, but the team still owns this release choreography.
+Backfills need batching. A migration that updates ten million rows in one transaction can create locks, replication lag, table bloat, and a painful rollback. A safer backfill updates small batches, records progress, watches database metrics, and can pause between batches. The application release should tolerate old and new columns during that period.
 
-## Operating Signals and Day-Two Work
-<!-- section-summary: Relational databases need ongoing review of query latency, locks, storage growth, connections, backups, and engine lifecycle. -->
+A production migration ticket should show the exact order:
 
-After launch, the database sits near the center of the operating surface for the system. Maple Market should watch signals that explain user-facing symptoms and database health.
+1. Add backward-compatible schema such as nullable columns or new tables.
+2. Deploy code that can read old and new shapes.
+3. Backfill in batches with progress logging.
+4. Compare old and new values with validation queries.
+5. Switch reads after validation.
+6. Remove old structures in a later release after rollback risk has passed.
 
-The core signals include CPU, memory, free storage, read and write IOPS, disk queue depth, connections, transaction rate, replica lag, deadlocks, lock waits, slow queries, failed logins, backup completion, and failover events. RDS Performance Insights and database engine logs can help teams connect slow application endpoints to specific SQL statements.
+That order protects rolling deployments. During an ECS or Lambda rollout, old and new code may run at the same time for several minutes. The database schema must support both versions during that overlap, or the deployment itself creates the outage.
 
-Indexes need maintenance as product behavior changes. A query that was fine with 10,000 rows can hurt with 50 million rows. Teams should review slow queries, inspect query plans, add indexes deliberately, and remove unused indexes that slow writes. For PostgreSQL, teams also need to watch vacuum health and table bloat. For MySQL-compatible engines, teams watch different engine-specific metrics and configuration choices.
+Slow query work is part of the same operating surface. Enable the engine's supported slow query logging path, review high-latency statements, and add indexes based on real query plans. Adding an index without checking write impact can slow checkout writes, so database changes deserve the same review as application code.
 
-Engine versions need lifecycle planning. Open-source database major versions eventually leave standard support windows. AWS offers paths such as upgrades and, in some cases, paid extended support. A production team should keep an engine-version calendar so a database upgrade is planned work, not a surprise ticket near end of support.
-
-A simple monthly database review can cover several recurring questions. The review should produce decisions or tickets, not just a screenshot of graphs.
-
-| Review item | Question |
-|---|---|
-| Backups | Did the latest restore drill work? |
-| Connections | Are pools sized for current task counts? |
-| Queries | Which SQL statements dominate latency and load? |
-| Storage | Is growth expected, and does autoscaling or capacity planning match it? |
-| Replicas | Are lag and failover behavior acceptable for the app paths using them? |
-| Patching | Are maintenance windows and engine versions still healthy? |
-| Security | Are secrets, security groups, and audit logs still scoped correctly? |
-
-This regular care keeps the managed database healthy as the application grows. It also helps the team catch slow drift before it turns into a customer-facing incident.
-
-## Putting It All Together
+## Operating Checklist
 <!-- section-summary: RDS and Aurora solve relational infrastructure operations, while the team still owns schema, queries, access, and releases. -->
 
-Maple Market uses a relational database for checkout because orders, payments, inventory, and refunds need transactions, constraints, and SQL. RDS gives the team familiar managed database engines. Aurora gives the team a MySQL-compatible or PostgreSQL-compatible clustered engine with a distributed storage design. Both choices need private networking, scoped security groups, managed secrets, connection pooling, backups, availability planning, migrations, monitoring, and version lifecycle work.
+Review these items before launch:
 
-The beginner mistake is thinking the service choice is the whole design. The service choice is only the first part. The real production design says which engine runs, where the endpoint lives, which role can get the secret, how many connections each app can open, how restores are tested, how schema changes roll out, and which metrics wake someone up.
+- Engine, version, instance or cluster class, and upgrade policy are documented.
+- Database subnets are private and spread across Availability Zones.
+- Security groups allow only approved application paths.
+- Credentials live in Secrets Manager or an approved secret process.
+- Connection pooling and max connection behavior are tested.
+- Automated backups and restore drills are scheduled.
+- Slow query, lock, CPU, memory, storage, and connection metrics have alarms.
+- Schema migration rollback and backfill plans are written before release.
 
-That is the shape of managed relational databases on AWS: AWS carries a large part of the infrastructure burden, and your team still carries the data contract. The best teams respect both halves.
+RDS and Aurora reduce database infrastructure work. The team still owns database engineering: data correctness, query health, schema releases, and access design.
 
-![Relational database review checklist covering engine version, private endpoint, secrets, connection pool, backups plus Multi-AZ, and safe migrations](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/relational-database-review.png)
+Useful operating commands include:
 
-*RDS and Aurora reduce infrastructure work, while the team still owns schema, queries, access, and release safety.*
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier maple-prod-postgres \
+  --query 'DBInstances[*].{Public:PubliclyAccessible,MultiAZ:MultiAZ,Subnets:DBSubnetGroup.Subnets[*].SubnetIdentifier,Backup:BackupRetentionPeriod}'
 
-## What's Next
-<!-- section-summary: The next article explains DynamoDB for high-scale key-based access patterns that do not need relational joins. -->
+aws rds describe-db-snapshots \
+  --db-instance-identifier maple-prod-postgres \
+  --snapshot-type automated \
+  --query 'DBSnapshots[0:3].{Snapshot:DBSnapshotIdentifier,Status:Status,CreateTime:SnapshotCreateTime,Encrypted:Encrypted}'
+```
 
-Relational databases are excellent for structured records and transactions. Some data needs fast key-based access at very high request rates, with fewer joins and a different modeling style. The next article covers NoSQL with DynamoDB.
+The first command checks whether the database is private, whether Multi-AZ is enabled, which subnets it uses, and how many backup retention days are configured. A healthy production output might look like this:
 
----
+```json
+[
+  {
+    "Public": false,
+    "MultiAZ": true,
+    "Subnets": ["subnet-0aaa1111", "subnet-0bbb2222", "subnet-0ccc3333"],
+    "Backup": 7
+  }
+]
+```
 
-**References**
+The second command proves automated snapshots exist and keeps the output to the first few snapshot records:
 
-- [What is Amazon RDS?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html) - Describes RDS engines, instances, backups, Multi-AZ, and managed database operations.
-- [Amazon RDS storage](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html) - Documents RDS storage types and current storage guidance.
-- [Working with a DB instance in a VPC](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html) - Explains subnet groups, VPC placement, and private database networking.
-- [RDS Multi-AZ DB instance deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html) - Explains synchronous standby replication and failover for Multi-AZ DB instances.
-- [Multi-AZ DB cluster deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts.html) - Documents the writer plus readable standby cluster deployment mode for supported engines.
-- [Amazon RDS read replicas](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html) - Covers read replica use cases and replication behavior.
-- [What is Amazon Aurora?](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/CHAP_AuroraOverview.html) - Defines Aurora as a MySQL-compatible and PostgreSQL-compatible managed relational database engine.
-- [Amazon Aurora DB clusters](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html) - Explains cluster instances, endpoints, and Aurora cluster architecture.
-- [Amazon Aurora storage and reliability](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html) - Details Aurora cluster volume storage behavior and reliability design.
-- [AWS Secrets Manager integration with Amazon RDS](https://docs.aws.amazon.com/secretsmanager/latest/userguide/integration_rds.html) - Covers credential storage and rotation integration.
-- [Managing connections with RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) - Explains connection pooling and proxy behavior for RDS and Aurora.
+```json
+[
+  {
+    "Snapshot": "rds:maple-prod-postgres-2026-06-24-04-10",
+    "Status": "available",
+    "CreateTime": "2026-06-24T04:10:31.123000+00:00",
+    "Encrypted": true
+  }
+]
+```
+
+`Public: false` confirms the public access setting. `MultiAZ: true` confirms the availability choice. `Backup: 7` means automated backups are retained for seven days. Snapshot `Status` should be `available` before the team counts on it for restore. If either command returns empty or surprising values, the team should fix the recovery design before trusting the database with production orders.
+
+![The review summary collects backup, Multi-AZ, credentials, schema changes, monitoring, and restore-test evidence for RDS and Aurora](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/relational-database-review.png)
+
+*The review summary collects backup, Multi-AZ, credentials, schema changes, monitoring, and restore-test evidence for RDS and Aurora.*
+
+
+## References
+
+- [Amazon RDS documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
+- [Amazon Aurora documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/CHAP_AuroraOverview.html)
+- [Amazon RDS documentation: Backing up and restoring](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_CommonTasks.BackupRestore.html)
+- [Amazon RDS documentation: Multi-AZ deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html)
+- [AWS Secrets Manager documentation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)

@@ -12,256 +12,377 @@ aliases:
   - cloud-providers/aws/storage-databases/dynamodb-tables-and-access-patterns.md
   - cloud-providers/aws/storage-databases/nosql-with-dynamodb.md
 ---
-
 ## Table of Contents
 
-1. [When Key-Based Data Fits](#when-key-based-data-fits)
-2. [Tables, Items, and Primary Keys](#tables-items-and-primary-keys)
-3. [Access Patterns Before Attributes](#access-patterns-before-attributes)
-4. [Conditional Writes and Idempotency](#conditional-writes-and-idempotency)
+1. [Start With a Cart Lookup](#start-with-a-cart-lookup)
+2. [Tables, Items, and Keys](#tables-items-and-keys)
+3. [Design Access Patterns First](#design-access-patterns-first)
+4. [Conditional Writes](#conditional-writes)
 5. [Indexes, Streams, TTL, and Global Tables](#indexes-streams-ttl-and-global-tables)
-6. [Capacity, Hot Keys, and Observability](#capacity-hot-keys-and-observability)
-7. [Production Table Checklist](#production-table-checklist)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+6. [Capacity and Hot Keys](#capacity-and-hot-keys)
+7. [Production Checklist](#production-checklist)
+8. [References](#references)
 
-## When Key-Based Data Fits
+## Start With a Cart Lookup
 <!-- section-summary: DynamoDB fits high-volume data that applications read and write through known keys and predictable access patterns. -->
 
-Maple Market already has a relational checkout database for orders and payments. That database is the right home for transactions, joins, constraints, and flexible SQL reporting. The application also has data that behaves differently: shopping carts, login sessions, rate-limit counters, feature flags, and payment idempotency records.
+Maple Market's shopping cart has a simple hot path. A customer opens the site, the app loads the cart by customer ID, updates item quantities, and saves the result. The app knows the main question before table design starts: "give me this customer's active cart."
 
-Those records usually have one thing in common. The application knows the key before it reads or writes the data. It asks for cart `CART#8842`, session `SESSION#abc`, or payment request `REQUEST#pay_771`. The request path wants a fast answer for a known key at high traffic, while flexible reporting and many-table joins still belong in the relational part of the system.
+That is the kind of workload Amazon DynamoDB handles well. **DynamoDB** is a managed NoSQL database for fast key-based reads and writes at large scale. It is strongest when the application knows its access patterns and can design keys around them.
 
-Amazon DynamoDB is a managed NoSQL database for this kind of access. **NoSQL** is a broad term, but in this article it means DynamoDB stores items in tables and routes reads and writes through primary keys and indexes instead of SQL joins. AWS manages the servers and storage partitions behind the service. Your team designs the keys, item shapes, indexes, capacity mode, and access patterns.
+DynamoDB needs intentional table design. Start with reads and writes, then choose table keys and indexes that serve those paths.
 
-That design shift is the big beginner hurdle. In a relational database, you often start with normalized entities and then write SQL queries. In DynamoDB, teams start with the questions the application must answer quickly. "Get cart by customer." "Add item to cart." "Create idempotency record if request ID is new." "Find open carts by account for support." The table design follows those access patterns.
+This is the main difference from starting with SQL tables. With DynamoDB, you do not begin by normalizing every noun into a table. You begin with exact questions the app asks under load. If the app cannot name those questions, the table design will probably drift into scans, hot keys, and expensive indexes.
 
-## Tables, Items, and Primary Keys
+## Tables, Items, and Keys
 <!-- section-summary: DynamoDB tables store flexible items, and every item is addressed through a primary key. -->
 
-A DynamoDB **table** is a collection of **items**. An item is a group of attributes. Attributes can be strings, numbers, booleans, lists, maps, sets, and other supported value types. Items in the same table can have different attributes, which gives DynamoDB flexibility for mixed item shapes.
+A DynamoDB table stores **items**. An item is a set of attributes, similar to a JSON-like record. Every item has a primary key. The primary key can be a partition key alone, or a partition key plus sort key.
 
-Every item needs a **primary key**. A simple primary key has only a partition key. A composite primary key has a partition key and a sort key. The partition key decides how DynamoDB routes the item to physical storage partitions. The sort key lets many related items share the same partition key while staying ordered and uniquely addressed inside that partition key.
-
-For Maple Market, a cart item could look like this. The `pk` and `sk` values are part of the application contract, and reviewers should treat them as designed API fields.
+For a cart table, one item might look like this:
 
 ```json
 {
-  "pk": "CUSTOMER#771",
+  "pk": "CUSTOMER#cust_123",
   "sk": "CART#active",
-  "cartId": "cart-8842",
   "items": [
-    {
-      "sku": "BAG-RED-01",
-      "quantity": 2
-    }
+    { "sku": "tea-001", "quantity": 2 },
+    { "sku": "mug-009", "quantity": 1 }
   ],
-  "updatedAt": "2026-06-13T11:40:00Z",
-  "expiresAt": 1781350800
+  "updatedAt": "2026-06-24T10:15:00Z"
 }
 ```
 
-The partition key `CUSTOMER#771` groups records related to one customer. The sort key `CART#active` names the active cart. A query can ask DynamoDB for the item with that exact key. Another query could request all items under `CUSTOMER#771` if the table stores more customer-scoped items.
+The partition key decides how data is distributed and found. The sort key lets you group related items and query ranges or prefixes under the same partition key. Good keys match real application questions.
 
-The primary key is more than a label. It affects performance and scale. DynamoDB distributes data by partition key. If many requests hit the same partition key at the same time, that key can get hot. A hot key is a key that receives too much traffic compared with the rest of the table. Good partition key design spreads work across many keys while still matching the reads the application needs.
+The item size limit is part of the design. A cart can store a reasonable list of items, but a growing history of every cart change may belong in separate items, S3, or an event stream. Large items cost more to read and write, and they can make a simple lookup carry data the request does not need.
 
-This is why naming keys deserves review. `CUSTOMER#771` may work for carts if each customer has moderate traffic. A celebrity live event or flash sale counter under one key could overload that key. For high-write counters, teams often shard the key, write to multiple buckets such as `COUNTER#sale-2026#shard-03`, and aggregate results later.
+The application reads this item by key, so the hot request can avoid scanning the table. A small SDK-style call uses the same `pk` and `sk` values the design wrote down:
 
-![DynamoDB key routing infographic showing a cart request, partition key hash, storage partitions, selected cart item, and hot key warning](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-key-routing.png)
+```js
+const response = await dynamo.send(new GetCommand({
+  TableName: "maple-carts-prod",
+  Key: {
+    pk: "CUSTOMER#cust_123",
+    sk: "CART#active"
+  }
+}));
+```
 
-*The partition key is both an address and a traffic distribution choice.*
+That call is the reason the key design matters. The app is not asking DynamoDB to search every cart. It gives DynamoDB the exact key, and DynamoDB can route the request to the partition that owns that item.
 
-## Access Patterns Before Attributes
+![The key routing view shows how partition keys and sort keys decide where DynamoDB stores and finds an item](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-key-routing.png)
+
+*The key routing view shows how partition keys and sort keys decide where DynamoDB stores and finds an item.*
+
+
+## Design Access Patterns First
 <!-- section-summary: DynamoDB table design starts by listing exact reads and writes, then choosing keys and indexes that serve those paths. -->
 
-Before Maple Market creates a table, the team should write the access patterns. This is the DynamoDB design step that replaces "let's make tables for every noun." A useful access pattern names the caller, the key facts known at request time, and the result needed.
+Start by writing the exact operations. Maple Market might need these:
 
-Here is a small access-pattern list. Each row names what the caller knows and how the table should answer.
+- Get active cart by customer ID.
+- Update one cart after the customer changes quantity.
+- Create payment idempotency record by request ID.
+- Read recent sessions by customer for support.
+- Expire abandoned carts after 30 days.
 
-| Access pattern | Known values | DynamoDB path |
-|---|---|---|
-| Get active cart | `customerId` | `pk=CUSTOMER#771`, `sk=CART#active` |
-| Save cart | `customerId`, cart body | Put or update same cart item |
-| Create payment idempotency record | `requestId` | `pk=IDEMPOTENCY#pay_771`, `sk=REQUEST` |
-| Check session | `sessionId` | `pk=SESSION#abc`, `sk=PROFILE` |
-| List open carts for support | `accountId`, status | Global secondary index by account and status |
+Then design keys and indexes. The cart can use `pk = CUSTOMER#{id}` and `sk = CART#active`. Payment idempotency can use a separate table with `pk = IDEMPOTENCY#{requestId}`. Support session lookup may need a global secondary index if it uses a different key pattern.
 
-That table gives the design something concrete. The first four paths are direct key lookups. The support query needs a second access path because support knows account and status, not the exact customer cart key. That is where a **global secondary index**, usually called a GSI, can help.
-
-The item can carry extra attributes for future workflows, but those attributes do not make the table queryable by themselves. DynamoDB does not scan the whole table efficiently for every question. If the application needs to find data by a different key, the table usually needs an index or a separate projected item shape.
-
-This is the production lesson: write the real reads and writes before choosing keys. If the team cannot name the access patterns, DynamoDB design turns into guessing. If the access patterns are clear, DynamoDB can be very predictable.
-
-The first table command should match those access patterns instead of a generic table shape. This example creates the Maple Market app-state table with a composite primary key, on-demand capacity, and point-in-time recovery enabled after creation:
+A table creation command for the cart might look like this:
 
 ```bash
 aws dynamodb create-table \
-  --table-name maple-prod-app-state \
+  --table-name maple-carts-prod \
   --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
   --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST \
-  --deletion-protection-enabled
-
-aws dynamodb update-continuous-backups \
-  --table-name maple-prod-app-state \
-  --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+  --billing-mode PAY_PER_REQUEST
 ```
 
-The command makes two production choices visible. `PAY_PER_REQUEST` fits a new workload with uncertain traffic, while deletion protection and PITR reduce the chance that a bad operator action or application bug permanently removes table data.
+`pk` is the partition key, and `sk` is the sort key. `AttributeType=S` means both values are strings. `KeyType=HASH` marks the partition key, and `KeyType=RANGE` marks the sort key. The `PAY_PER_REQUEST` mode is often useful for spiky or early workloads. Provisioned capacity can make sense when traffic is predictable and the team wants tighter capacity control. After creation, check that the table reaches `ACTIVE` with `describe-table` or `aws dynamodb wait table-exists`.
 
-## Conditional Writes and Idempotency
-<!-- section-summary: Conditional writes let DynamoDB protect workflows from duplicate requests and unsafe overwrites. -->
+The inspection command should confirm the table shape before the application starts using it:
 
-One of DynamoDB's most useful production features is the **conditional write**. A conditional write says "write this item only if this condition is true." DynamoDB evaluates the condition atomically with the write. This lets a single table item act as a concurrency barrier.
+```bash
+aws dynamodb describe-table \
+  --table-name maple-carts-prod \
+  --query 'Table.{Status:TableStatus,Billing:BillingModeSummary.BillingMode,Keys:KeySchema,ItemCount:ItemCount}'
+```
 
-Maple Market uses conditional writes for payment idempotency. **Idempotency** means the same client request can arrive more than once and still produce one business result. Payment systems need this because browsers retry, networks time out, and users click buttons twice. The payment service should charge once, even if it receives the same request twice.
-
-The service can create an idempotency item with a condition that the item does not already exist. That single conditional write protects the workflow during retries.
+Example output:
 
 ```json
 {
-  "TableName": "maple-prod-app-state",
-  "Item": {
-    "pk": { "S": "IDEMPOTENCY#pay_771" },
-    "sk": { "S": "REQUEST" },
-    "status": { "S": "processing" },
-    "createdAt": { "S": "2026-06-13T12:00:00Z" },
-    "expiresAt": { "N": "1781352000" }
-  },
-  "ConditionExpression": "attribute_not_exists(pk)"
+  "Status": "ACTIVE",
+  "Billing": "PAY_PER_REQUEST",
+  "Keys": [
+    {
+      "AttributeName": "pk",
+      "KeyType": "HASH"
+    },
+    {
+      "AttributeName": "sk",
+      "KeyType": "RANGE"
+    }
+  ],
+  "ItemCount": 0
 }
 ```
 
-If the item already exists, DynamoDB rejects the write with a conditional check failure. The service can then read the existing item and return the already-created result or wait for the first request to finish. That is much safer than checking first and writing later because a check-then-write sequence can race under concurrent requests.
+`Status: ACTIVE` means the table is ready for traffic. `Billing` confirms the capacity mode. `Keys` should match the key design the team wrote down. `ItemCount` can lag behind real item count, so use it as a rough signal. Use dedicated reports, exports, or queries for billing and audit counts.
 
-The same conditional write is visible from the AWS CLI. A payment worker can use this shape during a smoke test before the application code owns the call:
+Map the access patterns before choosing indexes:
+
+| Access pattern | Key choice |
+| --- | --- |
+| Get active cart by customer | `pk = CUSTOMER#{customerId}`, `sk = CART#active` |
+| Store idempotency by request | `pk = REQUEST#{requestId}` in a separate table or item family |
+| Support lists recent sessions | GSI with `customerId` or normalized email plus time-based sort key |
+| Expire abandoned carts | TTL attribute such as `expiresAt` |
+
+This table is the contract between product behavior and database design.
+
+Some DynamoDB tables use a **single-table design**, where several item types share one table and use prefixes in `pk` and `sk`. That can reduce cross-table calls and support related queries, but it needs careful naming. A customer's active cart, past carts, sessions, and support notes might live under `pk = CUSTOMER#cust_123` with different sort key prefixes such as `CART#active`, `CART#2026-06-24`, `SESSION#2026-06-24T10:00:00Z`, and `NOTE#support_456`.
+
+Single-table design is useful when related access patterns are known. It is a poor place for guessing. If support later needs a lookup by email and the table has no key or GSI for email, the team may end up scanning. Write access patterns in a table before writing Terraform or clicking Create table.
+
+## Conditional Writes
+<!-- section-summary: Conditional writes let DynamoDB protect workflows from duplicate requests and unsafe overwrites. -->
+
+A **conditional write** tells DynamoDB to write only if a condition is true. This is very useful for duplicate payment requests. If the same request arrives twice, only the first request should create the idempotency record.
+
+An idempotency item can be written with a condition that the key does not already exist:
 
 ```bash
 aws dynamodb put-item \
-  --table-name maple-prod-app-state \
-  --item file://idempotency-item.json \
+  --table-name maple-payment-idempotency-prod \
+  --item '{"pk":{"S":"REQUEST#req_123"},"status":{"S":"started"}}' \
   --condition-expression 'attribute_not_exists(pk)'
 ```
 
-The expected duplicate-request signal is `ConditionalCheckFailedException`. For idempotency paths, responders should treat that error as a business conflict signal first. It often means the protection worked and a repeated request returned the existing payment result. The application logs should label that case clearly so responders can separate healthy duplicate suppression from unexpected write failures.
+If a duplicate request tries the same write, DynamoDB returns a conditional check failure. The app can then read the existing item and return the already recorded result. This protects the payment workflow from double charging when clients retry.
 
-DynamoDB also supports transactions for cases where multiple items need coordinated changes. Transactions are useful, but they should stay tied to clear access patterns and measured needs. If most of the application needs broad relational transactions and flexible joins, the data may belong in RDS or Aurora instead. For key-based concurrency barriers, DynamoDB conditional writes are often a clean fit.
+The failure is a useful application signal:
 
-![DynamoDB conditional write flow showing payment request, PutItem, item-missing condition, first request processing, duplicate returning saved result, and one charge](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/conditional-idempotency-flow.png)
+```bash
+An error occurred (ConditionalCheckFailedException) when calling the PutItem operation: The conditional request failed
+```
 
-*A conditional write can turn a retry-prone payment request into one safe business result.*
+The app should catch that exception, read `REQUEST#req_123`, and return the result already attached to that request. Treating the error as a normal duplicate path keeps retries safe.
+
+Conditional writes also help protect counters, ownership claims, and optimistic locking patterns. They are one of the main tools for correctness in key-value workflows.
+
+For optimistic locking, store a `version` attribute and update only when the current version matches the value the app read. If another request changed the item first, the conditional update fails and the app can retry or show a conflict. That protects carts and profile settings from last-writer-wins surprises.
+
+A cart quantity update can use a condition so the app does not recreate a deleted cart by accident:
+
+```bash
+aws dynamodb update-item \
+  --table-name maple-carts-prod \
+  --key '{"pk":{"S":"CUSTOMER#cust_123"},"sk":{"S":"CART#active"}}' \
+  --update-expression 'SET updatedAt = :now, items = :items' \
+  --condition-expression 'attribute_exists(pk)' \
+  --expression-attribute-values file://cart-update-values.json
+```
+
+The update expression sets `updatedAt` and `items` to placeholder values. Those placeholders, `:now` and `:items`, come from `cart-update-values.json`, which contains DynamoDB-typed values such as strings, numbers, lists, and maps. If the cart item no longer exists, DynamoDB returns `ConditionalCheckFailedException`, which the app should treat as a known business outcome.
+
+If the condition fails, the application should treat that as a business result. Maybe the cart expired, another checkout already completed, or the customer session is stale. DynamoDB gives the app a clean signal instead of silently writing unsafe state.
+
+![The idempotency flow shows how conditional writes protect a workflow from duplicate requests and repeated messages](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/conditional-idempotency-flow.png)
+
+*The idempotency flow shows how conditional writes protect a workflow from duplicate requests and repeated messages.*
+
 
 ## Indexes, Streams, TTL, and Global Tables
 <!-- section-summary: Secondary DynamoDB features support alternate lookups, event-driven workflows, expiry, and multi-Region table replicas. -->
 
-After primary keys, DynamoDB has several features that show up in real systems. Each feature should attach to a specific access path or operating need.
+A **global secondary index**, or GSI, supports an alternate key lookup. If support needs to find sessions by email, the table may need a GSI keyed by normalized email. Add indexes only for real access patterns because they add write cost and operational complexity.
 
-A **global secondary index** gives the table another key structure. Maple Market support wants to list open carts by account. The base table key is customer-oriented, so the team can add a GSI with `gsi1pk=ACCOUNT#42#CART_STATUS#open` and `gsi1sk=UPDATED#2026-06-13T11:40:00Z#CART#8842`. The support UI can query that index without scanning the whole table.
+**DynamoDB Streams** capture item changes in order per partition key. They can trigger Lambda functions or feed downstream processing. Maple Market might publish cart-abandoned events or update a search projection from stream records.
 
-GSIs have their own capacity and consistency behavior. Updates replicate from the base table into the index asynchronously, so a GSI read can lag behind the base table briefly. DynamoDB supports eventually consistent reads from GSIs. If Maple Market needs immediate read-after-write confirmation for a customer, that path should read the base item by primary key.
+**TTL**, or time to live, marks items for expiry with a timestamp attribute. It is useful for abandoned carts, sessions, and temporary idempotency records. TTL deletion is asynchronous, so the app should tolerate expired items that remain briefly.
 
-**DynamoDB Streams** capture item-level changes in a table. A stream can trigger Lambda or feed other processing. Maple Market can publish cart changes into a recommendation workflow or send idempotency completion events to an audit process. Streams are helpful when the application wants the table write to produce follow-up work without putting that work inside the user request.
+**Global tables** replicate DynamoDB data across Regions for multi-Region applications. Use them when the business needs multi-Region reads and writes, and design carefully for conflict behavior and regional failover.
 
-**Time to Live**, usually called TTL, lets DynamoDB delete expired items after a timestamp attribute passes. Sessions, abandoned carts, and idempotency records often have a natural expiry. TTL is an eventual background cleanup feature, so the application should still treat expired records carefully during reads. For example, it can check `expiresAt` and ignore a stale session even if DynamoDB has not removed the item yet.
+Streams and TTL also have timing details. Stream records are useful for event-driven processing, but downstream consumers need retry and dead-letter handling. TTL deletion is asynchronous, so expired carts may remain visible for a while. The application should check the expiry attribute itself when correctness depends on it.
 
-**Point-in-time recovery**, or PITR, helps recover from accidental writes or deletes by allowing restore to a previous point within the configured window. **Global tables** replicate a DynamoDB table across Regions for multi-Region applications. These features are powerful, and they also add operational work around replication, conflict behavior, cost, failover procedures, and testing.
+Indexes deserve their own review. A GSI copies selected table attributes into another access path. That means each write to the base table may also write to the index. If the index key is low-cardinality, such as `status = OPEN` for every active cart, the index can create a hot key. If the index projection includes large attributes the query never uses, it increases cost and write pressure.
 
-The feature list is tempting, but the design should stay anchored in access patterns. A GSI belongs in the table when one real query needs it. Streams belong in the design when one workflow consumes the change. TTL belongs on item families that expire. Global tables belong in a real multi-Region design that needs regional reads and writes.
+Streams turn table changes into records that downstream workers can process. A stream consumer that updates search, sends email, or publishes events needs idempotency just like an SQS worker. Store a processed event ID or make the side effect safe to repeat. The table update succeeded before the stream consumer ran, so downstream failure handling needs its own alarm and retry path.
 
-## Capacity, Hot Keys, and Observability
+Global tables add a multi-Region write path. They are useful when the application needs regional reads and writes, but conflict behavior must be part of the design. If two Regions update the same cart at nearly the same time, the application needs a clear rule for which value wins or how to prevent that situation. Global tables are a resilience feature and a data design choice together.
+
+## Capacity and Hot Keys
 <!-- section-summary: DynamoDB scale depends on capacity mode, key distribution, request shape, and monitoring signals. -->
 
-DynamoDB has two main capacity modes. **On-demand** mode charges per request and adjusts capacity automatically for variable traffic. It is a strong default for new workloads, unpredictable workloads, and teams that want less capacity planning. **Provisioned** mode lets teams set read and write capacity and use auto scaling, which can fit steady workloads with known patterns and cost optimization goals.
+DynamoDB performance depends heavily on key distribution. A **hot key** happens when too much traffic hits one partition key. For example, `pk = CART#active` for every customer would be a bad design because all active carts share one key. `pk = CUSTOMER#{id}` spreads carts by customer.
 
-Capacity mode does not erase data-model problems. If one partition key receives too much traffic, the table can still throttle that hot key even while other keys sit quiet. Maple Market should avoid designs where every live request updates `pk=GLOBAL#cart-count` or `pk=FLASHSALE#current` during a launch event. High-write shared counters usually need sharding, aggregation, or a different service pattern.
+Capacity mode matters too. On-demand capacity handles variable traffic without planning read and write units in advance. Provisioned capacity can be efficient for steady workloads, especially with auto scaling and clear traffic patterns.
 
-Read consistency also matters. DynamoDB can serve eventually consistent reads for lower cost and higher throughput in many paths. Strongly consistent reads are available for base table reads in a single Region, but not for GSI reads. The application should pick consistency based on the user path. A cart page right after a write may read the base item strongly. A support dashboard can usually accept slight delay from an index.
+Watch throttling, consumed capacity, hot partitions, item size, and latency. Also watch GSI behavior because an overloaded index can throttle table writes. A table can look healthy while one access pattern is creating pressure on one key or index.
 
-The main observability signals include throttled requests, consumed read and write capacity, successful request latency, system errors, user errors, hot partition symptoms, stream iterator age, conditional check failures, and account-level limits. Conditional check failures can be healthy if they represent duplicate payment requests being blocked, so alarms should separate expected business conflicts from unexpected failures.
+A practical debug path starts with metrics and the key value. If throttling appears, identify the operation, table or index, partition key shape, consumed capacity, and item size. A single tenant, promotion, or popular product can create a hot partition if the key design groups too much traffic under one value.
 
-A practical DynamoDB launch review includes one load test. Maple Market can generate traffic with realistic key distribution, not only random UUIDs. Random keys can make a bad design look good because they spread perfectly. Production traffic often has popular customers, hot products, repeated sessions, and launch spikes. The test data should include those shapes.
+For on-demand tables, throttling can still happen when traffic ramps sharply or when a partition key receives too much concentrated load. For provisioned tables, compare consumed read and write capacity with the provisioned settings and auto scaling history. In both modes, the key question is the same: is the workload spread across many partition key values, or is one value doing too much work?
 
-The basic operating signals can be pulled from CloudWatch before and after that load test:
+Useful production checks include:
 
 ```bash
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/DynamoDB \
-  --metric-name ReadThrottleEvents \
-  --dimensions Name=TableName,Value=maple-prod-app-state \
-  --start-time 2026-06-13T10:00:00Z \
-  --end-time 2026-06-13T11:00:00Z \
-  --period 60 \
-  --statistics Sum
+aws dynamodb describe-table \
+  --table-name maple-carts-prod \
+  --query 'Table.{Status:TableStatus,Billing:BillingModeSummary,ItemCount:ItemCount,KeySchema:KeySchema,GSIs:GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus,KeySchema:KeySchema}}'
 
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/DynamoDB \
-  --metric-name WriteThrottleEvents \
-  --dimensions Name=TableName,Value=maple-prod-app-state \
-  --start-time 2026-06-13T10:00:00Z \
-  --end-time 2026-06-13T11:00:00Z \
-  --period 60 \
-  --statistics Sum
-
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/DynamoDB \
-  --metric-name SuccessfulRequestLatency \
-  --dimensions Name=TableName,Value=maple-prod-app-state Name=Operation,Value=GetItem \
-  --start-time 2026-06-13T10:00:00Z \
-  --end-time 2026-06-13T11:00:00Z \
-  --period 60 \
-  --statistics Average Maximum
+aws cloudwatch describe-alarms \
+  --alarm-name-prefix maple-carts-prod \
+  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Reason:StateReason}'
 ```
 
-If throttles rise while total traffic stays modest, the team should look at key distribution before adding capacity. If `GetItem` latency rises only for one access path, the item size, key heat, or downstream application behavior may be the real problem.
+The table output gives responders the database shape:
 
-## Production Table Checklist
+```json
+{
+  "Status": "ACTIVE",
+  "Billing": {
+    "BillingMode": "PAY_PER_REQUEST",
+    "LastUpdateToPayPerRequestDateTime": "2026-06-01T09:00:00+00:00"
+  },
+  "ItemCount": 125438,
+  "KeySchema": [
+    {
+      "AttributeName": "pk",
+      "KeyType": "HASH"
+    },
+    {
+      "AttributeName": "sk",
+      "KeyType": "RANGE"
+    }
+  ],
+  "GSIs": [
+    {
+      "Name": "gsi-support-sessions",
+      "Status": "ACTIVE",
+      "KeySchema": [
+        {
+          "AttributeName": "supportLookup",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "createdAt",
+          "KeyType": "RANGE"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The alarm output tells the team whether AWS already sees trouble:
+
+```json
+[
+  {
+    "Name": "maple-carts-prod-throttled-writes",
+    "State": "OK",
+    "Reason": "Threshold Crossed: 1 datapoint was not greater than the threshold."
+  },
+  {
+    "Name": "maple-carts-prod-user-errors",
+    "State": "ALARM",
+    "Reason": "Validation exceptions increased during the last 5 minutes."
+  }
+]
+```
+
+Those commands supplement application tracing by giving responders table structure, billing mode, index state, and alarm state before changing capacity or code. If the table is active and alarms are quiet, the next place to look is the request key shape, item size, and application retry behavior.
+
+IAM boundaries should match the table and index access the application needs. A checkout service that reads and writes carts can receive access to one table and its indexes:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:123456789012:table/maple-carts-prod",
+        "arn:aws:dynamodb:us-east-1:123456789012:table/maple-carts-prod/index/*"
+      ]
+    }
+  ]
+}
+```
+
+That role should not need account-wide DynamoDB permissions. If the same service also writes events to a stream or queue, give that permission separately so a table access problem and an event publishing problem are easier to debug.
+
+## Production Checklist
 <!-- section-summary: DynamoDB production reviews should check access patterns, key heat, indexes, recovery, expiry, security, and cost. -->
 
-Before a DynamoDB table goes live, Maple Market can review it with a focused checklist. The checklist helps catch missing access patterns while the table is still easy to change.
+Review a DynamoDB design with concrete access patterns:
 
-| Area | Production check |
-|---|---|
-| Access patterns | Each read and write path is written down with known keys |
-| Primary key | Partition key distributes traffic and sort key supports item grouping |
-| Hot keys | Known popular keys have sharding, aggregation, or another mitigation |
-| GSIs | Each index maps to a real query and has expected consistency behavior documented |
-| Conditions | Duplicate-sensitive writes use conditional expressions |
-| Capacity | On-demand or provisioned mode matches traffic and cost goals |
-| TTL | Expiring items have a timestamp attribute and application-side stale checks |
-| Recovery | PITR or backup strategy matches data importance |
-| Streams | Stream consumers are idempotent and monitored for lag |
-| IAM | Application role can access only required table and index actions |
-| Observability | Throttles, latency, errors, consumed capacity, and stream age have dashboards or alarms |
+- Every read and write path has a named key or index.
+- Partition keys distribute traffic across many values.
+- Conditional writes protect duplicate or unsafe workflows.
+- GSIs exist only for required alternate lookups.
+- TTL is used for temporary data, and the app tolerates delayed deletion.
+- Point-in-time recovery is enabled for production tables.
+- IAM policies restrict table and index access to the application role.
+- Alarms cover throttles, errors, latency, and consumed capacity.
 
-The checklist makes DynamoDB less mysterious for a beginner. It also keeps the team from discovering missing access patterns after the table is full of production data.
+DynamoDB works best when table design starts with the app's questions. If the team cannot name the access patterns, pause before creating the table.
 
-## Putting It All Together
-<!-- section-summary: DynamoDB works best when the team designs exact key-based access paths before creating the table. -->
+Recovery should be part of that checklist. Enable point-in-time recovery on production tables, test restoring into a new table, and document how the application would switch or copy back selected items. Restoring a DynamoDB table creates a new table, so the app and IAM paths need a plan for using the restored data.
 
-Maple Market uses DynamoDB for carts, sessions, idempotency records, and other key-based state. The team starts from access patterns, then chooses partition keys, sort keys, and indexes. It uses conditional writes to prevent duplicate payment work. It uses TTL for records with a natural expiry. It watches capacity, throttles, hot keys, and stream lag. It turns on recovery features for important tables and keeps IAM scoped to the exact table and indexes.
+The PITR path is concrete:
 
-DynamoDB can serve very large traffic with low operational overhead, but it asks for careful data modeling upfront. Relational design starts from relationships and flexible SQL. DynamoDB design starts from known questions and known keys. When the access paths are clear, that trade is powerful.
+```bash
+aws dynamodb update-continuous-backups \
+  --table-name maple-carts-prod \
+  --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
 
-![DynamoDB table review checklist covering access patterns, partition key, sort key, GSI, capacity mode, and PITR plus TTL](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-table-review.png)
+aws dynamodb restore-table-to-point-in-time \
+  --source-table-name maple-carts-prod \
+  --target-table-name maple-carts-restore-20260624 \
+  --restore-date-time 2026-06-24T09:30:00Z
+```
 
-*The table review starts with the application questions, then checks key design and operating controls.*
+`update-continuous-backups` turns on PITR for the source table. `restore-table-to-point-in-time` creates a new table from the source table at the requested time. The target table name must be new because DynamoDB restores into a separate table.
 
-## What's Next
-<!-- section-summary: The final article covers the movement paths that get files, databases, and exports into and around AWS. -->
+Confirm PITR after enabling it:
 
-Now Maple Market has places for objects, filesystems, relational records, and key-value items. The last topic is movement: how data gets imported, copied, replicated, transformed, and handed off between systems.
+```bash
+aws dynamodb describe-continuous-backups \
+  --table-name maple-carts-prod \
+  --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription'
+```
 
----
+Example output:
 
-**References**
+```json
+{
+  "PointInTimeRecoveryStatus": "ENABLED",
+  "EarliestRestorableDateTime": "2026-05-25T09:00:00+00:00",
+  "LatestRestorableDateTime": "2026-06-24T10:08:12+00:00"
+}
+```
 
-- [What is Amazon DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) - Introduces DynamoDB, capacity modes, serverless behavior, and core service concepts.
-- [Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html) - Defines tables, items, attributes, primary keys, and streams.
-- [Partition key design best practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) - Covers partition key design and high-cardinality distribution.
-- [DynamoDB throughput capacity modes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/capacity-mode.html) - Explains on-demand and provisioned capacity modes.
-- [Global secondary indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html) - Documents GSI key schemas, projections, and asynchronous index behavior.
-- [DynamoDB read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html) - Explains eventually consistent and strongly consistent reads.
-- [Condition expressions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html) - Shows conditional writes such as `attribute_not_exists`.
-- [Time to Live in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) - Documents item expiration behavior and TTL attributes.
-- [Point-in-time recovery for DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery.html) - Explains continuous backups and restore behavior.
-- [DynamoDB global tables](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html) - Covers multi-Region table replication.
+`EarliestRestorableDateTime` and `LatestRestorableDateTime` define the restore window the team can choose from. After the restore, validate sample carts, confirm indexes, update temporary IAM access if needed, and decide whether to copy selected items back or point a repair tool at the restored table. The restore command starts the recovery. The application repair plan finishes it.
+
+![The table review summary connects access patterns, keys, indexes, capacity, streams, TTL, PITR, alarms, and hot-key checks](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-table-review.png)
+
+*The table review summary connects access patterns, keys, indexes, capacity, streams, TTL, PITR, alarms, and hot-key checks.*
+
+
+## References
+
+- [Amazon DynamoDB documentation: What is DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html)
+- [Amazon DynamoDB documentation: Core components](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html)
+- [Amazon DynamoDB documentation: Best practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html)
+- [Amazon DynamoDB documentation: Point-in-time recovery](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html)
+- [Amazon DynamoDB documentation: Secondary index best practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-indexes-general.html)

@@ -28,6 +28,9 @@ At 14:05 UTC, support reports that customers can open the checkout page, but pay
 
 The first question is plain: how many customers are affected? After that, the team needs the exact failing request, the code path that failed, the dependency that returned the error, the revision that served the request, the person or pipeline that changed production, and the graph that proves the fix worked. Those answers live in different signals, so observability is the way the team connects them.
 
+![Infographic showing one checkout-api HTTP 500 incident connected to metrics, logs, traces, audit logs, error groups, and labels.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/incident-signals.png)
+*One incident creates several different questions. Metrics give scope, logs give event detail, traces show the request path, and audit logs show production changes.*
+
 ## What GCP Observability Means
 <!-- section-summary: GCP observability is the Google Cloud evidence system for understanding running applications and infrastructure from the outside. -->
 
@@ -64,6 +67,9 @@ The project is the first boundary because production, staging, and development o
 User-defined labels add ownership and operating context. A team might use labels like `env=prod`, `team=checkout`, `service=checkout-api`, `release=2026-06-14.3`, and `cost_center=commerce`. These labels should stay low-cardinality, which means they should have a small and predictable set of values. Values like customer IDs, checkout IDs, and request IDs belong in logs or traces, because using them as metric or resource labels can create too many series and can leak sensitive data.
 
 Trace IDs connect request-level evidence. If the active trace ID appears in a log entry, then Cloud Logging can show the logs for the same request that Cloud Trace displays as spans. This gives the responder two directions of travel. A trace can lead to the exact log lines written by the failing span, and a structured error log can lead back to the trace timeline for that request.
+
+![Infographic showing logs, metrics, traces, and audit records joined by shared fields such as project, region, service, revision, release, and trace ID.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/shared-context.png)
+*The shared fields do the joining work. A responder can move from a metric spike to logs, traces, and audit events because the evidence names the same service, revision, release, and trace.*
 
 Here is the shape of a useful application log from `checkout-api`:
 
@@ -109,6 +115,36 @@ gcloud logging read \
   --format=json
 ```
 
+The filter starts with `resource.type` because the team is investigating Cloud Run revision logs, then narrows to one service, region, and revision. `severity>=ERROR` keeps routine request noise out of the first pass, and the timestamp window keeps the query tied to the incident instead of the whole day.
+
+A useful result has repeated errors from the same revision and enough payload detail to continue the investigation:
+
+```json
+[
+  {
+    "timestamp": "2026-06-14T14:04:12.221Z",
+    "severity": "ERROR",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "checkout-api",
+        "revision_name": "checkout-api-00042-n9p",
+        "location": "us-central1"
+      }
+    },
+    "jsonPayload": {
+      "message": "payment provider rejected checkout request",
+      "route": "POST /checkout",
+      "error_code": "provider_timeout",
+      "release": "2026-06-14.3"
+    },
+    "trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736"
+  }
+]
+```
+
+Healthy output during a calm period might return no rows or a small number of unrelated handled errors. Suspicious output during this incident shows many rows with the same `error_code`, the same release, the same revision, and timestamps that line up with the `5xx` metric spike.
+
 The third movement is from one error event to one request story. If a matching log entry includes `trace`, the team can query every log with the same trace ID and open the trace to see the request timeline. The trace might show `POST /checkout` spending 2.8 seconds inside `payment.authorize`, followed by an exception and an HTTP `500` response.
 
 The fourth movement is from runtime evidence to change evidence. Cloud Audit Logs can show whether a deployment, secret update, IAM change, or networking change happened just before the metric spike. If the audit log shows that the CI/CD service account updated the Cloud Run service at 13:58 UTC and the spike started at 14:01 UTC, the team has a strong rollout suspect.
@@ -142,6 +178,28 @@ gcloud run services describe checkout-api \
   --format='yaml(metadata.labels,spec.template.metadata.labels,spec.template.spec.serviceAccountName,status.latestReadyRevisionName,status.url)'
 ```
 
+This command is read-only. `--region` selects the Cloud Run region, `--project` selects the production project, and the `--format` expression prints only the fields an incident responder needs at the start: labels, runtime service account, latest ready revision, and service URL.
+
+```yaml
+metadata:
+  labels:
+    env: prod
+    service: checkout-api
+    team: checkout
+spec:
+  template:
+    metadata:
+      labels:
+        release: "2026-06-14.3"
+    spec:
+      serviceAccountName: checkout-runtime@shop-prod.iam.gserviceaccount.com
+status:
+  latestReadyRevisionName: checkout-api-00042-n9p
+  url: https://checkout-api-7f9c2d4-uc.a.run.app
+```
+
+Healthy output names the expected production labels and the expected runtime service account. Suspicious output might show a missing `team` label, a revision the team did not expect, or a runtime service account with broader access than the service normally needs.
+
 Then confirm that the service emits request logs and application errors with the resource fields the team expects:
 
 ```bash
@@ -155,6 +213,16 @@ gcloud logging read \
   --limit=20 \
   --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.message,textPayload)'
 ```
+
+The `--freshness=1h` flag is useful during live triage because the responder wants recent evidence first. The table format is a quick scan view, while JSON is better when the team needs the full payload.
+
+```console
+TIMESTAMP                    REVISION_NAME              SEVERITY  MESSAGE                                      TEXT_PAYLOAD
+2026-06-14T14:04:12.221Z     checkout-api-00042-n9p     ERROR     payment provider rejected checkout request
+2026-06-14T14:04:18.904Z     checkout-api-00042-n9p     ERROR     payment authorization timed out after retry
+```
+
+Healthy output during normal traffic has few or no `ERROR` rows, and routine request logs still carry the expected Cloud Run resource labels. Suspicious output repeats the same revision and message while the dashboard shows a rising `5xx` ratio.
 
 The application layer starts with structured logs and traces. The app should write JSON logs with stable fields, should keep secrets and payment data out of telemetry, and should attach trace and span fields when possible. OpenTelemetry is the normal production direction because it gives standard APIs and attributes across languages, collectors, metrics, logs, and traces.
 
@@ -173,6 +241,15 @@ gcloud logging read \
   --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.methodName,protoPayload.resourceName)'
 ```
 
+This audit query reads the Admin Activity log for Cloud Run service updates. The `protoPayload.serviceName` field narrows the evidence to Cloud Run API activity, and `protoPayload.methodName:"UpdateService"` catches service update methods whose full method names can include versioned API paths.
+
+```console
+TIMESTAMP                 PRINCIPAL_EMAIL                                  METHOD_NAME                         RESOURCE_NAME
+2026-06-14T13:58:44Z      ci-deploy@shop-prod.iam.gserviceaccount.com       google.cloud.run.v2.Services.UpdateService   namespaces/shop-prod/services/checkout-api
+```
+
+Healthy audit output shows an approved deployment principal, a known resource, and a change time that matches the release notes. Suspicious output includes a human account making an emergency change without an incident record, an unexpected service account, a secret or IAM change near the same time, or a deployment that starts just before the error spike.
+
 The response layer starts with a small dashboard and a small alert set. The top row should show user-facing health: checkout success, `5xx` rate, and p95 latency. The lower rows should show Cloud Run instances, dependency latency, database health, Pub/Sub backlog, recent deployment markers, and current incidents. The first alerts should page on sustained user impact, while brief infrastructure wiggles usually belong on dashboards or lower-priority tickets.
 
 | Setup item | Why it matters during the first incident |
@@ -186,6 +263,9 @@ The response layer starts with a small dashboard and a small alert set. The top 
 | Dashboards and alert policies | Turns telemetry into response instead of passive charts |
 
 This setup is enough to begin operating like a production team. Later refinements can add service-level objectives, burn-rate alerts, Prometheus metrics, custom business metrics, synthetic checks, profiling, cross-project metrics scopes, and deeper security exports.
+
+![Infographic showing the first production observability loop: detect, narrow, inspect logs, follow traces, verify audit changes, and recover by watching the same metrics improve.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/observability-loop.png)
+*The first setup is useful because it supports a repeatable response loop. The team starts with user impact, follows evidence, checks change history, and verifies recovery with the same signals.*
 
 ## Putting It All Together
 <!-- section-summary: GCP observability works when every signal has a job and enough shared context to join the incident story. -->

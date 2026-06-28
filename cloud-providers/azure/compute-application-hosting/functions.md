@@ -168,12 +168,46 @@ The function app also owns configuration. **App settings** are environment varia
 During an incident, an operator might start with these Azure CLI commands:
 
 ```bash
-az functionapp show --name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
-az functionapp config appsettings list --name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
-az functionapp function list --function-app-name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
+az functionapp show \
+  --name func-devpolaris-orders-jobs-prod \
+  --resource-group rg-devpolaris-orders-prod \
+  --query "{state:state,kind:kind,plan:serverFarmId}"
+
+az functionapp config appsettings list \
+  --name func-devpolaris-orders-jobs-prod \
+  --resource-group rg-devpolaris-orders-prod \
+  --query "[].name" \
+  --output table
+
+az functionapp function list \
+  --function-app-name func-devpolaris-orders-jobs-prod \
+  --resource-group rg-devpolaris-orders-prod \
+  --query "[].{name:name,disabled:config.disabled}" \
+  --output table
 ```
 
-Those commands answer ordinary but important questions. Is the app running? Which plan hosts it? Which runtime does it use? Which settings point at queues and storage accounts? Which functions exist? Are any functions disabled? Before changing code, a production operator needs that resource evidence.
+```console
+{
+  "state": "Running",
+  "kind": "functionapp,linux",
+  "plan": "/subscriptions/.../serverfarms/asp-functions-prod"
+}
+
+Column1
+------------------------------
+AzureWebJobsStorage
+FUNCTIONS_EXTENSION_VERSION
+FUNCTIONS_WORKER_RUNTIME
+OrdersStorage__accountName
+EmailProvider__endpoint
+
+Name              Disabled
+----------------  --------
+sendOrderReceipt  False
+nightlyCleanup    False
+```
+
+Those commands answer ordinary but important questions. Is the app running? Which plan hosts it? Which setting names point at queues and storage accounts? Which functions exist? Are any functions disabled? The app settings command lists names only, because printing values can leak connection strings, Key Vault references, or provider endpoints into tickets and chat logs.
 
 Now that we have the function app boundary, we can talk about another Functions feature that often surprises people: bindings.
 
@@ -261,6 +295,15 @@ az functionapp config appsettings list \
   --output table
 ```
 
+```console
+Name
+------------------------------------------------------------
+AzureFunctionsJobHost__extensions__queues__batchSize
+AzureFunctionsJobHost__extensions__queues__newBatchThreshold
+```
+
+That output confirms the override reached the function app. The team still watches invocation duration, queue depth, poison queue count, database connections, and email provider throttling after the change to confirm the value fits production behavior.
+
 This is the point where hosting plan choice starts to matter. The plan controls scale, cold starts, networking, costs, and some timeout behavior.
 
 ## Hosting Plans
@@ -268,7 +311,7 @@ This is the point where hosting plan choice starts to matter. The plan controls 
 
 A **hosting plan** is the compute and billing model for a function app. It decides how Azure allocates workers, how the app scales, how cold starts behave, whether virtual network integration is available, how billing appears, and which limits apply. The same handler code can behave very differently on different plans.
 
-As of June 11, 2026, Microsoft documents **Flex Consumption** as the recommended serverless hosting plan for new dynamic-scale function apps. Flex Consumption keeps serverless pay-for-use behavior while adding fast scale-out, configurable instance memory, virtual network integration, per-function scaling, and optional always-ready instances to reduce cold starts.
+Microsoft currently presents **Flex Consumption** as the recommended serverless hosting plan for new dynamic-scale function apps. Flex Consumption keeps serverless pay-for-use behavior while adding fast scale-out, configurable instance memory, virtual network integration, per-function scaling, and optional always-ready instances to reduce cold starts. A production team should still check regional availability, language/runtime support, trigger support, and networking needs before choosing it.
 
 Here is the practical map:
 
@@ -327,7 +370,7 @@ Functions has a clear boundary too. Some backend work belongs in a service.
 ## When A Service Is Simpler
 <!-- section-summary: A normal service can be the simpler home for large APIs, shared routing, long-lived processes, heavy in-memory state, and steady connection-heavy workloads. -->
 
-Azure Functions works best when the job has a clear event and a bounded piece of work. A service such as App Service, Container Apps, or AKS can fit better when the code behaves like a full application. A large REST API with many routes, shared authentication middleware, streaming responses, stable connection pools, and steady traffic usually wants a continuously running process.
+Azure Functions works best when the job has a clear event and a bounded piece of work. A service such as App Service, Container Apps, or AKS can fit code that behaves like a full application. A large REST API with many routes, shared authentication middleware, streaming responses, stable connection pools, and steady traffic usually wants a continuously running process.
 
 Imagine the Orders API itself. It handles checkout, carts, customer sessions, product lookups, payment authorization, pricing rules, and route-level authorization. Splitting that API into dozens of HTTP-triggered functions can scatter one cohesive service across many handlers. The team may then fight shared middleware, distributed routing, duplicated validation, cold starts, and confusing traces.
 
@@ -352,7 +395,7 @@ That is the whole operating story. Azure Functions is small code, and the produc
 
 ## What's Next
 
-Functions gives us a clean home for event-shaped work around an application. The next step up is a shared platform for many containers, teams, policies, services, and deployment shapes. That is where Azure Kubernetes Service enters the roadmap. In the next article, we will look at AKS, pods, services, ingress, node pools, cluster ownership, and the reasons a team might want Kubernetes instead of a simpler managed runtime.
+Functions gives us a clean home for event-shaped work around an application. The next article returns to server-shaped work with Azure Virtual Machines. We will look at images, VM sizes, managed disks, network interfaces, extensions, process supervision, patching, backups, and the evidence a team needs when it still owns a full guest operating system.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Container Runtime Isolation"
-description: "Limit what running containers can do with Linux capabilities, seccomp, AppArmor, sandboxing, and runtime limits."
-overview: "A trusted container image still needs runtime guardrails after Kubernetes starts it. This article follows the payments-api release into the cluster and shows how non-root users, dropped capabilities, seccomp, AppArmor or SELinux, read-only filesystems, resource limits, network policy, Pod Security Standards, and sandbox runtimes limit what a compromised container can do."
+description: "Constrain running containers with non-root users, dropped capabilities, seccomp, AppArmor or SELinux, resource limits, network policy, and sandbox runtimes."
+overview: "Start with a signed payments-api image finally running as a Linux process on a Kubernetes node. Then learn why containers share the host kernel, how to set a runtime baseline, and how capabilities, seccomp, AppArmor or SELinux, non-root execution, read-only filesystems, resource limits, network policy, Kubernetes guardrails, sandbox runtimes, and verification reduce the blast radius of a compromised container."
 tags: ["devsecops", "runtime-isolation", "seccomp", "apparmor"]
 order: 4
 id: article-devsecops-container-image-security-registry-security
@@ -9,7 +9,7 @@ id: article-devsecops-container-image-security-registry-security
 
 ## Table of Contents
 
-1. [After the Image Starts](#after-the-image-starts)
+1. [A Signed Image Starts as a Linux Process](#a-signed-image-starts-as-a-linux-process)
 2. [Containers Share the Host Kernel](#containers-share-the-host-kernel)
 3. [A Runtime Baseline for payments-api](#a-runtime-baseline-for-payments-api)
 4. [Linux Capabilities](#linux-capabilities)
@@ -22,13 +22,14 @@ id: article-devsecops-container-image-security-registry-security
 11. [Sandbox Runtimes](#sandbox-runtimes)
 12. [Verification and Debugging Workflow](#verification-and-debugging-workflow)
 13. [Putting It All Together](#putting-it-all-together)
+14. [References](#references)
 
-## After the Image Starts
-<!-- section-summary: A signed image from a private registry still needs runtime guardrails because the container runs as a process on a Kubernetes node. -->
+## A Signed Image Starts as a Linux Process
+<!-- section-summary: A signed image from a private registry still needs runtime guardrails once Kubernetes starts it as a process on a node. -->
 
-Let's continue the same story from the previous articles. The small team has a `payments-api` container. The CI pipeline builds it, scans it, signs it, and pushes it to a private registry. The release manifest uses an image digest, so Kubernetes pulls the exact artifact the team approved. That is a strong supply-chain path.
+Let's continue the same story from the previous articles. The small team has a `payments-api` image. CI built it, scanned it, signed it, pushed it to a private registry, and recorded the digest. The Kubernetes manifest uses that digest, so the cluster pulls the exact artifact the team approved.
 
-Now the pod starts. The kubelet asks the container runtime to pull the image and launch a process on a worker node. At that point, the security question moves from image trust to runtime behavior. The team already knows where the image came from. The next question is what the running process can do if a bug, bad dependency, or exposed endpoint gives an attacker a foothold inside the container.
+Now the image finally runs. The kubelet asks the container runtime to unpack the image layers, prepare the container, and launch the application as a Linux process on a worker node. At that point, the security question changes from "do we trust this image?" to "what can this process do while it is running?"
 
 **Container runtime isolation** means the limits around a running container: which Linux privileges it has, which system calls it can make, which files it can write, which network paths it can reach, how much CPU and memory it can consume, and which kernel-level policies apply to it. For `payments-api`, runtime isolation is the difference between "an attacker found one application bug" and "an attacker can now change the node, scan the cluster, read service account tokens, and affect nearby workloads."
 
@@ -36,7 +37,7 @@ This article walks through the controls in the order a real team usually applies
 
 ![Runtime isolation layers infographic showing a payments-api pod constrained by non-root UID, dropped capabilities, seccomp, AppArmor or SELinux, NetworkPolicy, resource limits, and the node kernel boundary](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-layers.png)
 
-*Runtime isolation works in layers around the running process, so one application bug has fewer paths to become node or cluster access.*
+*Runtime isolation works in layers around the running process, so one application bug has fewer paths to node or cluster access.*
 
 ## Containers Share the Host Kernel
 <!-- section-summary: Containers isolate process views with Linux features, but every container on a node still asks the same host kernel to do privileged work. -->
@@ -45,7 +46,7 @@ A **container** is a normal Linux process with a packaged filesystem and a restr
 
 The important beginner-friendly detail is this: containers on the same worker node share the host kernel. The **kernel** is the part of the operating system that controls memory, filesystems, networking, processes, and hardware. An application cannot directly mount a disk or change network routes by itself. It asks the kernel through a **system call**, often called a syscall. `open`, `connect`, `clone`, `mount`, and `chmod` are examples of requests a process can make to the kernel.
 
-For `payments-api`, that matters because the application handles real payment requests. Maybe a deserialization bug lets someone run a command inside the container. Maybe a dependency vulnerability lets them write a file. Maybe an SSRF bug lets them make network calls from inside the pod. Image scanning and signing helped before the pod started, but runtime isolation controls what that compromised process can do after it starts.
+For `payments-api`, the runtime limits protect a service that handles real payment requests. Maybe a deserialization bug lets someone run a command inside the container. Maybe a dependency vulnerability lets them write a file. Maybe an SSRF bug lets them make network calls from inside the pod. Image scanning and signing helped before the pod started, and runtime isolation controls what that compromised process can do after it starts.
 
 A weak runtime setup gives too much power to the process. A container running as root with broad Linux capabilities, a writable root filesystem, no syscall filtering, no network policy, and a mounted service account token gives an attacker many paths to explore. A hardened runtime setup gives the same application only the privileges it actually needs: listen on port `8080`, read its config, write temporary files in `/tmp`, call the database and payment provider, and exit cleanly.
 
@@ -54,81 +55,42 @@ Now that the risk is clear, the team needs a concrete Kubernetes baseline. The b
 ## A Runtime Baseline for payments-api
 <!-- section-summary: A secure runtime baseline combines pod-level defaults, container-level restrictions, temporary writable volumes, and resource budgets. -->
 
-A good starting point is a manifest that makes runtime security visible. Kubernetes has defaults, and many defaults are safe for ordinary cases, but production teams usually write the important settings into YAML so reviewers and admission policies can check them. The `payments-api` team wants the deployment to show exactly which privileges the application receives.
+A good starting point is a manifest skeleton that makes runtime security visible. Kubernetes has defaults, and many defaults are safe for ordinary cases, but production teams usually write the important settings into YAML so reviewers and admission policies can check them. The `payments-api` team wants the deployment to show which privileges the application receives without asking a beginner to digest the whole manifest at once.
 
-Here is a practical baseline for a normal HTTP API that listens on port `8080`, reads secrets from Kubernetes, writes only temporary files, and has no reason to call the Kubernetes API from inside the app. We will unpack the important fields section by section after the YAML:
+Here is the small shape first:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: payments
 spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: payments-api
   template:
-    metadata:
-      labels:
-        app: payments-api
     spec:
       serviceAccountName: payments-api
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
         seccompProfile:
-          type: RuntimeDefault
-        appArmorProfile:
           type: RuntimeDefault
       containers:
         - name: payments-api
           image: registry.example.com/payments/payments-api@sha256:9b6d2f4e...
-          ports:
-            - name: http
-              containerPort: 8080
-          envFrom:
-            - secretRef:
-                name: payments-api-runtime
           securityContext:
-            privileged: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
-              drop:
-                - ALL
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-            - name: app-cache
-              mountPath: /app/.cache
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 100m
               memory: 128Mi
-              ephemeral-storage: 64Mi
             limits:
               cpu: 500m
               memory: 512Mi
-              ephemeral-storage: 256Mi
-      volumes:
-        - name: tmp
-          emptyDir:
-            sizeLimit: 64Mi
-        - name: app-cache
-          emptyDir:
-            sizeLimit: 64Mi
 ```
 
-This manifest has several layers. The pod-level `securityContext` sets the Linux user, group, seccomp profile, and AppArmor profile for containers in the pod. The container-level `securityContext` drops Linux capabilities, blocks privilege escalation, and makes the image filesystem read-only. The `emptyDir` volumes give the application a small place to write temporary files without making the whole image filesystem writable. The resource section gives the scheduler and the kubelet a clear budget.
+This skeleton has the first five runtime decisions. The service account is explicit. The Kubernetes API token is not mounted by default. The pod asks for a non-root process and the runtime's default seccomp profile. The container blocks privilege escalation, keeps the image filesystem read-only, drops Linux capabilities, and sets a CPU and memory budget.
 
 `automountServiceAccountToken: false` deserves a quick note. Kubernetes can mount a token into a pod so the workload can call the Kubernetes API. Many application pods do not need that. If `payments-api` only serves HTTP requests and talks to a database, mounting the Kubernetes API token adds an unnecessary secret to the runtime. If a later feature needs Kubernetes API access, the team can turn it on deliberately and bind a narrow Role to that service account.
 
-The rest of this article breaks down why each part exists. We will start with Linux capabilities because they are one of the easiest ways to accidentally give a container more power than it needs, especially when an image still starts as root.
+The full deployment will also need ports, secret wiring, writable scratch volumes, AppArmor or SELinux defaults, storage budgets, and network policy. The rest of this article adds those details one layer at a time. We will start with Linux capabilities because they are one of the easiest ways to accidentally give a container more power than it needs, especially when an image still starts as root.
 
 ![Security context baseline infographic showing runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation false, drop ALL, RuntimeDefault seccomp, and tmp emptyDir settings applied to payments-api](/content-assets/articles/article-devsecops-container-image-security-registry-security/security-context-baseline.png)
 
@@ -139,7 +101,7 @@ The rest of this article breaks down why each part exists. We will start with Li
 
 **Linux capabilities** split powerful root privileges into smaller named pieces. Older Unix-style systems treated user ID `0`, usually called root, as the identity that could do almost everything. Linux capabilities made that more granular. A process might have permission to bind to a low network port, change file ownership, load kernel modules, or change system time, depending on which capabilities it holds.
 
-For a container, capabilities matter because a root process inside the container may still receive a set of kernel privileges. A web API usually needs very few of them. `payments-api` needs to listen on a TCP port, read configuration, make outbound network calls, write to a small temporary directory, and log to standard output. It does not need to change kernel networking, mount filesystems, load kernel modules, trace other processes, or change the host clock.
+For a container, capabilities deserve attention because a root process inside the container may still receive a set of kernel privileges. A web API usually needs very few of them. `payments-api` needs to listen on a TCP port, read configuration, make outbound network calls, write to a small temporary directory, and log to standard output. It does not need to change kernel networking, mount filesystems, load kernel modules, trace other processes, or change the host clock.
 
 Kubernetes lets the team drop capabilities at the container level. The setting belongs on the container because each container in a pod can need a different privilege set:
 
@@ -203,7 +165,7 @@ securityContext:
     localhostProfile: profiles/payments-api.json
 ```
 
-This means the profile file already exists on the node under the kubelet's configured seccomp profile path. Kubernetes references the profile; it does not create the profile file for the team. That detail matters in real clusters because a missing local profile can keep the pod from starting.
+This means the profile file already exists on the node under the kubelet's configured seccomp profile path. Kubernetes references the profile; it does not create the profile file for the team. That detail is important in real clusters because a missing local profile can keep the pod from starting.
 
 Seccomp failures often appear as `Operation not permitted`, startup crashes, or application logs that point at a syscall-dependent feature. The normal rollout path is staging first, one workload at a time, with logs and node events open. If the app breaks after a custom profile change, the team compares the new profile to the syscall the app needed and decides whether the syscall is part of normal application behavior or a risky feature that should stay blocked.
 
@@ -250,7 +212,7 @@ So far, the container has fewer kernel privileges and stronger OS policy. The ne
 ## Non-Root, Read-Only Filesystems, and Privilege Escalation
 <!-- section-summary: Running as a non-root user, blocking privilege escalation, and making the image filesystem read-only reduce damage from application compromise. -->
 
-**Running as non-root** means the main process inside the container starts with a normal numeric user ID instead of user ID `0`. In Kubernetes, `runAsNonRoot: true` asks the kubelet to reject the container if it would run as root. `runAsUser: 10001` makes the intended user explicit. This matters because many files and behaviors inside Linux still treat root differently, and some container escape or misconfiguration paths grow more dangerous when the process starts as root.
+**Running as non-root** means the main process inside the container starts with a normal numeric user ID instead of user ID `0`. In Kubernetes, `runAsNonRoot: true` asks the kubelet to reject the container if it would run as root. `runAsUser: 10001` makes the intended user explicit. Many files and behaviors inside Linux still treat root differently, and some container escape or misconfiguration paths grow more dangerous when the process starts as root.
 
 The runtime setting should match the image. A typical Dockerfile for `payments-api` might create or choose a non-root user during the build, then make that user the default process identity:
 
@@ -532,7 +494,7 @@ Before the article closes, the team needs a way to verify these settings without
 ## Verification and Debugging Workflow
 <!-- section-summary: A short staging workflow checks admission, runtime settings, filesystem writes, resource behavior, and network policy before production rollout. -->
 
-Runtime isolation works best when the team checks it during normal delivery, not only during an incident. For `payments-api`, the CI pipeline can lint the manifests, the cluster can reject unsafe pods through admission, and a staging rollout can confirm that the app still runs under the tighter settings.
+Runtime isolation works best when the team checks it during normal delivery and during incident drills. For `payments-api`, the CI pipeline can lint the manifests, the cluster can reject unsafe pods through admission, and a staging rollout can confirm that the app still runs under the tighter settings.
 
 A practical staging session might look like this. These commands check admission first, then inspect the running pod only after the manifest passes server-side validation:
 
@@ -564,21 +526,92 @@ The key idea is **blast radius**. A runtime bug may still happen. A vulnerable l
 
 For a small team, the most useful starting point is straightforward. Use a private-registry image by digest. Run as a non-root UID. Drop all capabilities. Set `allowPrivilegeEscalation: false`. Use `RuntimeDefault` seccomp. Use AppArmor or SELinux defaults from the platform. Make the root filesystem read-only and mount only the writable paths the app actually needs. Add CPU, memory, and storage budgets. Keep the service internal behind the gateway. Add NetworkPolicy for expected paths. Enforce the Restricted Pod Security Standard in the namespace. Reach for gVisor or Kata when the workload runs less trusted code or needs a stronger tenant boundary.
 
-That is the complete container and image security path for `payments-api`: build a trustworthy artifact, store and release it through a trusted registry path, then run it with limits that match what the service actually needs. The last step matters because production risk continues after the image starts.
+After learning the parts, the full baseline is much easier to read:
 
-![Runtime isolation summary infographic showing trusted image, constrained process, small write area, narrow network, resource budget, and sandbox when needed around payments-api](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-summary.png)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: payments
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payments-api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+    spec:
+      serviceAccountName: payments-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+        appArmorProfile:
+          type: RuntimeDefault
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments/payments-api@sha256:9b6d2f4e...
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: payments-api-runtime
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: app-cache
+              mountPath: /app/.cache
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: app-cache
+          emptyDir:
+            sizeLimit: 64Mi
+```
+
+This final manifest is the assembled version of the skeleton from the start of the article. The pod-level `securityContext` sets the Linux user, group, seccomp profile, and AppArmor profile. The container-level `securityContext` drops Linux capabilities, blocks privilege escalation, and keeps the image filesystem read-only. The `emptyDir` volumes give the application small writable paths without making the whole image filesystem writable. The resource section gives the scheduler and kubelet a clear budget.
+
+That is the complete container and image security path for `payments-api`: build a trustworthy artifact, store and release it through a trusted registry path, then run it with limits that match what the service actually needs. Production risk continues after the image starts, so runtime isolation closes the container security loop.
+
+![Runtime isolation summary infographic showing trusted image, constrained process, small write area, narrow network, resource budget, and optional sandbox around payments-api](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-summary.png)
 
 *The runtime summary is the final handoff: a trusted image still runs as a constrained process with limited files, network paths, resources, and sandbox options.*
 
----
-
-**References**
+## References
 
 - [Kubernetes Security Context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Documents pod and container `securityContext` fields such as users, groups, capabilities, seccomp, AppArmor, privilege escalation, and read-only root filesystems.
 - [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Defines the Privileged, Baseline, and Restricted policy levels for pods.
 - [Enforce Pod Security Standards with namespace labels](https://kubernetes.io/docs/tasks/configure-pod-container/enforce-standards-namespace-labels/) - Shows how Pod Security Admission uses `pod-security.kubernetes.io/*` labels.
 - [Linux kernel security constraints for Pods and containers](https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/) - Explains seccomp, AppArmor, SELinux, privilege escalation, privileged containers, and kernel-level isolation.
 - [Docker seccomp security profiles](https://docs.docker.com/engine/security/seccomp/) - Explains Docker's default seccomp profile and how seccomp limits Linux syscalls.
+- [Linux seccomp manual page](https://man7.org/linux/man-pages/man2/seccomp.2.html) - Documents the Linux `seccomp` system call and `/proc` seccomp status fields.
+- [AppArmor documentation](https://apparmor.net/) - Official AppArmor documentation for profile-based Linux application confinement.
+- [SELinux Project](https://selinuxproject.github.io/) - Upstream SELinux project resources, including the SELinux Notebook technical reference.
 - [Linux capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) - Defines Linux capability names and the privileged operations they control.
 - [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Documents pod ingress and egress isolation with NetworkPolicy.
 - [Kubernetes Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/) - Documents CPU, memory, and ephemeral storage requests and limits.

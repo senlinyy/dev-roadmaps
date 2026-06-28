@@ -51,6 +51,8 @@ An **Azure Virtual Network** is the private network boundary for Azure resources
 
 For the Orders system, `vnet-devpolaris-prod` is the private network home for the production API and its supporting network pieces. The API can receive traffic from a controlled entry subnet, call private endpoints inside the VNet, and send approved outbound traffic through NAT Gateway or a firewall path. The VNet gives those paths a shared private IP space and a common routing surface.
 
+Keep one request in view while reading this article. A browser reaches the public entry layer, the entry layer forwards to `orders-api-prod` on a private address, the API resolves Azure SQL to a private endpoint IP, and the same API calls a payment provider through the chosen outbound path. The VNet does not replace DNS, TLS, NSGs, or identity, but every one of those controls depends on the private network shape underneath.
+
 If you know AWS, a VNet fills the same broad job as a VPC. One Azure detail matters early: Azure virtual networks and subnets span all availability zones in a region. A zonal virtual machine can still live in a specific zone, but the subnet itself stays regional. That means Azure subnet design usually starts with workload role boundaries, such as public entry, app compute, private endpoints, firewall, and gateway, rather than one subnet per zone.
 
 The VNet is also the attachment point for later networking topics. Network security groups filter packet flows. Application Gateway and Front Door handle public entry patterns. Private Link brings specific Azure service instances into the private address space. VPN Gateway and ExpressRoute connect the VNet to corporate networks. The VNet does the base job that all of those later controls need.
@@ -60,7 +62,7 @@ The VNet is also the attachment point for later networking topics. Network secur
 
 A **VNet address space** is the private IP range assigned to a virtual network. It uses CIDR notation, such as `10.30.0.0/16`. The `10.30.0.0` part names the range, and the `/16` part tells Azure how many addresses belong to that range. In this example, the VNet has room for 65,536 total addresses before subnet reservations and service-specific limits enter the picture.
 
-The Orders team chooses `10.30.0.0/16` for production because it gives enough room for current subnets and future growth. The same company might use `10.20.0.0/16` for development and `10.40.0.0/16` for analytics. That planning looks like housekeeping at first, but it matters when networks connect to each other.
+The Orders team chooses `10.30.0.0/16` for production because it gives enough room for current subnets and future growth. The same company might use `10.20.0.0/16` for development and `10.40.0.0/16` for analytics. That planning matters when networks connect to each other.
 
 Connected networks need **non-overlapping address spaces**. If the Orders VNet and the corporate datacenter both use `10.30.0.0/16`, a router cannot make a clean decision for `10.30.2.15` because both sides claim that address range. Peering, VPN, ExpressRoute, and hub-and-spoke designs all depend on ranges that point to one clear owner.
 
@@ -112,6 +114,27 @@ az network vnet subnet update \
 
 The first command creates the private address container and one subnet. The second command records an important production decision: outbound internet access should use an explicit design such as NAT Gateway, firewall, public IP, or load balancer outbound rules, instead of an implicit platform-provided outbound IP.
 
+The quick verification is a read-only subnet check. The address prefix should match the plan, and `defaultOutboundAccess` should show `false` for a private application subnet.
+
+```bash
+az network vnet subnet show \
+  --resource-group rg-devpolaris-network-prod \
+  --vnet-name vnet-devpolaris-prod \
+  --name snet-orders-api \
+  --query "{addressPrefix:addressPrefix, defaultOutboundAccess:defaultOutboundAccess}"
+```
+
+Example output:
+
+```json
+{
+  "addressPrefix": "10.30.2.0/24",
+  "defaultOutboundAccess": false
+}
+```
+
+If the value is missing or true on a new production subnet, the team should decide whether the subnet intentionally allows default outbound behavior or whether the deployment used an older API version or template that left the property unset.
+
 ## Reserved Addresses and Sizing
 <!-- section-summary: Azure reserves five IP addresses in every subnet, so subnet size needs to account for platform reservations and workload growth. -->
 
@@ -161,10 +184,23 @@ For a VM-based test host in the same subnet, the Azure CLI can show the effectiv
 ```bash
 az network nic show-effective-route-table \
   --resource-group rg-devpolaris-network-prod \
-  --name nic-orders-api-test
+  --name nic-orders-api-test \
+  --query "value[].{source:source,prefixes:addressPrefix,nextHop:nextHopType,nextHopIp:nextHopIpAddress}" \
+  --output table
 ```
 
-That output gives the team route evidence from Azure itself. If `orders-api-prod` cannot reach `10.30.40.7`, the reviewer can check whether a custom route, peering route, or gateway route sends that private endpoint traffic somewhere unexpected. This is where user-defined routes become powerful, because they can intentionally override default behavior.
+Example output:
+
+```console
+Source    Prefixes       NextHopType       NextHopIp
+--------  -------------  ----------------  ----------
+Default   10.30.0.0/16   VnetLocal
+Default   0.0.0.0/0      Internet
+User      0.0.0.0/0      VirtualAppliance  10.30.100.4
+Default   10.80.0.0/16   VirtualNetworkGateway
+```
+
+That output gives the team route evidence from Azure itself. If `orders-api-prod` cannot reach `10.30.40.7`, the reviewer can check whether a custom route, peering route, or gateway route sends that private endpoint traffic somewhere unexpected. That is the point where user-defined routes matter, because they can intentionally override default behavior.
 
 ![Azure effective routes infographic showing local VNet, gateway or peering, and outbound firewall or NAT paths](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/effective-routes-paths.png)
 
@@ -200,6 +236,34 @@ az network vnet subnet update \
 
 Those commands create the route table, add one broad route, and associate the table with the Orders API subnet. The association is the step that makes the route affect packets. A route table sitting unattached in a resource group has no effect on a subnet.
 
+Verify both pieces. The route should point at the firewall IP, and the subnet should show the route table association.
+
+```bash
+az network route-table route show \
+  --resource-group rg-devpolaris-network-prod \
+  --route-table-name rt-orders-private \
+  --name default-to-firewall \
+  --query "{prefix:addressPrefix,nextHop:nextHopType,nextHopIp:nextHopIpAddress}"
+
+az network vnet subnet show \
+  --resource-group rg-devpolaris-network-prod \
+  --vnet-name vnet-devpolaris-prod \
+  --name snet-orders-api \
+  --query "{subnet:name,routeTable:routeTable.id}"
+```
+
+Example output:
+
+```json
+{
+  "prefix": "0.0.0.0/0",
+  "nextHop": "VirtualAppliance",
+  "nextHopIp": "10.30.100.4"
+}
+```
+
+That first result proves the route intent. The second result should contain the `rt-orders-private` resource ID. If the route exists but the subnet output has no route table, Azure will not use the custom route for that subnet.
+
 UDRs are useful because they make network intent explicit. They are risky for the same reason. A broad `0.0.0.0/0` route can move many destinations through one next hop, and a more specific private prefix can override the VNet-local path. A route to a virtual appliance also requires the appliance network interface to allow IP forwarding, because Azure drops forwarded traffic when the NIC is not configured for that gateway job.
 
 The safest UDR review names four things in one sentence: source subnet, destination prefix, next hop, and return path. For example, `snet-orders-api` sends `0.0.0.0/0` to firewall `10.30.100.4`, and the firewall sends approved internet traffic out through its outbound configuration while return traffic comes back through the same path. That sentence gives the team something concrete to test.
@@ -209,9 +273,9 @@ The safest UDR review names four things in one sentence: source subnet, destinat
 
 **Outbound access** means a private workload starts a connection to something outside its subnet or VNet. The Orders API needs outbound access for payment provider calls, package mirrors, telemetry endpoints, and some platform dependencies. The design question is which outbound method owns those connections and which public or private source address the outside service sees.
 
-Azure has older default outbound behavior for virtual machines in nonprivate subnets. In that model, a VM without an explicit outbound method can receive a Microsoft-owned default outbound public IP. Microsoft now recommends explicit outbound connectivity because the default outbound IP can change, the behavior is implicit, and it conflicts with clearer Zero Trust network design.
+Azure has older default outbound behavior for virtual machines in nonprivate subnets. In that model, a VM without an explicit outbound method can receive a Microsoft-owned default outbound public IP. Microsoft recommends explicit outbound connectivity because the default outbound IP can change, the behavior is implicit, and it conflicts with clearer Zero Trust network design.
 
-The date matters here. Microsoft documents that for API versions released after **March 31, 2026**, new virtual networks default to private subnets, with `defaultOutboundAccess` set to `false`. Existing VNets keep their existing behavior unless teams change the subnet settings. Since this article is about new production design, the Orders team treats outbound access as something the architecture must name directly.
+The date matters here. Microsoft documents that for API versions released after **March 31, 2026**, new virtual networks use private subnets by default, with `defaultOutboundAccess` set to `false`. Existing VNets keep their existing behavior unless teams change the subnet settings, and templates or tools that pin older API versions can still leave the property unset. Since this article is about new production design, the Orders team treats outbound access as something the architecture must name directly.
 
 | Outbound method | Where it fits | Orders example |
 |---|---|---|
@@ -253,6 +317,26 @@ export async function chargeOrder(orderId: string) {
 ```
 
 The important idea in that small example is the long-lived client. The app creates the provider client once and reuses the underlying connection pool instead of creating a new network client inside every request handler. NAT Gateway gives the subnet a strong outbound platform, and application connection reuse helps that platform keep enough ports available during traffic spikes.
+
+The infrastructure check should prove that the subnet actually uses the NAT Gateway. Effective routes still decide the packet path, and this check confirms the subnet association before the team inspects those routes.
+
+```bash
+az network vnet subnet show \
+  --resource-group rg-devpolaris-network-prod \
+  --vnet-name vnet-devpolaris-prod \
+  --name snet-orders-api \
+  --query "{subnet:name,natGateway:natGateway.id,defaultOutboundAccess:defaultOutboundAccess}"
+```
+
+Example output:
+
+```json
+{
+  "subnet": "snet-orders-api",
+  "natGateway": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/natGateways/ngw-orders-prod",
+  "defaultOutboundAccess": false
+}
+```
 
 NAT Gateway also interacts with routes. If the subnet has a UDR for `0.0.0.0/0` to a virtual appliance or virtual network gateway, that UDR can override NAT Gateway for broad internet-bound traffic. A production review should look at both the NAT Gateway association and the effective routes before deciding which outbound path the packet actually takes.
 

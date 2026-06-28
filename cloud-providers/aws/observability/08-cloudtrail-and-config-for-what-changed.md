@@ -24,7 +24,7 @@ id: article-cloud-providers-aws-observability-cloudtrail-config-what-changed
 
 Go back to the checkout system from the previous article. CloudWatch alarms fire because `orders-api` is returning HTTP 500 errors, the `inventory-worker` pods in EKS are logging database connection failures, and the `receipt-renderer` Lambda function still looks healthy. The first incident question is operational: which workload is failing?
 
-After ten minutes, the team finds the symptom. The EKS worker cannot reach the database. The next question is a change question: **what changed?** Someone may have edited a security group, replaced a route table, changed a secret, rotated a role, updated an ECS task definition, modified a Lambda environment variable, or deployed a Kubernetes change that points to the wrong endpoint.
+After ten minutes, the team finds the symptom. The EKS worker has no network path to the database. The next question is a change question: **what changed?** Someone may have edited a security group, replaced a route table, changed a secret, rotated a role, updated an ECS task definition, modified a Lambda environment variable, or deployed a Kubernetes change that points to the wrong endpoint.
 
 CloudWatch gives the workload evidence. **AWS CloudTrail** and **AWS Config** give the change evidence:
 
@@ -97,9 +97,11 @@ Management events usually answer the first "what changed?" question because reso
 
 The event type decides which CloudTrail feature you need. Event history is quick, trails are durable, Lake gives SQL for existing Lake customers, and Insights highlights unusual patterns.
 
-![CloudTrail and AWS Config timeline showing who changed what, API call timing, resource state before, and resource state after](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/who-changed-what.png)
+![The change record view shows how CloudTrail ties caller, API action, time, source, and target resource together](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/who-changed-what.png)
 
-*The timeline shows why CloudTrail and Config belong together. CloudTrail explains the API action and caller, while Config shows the resource state before and after the change.*
+*The change record view shows how CloudTrail ties caller, API action, time, source, and target resource together.*
+
+
 
 ## Event History, Trails, Lake, and Insights
 <!-- section-summary: CloudTrail has several access patterns, and each one fits a different retention, query, and investigation need. -->
@@ -116,6 +118,64 @@ aws cloudtrail lookup-events \
   --query 'Events[].{Time:EventTime,User:Username,Event:EventName,Resources:Resources}' \
   --output table
 ```
+
+The lookup filters to one API action during a one-hour UTC window. The table output should show event time, caller, event name, and related resources. That is enough to identify candidate changes before opening the full event JSON.
+
+Example output:
+
+```console
+-------------------------------------------------------------------------------------------------------------
+|                                               LookupEvents                                                 |
++----------------------+-------------------------------+----------------------------+------------------------+
+| Event                | Time                          | User                       | Resources              |
++----------------------+-------------------------------+----------------------------+------------------------+
+| AuthorizeSecurity... | 2026-06-11T15:24:33+00:00     | alice                      | sg-0abc123def456       |
++----------------------+-------------------------------+----------------------------+------------------------+
+```
+
+The table is a candidate list. It gives the time, the visible username field, the API action, and the security group ID. The full event still matters because assumed-role sessions, automation user agents, source IP addresses, and request parameters usually live in the deeper JSON.
+
+When the same question needs raw detail, fetch the event record and inspect the decoded CloudTrail event JSON:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress \
+  --start-time 2026-06-11T15:00:00Z \
+  --end-time 2026-06-11T16:00:00Z \
+  --query 'Events[0].CloudTrailEvent' \
+  --output text
+```
+
+Example output excerpt:
+
+```json
+{
+  "eventTime": "2026-06-11T15:24:33Z",
+  "eventSource": "ec2.amazonaws.com",
+  "eventName": "AuthorizeSecurityGroupIngress",
+  "userIdentity": {
+    "type": "AssumedRole",
+    "arn": "arn:aws:sts::123456789012:assumed-role/prod-network-admin/alice"
+  },
+  "userAgent": "aws-cli/2.17.0",
+  "requestParameters": {
+    "groupId": "sg-0abc123def456",
+    "ipPermissions": [
+      {
+        "fromPort": 5432,
+        "toPort": 5432,
+        "ipRanges": [
+          {
+            "cidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The table view helps find candidates. The raw event shows request parameters, user agent, session issuer, and response details that may be omitted from the summary. That is usually where the responder confirms the exact security group rule, role session, and automation tool involved.
 
 Event history has clear limits. It covers management events only, it looks back 90 days, it searches within one account and one Region, and `lookup-events` supports one lookup attribute per request. When the team needs durable evidence, multi-account coverage, data events, network activity events, or longer retention, they need a trail or an event data store.
 
@@ -200,7 +260,7 @@ Before AWS Config enters the story, the CloudTrail baseline itself needs protect
 ## CloudTrail Security Baseline
 <!-- section-summary: CloudTrail evidence needs centralization, multi-Region coverage, log validation, encryption, alerting, and tightly controlled access. -->
 
-CloudTrail logs are security evidence. They should live in a place where ordinary application administrators cannot edit or delete them. In a multi-account AWS organization, that usually means a dedicated log archive account and an organization trail that records activity for all member accounts.
+CloudTrail logs are security evidence. They should live in a place where ordinary application administrators have no edit or delete path. In a multi-account AWS organization, that usually means a dedicated log archive account and an organization trail that records activity for all member accounts.
 
 A baseline trail often starts like this:
 
@@ -219,11 +279,13 @@ Log file validation deserves special attention. It lets the team validate whethe
 
 Many teams also send selected CloudTrail events to CloudWatch Logs so they can create metric filters and alarms. Examples include root account use, failed console sign-ins, CloudTrail changes, KMS key policy changes, security group changes, and IAM policy changes. GuardDuty and Security Hub can add higher-level detection and posture checks, but the raw trail still provides the audit record.
 
-![Audit baseline showing CloudTrail multi-Region trail, log validation, KMS encryption, central S3, and AWS Config recorder, rules, aggregator, and remediation](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/audit-baseline.png)
-
-*The baseline image collects the durable evidence controls in one place. CloudTrail protects the activity record, and Config records and evaluates resource state.*
 
 CloudTrail now answers who called the API. The resource-state side still needs AWS Config, because the team has to see what the security group looked like after AWS applied the change.
+
+![The audit baseline shows which event types and retention choices help teams investigate security and production changes later](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/audit-baseline.png)
+
+*The audit baseline shows which event types and retention choices help teams investigate security and production changes later.*
+
 
 ## AWS Config: What the Resource Looked Like
 <!-- section-summary: AWS Config records resource inventory and configuration history so teams can compare resource state before and after a change. -->
@@ -243,7 +305,24 @@ aws configservice get-resource-config-history \
   --query 'configurationItems[].{Time:configurationItemCaptureTime,Status:configurationItemStatus,Config:configuration}'
 ```
 
-This gives responders the resource state as AWS Config recorded it. They can compare the captured ingress rules before and after the CloudTrail event, confirm that port `5432` opened to `0.0.0.0/0`, and see related resources that used the security group.
+Example output excerpt:
+
+```json
+[
+  {
+    "Time": "2026-06-11T15:25:08.000Z",
+    "Status": "OK",
+    "Config": "{\"groupId\":\"sg-0abc123def456\",\"groupName\":\"checkout-db\",\"ipPermissions\":[{\"ipProtocol\":\"tcp\",\"fromPort\":5432,\"toPort\":5432,\"ipv4Ranges\":[{\"cidrIp\":\"0.0.0.0/0\"}]}]}"
+  },
+  {
+    "Time": "2026-06-11T15:03:12.000Z",
+    "Status": "OK",
+    "Config": "{\"groupId\":\"sg-0abc123def456\",\"groupName\":\"checkout-db\",\"ipPermissions\":[{\"ipProtocol\":\"tcp\",\"fromPort\":5432,\"toPort\":5432,\"userIdGroupPairs\":[{\"groupId\":\"sg-0app123456789\"}]}]}"
+  }
+]
+```
+
+This gives responders the resource state as AWS Config recorded it. The newer item shows port `5432` open to `0.0.0.0/0`. The older item shows the same port allowed from the application security group instead. CloudTrail names the API request and caller; Config shows the resource state AWS captured after the request.
 
 AWS Config also provides a resource inventory. A team can list discovered resources:
 
@@ -253,6 +332,23 @@ aws configservice list-discovered-resources \
   --query 'resourceIdentifiers[].{Id:resourceId,Name:resourceName}'
 ```
 
+Example output:
+
+```json
+[
+  {
+    "Id": "sg-0abc123def456",
+    "Name": "checkout-db"
+  },
+  {
+    "Id": "sg-0app123456789",
+    "Name": "orders-api"
+  }
+]
+```
+
+That command returns the security groups AWS Config knows about in the current Region. If a security group is missing from the output, check Config recorder scope, Region, and resource type support before assuming Config has evidence for it.
+
 For broader questions, **advanced queries** let teams query current resource configuration with SQL-like syntax:
 
 ```bash
@@ -260,9 +356,32 @@ aws configservice select-resource-config \
   --expression "SELECT resourceId, resourceName, configuration.ipPermissions WHERE resourceType = 'AWS::EC2::SecurityGroup'"
 ```
 
-This helps with inventory and exposure review. For example, the security team can find security groups with broad ingress, buckets without required settings, or resources missing expected tags. The query shows current configuration. The history API shows how one resource changed over time.
+Example output excerpt:
 
-AWS Config recording has scope and Region considerations. AWS Config supports many resource types, but support can vary by Region and feature. Teams should check AWS's supported resource type coverage before assuming a specific resource type records everywhere they operate. Once recording is turned on, the configuration recorder and delivery channel become part of the audit foundation.
+```json
+{
+  "Results": [
+    "{\"resourceId\":\"sg-0abc123def456\",\"resourceName\":\"checkout-db\",\"configuration\":{\"ipPermissions\":[{\"ipProtocol\":\"tcp\",\"fromPort\":5432,\"toPort\":5432,\"ipv4Ranges\":[{\"cidrIp\":\"0.0.0.0/0\"}]}]}}"
+  ],
+  "QueryInfo": {
+    "SelectFields": [
+      {
+        "Name": "resourceId"
+      },
+      {
+        "Name": "resourceName"
+      },
+      {
+        "Name": "configuration.ipPermissions"
+      }
+    ]
+  }
+}
+```
+
+This helps with inventory and exposure review. The `Results` array contains JSON strings that represent the current resource shape. For example, the security team can find security groups with broad ingress, buckets without required settings, or resources missing expected tags. The query shows current configuration. The history API shows how one resource changed over time.
+
+AWS Config recording has scope and Region considerations. AWS Config supports many resource types, but support can vary by Region and feature. Teams should check AWS's supported resource type coverage before assuming a specific resource type records everywhere they operate. Once recording is turned on, the configuration recorder and delivery channel are part of the audit foundation.
 
 History is useful during incidents. Rules, aggregators, conformance packs, and remediation make AWS Config useful before the incident.
 
@@ -293,6 +412,30 @@ aws configservice put-config-rule \
 ```
 
 Rules turn change history into posture. Instead of discovering a public SSH rule during an incident, the team can receive a noncompliant result when the rule appears. For database security groups, the team might use a managed rule with parameters or a custom Guard rule that matches company network policy.
+
+After the rule evaluates, inspect the compliance result:
+
+```bash
+aws configservice get-compliance-details-by-config-rule \
+  --config-rule-name restricted-ssh \
+  --query 'EvaluationResults[].{Resource:EvaluationResultIdentifier.EvaluationResultQualifier.ResourceId,Compliance:ComplianceType,Annotation:Annotation}' \
+  --output table
+```
+
+Example output:
+
+```console
+-----------------------------------------------------------------------------------
+|                         GetComplianceDetailsByConfigRule                         |
++-------------------+----------------+--------------------------------------------+
+| Annotation        | Compliance     | Resource                                   |
++-------------------+----------------+--------------------------------------------+
+| No unrestricted...| COMPLIANT      | sg-0app123456789                           |
+| The security...   | NON_COMPLIANT  | sg-0bastion123456                           |
++-------------------+----------------+--------------------------------------------+
+```
+
+The compliance row is evidence with a resource name and a reason. `NON_COMPLIANT` tells the team which resource failed the rule, and the annotation explains why the rule flagged it. That output can feed a ticket, an incident timeline, or a remediation workflow.
 
 An **aggregator** collects AWS Config configuration and compliance data from multiple accounts and Regions into one account and Region. It gives central teams a read-only view across source accounts without giving that aggregator mutating access back into the source accounts. That fits the separation between compliance visibility and account administration.
 
@@ -327,6 +470,18 @@ aws cloudtrail lookup-events \
   --output table
 ```
 
+Example output:
+
+```console
+-------------------------------------------------------------------------------------------------------------
+|                                               LookupEvents                                                 |
++----------------------+-------------------------------+----------------------------+------------------------+
+| Event                | Time                          | User                       | Resources              |
++----------------------+-------------------------------+----------------------------+------------------------+
+| AuthorizeSecurity... | 2026-06-11T15:24:33+00:00     | alice                      | sg-0abc123def456       |
++----------------------+-------------------------------+----------------------------+------------------------+
+```
+
 The event list shows `AuthorizeSecurityGroupIngress` at 15:24 UTC. The full event shows the assumed role session, source IP address, request parameters, security group ID, port, and CIDR block. That answers the caller side of the question.
 
 Second, the responder asks AWS Config for the security group history:
@@ -339,6 +494,25 @@ aws configservice get-resource-config-history \
   --later-time 2026-06-11T15:40:00Z \
   --output json
 ```
+
+`--resource-type` and `--resource-id` choose the security group timeline. `--earlier-time` and `--later-time` bound the history window around the CloudTrail event. The JSON output should show configuration items before and after the ingress change.
+
+The useful part of the output looks like this after the team expands the `configuration` field:
+
+```json
+[
+  {
+    "configurationItemCaptureTime": "2026-06-11T15:25:08.000Z",
+    "ingressSummary": "tcp/5432 from 0.0.0.0/0"
+  },
+  {
+    "configurationItemCaptureTime": "2026-06-11T15:03:12.000Z",
+    "ingressSummary": "tcp/5432 from sg-0app123456789"
+  }
+]
+```
+
+The later item is the risky state. The earlier item is the known safer state. Config capture time may be a little later than the CloudTrail event time because AWS Config records the resource state after it observes the change.
 
 The configuration items show the before-and-after state. Before 15:24 UTC, port `5432` only allowed traffic from the application subnets. After 15:24 UTC, port `5432` allowed `0.0.0.0/0`. CloudTrail and Config now agree: a role session opened the database security group broadly.
 
@@ -355,6 +529,11 @@ The important workflow is the pairing:
 | Prevent repeat | Trail monitoring for risky APIs | Rules, conformance packs, and remediation |
 
 CloudTrail gives the activity trail. AWS Config gives the resource state trail. Together they turn a vague "what changed?" into an evidence-backed timeline.
+
+![The investigation path combines alarm time, CloudTrail events, Config history, resource tags, and remediation evidence](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/change-investigation-path.png)
+
+*The investigation path combines alarm time, CloudTrail events, Config history, resource tags, and remediation evidence.*
+
 
 ## Putting It All Together
 <!-- section-summary: CloudWatch, CloudTrail, and AWS Config form the operational loop for symptoms, actions, and resource state. -->
@@ -373,9 +552,6 @@ For a small account, Event history and a few Config lookups may solve the invest
 
 The last piece is discipline. CloudTrail and Config help most when teams turn them on deliberately, protect the records, and practice using them before a serious incident. A normal deployment review gives the team a much calmer place to learn these queries than a security incident with executives asking for a timeline.
 
-![Change investigation path from alarm to API call, resource state, before and after comparison, rule evaluation, safe remediation, and guardrail improvement](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/change-investigation-path.png)
-
-*The final summary turns the audit tools into an operating path. The team starts from the alarm, finds the API call, compares resource state, remediates safely, and improves the guardrail.*
 
 ---
 

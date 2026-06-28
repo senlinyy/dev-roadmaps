@@ -23,19 +23,13 @@ id: article-containers-orchestration-kubernetes-service-mesh-mesh-security
 ## The Scenario and the Security Chain
 <!-- section-summary: Mesh security connects identity, encryption, and authorization so the cluster can allow checkout to call payments while blocking analytics. -->
 
-Imagine the same online store running inside one Kubernetes cluster. The **web** service receives browser traffic, **web** calls **checkout**, and **checkout** calls **payments** to finish an order. A fourth service, **analytics**, reads business events and builds reports. Analytics runs in the same cluster, maybe even in the same namespace, but it should never call **payments** directly because it has no reason to create charges or read payment responses.
+Start with the request path. The **web** service receives browser traffic and calls **checkout** over HTTP. Then **checkout** calls **payments** to finish the order. A fourth service, **analytics**, reads business events and builds reports. Analytics can run in the same cluster and still have no business reason to call payments directly.
 
-Mesh security uses the proxy layer for identity, encryption, and access rules. When checkout calls payments, the checkout app talks to its local Envoy proxy, that proxy talks securely to the payments Envoy proxy, and the payments app receives the request after the proxy layer has checked the connection.
+Kubernetes networking can route packets from many Pods to many other Pods. If analytics can resolve `payments.store.svc.cluster.local` and open a TCP connection, the network has done its job. The security question is separate: should the payments workload accept that caller, and can payments prove the caller is really checkout?
 
-That one scenario gives us the whole security path for this article. First, each workload needs its own Kubernetes **service account**. In a mesh, the service account is the raw name Istio uses for service-to-service identity. Giving web, checkout, payments, and analytics separate service accounts gives the mesh separate names to work with. Then Istio turns the service account into a cryptographic **workload identity**, which means a name the running workload can prove during a network connection. Checkout needs its own workload identity because payments should accept checkout, while analytics needs a different workload identity because payments should reject analytics.
+**Mesh security** means using the proxy layer to give service-to-service calls identity, encryption, and access rules. In the store, checkout should prove its identity when it calls payments, the proxy-to-proxy connection should be encrypted, and payments should allow checkout while rejecting analytics.
 
-The workload identity appears as a **SPIFFE ID**, which is a URI-shaped workload name that can fit inside a certificate. The `cluster.local` part of a typical Istio identity is the **trust domain**, which is the identity boundary for the mesh. In our store, `spiffe://cluster.local/ns/store/sa/checkout` says "the checkout service account in the store namespace, inside this mesh trust domain." A **certificate** is a signed identity document the proxy can present to another proxy, and the matching **private key** is the secret cryptographic material the proxy uses to prove it really owns that certificate. Istio's **certificate authority**, often shortened to CA, is the signing system that issues trusted workload certificates. **mTLS**, short for mutual TLS, uses those certificates so both sides of a connection can prove who they are while encrypting the traffic.
-
-Finally, an Istio **AuthorizationPolicy** is the access-control rule that uses the caller's **source principal**, the identity Istio reads from the peer certificate, to enforce **least privilege between services**. Least privilege between services means each service can call only the other services it actually needs for its job. In the store, checkout needs payments to charge an order, but analytics only needs reporting data, so the payments proxy should allow checkout and block analytics.
-
-The cluster network can route packets from many Pods to many other Pods. That reachability is useful, but reachability alone gives a weak security boundary. If **analytics** can resolve `payments.store.svc.cluster.local` and open a TCP connection, the network has done its job. The security question lives one layer higher: should the payments workload accept that caller?
-
-In this article, we will protect the path in three stages. **Workload identity** answers "who is calling?" **mTLS** makes the caller prove that identity with a certificate and encrypts the traffic between proxies. **AuthorizationPolicy** answers "is this caller allowed to use this destination?" That chain lets **web** call **checkout**, lets **checkout** call **payments**, and blocks **analytics** from calling **payments** even though all three services run inside Kubernetes.
+This article protects the path in three plain stages. First, each workload gets its own name, so checkout and analytics do not look the same to payments. Second, the proxy-to-proxy connection is encrypted, so the service call has protection on the network. Third, payments gets an allow rule: checkout can call payments, analytics cannot. The Istio names for those stages are workload identity, mTLS, and AuthorizationPolicy, and we will introduce each one only after the basic security question is clear.
 
 ![Mesh security chain infographic showing web to checkout to payments allowed through identity, mTLS, and AuthorizationPolicy while analytics is blocked at the payments destination proxy](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/security-chain.png)
 
@@ -48,22 +42,9 @@ In this article, the service account is the identity seed for the mesh. Dedicate
 
 For mesh security, give each application its own service account. A **workload identity** is the identity a running workload can prove to another workload, and Istio builds that identity from the Kubernetes service account and namespace. In this scenario, `checkout` and `analytics` need different identities because payments should treat them differently. If both deployments used the `default` service account, the payments proxy would see one shared caller name and your policy would have no clean way to allow checkout while blocking analytics.
 
-This manifest shows the important shape. The images are placeholders for your own application images, but the service accounts, labels, and `serviceAccountName` fields are the security pieces to pay attention to.
+Start with the smallest shape. The namespace enables sidecar injection, and each workload gets a separate service account. The snippet below shows the payment path and the caller we want to block; the `web` service should get the same kind of dedicated service account:
 
 ```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: store
-  labels:
-    istio-injection: enabled
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: web
-  namespace: store
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -81,29 +62,11 @@ kind: ServiceAccount
 metadata:
   name: analytics
   namespace: store
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web
-  namespace: store
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: web
-  template:
-    metadata:
-      labels:
-        app: web
-    spec:
-      serviceAccountName: web
-      containers:
-        - name: web
-          image: ghcr.io/example/store-web:1.0
-          ports:
-            - containerPort: 8080
----
+```
+
+Now connect one Deployment to one of those service accounts. The `serviceAccountName` field is the important security line because it tells Istio which workload identity to issue for that Pod:
+
+```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -125,51 +88,13 @@ spec:
           image: ghcr.io/example/store-checkout:1.0
           ports:
             - containerPort: 8080
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments
-  namespace: store
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: payments
-  template:
-    metadata:
-      labels:
-        app: payments
-    spec:
-      serviceAccountName: payments
-      containers:
-        - name: payments
-          image: ghcr.io/example/store-payments:1.0
-          ports:
-            - containerPort: 8080
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: analytics
-  namespace: store
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: analytics
-  template:
-    metadata:
-      labels:
-        app: analytics
-    spec:
-      serviceAccountName: analytics
-      containers:
-        - name: analytics
-          image: ghcr.io/example/store-analytics:1.0
-          ports:
-            - containerPort: 8080
----
+```
+
+The web, payments, and analytics Deployments repeat the same pattern with their own names, labels, images, and `serviceAccountName` values. The payments Deployment should use `serviceAccountName: payments`, and the analytics Deployment should use `serviceAccountName: analytics`. That separation gives the payments proxy two different caller identities to evaluate later.
+
+Finally, expose the workloads that other services need to call:
+
+```yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -221,11 +146,11 @@ A **SPIFFE ID** is a URI that uniquely identifies a workload. In an Istio mesh w
 
 A **trust domain** is the part of the identity system that says which authority is allowed to speak for a set of workload names. If payments trusts the `cluster.local` trust domain, then a checkout certificate under `cluster.local` can prove the checkout identity for this mesh. If another cluster or identity system uses a different trust domain, teams have to configure federation or migration deliberately, because payments should not guess that a similar-looking name from somewhere else is safe.
 
-A **certificate** is the signed document that carries the SPIFFE ID, and a **private key** is the secret key paired with that certificate. The proxy uses the private key during the TLS handshake to prove that it owns the certificate without sending the private key across the network. That detail matters for the store because the payments proxy should trust a checkout certificate only when the checkout proxy can prove possession of the matching private key. A copied identity string in a header should not be enough to charge an order.
+A **certificate** is the signed document that carries the SPIFFE ID, and a **private key** is the secret key paired with that certificate. The proxy uses the private key during the TLS handshake to prove that it owns the certificate without sending the private key across the network. For the store, the payments proxy should trust a checkout certificate only when the checkout proxy can prove possession of the matching private key. A copied identity string in a header should not be enough to charge an order.
 
 A **certificate authority**, often shortened to CA, signs certificates so other systems can trust them. In a default Istio install, `istiod` includes the CA behavior for workload certificates. When the checkout Pod starts, its proxy receives an identity certificate after Istio validates the workload's Kubernetes service account. The proxy keeps that certificate and private key in its own runtime and refreshes the certificate before it expires, so application code does not need to store long-lived mesh secrets.
 
-This matters because the **payments** proxy can trust a certificate signed by the mesh CA. When checkout calls payments, the checkout proxy presents its certificate during the connection setup. The payments proxy checks the signature chain, reads the SPIFFE identity from the certificate, and learns that the caller is `cluster.local/ns/store/sa/checkout`.
+The **payments** proxy can trust a certificate signed by the mesh CA. When checkout calls payments, the checkout proxy presents its certificate during the connection setup. The payments proxy checks the signature chain, reads the SPIFFE identity from the certificate, and learns that the caller is `cluster.local/ns/store/sa/checkout`.
 
 In production, some teams integrate Istio with SPIRE or another identity system when they need stronger node attestation, cross-platform workload identity, or federation between trust domains. The beginner path is still the same: a workload gets an identity, a CA signs proof of that identity, and the destination proxy verifies the proof before trusting the caller.
 
@@ -363,7 +288,7 @@ If the JSON query returns `null`, inspect the short `istioctl proxy-config secre
 ## Allow Checkout and Block Analytics
 <!-- section-summary: AuthorizationPolicy lets payments allow the checkout source principal and reject analytics with the same mesh identity system. -->
 
-An **AuthorizationPolicy** is an Istio access-control resource. It runs at the destination side of the connection, inside the server-side Envoy proxy. For the payments workload, that means the payments proxy evaluates the caller before the payments container receives the request. This placement matters because checkout, analytics, and any other caller all meet the same payments-side rule instead of each caller deciding for itself whether it should be trusted.
+An **AuthorizationPolicy** is an Istio access-control resource. It runs at the destination side of the connection, inside the server-side Envoy proxy. For the payments workload, that means the payments proxy evaluates the caller before the payments container receives the request. This placement gives checkout, analytics, and any other caller the same payments-side rule instead of each caller deciding for itself whether it should be trusted.
 
 The safest service-to-service rule here is **least privilege between services**. Checkout needs to call payments, so checkout gets access. Analytics has no business reason to call payments, so analytics gets blocked. The policy should express that exact dependency instead of trusting every Pod in the namespace.
 

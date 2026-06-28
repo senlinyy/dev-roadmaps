@@ -1,7 +1,7 @@
 ---
 title: "Detection Signals and Alert Triage"
-description: "Use cloud logs, runtime alerts, scanner signals, SIEM events, and identity activity to identify security incidents early."
-overview: "Signals are raw security evidence, alerts are signals that deserve attention, and triage is the first investigation that decides whether the team has an incident. This article follows a leaked deployment token from first alert to escalation."
+description: "Turn noisy alert queues into evidence-based triage using cloud logs, identity activity, runtime signals, pipelines, and MITRE ATT&CK."
+overview: "An alert notification is only the start. This article follows a leaked deployment key from a noisy queue through signals, alerts, incidents, cloud and identity logs, runtime and pipeline evidence, MITRE ATT&CK mapping, severity, escalation, and a small triage workflow."
 tags: ["devsecops", "detection", "triage", "attck"]
 order: 1
 id: article-devsecops-incident-readiness-detection-signals-alert-triage
@@ -9,7 +9,7 @@ id: article-devsecops-incident-readiness-detection-signals-alert-triage
 
 ## Table of Contents
 
-1. [Why Triage Exists](#why-triage-exists)
+1. [The Alert Queue](#the-alert-queue)
 2. [Signals, Alerts, and Incidents](#signals-alerts-and-incidents)
 3. [The Running Scenario](#the-running-scenario)
 4. [Cloud and Identity Logs](#cloud-and-identity-logs)
@@ -20,15 +20,16 @@ id: article-devsecops-incident-readiness-detection-signals-alert-triage
 9. [A Small Triage Workflow](#a-small-triage-workflow)
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
+12. [References](#references)
 
-## Why Triage Exists
+## The Alert Queue
 <!-- section-summary: Triage gives the team a short, disciplined investigation before a noisy alert turns into either closed noise or a real incident. -->
 
-Security detection in a DevSecOps team usually starts with a messy queue. A scanner opens a secret alert, GuardDuty reports unusual cloud API activity, a Kubernetes audit log shows a service account creating pods, and the SIEM groups three logins from a new country. Each item may be harmless by itself, but the team still has to decide which one deserves action right now.
+The on-call phone buzzes at 02:14. A scanner opens a secret alert, GuardDuty reports unusual cloud API activity, a Kubernetes audit log shows a service account creating pods, and the SIEM groups three logins from a new country. Each item may be harmless by itself, but the team still has to decide which one deserves action right now.
 
 **Triage** is the first investigation step after an alert appears. The goal is to answer a small set of questions quickly: what happened, which identity or system was involved, what could that identity reach, whether the activity matches normal work, and whether someone needs to start the incident response runbook.
 
-This matters because alert queues punish vague thinking. If every alert turns into a full incident, engineers burn out and the response channel fills with noise. If every alert waits until someone has spare time, a real attacker can keep using the access they found. Triage creates the middle step: enough evidence to make a confident first decision.
+A noisy queue punishes vague thinking. If every alert turns into a full incident, engineers burn out and the response channel fills with noise. If every alert waits until someone has spare time, a real attacker can keep using the access they found. Triage creates the middle step: enough evidence to make a confident first decision.
 
 In production, detection also belongs to more than one team. Platform engineers understand deployment workflows, security engineers understand attacker behavior, service owners understand normal application traffic, and support teams may hear from customers first. A good triage process lets those people share one view of the evidence instead of arguing from separate dashboards.
 
@@ -82,7 +83,28 @@ aws cloudtrail lookup-events \
   --query 'Events[].{time:EventTime,name:EventName,source:EventSource,user:Username}'
 ```
 
-That command asks CloudTrail for events tied to one access key during a tight window. The output gives the first timeline: which APIs were called, when they were called, and which identity name AWS associated with them. The analyst still needs the full event JSON for source IP, user agent, and request details, but the timeline starts here.
+That command asks CloudTrail for events tied to one access key during a tight window. `AccessKeyId` is the join key from the leaked credential, and the start and end times keep the first search close to the alert. The selected output fields give the first timeline: which APIs were called, when they were called, and which identity name AWS associated with them.
+
+Example output:
+
+```json
+[
+  {
+    "time": "2026-06-22T21:58:33Z",
+    "name": "GetCallerIdentity",
+    "source": "sts.amazonaws.com",
+    "user": "deploy-bot-prod"
+  },
+  {
+    "time": "2026-06-22T22:01:12Z",
+    "name": "ListBuckets",
+    "source": "s3.amazonaws.com",
+    "user": "deploy-bot-prod"
+  }
+]
+```
+
+The analyst still needs the full event JSON for source IP, user agent, and request details, but this short output shows whether the key was active during the suspicious window.
 
 GitHub adds another identity layer. The organization audit log can show repository setting changes, secret scanning events, workflow changes, environment changes, and access changes. For this scenario, the triage view should include the commit that introduced the secret, the secret scanning alert, any push protection bypass, workflow file changes, and any deployment environment approvals near the same time.
 
@@ -184,7 +206,7 @@ An alert label is a starting point. A "high" alert on a lab repository may need 
 
 For the running scenario, the confidence increases because multiple independent sources agree. GitHub found the key in source control. CloudTrail shows the key used after exposure. The source IP and user agent do not match the normal deployment pattern. The pipeline has no matching workflow run.
 
-The blast radius also matters. A deploy key that can only update a staging demo has a limited path. A deploy key that can update production Lambda code, read container images, or pull logs from customer workflows creates a wider response. The analyst should look up permissions early because severity depends on what the credential could do, not only what it already did.
+The **blast radius** is the set of systems the identity could affect. A deploy key that can only update a staging demo has a limited path. A deploy key that can update production Lambda code, read container images, or pull logs from customer workflows creates a wider response. The analyst should look up permissions early because severity depends on what the credential could do and what it already did.
 
 Here is a simple severity guide for credential-related triage:
 
@@ -242,7 +264,7 @@ gh run list \
   > "evidence/$CASE_ID/github-runs.json"
 ```
 
-Those three files give the responder a grounded start. The responder can compare cloud API activity with repository alerts and workflow runs instead of switching between dashboards and trying to remember what they saw.
+Those three files give the responder a grounded start. `github-secret-alerts.json` records the repository alert metadata, `cloudtrail-access-key.json` records API activity for the exposed key, and `github-runs.json` records workflow runs in the same time window. The responder can compare cloud API activity with repository alerts and workflow runs instead of switching between dashboards and trying to remember what they saw.
 
 Here is a compact triage note format:
 
@@ -271,7 +293,7 @@ The habit to build is simple and concrete. Start with the alert, name the identi
 
 ![Detection triage loop infographic showing collect signals, group case, build timeline, score severity, and escalate or close around a leaked deploy key](/content-assets/articles/article-devsecops-incident-readiness-detection-signals-alert-triage/detection-triage-loop.png)
 
-_The summary loop shows triage as a repeatable handoff process, not a one-off hunt through logs._
+_The summary loop shows triage as a repeatable handoff process built from evidence, ownership, and clear decisions._
 
 ## What's Next
 <!-- section-summary: The next article takes the escalated leaked-token case into containment, evidence preservation, credential rotation, recovery, and communication. -->
@@ -280,11 +302,10 @@ The triage case has crossed the response threshold. A production deployment cred
 
 The next article follows the same `checkout-api` case through a runbook: who takes which role, how evidence is preserved, how the key is contained, how credentials are rotated, how the service recovers, and how the team communicates without losing the timeline. That gives the triage handoff a practical response path.
 
----
-
-**References**
+## References
 
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management](https://csrc.nist.gov/pubs/sp/800/61/r3/final) - Frames incident response as part of the wider CSF 2.0 risk management lifecycle.
+- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework) - Provides the Govern, Identify, Protect, Detect, Respond, and Recover functions used to organize security operations.
 - [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks) - Provides standardized playbook ideas for identifying, coordinating, remediating, recovering, and tracking mitigations.
 - [MITRE ATT&CK Enterprise Matrix](https://attack.mitre.org/matrices/enterprise/) - Gives shared tactic and technique names for suspicious behavior across enterprise, cloud, SaaS, and container platforms.
 - [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Explains CloudTrail account activity records and event history.

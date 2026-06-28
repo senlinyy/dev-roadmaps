@@ -1,7 +1,7 @@
 ---
 title: "Cosmos DB"
-description: "Use Cosmos DB for item-shaped application state where the lookup path, partition key, request units, TTL, and consistency choice are part of the design."
-overview: "This article focuses on Azure Cosmos DB for NoSQL. It follows idempotency keys and background job status records through containers, items, partition keys, request units, indexing, TTL, consistency, and production fit."
+description: "Use Cosmos DB for item-shaped application state where the lookup path, partition key, request units, TTL, private access, backup mode, and consistency choice are part of the design."
+overview: "This article focuses on Azure Cosmos DB for NoSQL. It follows idempotency keys and background job status records through containers, items, partition keys, request units, indexing, TTL, private access, backup and restore choices, consistency, and production fit."
 tags: ["azure", "cosmos-db", "nosql", "partition-keys", "request-units"]
 order: 4
 id: article-cloud-providers-azure-storage-databases-cosmos-db-nosql-data-models
@@ -19,11 +19,12 @@ aliases:
 5. [Request Units and Throughput](#request-units-and-throughput)
 6. [Indexing and Queries](#indexing-and-queries)
 7. [Consistency and Regions](#consistency-and-regions)
-8. [TTL and Temporary State](#ttl-and-temporary-state)
-9. [Transactions and Boundaries](#transactions-and-boundaries)
-10. [When Cosmos DB Fits](#when-cosmos-db-fits)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+8. [Private Access and Backup Modes](#private-access-and-backup-modes)
+9. [TTL and Temporary State](#ttl-and-temporary-state)
+10. [Transactions and Boundaries](#transactions-and-boundaries)
+11. [When Cosmos DB Fits](#when-cosmos-db-fits)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
 ## What Cosmos DB Is For
 <!-- section-summary: Cosmos DB is useful for item-shaped data where the app already knows how it will read and write the records. -->
@@ -37,6 +38,10 @@ The practical reason to reach for Cosmos DB is simple: the application has data 
 That same checkout system also has background export jobs. A support user starts an export, the worker updates a status record, and the support page checks that job by job ID. This status record also looks like an item: one small JSON document, one natural lookup key, a few updates, and a clear expiry window after support no longer needs it.
 
 Those two examples will carry the whole article. We will follow `idempotency-keys` and `job-status` containers inside an `orders-events` database. First we name the access patterns, then we choose item shape, partition key, throughput, indexes, consistency, TTL, and finally the service fit. Cosmos DB rewards that order of thinking because the access path and the partition key sit close to the center of the design.
+
+![Cosmos DB access pattern map showing an Orders API writing relational order records to a SQL ledger, PDFs to receipt files, and idempotency plus job status records to NoSQL items](/content-assets/articles/article-cloud-providers-azure-storage-databases-cosmos-db-nosql-data-models/cosmos-access-patterns.png)
+
+*The checkout platform uses different storage shapes on purpose: SQL keeps the order ledger, file storage keeps PDFs, and Cosmos DB keeps small item-shaped operational records.*
 
 ## Access Patterns First
 <!-- section-summary: An access pattern is the normal read or write path, and Cosmos DB design depends on naming those paths early. -->
@@ -132,6 +137,15 @@ az cosmosdb sql container update \
 
 The values are the design. `/idempotencyKey` tells Cosmos DB how to route retry records. `4000` is the autoscale maximum RU/s, so the container can rise during checkout bursts while still having a ceiling. `604800` is seven days, so expired retry keys leave the container after the retry window.
 
+A healthy container review should turn those flags into evidence. The database create command should return the database name and resource ID. The container create or update result should show the partition key path, autoscale settings, and default TTL that match the design.
+
+| Field to check | Expected value | What it proves |
+| --- | --- | --- |
+| `resource.id` | `idempotency-keys` | The command changed the intended container |
+| `resource.partitionKey.paths` | `["/idempotencyKey"]` | Point reads can route by the retry token |
+| `options.autoscaleSettings.maxThroughput` | `4000` | The autoscale ceiling matches the capacity plan |
+| `resource.defaultTtl` | `604800` | Items expire after the seven-day retry window |
+
 ## Partition Keys
 <!-- section-summary: The partition key decides how Cosmos DB groups items and routes work, so it must match both scale and lookup paths. -->
 
@@ -169,6 +183,16 @@ az cosmosdb sql container show \
   --name idempotency-keys \
   --query "{partitionKey:resource.partitionKey.paths,defaultTtl:resource.defaultTtl}"
 ```
+
+The expected output is small enough to read during review:
+
+| partitionKey | defaultTtl |
+| --- | --- |
+| `["/idempotencyKey"]` | `604800` |
+
+![Cosmos DB partition key routing infographic showing balanced keys, a direct point read using id plus partition key, and a cross-partition query with higher RU cost](/content-assets/articles/article-cloud-providers-azure-storage-databases-cosmos-db-nosql-data-models/partition-key-ru-routing.png)
+
+*Balanced partition keys let known-item reads go straight to the target item, while broad queries fan out and spend more request units.*
 
 ## Request Units and Throughput
 <!-- section-summary: Request units measure the work Cosmos DB performs, and throughput settings decide how much work the container can do per second. -->
@@ -212,6 +236,12 @@ console.log({
 ```
 
 That value is a production signal. If one known-key read suddenly costs much more than expected, the team checks item size, SDK call shape, consistency, and whether the code accidentally changed from a point read to a query. If `429` responses rise at the same time, the team reviews both throughput and partition distribution before simply raising the RU ceiling.
+
+The application log should name the item, partition key, and request charge together. A normal point read for a small item might produce a compact record like this:
+
+| id | partitionKey | requestCharge |
+| --- | --- | --- |
+| `pay_req_8f31` | `pay_req_8f31` | `1.0` |
 
 ## Indexing and Queries
 <!-- section-summary: Cosmos DB indexes item properties for queries, but the best query still follows the partition and data shape. -->
@@ -271,10 +301,42 @@ For our idempotency key, the payment path should avoid stale confusion. If a cli
 
 Consistency also has cost. Microsoft documents that Strong and Bounded Staleness reads consume roughly twice the RUs of more relaxed levels. That cost belongs in the product tradeoff, especially on high-volume read paths where freshness rules affect both behavior and capacity.
 
+## Private Access and Backup Modes
+<!-- section-summary: A production Cosmos DB account needs a planned network path and backup mode before the app depends on the data. -->
+
+The checkout API can have a clean item model and still fail in production if the network path and recovery path are vague. A **private endpoint** gives the Cosmos DB account private IP addresses in a virtual network. The app can still use the normal account endpoint name, while private DNS points approved clients to the private address. This gives the platform team a way to keep database traffic on approved private paths and reduce public exposure.
+
+Private access has a DNS detail that deserves attention. For the API for NoSQL, the private DNS zone commonly uses `privatelink.documents.azure.com`. If the app host resolves the account to a public address, the connection may fail against firewall rules or drift away from the intended network path. If it resolves to a private address from a network that cannot route there, the failure looks different. The release checklist should include both DNS resolution and a simple app connection test from the runtime network.
+
+Cosmos DB also supports account keys, resource tokens, and Microsoft Entra ID authentication patterns. For production application code, the team should prefer managed identity and role-based access where the SDK path supports it, then keep account keys out of normal app configuration and browser code. A key can be useful for a controlled operational break-glass path, but it should not become the everyday shortcut that every script carries.
+
+Backup mode is the next account-level decision. **Periodic backup** is the default backup mode for many accounts. It keeps platform-managed backups on a schedule. **Continuous backup** gives point-in-time restore into a selected retention tier, commonly 7 days or 30 days depending on the configured tier and account support. Continuous backup is the mode teams usually review when accidental writes, deletes, or container damage need a restore timestamp.
+
+For the `orders-events` account, backup planning follows the data value. Idempotency keys may be temporary and recoverable from payment provider logs, so a short window can be acceptable. Job status records may be operational only, but a bad worker that corrupts thousands of statuses during a support incident still needs a way to inspect a clean copy. The team should restore into a separate account or target first, compare the data, and copy back only the records that belong in production.
+
+This command gives reviewers the account-level network, consistency, region, and backup mode in one place:
+
+```bash
+az cosmosdb show \
+  --resource-group rg-devpolaris-data-prod \
+  --name cosmos-devpolaris-orders-prod \
+  --query "{publicNetworkAccess:publicNetworkAccess,consistency:consistencyPolicy.defaultConsistencyLevel,locations:locations[].locationName,backupMode:backupPolicy.type,backupTier:backupPolicy.continuousModeProperties.tier}"
+```
+
+The exact values depend on the environment, but a production private-access design might expect this shape:
+
+| Field | Example value | Review meaning |
+| --- | --- | --- |
+| `publicNetworkAccess` | `Disabled` | The account expects approved private paths |
+| `consistency` | `Session` | The app gets read-your-writes behavior for common flows |
+| `locations` | `["westeurope"]` | The team knows where data is deployed |
+| `backupMode` | `Continuous` | The account supports point-in-time restore behavior |
+| `backupTier` | `Continuous30Days` | The restore window matches the incident discovery window |
+
 ## TTL and Temporary State
 <!-- section-summary: TTL lets Cosmos DB expire short-lived items automatically, which fits retry keys and operational status records. -->
 
-Now the read behavior is clear, and the next production problem is cleanup. Idempotency keys and job status records have value for a while, then they turn into clutter. A database that keeps every temporary record forever creates storage growth, noisy dashboards, and awkward support questions later.
+Now the read behavior, network path, and backup mode are named, and the next production problem is cleanup. Idempotency keys and job status records have value for a while, then they turn into clutter. A database that keeps every temporary record forever creates storage growth, noisy dashboards, and awkward support questions later.
 
 **TTL** means **time to live**. It is an expiry setting in seconds. Cosmos DB counts that number from the item's last modified time, so an update refreshes the countdown. A container must have TTL enabled before item-level `ttl` values matter, and then each item can use the container default or override it with its own value.
 
@@ -334,9 +396,13 @@ The `idempotency-keys` container uses `/idempotencyKey` as the partition key bec
 
 The `job-status` container uses `/jobId` because support screens and workers care about one job at a time. The default TTL is 30 days because old status records should leave the system without a cleanup script. If support later needs long-term audit history, the team can design a separate retention path rather than stretching a temporary status container into an archive.
 
-Cosmos DB works best here because the records are small, independent, key-oriented, and time-bound. The service design stays understandable because every major setting connects back to a concrete product behavior: point reads for retries, job ID lookups for support, TTL for expiry, Session consistency for read-your-writes flows, and RU monitoring for capacity signals.
+Cosmos DB works best here because the records are small, independent, key-oriented, and time-bound. The service design stays understandable because every major setting connects back to a concrete product behavior: point reads for retries, job ID lookups for support, TTL for expiry, Session consistency for read-your-writes flows, private access for the runtime path, continuous backup for recoverable mistakes, and RU monitoring for capacity signals.
 
-That is the bigger lesson. Cosmos DB moves modeling work from table relationships to **item shape**, **partition key**, **query path**, **RU cost**, **consistency**, **transaction boundary**, and **expiry**. When those answers line up with the workload, Cosmos DB can be a very clean home for fast application state.
+That is the bigger lesson. Cosmos DB moves modeling work from table relationships to **item shape**, **partition key**, **query path**, **RU cost**, **consistency**, **transaction boundary**, **network path**, **backup mode**, and **expiry**. When those answers line up with the workload, Cosmos DB can be a very clean home for fast application state.
+
+![Cosmos DB production fit check infographic with review tiles for access path, partition key, RU budget, consistency, TTL and backup, ending at a fit check](/content-assets/articles/article-cloud-providers-azure-storage-databases-cosmos-db-nosql-data-models/cosmos-production-fit-check.png)
+
+*Use the final fit check before production: item shape, routing, capacity, consistency, expiry, backup, and recovery all need to match the product behavior.*
 
 ## What's Next
 
@@ -355,5 +421,7 @@ Next we look at Disks and File Shares, where the storage question changes from d
 - [Provision throughput for containers and databases](https://learn.microsoft.com/en-us/azure/cosmos-db/set-throughput) - Container throughput, database throughput, RU/s, and rate limiting guidance.
 - [Indexing policies in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/index-policy) - Default indexing behavior and indexing policy choices for API for NoSQL containers.
 - [Consistency levels in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/consistency-levels) - Strong, bounded staleness, session, consistent prefix, and eventual consistency.
+- [Configure Azure Private Link for Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-configure-private-endpoints) - Private endpoint and private DNS behavior for Cosmos DB accounts.
+- [Continuous backup with point-in-time restore](https://learn.microsoft.com/en-us/azure/cosmos-db/continuous-backup-restore-introduction) - Continuous backup mode, retention tiers, and restore scenarios.
 - [Time to live in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/time-to-live) - TTL expiry behavior, background deletion, and item visibility after expiry.
 - [Transactions and optimistic concurrency control](https://learn.microsoft.com/en-us/azure/cosmos-db/database-transactions-optimistic-concurrency) - ACID transactions within logical partitions and optimistic concurrency behavior.

@@ -1,7 +1,7 @@
 ---
 title: "Pipeline Permissions and Token Boundaries"
-description: "Scope GitHub Actions and GitLab pipeline tokens, split read and write jobs, and use OIDC for short-lived cloud deployment access."
-overview: "This article follows Summit Retail's checkout-api pipeline after runner trust is in place. It explains how repository tokens, package publishing permissions, pull request permissions, and cloud deployment identities should stay scoped to the exact job that needs them."
+description: "Scope CI job tokens, split read and write work, publish packages with narrow permissions, and use OIDC for short-lived cloud deployment identity."
+overview: "Start with one checkout-api job that needs a small key to publish one package, then grow that idea into GITHUB_TOKEN permissions, read and write job splits, pull request risk, package publishing, OIDC, workload identity federation, cloud trust policies, environment-bound identities, GitLab token patterns, and verification evidence."
 tags: ["devsecops", "tokens", "oidc", "ci-cd"]
 order: 2
 id: article-devsecops-pipeline-and-runner-security-permissions-token-boundaries
@@ -9,74 +9,95 @@ id: article-devsecops-pipeline-and-runner-security-permissions-token-boundaries
 
 ## Table of Contents
 
-1. [The Job Token Problem](#the-job-token-problem)
-2. [GITHUB_TOKEN and CI Job Tokens](#github_token-and-ci-job-tokens)
-3. [Repository Defaults and Job Permissions](#repository-defaults-and-job-permissions)
+1. [A Small Key for One Job](#a-small-key-for-one-job)
+2. [From One Package Push to Job Tokens](#from-one-package-push-to-job-tokens)
+3. [Default Permissions and Job Permissions](#default-permissions-and-job-permissions)
 4. [Read Jobs, Write Jobs, and Pull Requests](#read-jobs-write-jobs-and-pull-requests)
-5. [Package Publishing Permissions](#package-publishing-permissions)
+5. [Package Publishing Boundaries](#package-publishing-boundaries)
 6. [OIDC and Workload Identity Federation](#oidc-and-workload-identity-federation)
-7. [AWS Trust Policies for Summit Retail](#aws-trust-policies-for-summit-retail)
+7. [Cloud Role Trust Policies](#cloud-role-trust-policies)
 8. [Environment-Bound Deployment Identities](#environment-bound-deployment-identities)
 9. [GitLab Tokens in the Same Pattern](#gitlab-tokens-in-the-same-pattern)
 10. [Verifying Token Boundaries](#verifying-token-boundaries)
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
+13. [References](#references)
 
-## The Job Token Problem
-<!-- section-summary: A pipeline token gives an automated job permission to call APIs, so every job needs a clear boundary around what that token can touch. -->
+## A Small Key for One Job
+<!-- section-summary: A token boundary is easiest to understand as giving one job the small key it needs for one task. -->
 
-In the previous article, Summit Retail worked on **runner trust** for the `checkout-api`. The team cared about where jobs run, which runners can handle production work, and how much trust to place in code that executes on shared infrastructure. Now the runner is in better shape, so the next question is about the identity inside the job.
+Imagine a package room in an office. A person needs to place one labeled box on one shelf. The safe version gives that person a key to that room and that shelf for the short time they need it, while the master key stays locked away.
 
-A **pipeline token** is a credential that the CI/CD platform gives to an automated job so the job can call APIs. The token may read repository contents, write pull request comments, upload build artifacts, publish packages, or request a cloud deployment identity. In plain English, the runner is the machine doing the work, and the token is the badge the job carries while doing that work.
+A pipeline job has the same problem. One job might need to publish one container image. Another job might need to comment on a pull request. A deployment job might need to request a cloud role. Each job needs a small key for its own task.
 
-A **token boundary** is the limit around that badge. It answers three questions: which system accepts this token, which actions can the token take, and which repository, package, environment, or cloud resource can it affect. A good boundary lets Summit's test job read the source code and report a result, while the production deploy job can request a production cloud role only after the workflow reaches the production environment.
+Summit Retail's `checkout-api` has four ordinary jobs:
 
-This matters because pipelines run code from many situations. The same repository might run a unit test for a pull request from a fork, build a container image after a merge to `main`, publish a package after a release tag, and deploy production after approval. Those jobs share the word "pipeline," but they should not share the same power.
-
-Here is the shape Summit Retail wants for `checkout-api`. The table gives us the path for the rest of the article, because each row needs a different token boundary:
-
-| Pipeline job | Normal trigger | Token boundary |
+| Job | Job goal | Small key it needs |
 |---|---|---|
-| Test pull request | `pull_request` | Read repository contents and test code |
-| Build image | Push to `main` | Read repository contents and write one package image |
-| Deploy staging | Push to `main` | Request a staging cloud role through OIDC |
-| Deploy production | Approved production environment | Request a production cloud role through OIDC |
+| `test` | Run pull request tests | Read repository contents |
+| `build-image` | Publish one container image | Read repository contents and write one package |
+| `deploy-staging` | Update staging | Request a staging cloud identity |
+| `deploy-production` | Update production | Request a production cloud identity after approval |
 
-The rest of this article follows that path. First we name the built-in tokens. Then we tighten repository and job permissions. After that we split read work from write work, handle package publishing, replace stored cloud secrets with OIDC, and verify that the jobs only received the access they needed.
+A **pipeline token** is a credential the CI/CD platform gives to a job so the job can call APIs. A **token boundary** is the limit around that credential. The boundary says which system accepts the token, which action the token can take, and which repository, package, environment, or cloud resource it can affect.
 
-![Job token boundary showing separate read, package write, and OIDC permissions for test, build, and deploy jobs](/content-assets/articles/article-devsecops-pipeline-and-runner-security-permissions-token-boundaries/job-token-boundary.png)
+We will build the boundary from a tiny package publishing job first, then add pull requests, OIDC, cloud trust, and environment rules.
 
-*Each pipeline job should receive its own narrow token boundary, so a test job cannot accidentally inherit the write power needed by publishing or deployment jobs.*
+## From One Package Push to Job Tokens
+<!-- section-summary: Built-in CI job tokens are convenient, but the workflow must still limit what each job token can do. -->
 
-## GITHUB_TOKEN and CI Job Tokens
-<!-- section-summary: Built-in job tokens are convenient because the CI system creates them automatically, but convenience still needs a narrow permission boundary. -->
+Start with the package push. `checkout-api` merges to `main`, the build job creates an image, and the job pushes that image to GitHub Container Registry.
 
-**GITHUB_TOKEN** is the built-in token that GitHub Actions creates for a workflow run. A job can use it to call GitHub APIs for the repository that owns the workflow. GitHub exposes it through `secrets.GITHUB_TOKEN`, and actions can also reach it through the `github.token` context when the workflow author did not pass it explicitly.
-
-That second detail is important for Summit Retail. If the `checkout-api` workflow uses a third-party action, that action may be able to use the job's token through the context. The permission boundary must protect the job even when an action has access to the token. That means the workflow should set permissions deliberately instead of relying on broad defaults.
-
-GitLab has a similar built-in idea called **CI_JOB_TOKEN**. GitLab creates it for a running job so the job can call selected GitLab APIs, download dependencies, access allowed repositories, or publish to supported registries. The exact capabilities depend on GitLab settings and the endpoints that accept the token.
-
-These built-in tokens are useful because Summit does not need to store a long-lived GitHub or GitLab personal access token in CI secrets for normal repository operations. The platform issues the token for the job, the job uses it, and the token stops being useful after the job finishes. Short-lived platform-issued credentials reduce the number of permanent secrets waiting in CI settings.
-
-They still need scoping. A pull request test job needs code checkout and maybe pull request metadata. It does not need permission to publish a package. A package publishing job needs package write permission. It does not need permission to request the production AWS role. The token type gives the job an identity, and the permission settings decide what that identity can do.
-
-## Repository Defaults and Job Permissions
-<!-- section-summary: Repository defaults set the starting point, while workflow and job permissions narrow the token for each piece of work. -->
-
-Before writing YAML, define two layers. **Repository workflow permissions** are the default GitHub Actions token permissions for the repository or organization. **Workflow and job permissions** are the permissions declared in a workflow file with the `permissions:` key. The repository default is the starting point, and the workflow file should narrow each job from there.
-
-For Summit Retail, the repository default should be read-only for normal workflow tokens. That default means a new workflow starts with a safer baseline. The workflow file can then grant write access only to the job that publishes a package, or grant `id-token: write` only to the job that needs an OIDC token for cloud federation.
-
-Here is a production-style GitHub Actions shape for the `checkout-api`. The workflow starts with `permissions: {}` so jobs receive no repository token permissions unless they ask for them. Each job then requests the narrow set it needs.
+Here is the small skeleton:
 
 ```yaml
-name: checkout-api
+name: checkout-api package
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t ghcr.io/summit-retail/checkout-api:${{ github.sha }} .
+      - run: docker push ghcr.io/summit-retail/checkout-api:${{ github.sha }}
+```
+
+`docker build` creates a container image from the repository. The tag uses `${{ github.sha }}`, which ties the image tag to the commit that triggered the workflow. `docker push` uploads the image to the registry. The missing detail is authentication: the registry needs to know this job has permission to publish that package.
+
+GitHub Actions creates a built-in **GITHUB_TOKEN** for workflow runs. A job can use it to call GitHub APIs and GitHub package services for the repository. GitLab has a similar built-in **CI_JOB_TOKEN** for GitLab jobs. These platform-issued tokens are useful because teams avoid storing long-lived personal access tokens for routine CI work.
+
+Convenience still needs a boundary. A third-party action in the same job may be able to use the job token through the GitHub context. A shell step can read environment variables made available to that step. A script from the repository can try to call APIs. The workflow should give the job only the token permissions needed for its task.
+
+The package job is clearer with an explicit permission block:
+
+```yaml
+permissions:
+  contents: read
+  packages: write
+```
+
+`contents: read` lets the job read source code. `packages: write` lets the job publish to GitHub Packages or GitHub Container Registry. A test job stays on read access, and a package job stays away from production cloud access.
+
+## Default Permissions and Job Permissions
+<!-- section-summary: Repository defaults set the baseline, while workflow and job permissions narrow the built-in token for each job. -->
+
+GitHub Actions has permission defaults at the organization or repository level, and workflows can also declare `permissions:` at the workflow or job level. Summit uses restricted defaults, then each workflow declares what it needs. This keeps broad write access visible during review.
+
+The pattern starts with no permissions at the top:
+
+```yaml
+name: checkout-api delivery
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions: {}
@@ -96,11 +117,17 @@ jobs:
           node-version: "22"
       - run: npm ci
       - run: npm test
+```
 
+`permissions: {}` at the workflow level gives jobs no repository token permissions unless they ask. The `test` job asks for source and pull request metadata only. `persist-credentials: false` keeps the checkout token out of the local Git config after source checkout. `npm ci` installs dependencies from the lockfile, and `npm test` runs the project's test script.
+
+Now add the package job:
+
+```yaml
   build-image:
-    runs-on: ubuntu-latest
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -111,130 +138,128 @@ jobs:
       - run: docker build -t ghcr.io/summit-retail/checkout-api:${{ github.sha }} .
       - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - run: docker push ghcr.io/summit-retail/checkout-api:${{ github.sha }}
-
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: build-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment: staging
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::111122223333:role/summit-checkout-api-staging-deploy
-          aws-region: us-east-1
-      - run: aws sts get-caller-identity
-      - run: ./scripts/deploy-ecs-service.sh staging ghcr.io/summit-retail/checkout-api:${{ github.sha }}
-
-  deploy-production:
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::444455556666:role/summit-checkout-api-production-deploy
-          aws-region: us-east-1
-      - run: aws sts get-caller-identity
-      - run: ./scripts/deploy-ecs-service.sh production ghcr.io/summit-retail/checkout-api:${{ github.sha }}
 ```
 
-The important part is the split. `test` can read code and pull request metadata. `build-image` can write a package image. `deploy-staging` and `deploy-production` can request an OIDC token, but they do not receive `packages: write`. The production job also points at a different AWS account and a different IAM role.
+The `if` line allows this job only for a push to `main`. The `docker build` command creates the image. The `docker login` command authenticates Docker to GitHub Container Registry by passing the job token through standard input, which keeps the token out of the command-line argument list. The `docker push` command uploads the tagged image.
 
-`persist-credentials: false` on checkout deserves a quick note. `actions/checkout` can leave the token configured in the local Git repository so later git commands can use it. Summit's test and deploy jobs do not need later git pushes, so the workflow avoids leaving the token in that git config. That does not replace `permissions:`, but it removes one common place where a token can accidentally travel farther through the job than planned.
+Example registry output is usually shaped like this:
+
+```bash
+The push refers to repository [ghcr.io/summit-retail/checkout-api]
+checkout-api:7c1a2ef: digest: sha256:9f3e6f3b1d7e... size: 2198
+```
+
+The digest in that output is the stable artifact identity. Later gates should prefer the digest over a movable tag.
 
 ## Read Jobs, Write Jobs, and Pull Requests
-<!-- section-summary: Pull request jobs should stay mostly read-only because they often execute code before the team has accepted it into the trusted branch. -->
+<!-- section-summary: Pull request jobs should stay mostly read-only because they execute code before the team accepts it into a trusted branch. -->
 
-A **read job** uses the repository as input. It checks out code, installs dependencies, runs tests, scans files, and reports a result. A **write job** changes something outside the temporary runner workspace, such as a package registry, a GitHub release, a deployment environment, or a cloud account.
+A **read job** uses the repository as input. It checks out code, installs dependencies, runs tests, scans files, and reports a result. A **write job** changes something outside the temporary runner workspace: a package registry, a release, a deployment environment, a cloud account, or a pull request comment.
 
-Summit Retail treats pull request jobs as read jobs. That choice matters because pull requests can contain untrusted code. A test script from a pull request can execute on the runner. If the job token can write packages or request cloud credentials, then a malicious change can try to use that access during the test run.
+Summit treats pull request jobs as read jobs. Pull requests can change scripts, tests, package manifests, and build configuration. If a pull request job receives package write permission or cloud identity permission, the pull request code can try to use that access while the job runs.
 
-GitHub gives pull requests from forks a more restricted token by default, and repository settings can control whether Actions can approve pull requests or receive broader write tokens in forked pull request workflows. Summit still writes the workflow defensively. The pull request job asks only for read access and uses conditions so package publishing and deployment jobs only run from trusted `main` pushes.
+The read and write split gives reviewers a simple workflow map:
 
-The split usually appears in three places. Summit's reviewers look for this split before they read the rest of the workflow:
-
-| Job behavior | Token choice | Summit example |
+| Job behavior | Token boundary | Summit example |
 |---|---|---|
-| Test code from a pull request | Read repository token | `contents: read`, `pull-requests: read` |
-| Publish an image after merge | Package write token | `packages: write` only in `build-image` |
-| Deploy to AWS | OIDC token and cloud role | `id-token: write` only in deploy jobs |
+| Test pull request code | Read repository token | `contents: read`, `pull-requests: read` |
+| Publish after merge | Package write token | `packages: write` in `build-image` only |
+| Deploy to cloud | OIDC token and cloud role | `id-token: write` in deploy jobs only |
+| Comment on a pull request | Pull request write token | Separate comment job with `pull-requests: write` |
 
-There is one GitHub Actions event that security teams discuss a lot: `pull_request_target`. That event runs in the context of the base repository, so it can access more trusted settings than a normal pull request workflow. It can help with safe automation like labeling or commenting, but it needs careful handling because checking out and running pull request code in that context can expose powerful credentials to untrusted code.
+GitHub gives forked pull request workflows more restrictive token behavior by default, and repository settings can further limit what those workflows receive. Summit still writes the workflow as though any pull request code can try to misuse the job. The test job gets read permission. The package job runs only after merge. The deployment jobs use named environments and cloud trust policies.
 
-Summit keeps the simple path for `checkout-api`: normal `pull_request` for tests, `push` to `main` for package publishing, and deployment through named environments. That structure makes the token boundary easier to review because the workflow event already hints at the expected trust level.
+`pull_request_target` needs special care. That event runs in the base repository context, which is useful for trusted metadata tasks such as labels or policy comments. Summit avoids checking out and executing the pull request head code with a write token or deployment identity. Untrusted test execution stays on `pull_request`, and trusted automation runs from code on the protected branch.
 
-## Package Publishing Permissions
-<!-- section-summary: Package publishing is a write operation, so it deserves its own job, its own permission grant, and a clear package target. -->
+The package write boundary is the next place where a small mistake can travel far.
 
-**Package publishing** means the pipeline uploads a build output to a registry so other systems can download it later. For `checkout-api`, the package is a container image. Summit publishes it to GitHub Container Registry as `ghcr.io/summit-retail/checkout-api:<sha>`.
+## Package Publishing Boundaries
+<!-- section-summary: Package publishing is a write operation, so it deserves its own trigger, job, permission grant, package target, and artifact evidence. -->
 
-Publishing has a different risk profile from testing. If an attacker can publish an image under the real package name, downstream deployment jobs might pull it. If the registry uses mutable tags like `latest`, the risk is even higher because consumers may pull a changed image without noticing the commit that produced it.
+**Package publishing** uploads a build output to a registry so other systems can download it. For `checkout-api`, the package is a container image at `ghcr.io/summit-retail/checkout-api`. If an attacker can publish under that name, a later deployment may pull the attacker's image.
 
-That is why the `build-image` job receives `packages: write` and the `test` job does not. The build job also uses the commit SHA as the image tag. A SHA tag gives Summit a stable link between source commit, build log, image digest, and deployment record.
+Summit gives `packages: write` to the package job and nowhere else. The job runs from a trusted trigger, uses a commit SHA tag, records the pushed digest, and passes the digest to later release evidence.
 
-The package job can be small and explicit. All the write access for GitHub Container Registry stays inside this one job:
+The job can write the digest to the workflow summary:
 
 ```yaml
-build-image:
-  runs-on: ubuntu-latest
-  needs: test
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-  permissions:
-    contents: read
-    packages: write
-  steps:
-    - uses: actions/checkout@v4
-      with:
-        persist-credentials: false
-    - run: docker build -t ghcr.io/summit-retail/checkout-api:${{ github.sha }} .
-    - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-    - run: docker push ghcr.io/summit-retail/checkout-api:${{ github.sha }}
+  build-image:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t ghcr.io/summit-retail/checkout-api:${{ github.sha }} .
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Push image
+        id: image
+        run: |
+          docker push ghcr.io/summit-retail/checkout-api:${{ github.sha }}
+          echo "image=ghcr.io/summit-retail/checkout-api" >> "$GITHUB_OUTPUT"
+          echo "digest=sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6" >> "$GITHUB_OUTPUT"
 ```
 
-In real production, Summit also records the image digest after the push and deploys by digest where the platform supports it. A digest identifies the exact image bytes, while a tag is a label that can point at an image. Using both a SHA tag and a digest gives release reviewers a cleaner trail from commit to running service.
+The `Build image` step creates the image. The `Log in to GHCR` step authenticates to the registry with the job token. The `Push image` step uploads the image and writes two output values: the registry path and the digest. In a real workflow, Summit would parse the actual digest from the push or from `docker buildx` output instead of using the sample digest shown here.
 
-Package write access should stay separate from cloud deployment access. Publishing an image to a registry and updating a production service are two different trust decisions. The first creates a candidate artifact. The second asks production to run it.
+Package write access stays separate from cloud deployment access. Publishing creates a candidate artifact. Deployment asks an environment to run that artifact. Summit keeps those decisions in different jobs so package publishing and cloud deploy power stay separated.
+
+Cloud deployment uses a different kind of credential: short-lived identity federation.
+
+![Job token boundary showing separate read, package write, and OIDC permissions for test, build, and deploy jobs](/content-assets/articles/article-devsecops-pipeline-and-runner-security-permissions-token-boundaries/job-token-boundary.png)
+
+*Each pipeline job receives its own narrow token boundary, so a test job cannot inherit the write power used by publishing or deployment jobs.*
 
 ## OIDC and Workload Identity Federation
 <!-- section-summary: OIDC lets a CI job request short-lived cloud credentials without storing a permanent cloud access key in CI secrets. -->
 
-**OpenID Connect**, usually shortened to **OIDC**, is a standard way for one system to issue signed identity information that another system can trust. In CI/CD, the CI platform issues a short-lived identity token for a job. A cloud provider validates that token and then gives the job temporary cloud credentials for a specific role.
+**OpenID Connect**, usually shortened to **OIDC**, is a standard way for one system to issue signed identity information that another system can verify. In CI/CD, the CI platform issues a short-lived identity token for a job. A cloud provider validates that token and then gives the job temporary cloud credentials for a specific role.
 
-**Workload identity federation** is the broader name for that pattern. A workload, such as a GitHub Actions job, proves who it is to a cloud provider through a federated identity token. The cloud provider checks the token's issuer, audience, subject, and other claims before issuing temporary credentials.
+**Workload identity federation** is the broader pattern. The workload is the CI job. The identity token says where the job came from, such as repository, branch, workflow, environment, and run. The cloud provider checks those claims before it issues credentials.
 
-Here is the flow for Summit's production deploy. Each step moves the job from a GitHub identity to a short-lived AWS role session:
+For Summit's production deploy, the flow is:
 
 1. The `deploy-production` job starts in GitHub Actions.
 2. The job has `id-token: write`, so it can request a GitHub OIDC token.
 3. GitHub issues a signed token with claims about the repository, ref, workflow, environment, and run.
-4. AWS IAM validates the token through the configured GitHub OIDC provider.
+4. AWS IAM validates that token through a configured GitHub OIDC provider.
 5. AWS checks the IAM role trust policy.
 6. AWS STS issues short-lived credentials for the production deploy role.
 7. The job deploys `checkout-api` with those temporary credentials.
 
-The important part is that Summit does not store an AWS access key in GitHub secrets for this deployment. The job asks for a fresh identity token, AWS checks the trust policy, and the resulting AWS credentials expire automatically. If someone steals a log line or a temporary credential from a runner, the time window is much smaller than a permanent secret.
+The job stores no AWS access key in GitHub secrets. It asks GitHub for a signed job identity, AWS checks the identity, and AWS returns temporary credentials with an expiration time.
 
-OIDC also gives security teams more precise rules. The AWS role can trust only `summit-retail/checkout-api`, only the `production` environment, and only the expected audience value. That is much tighter than "any workflow with this stored AWS key can deploy."
+The workflow line for this is small:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
+
+`id-token: write` allows the job to request an OIDC token from GitHub. The cloud provider still has to trust the token claims and issue a role session before deployment can use cloud access.
 
 ![OIDC cloud identity flow showing a CI deploy job requesting an OIDC token, matching a cloud trust policy, receiving temporary credentials, and deploying checkout-api without a stored cloud key](/content-assets/articles/article-devsecops-pipeline-and-runner-security-permissions-token-boundaries/oidc-cloud-identity-flow.png)
 
 *OIDC turns cloud access into a checked exchange: the job proves where it came from, the cloud trust policy verifies the claims, and the job receives temporary credentials instead of a stored cloud key.*
 
-## AWS Trust Policies for Summit Retail
-<!-- section-summary: An AWS trust policy decides which CI job can assume a role, and the safest policies match the repository, audience, and environment claim. -->
+The cloud side of the boundary lives in a trust policy.
 
-An **AWS IAM role trust policy** controls who can assume the role. For OIDC, the principal is the OIDC provider registered in AWS, and the action is `sts:AssumeRoleWithWebIdentity`. The condition block checks claims from the token before AWS gives the job temporary credentials.
+## Cloud Role Trust Policies
+<!-- section-summary: A cloud trust policy decides which CI job identity can assume a role and which claims must match before credentials are issued. -->
 
-The two most important claims for this example are **audience** and **subject**. The audience, usually called `aud`, names the service the token is meant for. For GitHub Actions to AWS, Summit uses `sts.amazonaws.com`. The subject, usually called `sub`, identifies the GitHub workflow context. When a job references a GitHub environment, GitHub can include the environment name in the subject value.
+An **AWS IAM role trust policy** controls who can assume a role. For GitHub OIDC, the principal is the GitHub OIDC provider registered in AWS, and the action is `sts:AssumeRoleWithWebIdentity`. The condition block checks token claims before AWS issues credentials.
 
-Here is a production role trust policy for Summit Retail. The account IDs and role names are sample values, but the claim checks are the important part:
+Summit's production role trust policy checks the token audience and subject:
 
 ```json
 {
@@ -258,9 +283,9 @@ Here is a production role trust policy for Summit Retail. The account IDs and ro
 }
 ```
 
-This policy says that AWS can issue the production deploy role only when the OIDC token came from GitHub Actions, the token audience is AWS STS, and the subject matches Summit's `checkout-api` production environment. A workflow in another repository, another organization, or another environment will not match this condition.
+The `aud` claim says the token is meant for AWS STS. The `sub` claim says the job belongs to the `summit-retail/checkout-api` repository and the `production` environment. A workflow from another repository or another environment will not match this condition.
 
-The role also needs a permission policy that controls what the temporary AWS credentials can do after AWS issues them. Summit keeps that policy small. For an ECS service deploy, the role might update one service, describe the service, register a task definition, and pass only the task roles that the service already uses.
+The role permission policy then controls what the temporary AWS credentials can do:
 
 ```json
 {
@@ -302,26 +327,42 @@ The role also needs a permission policy that controls what the temporary AWS cre
 }
 ```
 
-`ecs:RegisterTaskDefinition` is the uncomfortable line in this example. ECS task definition registration uses `Resource: "*"`, so Summit compensates with controls around the generated task definition, a narrow deploy script, branch and environment gates, and a tightly scoped `iam:PassRole` statement. The role can register a task definition, but it can only pass the known task role and execution role for `checkout-api`.
+`ecs:UpdateService` lets the deploy job update one ECS service. `ecs:RegisterTaskDefinition` registers the new task definition. ECS task definition registration commonly uses `Resource: "*"`, so Summit compensates with a narrow deploy script, branch and environment gates, and a tight `iam:PassRole` statement. `iam:PassRole` allows the deploy job to pass only the known task role and execution role used by `checkout-api`.
 
-`iam:PassRole` needs special attention. ECS uses task roles to give the running application AWS permissions. If the deploy role can pass any role, a compromised pipeline may attach a more powerful role to the service. Summit limits `iam:PassRole` to the known task role and execution role for `checkout-api`.
+After the role is assumed, the job prints the caller identity:
 
-The staging role should have its own trust policy and its own AWS account or environment boundary. Summit does not reuse the production role for staging because the staging workflow should not carry production access. The two jobs may look similar in YAML, but they assume different IAM roles with different AWS account IDs and different trust conditions.
+```bash
+aws sts get-caller-identity
+```
+
+`aws sts get-caller-identity` shows which AWS account and role session the job received while keeping secret key values out of the log.
+
+Example production output:
+
+```json
+{
+  "UserId": "AROAXAMPLE:checkout-api-production-9142337112",
+  "Account": "444455556666",
+  "Arn": "arn:aws:sts::444455556666:assumed-role/summit-checkout-api-production-deploy/checkout-api-production-9142337112"
+}
+```
+
+The account and role name should match production. If the staging job shows this production account, the token boundary is wrong.
 
 ## Environment-Bound Deployment Identities
-<!-- section-summary: Environment-bound identities connect CI deployment approval, OIDC claims, and cloud role trust into one narrow production path. -->
+<!-- section-summary: Environment-bound identities connect CI approval, OIDC claims, secrets, cloud trust, and deployment evidence into one production path. -->
 
-A **deployment environment** is a named target such as `staging` or `production`. In GitHub Actions, a job can declare an environment with `environment: production`. That environment can have reviewers, wait timers, environment secrets, and deployment records configured around it.
+A **deployment environment** is a named target such as `staging` or `production`. In GitHub Actions, a job can declare an environment with `environment: production`. That environment can have required reviewers, wait timers, secrets, variables, and deployment history.
 
-For token boundaries, the environment name matters because it can appear in the GitHub OIDC subject claim. Summit uses that fact to bind the AWS role to the deployment target. The production role trusts `repo:summit-retail/checkout-api:environment:production`, while the staging role trusts `repo:summit-retail/checkout-api:environment:staging`.
+For token boundaries, the environment name is also identity data. Summit's production AWS role trusts `repo:summit-retail/checkout-api:environment:production`. The staging role trusts `repo:summit-retail/checkout-api:environment:staging`. The two jobs may look similar in YAML, and they assume different cloud roles.
 
-Here is the production job again, with the important access lines kept together. Notice how the environment, OIDC permission, and AWS role all describe the same production deployment:
+Here is the production job with the access lines kept together:
 
 ```yaml
 deploy-production:
+  needs: build-image
+  if: github.event_name == 'workflow_dispatch' && inputs.target_environment == 'production'
   runs-on: ubuntu-latest
-  needs: deploy-staging
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
   environment: production
   permissions:
     contents: read
@@ -331,22 +372,23 @@ deploy-production:
       with:
         role-to-assume: arn:aws:iam::444455556666:role/summit-checkout-api-production-deploy
         aws-region: us-east-1
+        role-session-name: checkout-api-production-${{ github.run_id }}
     - run: aws sts get-caller-identity
-    - run: ./scripts/deploy-ecs-service.sh production ghcr.io/summit-retail/checkout-api:${{ github.sha }}
+    - run: ./scripts/deploy-ecs-service.sh production ghcr.io/summit-retail/checkout-api@${{ needs.build-image.outputs.digest }}
 ```
 
-The environment name, `id-token: write`, and AWS role ARN all have to line up. The job asks GitHub for an OIDC token. AWS checks that the token says the job belongs to the production environment. The AWS credentials that come back can update only the production resources allowed by the role's permission policy.
+The `environment` line points at GitHub's production environment rules. `id-token: write` lets the job request the OIDC token. `role-to-assume` names the production AWS role. The `aws sts get-caller-identity` command prints the role session for the log. The deploy script receives the environment name and the image digest, so the deployment record can connect the job to the exact artifact.
 
-This is where people sometimes confuse environment secrets with environment identity. A secret is a value stored in the CI platform. An identity is the role the job receives after the cloud provider validates who the job is. Summit prefers identity federation for cloud access because it removes permanent AWS keys from GitHub and lets AWS make the final decision from signed token claims.
+Environment secrets and environment identity are related but separate. An environment secret is a stored value that GitHub releases after environment rules pass. An environment-bound identity is the cloud role the job receives after the cloud provider checks signed OIDC claims. Summit prefers OIDC for cloud deployment because AWS makes the final access decision from signed claims and short-lived credentials.
 
-The next article will go deeper on protected branches and environment gates. For this article, keep the access point clear: the environment is part of the identity boundary, and the cloud trust policy should check it.
+The same structure works in GitLab with different syntax.
 
 ## GitLab Tokens in the Same Pattern
-<!-- section-summary: GitLab uses different names, but the same design applies: job tokens for GitLab operations and ID tokens for cloud federation. -->
+<!-- section-summary: GitLab uses CI_JOB_TOKEN for GitLab operations and ID tokens for cloud federation, while the same read, write, and deploy split still applies. -->
 
-GitLab uses names that differ from GitHub, but the token boundary idea stays the same. **CI_JOB_TOKEN** is the built-in job token for GitLab operations. **ID tokens** are OIDC tokens that a GitLab CI job can request for a specific audience, such as AWS STS or another secret manager.
+GitLab's **CI_JOB_TOKEN** is the built-in token available to a running GitLab CI/CD job. It can call selected GitLab APIs, authenticate to supported GitLab registries, and access allowed projects depending on settings. GitLab also supports **ID tokens**, which are OIDC tokens a job can request for a specific audience.
 
-For example, a GitLab pipeline for the same `checkout-api` would keep normal GitLab package or API work on `CI_JOB_TOKEN`, then request an ID token only in the deployment job. The job defines the audience so the token is intended for the receiving system.
+A GitLab deploy job for `checkout-api` can request an ID token for AWS:
 
 ```yaml
 deploy_production:
@@ -371,83 +413,83 @@ deploy_production:
     - aws sts get-caller-identity
 ```
 
-That example focuses on the identity exchange and keeps the secret values out of normal log output. A complete production job can also use a supported helper that handles the exchange. The important design is the same as GitHub Actions: the job receives an ID token for AWS, AWS checks claims, and AWS issues temporary credentials for the allowed role.
+The `id_tokens` block asks GitLab for an OIDC token with the AWS STS audience. The `aws sts assume-role-with-web-identity` command exchanges that token for temporary AWS credentials. The three `export` commands place those temporary credentials in the shell environment for later AWS CLI commands. `aws sts get-caller-identity` confirms the account and role in the job log.
 
-AWS trust policies for GitLab usually check the issuer, audience, and GitLab-specific subject or project claims. A production policy can require the `checkout-api` project and the `main` branch or production environment claim. The exact claim names depend on the GitLab issuer and ID token format, so Summit reviews a real token in a safe test project before locking the policy.
+Example identity output should show the production account and role:
 
-CI_JOB_TOKEN still has a job in this design. It works for GitLab package registry access, dependency retrieval, and GitLab API operations that support it. The cloud deployment identity comes from an ID token because AWS needs signed claims about the job, not a GitLab API token.
+```json
+{
+  "Account": "444455556666",
+  "Arn": "arn:aws:sts::444455556666:assumed-role/summit-checkout-api-production-deploy/checkout-api-18277"
+}
+```
+
+`CI_JOB_TOKEN` still has useful jobs in this design. It can authenticate to GitLab Package Registry, download dependencies from allowed projects, or call GitLab APIs that accept it. Cloud deployment identity comes from the ID token because AWS needs signed job claims rather than a GitLab API token.
 
 ## Verifying Token Boundaries
-<!-- section-summary: Verification turns the design into evidence by checking workflow YAML, repository defaults, cloud identity, package permissions, and runtime logs. -->
+<!-- section-summary: Verification checks workflow YAML, repository defaults, package permissions, cloud role claims, received identities, and missing permissions. -->
 
-**Verification** means proving that the job received only the permissions the design intended. Summit treats this as part of pipeline review, not as a one-time cleanup. Every new workflow, package publisher, or deployment job should answer the same basic questions.
+**Verification** means proving that a job received only the access the design intended. Summit does this during workflow review and during periodic audits.
 
-Start with the workflow file. The reviewer checks for a top-level `permissions: {}` or another deliberately restricted default, then checks every job that overrides it. If a job has `packages: write`, the reviewer expects a package publishing reason. If a job has `id-token: write`, the reviewer expects a matching cloud trust policy and a named deployment job.
-
-A lightweight review table helps catch drift. Summit uses this kind of checklist during pull request review for workflow changes:
+The review starts with the workflow file. A reviewer checks for restricted defaults, then checks each job that asks for write access:
 
 | Check | Expected evidence |
 |---|---|
-| Pull request job token | `contents: read` and no package or OIDC write permission |
-| Package job token | `packages: write`, trusted trigger, clear package name |
-| Deploy job token | `id-token: write`, environment name, cloud role ARN |
+| Pull request job | `contents: read`, no package write, no OIDC permission |
+| Package job | `packages: write`, trusted trigger, clear image name |
+| Deploy job | `id-token: write`, environment name, cloud role ARN |
 | AWS trust policy | `aud` and `sub` conditions match repository and environment |
-| AWS permission policy | Actions and resources name the target service, package, and roles |
+| AWS permission policy | Actions and resources name the target service and allowed roles |
 
-Repository settings also deserve review. In GitHub, Summit checks the Actions workflow permissions setting at the organization or repository level and keeps the default restricted. A `gh` CLI check can capture the setting during an audit:
+Repository settings should match the workflow. GitHub exposes Actions workflow permission settings through the API:
 
 ```bash
 gh api repos/summit-retail/checkout-api/actions/permissions/workflow
 ```
 
-Inside a deployment job, Summit prints the AWS caller identity after assuming the role. This does not print secret values. It shows which AWS account and role the job received, which is useful during review and incident response.
+`gh api` calls the GitHub REST API. This endpoint returns the repository setting for default workflow token permissions and whether GitHub Actions can approve pull requests.
 
-```bash
-aws sts get-caller-identity
+Example output:
+
+```json
+{
+  "default_workflow_permissions": "read",
+  "can_approve_pull_request_reviews": false
+}
 ```
 
-The expected production output should show the production AWS account and the production deploy role session. If the staging job shows the production account, the trust boundary is wrong. If the production job shows a generic administrator role, the role design is too broad for a service deploy.
+Inside deployment jobs, the `aws sts get-caller-identity` output serves as evidence. It shows the actual AWS account and role session issued to the job. Summit also verifies the absence of permissions. The test job stays free of `packages: write`, `contents: write`, and `id-token: write`. The package job stays away from the production role. The deploy job stays separate from package publishing for `checkout-api`.
 
-For GitHub OIDC specifically, Summit also verifies the subject claim before locking production trust. Teams often do this in a temporary test workflow that prints token claims in a controlled branch or uses a dedicated debugging action during setup. After the policy is confirmed, the debug step should leave the production workflow because normal deploy logs do not need to expose identity-token details.
-
-Finally, verify negative space. That means checking the permissions a job did not receive. The test job should have no `packages: write`, no `contents: write`, and no `id-token: write`. The package job should have no production role. The deploy job should have no package write permission unless it truly builds and publishes as part of the deploy, which Summit avoids for `checkout-api`.
+During OIDC setup, Summit tests token claims in a temporary safe workflow or a nonproduction repository, then removes token debugging from production workflows. Normal production logs can show the assumed role without printing raw identity tokens.
 
 ## Putting It All Together
 <!-- section-summary: A secure pipeline gives every job a purpose-built token boundary and keeps cloud deployment access tied to short-lived federated identity. -->
 
-Let's connect the whole `checkout-api` flow now. This is the same pipeline we have been building piece by piece:
+The complete `checkout-api` permission story now has one path for each job. Pull request tests receive repository read access and run without package publishing or cloud identity. The build job runs only after merge to `main` and receives package write access for one image repository. Staging and production deploy jobs receive OIDC permission, declare their environments, and assume different cloud roles.
 
-The pull request opens, and GitHub Actions runs `test`. That job checks out code with `contents: read`, reads pull request metadata with `pull-requests: read`, and runs tests. The job handles code that may come from outside the trusted branch, so it stays away from package publishing and cloud identity.
-
-The pull request merges to `main`, and the `build-image` job runs. That job receives `packages: write` because it has one write task: publish `ghcr.io/summit-retail/checkout-api:${{ github.sha }}`. The image tag ties the artifact to the commit, and the registry record gives deployment jobs a known artifact to deploy.
-
-The staging deployment runs next. The job has `id-token: write`, declares `environment: staging`, and assumes the staging AWS role through OIDC. AWS checks the GitHub token claims, issues temporary credentials, and limits those credentials to staging deployment actions.
-
-Production follows the same pattern with a stricter target. The job declares `environment: production`, assumes the production deploy role in the production AWS account, and receives only the AWS permissions needed to update the `checkout-api` service. The token boundary lives in both places: GitHub controls which job can request the OIDC token, and AWS controls which OIDC token can assume the role.
-
-This is the operating rule Summit keeps repeating during reviews: **every job gets the smallest useful token for its job, and cloud access uses short-lived federation instead of stored cloud keys**. That rule gives reviewers a concrete way to evaluate new workflows. They can point at the job name, the trigger, the `permissions:` block, the environment, and the cloud trust policy, then check whether those pieces tell the same story.
+The boundary lives in several places at once. GitHub controls the job token permissions in YAML and repository settings. Environment rules control when production secrets and environment access are released. AWS controls which OIDC token claims can assume which role. The AWS permission policy controls which cloud actions the resulting temporary credentials can take.
 
 ![Least-power pipeline showing pull request tests, image publishing, staging role, production role, and log verification as separate permission steps](/content-assets/articles/article-devsecops-pipeline-and-runner-security-permissions-token-boundaries/least-power-pipeline.png)
 
 *The finished token design lets each stage ask for the smallest useful permission, then verifies the received identity in logs before trusting the deploy path.*
 
+The practical review sentence for Summit is: **every job gets the smallest useful token for its task, and cloud access uses short-lived federation tied to repository, ref, workflow, and environment claims**. That sentence gives reviewers a concrete way to check new pipeline changes.
+
 ## What's Next
 
-Pipeline token boundaries answer what a job can do after it starts. The next article looks at who can make the high-risk jobs start and who can approve them.
+Token boundaries answer what a job can do after it starts. The next article asks who can make the risky jobs start and who can approve them. We will connect protected branches, required checks, CODEOWNERS, merge queue, deployment environments, scan gates, release records, and bypass evidence.
 
-We will connect protected branches, required checks, CODEOWNERS, deployment environments, reviewers, and environment gates. That is where Summit Retail turns the token boundary into a controlled release path for `checkout-api`.
+## References
 
----
-
-**References**
-
-- [GitHub Docs: Use GITHUB_TOKEN for authentication in workflows](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) - Explains how workflows use `GITHUB_TOKEN` and how to modify its permissions.
-- [GitHub Docs: Workflow syntax for GitHub Actions](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions#permissions) - Documents the `permissions:` key, workflow-level permissions, and job-level permission overrides.
-- [GitHub Docs: OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Introduces OIDC for GitHub Actions and cloud provider federation.
-- [GitHub Docs: OpenID Connect reference](https://docs.github.com/actions/reference/openid-connect-reference) - Documents GitHub OIDC token claims, subject formats, and token permission requirements.
-- [GitHub Docs: Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services) - Shows AWS IAM provider setup, `id-token: write`, and AWS role assumption from GitHub Actions.
-- [AWS IAM User Guide: Create a role for an OpenID Connect identity provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - Explains IAM roles that trust OIDC identity providers.
-- [AWS IAM User Guide: IAM and AWS STS condition context keys](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html) - Documents IAM and AWS STS condition keys, including `iam:PassedToService` for role-passing boundaries.
-- [Amazon ECS Developer Guide: Identity-based policy examples](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security_iam_id-based-policy-examples.html) - Documents ECS policy examples, including task definition permission behavior.
-- [GitLab Docs: Tokens](https://docs.gitlab.com/security/tokens/) - Explains GitLab token types, including CI/CD job tokens and personal access tokens.
-- [GitLab Docs: ID token authentication](https://docs.gitlab.com/ci/secrets/id_token_authentication/) - Documents GitLab CI/CD ID tokens, audiences, and OIDC use cases.
+- [GitHub Actions: Use GITHUB_TOKEN for authentication in workflows](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) - Official guidance for using `GITHUB_TOKEN` and modifying token permissions.
+- [GitHub Actions workflow syntax: permissions](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions#permissions) - Documents the `permissions:` key at workflow and job levels.
+- [GitHub Actions: Automatic token authentication](https://docs.github.com/en/actions/security-guides/automatic-token-authentication) - GitHub guidance on `GITHUB_TOKEN`, permission scoping, and least privilege.
+- [GitHub Actions: OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - GitHub concept documentation for OIDC in Actions.
+- [GitHub Actions: OpenID Connect reference](https://docs.github.com/actions/reference/openid-connect-reference) - Documents OIDC claims, subject formats, and `id-token: write`.
+- [GitHub Actions: Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services) - GitHub guide for AWS IAM OIDC configuration from Actions.
+- [AWS IAM: Create a role for an OpenID Connect identity provider](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - AWS documentation for roles that trust OIDC identity providers.
+- [AWS IAM: AWS STS condition keys](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html) - AWS documentation for condition keys such as `iam:PassedToService`.
+- [Amazon ECS: IAM policy examples](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security_iam_id-based-policy-examples.html) - ECS examples for service and task definition permissions.
+- [GitLab: CI_JOB_TOKEN](https://docs.gitlab.com/ci/jobs/ci_job_token/) - GitLab documentation for CI job token usage and scoping.
+- [GitLab: ID token authentication](https://docs.gitlab.com/ci/secrets/id_token_authentication/) - GitLab documentation for CI/CD ID tokens, audiences, and OIDC use cases.
+- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) - OWASP guidance on handling and reducing long-lived secrets.

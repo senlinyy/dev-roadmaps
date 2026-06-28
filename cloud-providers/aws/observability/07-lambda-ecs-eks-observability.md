@@ -37,11 +37,13 @@ Here is the shape we will use through the article:
 
 The important idea is simple: **observability starts with the runtime boundary**. Lambda already knows about invocations, duration, errors, throttles, and memory. ECS knows about clusters, services, tasks, and containers. EKS knows about Kubernetes objects such as namespaces, pods, deployments, nodes, and DaemonSets. A good setup respects those native shapes, then adds a shared trace ID and shared log fields so one checkout can be followed across all of them.
 
-![Three runtime shapes showing Lambda, ECS, and EKS connected to logs, metrics, traces, and runtime health](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/three-runtime-shapes.png)
-
-*The image shows the shared goal across different compute models. Lambda, ECS, and EKS all need logs, metrics, traces, and runtime health, but each runtime exposes them through a different setup path.*
 
 We will start with Lambda because it gives the most managed experience. AWS runs the host, the runtime lifecycle, and the scaling path, so your first job is to read the signals Lambda already emits and then add the missing detail.
+
+![The runtime comparison shows how Lambda invocations, ECS tasks, and EKS pods expose different observability units for the same checkout flow](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/three-runtime-shapes.png)
+
+*The runtime comparison shows how Lambda invocations, ECS tasks, and EKS pods expose different observability units for the same checkout flow.*
+
 
 ## Lambda Observability
 <!-- section-summary: Lambda gives every invocation logs and metrics, but production troubleshooting depends on structured logs, execution-role permissions, and focused Logs Insights queries. -->
@@ -58,6 +60,19 @@ A responder usually starts with the log group:
 aws logs tail /aws/lambda/receipt-renderer --since 30m --follow
 ```
 
+`--since 30m` starts with the last 30 minutes of events, and `--follow` keeps streaming new events. During a live incident, useful signals include `ERROR`, `Task timed out`, `AccessDenied`, and `REPORT` lines that show duration and maximum memory used.
+
+Example output:
+
+```console
+2026-06-13T10:16:04.114Z 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 START RequestId: 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 Version: $LATEST
+2026-06-13T10:16:04.319Z 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 {"level":"ERROR","service":"receipt-renderer","orderId":"ord-1042","errorType":"AccessDenied","message":"receipt upload failed"}
+2026-06-13T10:16:04.358Z 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 END RequestId: 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91
+2026-06-13T10:16:04.358Z 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 REPORT RequestId: 7d9b0c2a-1df4-4d95-b127-1acb4b4c9a91 Duration: 244.18 ms Billed Duration: 245 ms Memory Size: 512 MB Max Memory Used: 186 MB
+```
+
+The application line names the failing order, error type, and service. The `REPORT` line says the function used 186 MB out of 512 MB and finished quickly, so this specific failure looks like permission or bucket policy trouble rather than memory pressure or timeout.
+
 That command is useful during a live incident, but production teams move quickly to **CloudWatch Logs Insights** because it can query many events and many streams together. A basic Lambda investigation query looks like this:
 
 ```sql
@@ -69,6 +84,44 @@ fields @timestamp, @requestId, @duration, @maxMemoryUsed, @message
 
 This query mixes two useful views. The `REPORT` events show runtime facts such as duration and memory, while the message filter catches application failures and AWS SDK errors. If `receipt-renderer` suddenly slows down, the team can check whether duration rose, memory hit the ceiling, or the code started logging S3 `AccessDenied` errors.
 
+The next Lambda check is concurrency and throttling, because a function can look healthy in logs while Lambda rejects new invocations. A focused metric query can show invocations, errors, throttles, and duration for the same incident window:
+
+```bash
+aws cloudwatch get-metric-data \
+  --metric-data-queries file://receipt-renderer-lambda-metrics.json \
+  --start-time 2026-06-13T10:00:00Z \
+  --end-time 2026-06-13T10:30:00Z
+```
+
+The query file usually asks for `Invocations`, `Errors`, `Throttles`, `Duration`, and `ConcurrentExecutions` with the function name dimension. A trimmed response might look like this:
+
+```json
+{
+  "MetricDataResults": [
+    {
+      "Id": "errors",
+      "Label": "Errors",
+      "Timestamps": ["2026-06-13T10:15:00Z"],
+      "Values": [18]
+    },
+    {
+      "Id": "throttles",
+      "Label": "Throttles",
+      "Timestamps": ["2026-06-13T10:15:00Z"],
+      "Values": [0]
+    },
+    {
+      "Id": "p95Duration",
+      "Label": "p95 Duration",
+      "Timestamps": ["2026-06-13T10:15:00Z"],
+      "Values": [252.4]
+    }
+  ]
+}
+```
+
+This response says the function returned errors during the window, throttles stayed at zero, and p95 duration stayed around 252 milliseconds. That combination pushes the investigation toward application errors, IAM access, or downstream responses. If throttles rise while errors stay low, the function may need concurrency review, upstream backoff, or a queue buffer. If duration and memory rise together, inspect Lambda Insights next.
+
 Modern Lambda logging also supports **advanced logging controls**. That means you can choose plain text or structured JSON, set application and system log levels, and choose a custom log group. JSON logs matter because they let you query fields such as `orderId`, `customerId`, `traceId`, and `paymentAttemptId` instead of searching raw text.
 
 ```bash
@@ -76,6 +129,25 @@ aws lambda update-function-configuration \
   --function-name receipt-renderer \
   --logging-config LogFormat=JSON,ApplicationLogLevel=INFO,SystemLogLevel=WARN
 ```
+
+`--logging-config` switches the function to JSON logs, keeps application logs at `INFO`, and keeps Lambda system logs at `WARN`. The response should show the updated logging configuration before responders rely on field-based queries.
+
+Example response fields:
+
+```json
+{
+  "FunctionName": "receipt-renderer",
+  "LastUpdateStatus": "InProgress",
+  "LoggingConfig": {
+    "LogFormat": "JSON",
+    "ApplicationLogLevel": "INFO",
+    "SystemLogLevel": "WARN",
+    "LogGroup": "/aws/lambda/receipt-renderer"
+  }
+}
+```
+
+`LastUpdateStatus` tells the team the configuration change is still rolling out. The `LoggingConfig` block tells responders which log format and levels they should expect after the update completes.
 
 With JSON logging enabled, application log entries can carry the exact fields responders need:
 
@@ -171,7 +243,33 @@ The basic ECS log setup uses the `awslogs` log driver:
 }
 ```
 
-The log stream prefix matters during incidents because ECS includes the container name and task ID in the stream name. When `orders-api` has one crashing task among twenty healthy tasks, the task ID links container logs to service events, task metadata, deployment history, and Container Insights metrics.
+Read the log fields as the bridge between the container and CloudWatch Logs:
+
+| Field | What it does |
+|---|---|
+| `logDriver` | Chooses the ECS logging integration. `awslogs` sends container stdout and stderr to CloudWatch Logs. |
+| `awslogs-group` | Names the CloudWatch log group that will receive the task logs. |
+| `awslogs-region` | Sends logs to the selected Region. This should match the workload Region unless the team has a deliberate central logging design. |
+| `awslogs-stream-prefix` | Starts each stream name with a stable prefix before ECS adds the container name and task ID. |
+
+The task execution role also needs CloudWatch Logs permissions such as `logs:CreateLogStream` and `logs:PutLogEvents`. Without them, the task may run while logs never arrive where responders expect them.
+
+Verify the connection during an incident with a short tail:
+
+```bash
+aws logs tail /aws/ecs/orders-api/application \
+  --since 10m \
+  --region us-east-1
+```
+
+Example output:
+
+```console
+2026-06-24T10:14:03.392000+00:00 orders/orders-api/4d9f1b2c checkout request_id=req-782 status=200
+2026-06-24T10:15:11.027000+00:00 orders/orders-api/9aa7c02e checkout request_id=req-811 level=ERROR message="database timeout"
+```
+
+The middle part of each stream name includes the container name and task ID. When `orders-api` has one crashing task among twenty healthy tasks, that task ID links container logs to service events, task metadata, deployment history, and Container Insights metrics.
 
 For higher-volume or multi-destination logging, ECS teams often use **FireLens**. FireLens is the ECS log routing integration for Fluent Bit or Fluentd. It lets a task route application logs to CloudWatch Logs, Firehose, or supported partner destinations without baking log shipping code into the application container. A practical pattern is simple: keep `awslogs` for ordinary services, then use FireLens when the team needs custom parsing, buffering, enrichment, or multiple destinations.
 
@@ -209,6 +307,24 @@ aws ecs update-cluster-settings \
 
 The account-wide command matters because `put-account-setting` without the root principal applies only to the currently authenticated IAM principal. In real accounts, platform teams usually set the account default through their provisioning workflow, then explicitly update older clusters.
 
+Example response from the cluster update:
+
+```json
+{
+  "cluster": {
+    "clusterName": "prod-checkout",
+    "settings": [
+      {
+        "name": "containerInsights",
+        "value": "enhanced"
+      }
+    ]
+  }
+}
+```
+
+This output confirms the existing cluster uses enhanced Container Insights. If a later service dashboard lacks task or container detail, this setting is one of the first things to check before debugging the application.
+
 Container Insights metrics for ECS live in the `ECS/ContainerInsights` namespace. The normal incident path changes after it is enabled. Instead of asking only "is the service CPU high?", the responder can ask "which task is high?", "which container inside the task is high?", "did the deployment start a replacement loop?", and "did the task stop because of memory pressure?"
 
 Here is a practical ECS incident loop for `orders-api`:
@@ -223,11 +339,13 @@ For ECS clusters on EC2 instances, AWS also documents an ECS agent version requi
 
 Container Insights gives ECS strong infrastructure visibility, and application traces sit beside it. For a service such as `orders-api`, teams commonly add ADOT as a sidecar or collector path so the application can emit OpenTelemetry traces to X-Ray or another backend. The infrastructure view tells you which task hurt; the trace tells you which downstream call hurt inside the request.
 
-![Container Insights view showing cluster, node, task, pod, CPU, memory, restart, network, and logs](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/container-insights-view.png)
-
-*Container Insights adds the runtime layer that service metrics often miss. The team can move from cluster health to node, task, pod, CPU, memory, restarts, network, and logs.*
 
 Now the same checkout flow moves into EKS, where the container unit changes again. ECS tasks map neatly to AWS task metadata, while EKS adds Kubernetes objects and a cluster control plane.
+
+![The Container Insights view shows why task-level and container-level signals matter when a service has many running copies](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/container-insights-view.png)
+
+*The Container Insights view shows why task-level and container-level signals matter when a service has many running copies.*
+
 
 ## EKS Observability
 <!-- section-summary: EKS observability has to cover Kubernetes objects, node behavior, pod logs, control plane signals, and application telemetry together. -->
@@ -296,6 +414,8 @@ aws eks create-addon \
   --configuration-values '{"otelContainerInsights":{"enabled":true}}'
 ```
 
+The first command attaches CloudWatch collection permissions to the IAM role. The second command binds that role to the `cloudwatch-agent` service account in the `amazon-cloudwatch` namespace through EKS Pod Identity. The third command installs the add-on and enables OpenTelemetry Container Insights collection through the configuration value.
+
 After installation, the team checks the add-on status and agent pods:
 
 ```bash
@@ -307,6 +427,22 @@ aws eks describe-addon \
 
 kubectl get pods -n amazon-cloudwatch
 ```
+
+Example output:
+
+```console
+ACTIVE
+```
+
+```console
+NAME                                  READY   STATUS    RESTARTS   AGE
+cloudwatch-agent-5h9xk                1/1     Running   0          12m
+cloudwatch-agent-v7r2p                1/1     Running   0          12m
+fluent-bit-8f6mx                      1/1     Running   0          12m
+fluent-bit-j2k4q                      1/1     Running   0          12m
+```
+
+The add-on status should print `ACTIVE`. The pod list should show CloudWatch agent pods in `Running` state with ready containers. Failed or pending pods usually point to IAM, image pull, scheduling, network, or add-on configuration problems.
 
 The add-on handles the platform collection path. Application instrumentation still belongs to the application. For `inventory-worker`, the team usually adds OpenTelemetry SDK instrumentation in the service code and sends traces to an ADOT collector or CloudWatch-supported OTLP endpoint. The collector path keeps instrumentation portable and avoids tying application code to one backend forever.
 
@@ -362,9 +498,11 @@ For all three, keep the application fields boring and consistent:
 
 The final setup should feel practical in a real incident. A responder should move from an alarm to a function, task, pod, trace, or log query in a few clicks or commands. The goal is to collect the signals that answer where the failure happened, who or what it affected, and what changed just before it happened.
 
-![Runtime observability checklist with structured logs, platform metrics, runtime insights, trace context, service names, and alert path](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/runtime-observability-checklist.png)
+![The checklist summarizes logs, metrics, traces, runtime insights, permissions, dashboards, and alert routing across Lambda, ECS, and EKS](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/runtime-observability-checklist.png)
 
-*The checklist keeps the runtime work concrete. Before an incident, the team wires the shared fields, runtime metrics, trace context, and alert path that make Lambda, ECS, and EKS debuggable.*
+*The checklist summarizes logs, metrics, traces, runtime insights, permissions, dashboards, and alert routing across Lambda, ECS, and EKS.*
+
+
 
 ## What's Next
 <!-- section-summary: The next article moves from runtime symptoms to audit evidence about who changed AWS and what the resource looked like. -->

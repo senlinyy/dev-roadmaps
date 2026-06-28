@@ -25,9 +25,28 @@ id: article-containers-orchestration-kubernetes-networking-services
 
 Imagine a small shop platform running in Kubernetes. There is a `checkout-web` app that handles the browser flow, and there is a `payments-api` app that talks to the payment provider. The web app needs to call the payments API every time someone pays for an order.
 
-At first, a direct Pod IP can look like an easy answer. You run `kubectl get pods -o wide`, see that one payments Pod has the IP `10.244.2.17`, and wire the web app to call `http://10.244.2.17:8080`. That works for a short demo because one Pod happens to exist at that address right now.
+At first, a direct Pod IP can look like an easy answer. You run a command, see that one payments Pod has the IP `10.244.2.17`, and wire the web app to call `http://10.244.2.17:8080`. The command output gives a real-looking target, so the shortcut looks practical during a demo.
 
-Kubernetes changes that address during normal operations. A Deployment rollout creates new Pods and removes old Pods. A node drain moves Pods away from a node. A failed Pod gets replaced. A scale-up adds more Pods. Each new Pod gets its own IP, and the old IP can disappear. The caller needs a stable way to say, "I want the payments API," while Kubernetes keeps replacing the actual processes behind it.
+```bash
+kubectl -n shop get pods -l app.kubernetes.io/name=payments-api -o wide
+```
+
+```bash
+NAME                            READY   STATUS    RESTARTS   AGE   IP            NODE
+payments-api-6f8c7d9b7c-xz9q2   1/1     Running   0          3m    10.244.2.17   worker-2
+```
+
+That works for a short demo because one Pod happens to exist at that address right now. Then the payments team ships version `2.4.2`, Kubernetes creates a replacement Pod, and the old Pod disappears. The web app still carries the old address, so it is now tied to an address that Kubernetes never promised to keep. The next call can fail like this:
+
+```bash
+curl -m 3 http://10.244.2.17:8080/healthz
+```
+
+```bash
+curl: (28) Connection timed out after 3001 milliseconds
+```
+
+That output points at the shortcut. The payments API may already be healthy on a newer Pod with a different IP. The caller needs a stable way to say, "I want the payments API," while Kubernetes keeps replacing the actual processes behind it.
 
 A **Service** is the Kubernetes object that gives a group of Pods a stable network identity. A Service has a name, a namespace, a virtual IP for normal in-cluster Services, one or more ports, and a rule for finding backend Pods. The caller talks to the Service. Kubernetes tracks the current Pods behind that Service.
 
@@ -50,36 +69,7 @@ So the first job is clear. The payments team needs to publish a stable Service i
 
 A **ClusterIP Service** is the default Service type. It gives the Service an internal cluster IP and makes it reachable from inside the cluster. This is the normal starting point for one backend calling another backend, like `checkout-web` calling `payments-api`.
 
-Here is the Deployment behind our example. The important part for this article is the label under `template.metadata.labels`. That label goes onto every Pod created by the Deployment.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: shop
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: payments-api
-      app.kubernetes.io/component: api
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: payments-api
-        app.kubernetes.io/component: api
-        app.kubernetes.io/part-of: shop-platform
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/payments-api:2.4.1
-          ports:
-            - name: http
-              containerPort: 8080
-```
-
-Now here is the Service. It publishes port `80` to callers and sends traffic to the container port named `http`.
+Start with the smallest useful skeleton. This object only says, "there will be a Service named `payments-api` in the `shop` namespace, and it will stay inside the cluster."
 
 ```yaml
 apiVersion: v1
@@ -87,9 +77,56 @@ kind: Service
 metadata:
   name: payments-api
   namespace: shop
-  labels:
-    app.kubernetes.io/name: payments-api
-    app.kubernetes.io/part-of: shop-platform
+spec:
+  type: ClusterIP
+```
+
+That skeleton still does not know which Pods belong behind it. The payments Deployment must put stable labels on every Pod it creates. A **label** is a key-value tag on a Kubernetes object. In this example, every payments Pod receives two labels that describe the app and the component:
+
+```yaml
+template:
+  metadata:
+    labels:
+      app.kubernetes.io/name: payments-api
+      app.kubernetes.io/component: api
+```
+
+The Service uses a **selector** to find those Pods. A selector is a label query. This one says a backend Pod must carry both labels before it can sit behind the Service:
+
+```yaml
+selector:
+  app.kubernetes.io/name: payments-api
+  app.kubernetes.io/component: api
+```
+
+The last basic piece is the port contract. Callers use Service port `80`, and Kubernetes forwards the traffic to the Pod port named `http`:
+
+```yaml
+ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: http
+```
+
+The Pod side names its container port `http`, so the Service can target a name instead of a raw number:
+
+```yaml
+ports:
+  - name: http
+    containerPort: 8080
+```
+
+Put together, those pieces create a real contract. `metadata.name` gives callers the Service name. `metadata.namespace` places that name inside `shop`. `spec.type` keeps the Service internal to the cluster. `spec.selector` chooses the Pods. `spec.ports[].port` tells callers which port to use. `spec.ports[].targetPort` tells Kubernetes where traffic should land on the selected Pods.
+
+For a production review, the complete Service is still short enough to read after the pieces make sense:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-api
+  namespace: shop
 spec:
   type: ClusterIP
   selector:
@@ -97,14 +134,11 @@ spec:
     app.kubernetes.io/component: api
   ports:
     - name: http
-      protocol: TCP
       port: 80
       targetPort: http
 ```
 
-This little manifest creates a real contract. `metadata.name` gives callers the Service name. `metadata.namespace` places that name inside `shop`. `spec.type` keeps the Service internal to the cluster. `spec.selector` chooses the Pods. `spec.ports[].port` tells callers which port to use. `spec.ports[].targetPort` tells Kubernetes where traffic should land on the selected Pods.
-
-In production, teams treat these fields with the same care they give an API route. If `checkout-web` calls `payments-api.shop` on port `80`, a casual rename or port change can break checkout even while every payments Pod looks healthy.
+Kubernetes uses TCP when `protocol` is omitted, so this example keeps the complete Service short. In production, teams treat these fields with the same care they give an API route. If `checkout-web` calls `payments-api.shop` on port `80`, a casual rename or port change can break checkout even while every payments Pod looks healthy.
 
 Now the next question is the important one. How does Kubernetes know which Pods belong behind this Service?
 
@@ -260,7 +294,7 @@ DNS gives the caller a stable name. Selectors and EndpointSlices give Kubernetes
 ## Readiness Decides Who Receives Traffic
 <!-- section-summary: Readiness probes keep Pods out of Service traffic until the application can actually handle requests. -->
 
-A **readiness probe** tells Kubernetes whether a container is ready to receive traffic. This matters because a process can be running while the application still cannot serve useful requests. It might be loading configuration, opening a database connection, warming caches, or waiting for a dependency.
+A **readiness probe** tells Kubernetes whether a container is ready to receive traffic. A process can be running while the application still cannot serve useful requests. It might be loading configuration, opening a database connection, warming caches, or waiting for a dependency.
 
 Here is a readiness probe for the payments API:
 
@@ -276,7 +310,7 @@ readinessProbe:
 
 With this probe, Kubernetes checks `/readyz` on the named `http` port. When the probe succeeds, the Pod can receive Service traffic. When the probe fails, Kubernetes can remove that Pod's IP from the EndpointSlices for matching Services.
 
-This is why Services and rollouts fit together. During a rollout, Kubernetes creates a new payments Pod, waits for readiness, adds it to the backend list, and then continues replacing old Pods according to the Deployment strategy. `checkout-web` keeps using the Service name while the backend membership changes.
+Services and rollouts fit together through that readiness decision. During a rollout, Kubernetes creates a new payments Pod, waits for readiness, adds it to the backend list, and then continues replacing old Pods according to the Deployment strategy. `checkout-web` keeps using the Service name while the backend membership changes.
 
 The ready condition is visible in EndpointSlices:
 
@@ -301,7 +335,7 @@ kubectl -n shop describe pod -l app.kubernetes.io/name=payments-api,app.kubernet
 kubectl -n shop logs deployment/payments-api --tail=100
 ```
 
-The readiness endpoint should describe whether the application can serve requests, not just whether the process is alive. For a payments API, `/readyz` might check that required configuration is loaded and the payment provider client can be initialized. Teams often keep deeper dependency checks lightweight because a slow or flaky readiness endpoint can remove healthy Pods from traffic.
+The readiness endpoint should describe whether the application can serve requests, rather than only whether the process is alive. For a payments API, `/readyz` might check that required configuration is loaded and the payment provider client can be initialized. Teams often keep deeper dependency checks lightweight because a slow or flaky readiness endpoint can remove healthy Pods from traffic.
 
 Now we have all the main pieces. The final job is to use them in a repeatable debugging flow.
 

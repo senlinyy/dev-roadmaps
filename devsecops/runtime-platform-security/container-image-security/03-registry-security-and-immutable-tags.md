@@ -1,7 +1,7 @@
 ---
 title: "Registry Security and Immutable Tags"
-description: "Protect image registries with access control, private connectivity, immutable tags, and digest-based deploys."
-overview: "A private registry is the release checkpoint between the CI build that publishes payments-api and the Kubernetes cluster that runs it. This article explains push and pull identities, immutable tags, digest-based deploys, tag promotion, retention, quarantine, audit logs, private connectivity, and rollback with known-good digests."
+description: "Protect the image warehouse with private registries, scoped identities, immutable tags, digest deploys, promotion, retention, quarantine, and audit logs."
+overview: "Start with the registry as the warehouse where built payments-api images wait for deployment. Then learn private registries, repositories, tags, digests, push versus pull identity, digest capture after push, immutable tags, digest-based Kubernetes deploys, promotion without rebuilding, retention, quarantine, rollback records, private connectivity, and audit logs."
 tags: ["devsecops", "registries", "immutable-tags", "image-digests"]
 order: 3
 id: article-devsecops-container-image-security-registry-security-immutable-tags
@@ -9,7 +9,7 @@ id: article-devsecops-container-image-security-registry-security-immutable-tags
 
 ## Table of Contents
 
-1. [Why the Registry Is the Release Checkpoint](#why-the-registry-is-the-release-checkpoint)
+1. [The Warehouse for Built Images](#the-warehouse-for-built-images)
 2. [Private Registries, Repositories, Tags, and Digests](#private-registries-repositories-tags-and-digests)
 3. [Separate Push Identity from Pull Identity](#separate-push-identity-from-pull-identity)
 4. [Push the Image and Capture the Digest](#push-the-image-and-capture-the-digest)
@@ -19,13 +19,16 @@ id: article-devsecops-container-image-security-registry-security-immutable-tags
 8. [Private Connectivity and Audit Logs](#private-connectivity-and-audit-logs)
 9. [Putting It All Together](#putting-it-all-together)
 10. [What's Next](#whats-next)
+11. [References](#references)
 
-## Why the Registry Is the Release Checkpoint
-<!-- section-summary: The registry connects image evidence from CI to the exact image Kubernetes pulls in production. -->
+## The Warehouse for Built Images
+<!-- section-summary: The registry is the controlled warehouse where built images wait before Kubernetes pulls an approved digest. -->
 
-In the previous part of this module, the `payments-api` team started collecting image evidence. The CI pipeline built a container image, scanned it, created an SBOM, and attached release evidence to the build. That work matters because a container image can carry application code, operating system packages, language packages, startup scripts, certificates, and configuration defaults. If the team wants to know what they are about to run, the image gives them the evidence.
+In the previous article, the `payments-api` team built evidence for one exact image digest. CI scanned the image, created an SBOM, signed it, and attached release evidence. Now the image needs a safe place to wait before Kubernetes pulls it.
 
-Now the question moves one step forward. After CI creates that image, where does the team put it, and how does Kubernetes know which exact copy to run? That is where the **container registry** enters the story. A container registry stores image manifests, image layers, tags, and sometimes related artifacts such as SBOMs and signatures. For a small team, the registry can look like a simple upload location. In production, it works more like the release checkpoint between build and runtime.
+A **container registry** is the warehouse for built images. It stores image manifests, image layers, tags, digests, and sometimes related artifacts such as SBOMs, signatures, and attestations. CI pushes images into the warehouse. Kubernetes pulls approved images out of it. Security teams use the warehouse records to answer who published an image, which tag pointed to it, which digest production pulled, and whether old releases are still available for rollback.
+
+For a beginner, the registry can look like a simple upload location. In production, it sits between build and runtime. If the wrong identity can push into it, a trusted image name can carry untrusted content. If tags can move silently, a deployment manifest can keep the same text while new Pods pull different bytes. If old production digests disappear too early, rollback turns into a scramble.
 
 Here is the simple flow for our team:
 
@@ -169,7 +172,7 @@ docker build \
 docker push "$REGISTRY/$IMAGE:sha-$GIT_SHA"
 ```
 
-After the push, the registry has the final manifest. That detail matters because the digest the team deploys should come from the registry, especially when the build creates a multi-platform image or the registry stores an image index. The Docker CLI can inspect the remote reference:
+After the push, the registry has the final manifest. The digest the team deploys should come from the registry, especially when the build creates a multi-platform image or the registry stores an image index. The Docker CLI can inspect the remote reference:
 
 ```bash
 docker buildx imagetools inspect "$REGISTRY/$IMAGE:sha-$GIT_SHA"
@@ -318,7 +321,7 @@ spec:
           image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/payments-api:prod-2026-06-21-001@sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
 ```
 
-Here is a compact CI sketch that shows the release shape. The exact syntax will change by CI system, but the separation of jobs matters more than the product name.
+Here is a compact CI sketch that shows the release shape. The exact syntax will change by CI system, but the separation of jobs is the important part.
 
 ```yaml
 name: payments-api-release
@@ -565,9 +568,7 @@ That is the registry's job in the container security story. It keeps the path fr
 
 The registry controls which image Kubernetes can pull. The next article moves inside the cluster after the pull succeeds. We will look at **container runtime isolation**: how namespaces, cgroups, Linux capabilities, seccomp, AppArmor or SELinux, read-only filesystems, and Kubernetes security settings limit what the `payments-api` container can do while it is running.
 
----
-
-**References**
+## References
 
 - [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md) - Defines registry, repository, push, pull, tag, manifest, blob, and digest concepts used by compliant registries.
 - [Kubernetes Images](https://kubernetes.io/docs/concepts/containers/images/) - Documents image names, tags, digests, pull policies, digest pinning, and private registry pull configuration.

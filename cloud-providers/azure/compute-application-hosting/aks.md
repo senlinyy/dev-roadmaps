@@ -108,6 +108,15 @@ az aks get-credentials \
 kubectl get nodes
 ```
 
+```console
+NAME                                STATUS   ROLES    AGE   VERSION
+aks-systempool-11223344-vmss000000  Ready    <none>   14d   v1.31.7
+aks-api-55667788-vmss000001         Ready    <none>   6d    v1.31.7
+aks-api-55667788-vmss000002         Ready    <none>   6d    v1.31.7
+```
+
+Healthy output shows nodes in `Ready` status and the Kubernetes version the team expects after the last upgrade window. If a node is `NotReady`, missing from the expected pool, or running an unexpected version, pod problems may start at the capacity layer before the application manifest is involved.
+
 In a healthy production cluster, that command should show ready nodes across the pools you expect. If every pod for `orders-api` is pending, this is one of the first places to look. The scheduler can only place pods on nodes that exist, are ready, match the workload constraints, and have enough allocatable CPU and memory.
 
 This control-plane-and-node split is the main ownership boundary in AKS. Azure keeps the Kubernetes management layer alive. Your team designs the worker capacity, applies manifests, watches upgrades, and makes sure the workloads ask for resources in a way the cluster can actually satisfy.
@@ -220,6 +229,23 @@ spec:
 
 This example connects the public HTTP path to the internal service from the previous section. The service then selects pods. That gives us the full request chain: customer request, ingress controller, ingress rule, service, selected pod, container port.
 
+The verification path follows that same chain. The first command confirms that the service has ready pod endpoints. The second command checks the ingress rule and external address that the controller published.
+
+```bash
+kubectl get endpoints orders-api -n prod-orders
+kubectl get ingress commerce-ingress -n prod-orders
+```
+
+```console
+NAME         ENDPOINTS                                      AGE
+orders-api   10.244.3.18:8080,10.244.4.21:8080,10.244.5.9:8080   6d
+
+NAME               CLASS                              HOSTS            ADDRESS        PORTS   AGE
+commerce-ingress   webapprouting.kubernetes.azure.com shop.example.com 20.42.11.140   80      6d
+```
+
+If the service has no endpoints, start with pod labels and readiness. If the ingress has no address, start with the controller, ingress class, and Azure load balancer or gateway integration. Those checks keep a `502` from turning into random YAML edits.
+
 Layer 4 and layer 7 traffic solve different problems. A `LoadBalancer` service is useful when the workload needs raw TCP or a simple external endpoint. An ingress or gateway layer is useful when many HTTP services share a hostname, need path-based routing, central TLS behavior, certificate integration, redirect rules, or more detailed request handling. The commerce team may expose `shop.example.com/orders`, `shop.example.com/inventory`, and `shop.example.com/admin` through one traffic layer while each route lands on a different Kubernetes service.
 
 Traffic routing is only half of the production story. Those pods still need somewhere to run, and the shape of that worker capacity affects cost, reliability, scheduling, and blast radius.
@@ -249,6 +275,14 @@ az aks nodepool add \
   --min-count 3 \
   --max-count 12
 ```
+
+```console
+Name    Mode  VmSize           Count  MinCount  MaxCount  ProvisioningState
+------  ----  ---------------  -----  --------  --------  -----------------
+api     User  Standard_D4s_v5  3      3         12        Succeeded
+```
+
+The output should match the capacity lane the team intended: user mode, the expected VM size, and an autoscaler range that protects both availability and cost. A pool with the wrong VM size can leave pods pending even while the autoscaler adds more nodes.
 
 Node pools become useful when workloads have different needs. A payment API may need steady reserved capacity and zone spreading. A batch import worker may tolerate interruption and fit spot nodes. A machine learning job may need GPU nodes. An ingress controller may deserve its own pool so customer traffic has a capacity lane apart from noisy background jobs.
 
@@ -371,6 +405,19 @@ kubectl describe pod -n prod-orders -l app=orders-api
 kubectl get endpoints -n prod-orders orders-api
 kubectl logs -n prod-orders deploy/orders-api --tail=100
 ```
+
+```console
+NAME                          READY   STATUS    RESTARTS   AGE
+orders-api-778c8f6bb8-2h9mf   1/1     Running   0          38m
+orders-api-778c8f6bb8-7kq2p   1/1     Running   0          38m
+orders-api-778c8f6bb8-pm4tw   1/1     Running   0          37m
+
+orders-api  10.244.3.18:8080,10.244.4.21:8080,10.244.5.9:8080
+
+2026-06-11T09:22:44Z info request_id=checkout_7f23 path=/orders status=200 duration_ms=41
+```
+
+Healthy evidence connects all three layers: pods are ready, the service has endpoints, and application logs show successful requests with correlation data. A failing rollout often breaks one layer first, so these commands give the on-call engineer a fast way to choose the next investigation path.
 
 The second evidence layer is Azure Monitor and Container Insights. Those tools collect cluster, node, controller, and container signals so the team can see CPU, memory, restarts, node pressure, logs, and trends across time. Without this layer, every incident turns into a live shell session where the team can only see the current moment.
 

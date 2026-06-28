@@ -56,6 +56,10 @@ The Orders API gives us a concrete target for each layer. The table below names 
 | **Region** | `uksouth` | Geographic placement, latency, data residency, service availability, and regional quota |
 | **Availability zones** | Zone-redundant app and data choices where supported | Protection from a zone-level facility, power, cooling, or network failure |
 
+![Azure placement ladder showing tenant, subscription, resource groups, scope, region, and availability zones connected to the Orders API](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/placement-ladder.png)
+
+*The placement ladder keeps each early Azure decision tied to the same workload instead of treating tenant, subscription, region, and zones as separate vocabulary lists.*
+
 This placement story matters because many Azure mistakes start with a resource created in the wrong home. A developer runs a CLI command while the active subscription points at production. A staging database lands in the same resource group as production data. A team chooses a region before checking service availability. A zone-redundant design copies zone numbers across subscriptions before anyone checks the physical mapping.
 
 This ladder is useful because it gives the team an order for the conversation. We start with the tenant because every Azure resource operation needs a trusted identity. Then we move into subscriptions, resource groups, scopes, regions, zones, and a final placement review that the team can repeat before Bicep, Terraform, the Azure CLI, or the portal creates anything.
@@ -101,7 +105,7 @@ The Azure CLI also has an active subscription context. That context matters beca
 ```bash
 az account show \
   --query "{name:name, subscriptionId:id, tenantId:tenantId}" \
-  --output table
+  --output json
 ```
 
 The output should name the subscription and tenant the team expected. In this example, the CLI is pointing at the production Orders subscription and the DevPolaris tenant:
@@ -149,6 +153,29 @@ az group create \
   --tags service=orders-api env=prod team=commerce-platform
 ```
 
+That command creates the resource group in the active subscription, sets the group metadata location to `uksouth`, and writes the first ownership tags. After a create command, the Orders team reads the group back so the release notes contain proof instead of only the command that made the change:
+
+```bash
+az group show \
+  --name "rg-orders-app-prod-uksouth" \
+  --query "{name:name,location:location,tags:tags}" \
+  --output json
+```
+
+The useful output is small:
+
+```json
+{
+  "name": "rg-orders-app-prod-uksouth",
+  "location": "uksouth",
+  "tags": {
+    "env": "prod",
+    "service": "orders-api",
+    "team": "commerce-platform"
+  }
+}
+```
+
 The resource group location is the region where Azure stores metadata about the group. The resources inside the group can live in other regions, and Microsoft recommends using the same location for the group and its resources unless the team has a reason to separate them. For the Orders team, `rg-orders-app-prod-uksouth` in `uksouth` keeps the group metadata close to the app resources it describes.
 
 The tags in that command give the first hint of the next foundation article. Tags add queryable metadata such as `service`, `env`, and `team`. They help cost reports, inventories, and incident responders find ownership. This article cares about placement; the next article goes deeper into resource IDs, names, tags, and locks.
@@ -160,23 +187,11 @@ Now the Orders resources have a tenant, a subscription, and resource groups. The
 
 A **scope** is the Azure boundary where a management rule applies. Azure RBAC uses scope to decide how widely a role assignment reaches. Azure Policy also uses scopes so governance rules can apply to a management group, subscription, resource group, or specific resource.
 
-The practical hierarchy looks like this for the Orders production estate. The management group gives the company a production-wide parent, and the subscription, resource groups, and resources become more specific as the tree moves downward.
+The practical hierarchy looks like this for the Orders production estate. The management group gives the company a production-wide parent, and the subscription, resource groups, and resources get narrower as the tree moves downward.
 
-```mermaid
-flowchart TB
-    MG["Management group<br/>mg-prod"]
-    SUB["Subscription<br/>sub-orders-prod"]
-    RGAPP["Resource group<br/>rg-orders-app-prod-uksouth"]
-    RGDATA["Resource group<br/>rg-orders-data-prod-uksouth"]
-    APP["Container app<br/>orders-api-prod"]
-    DB["Database<br/>orders-db-prod"]
+![Scope inheritance diagram showing Reader flowing from subscription to child scopes while app deployment Contributor stays limited to the app resource group](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/scope-inheritance.png)
 
-    MG --> SUB
-    SUB --> RGAPP
-    SUB --> RGDATA
-    RGAPP --> APP
-    RGDATA --> DB
-```
+*The scope diagram shows why the role name and the assignment location must be reviewed together.*
 
 **Management groups** sit above subscriptions. Large organizations use them to organize many subscriptions and apply shared governance. DevPolaris might place `sub-orders-prod`, `sub-payments-prod`, and `sub-platform-prod` under `mg-prod`, then apply production-wide policies there.
 
@@ -196,6 +211,15 @@ The team can inspect role assignment evidence from the CLI by naming the scope d
 az role assignment list \
   --scope "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-app-prod-uksouth" \
   --output table
+```
+
+The output should show who received access and where Azure found the assignment. A shortened review table might look like this:
+
+```console
+Principal                         Role         Scope
+--------------------------------  -----------  -------------------------------------------------------------
+grp-orders-release-pipeline       Contributor  /subscriptions/.../resourceGroups/rg-orders-app-prod-uksouth
+grp-orders-oncall                 Reader       /subscriptions/.../resourceGroups/rg-orders-app-prod-uksouth
 ```
 
 At this point, the Orders team knows who can touch the work, where the resources live logically, and where governance flows from. The next placement decision moves from management structure into physical geography.
@@ -218,6 +242,10 @@ The Orders team usually checks five region questions before committing to `uksou
 | **Does the service exist there?** | The required compute, database, storage, Key Vault, and monitoring features must support `uksouth`. |
 | **Does this subscription have quota there?** | Production needs enough regional vCPU, database, and service quota before release week. |
 | **What recovery shape does the app need?** | The team decides between one region with zones, backup to a paired or secondary region, or active multi-region design. |
+
+![Region and zone review board showing users and data, the uksouth region check, service support, quota, SKU availability, zone plan, and restore evidence](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/region-zone-review.png)
+
+*The region review turns a location choice into evidence: user geography, data requirements, service support, quota, SKU availability, zone design, and restore proof.*
 
 The CLI can show supported locations for the active subscription. The Orders team uses that output to confirm the deployment name, display name, region category, and paired region metadata for `uksouth`:
 
@@ -248,6 +276,15 @@ az vm list-skus \
   --size "Standard_D" \
   --all \
   --output table
+```
+
+The table can be large, so the team usually filters or searches it during review. A shortened result might look like this:
+
+```console
+ResourceType      Locations  Name              Zones  Restrictions
+----------------  ---------  ----------------  -----  ------------
+virtualMachines   uksouth    Standard_D2s_v5   1,2,3  None
+virtualMachines   uksouth    Standard_D4s_v5   1,2,3  None
 ```
 
 If a deployment asks for a SKU outside the available set for that region, zone, or subscription, Azure can return an error such as `SkuNotAvailable`. That error usually means the requested size or service option is unavailable for that location, zone, or subscription. The fix may involve choosing another SKU, choosing another region or zone, or requesting quota where Azure supports a quota increase.

@@ -37,6 +37,9 @@ That same product still needs Cloud SQL for completed orders and payments, becau
 
 The structure for this article follows the order a real team should use. First, design the document path. Then name the query shapes. After that, create indexes, write safe transactions, choose the right access control layer, and add backup and verification habits. That order matters because Firestore rewards planned access patterns.
 
+![Firestore collection document path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/collection-document-path.png)
+*Firestore paths alternate collections and documents. The path is part of the application contract, so the team should name paths before code spreads them across handlers and jobs.*
+
 ## Documents, Collections, and Paths
 <!-- section-summary: Firestore stores records as documents inside collections, and the path is part of the application contract. -->
 
@@ -127,6 +130,13 @@ for (const doc of snapshot.docs) {
 
 This query has a clear business job. It filters to one user and one status, then orders by update time. The next section turns that shape into index configuration.
 
+A beginner should also know what a healthy result looks like. In a support tool, the query output should return draft IDs and timestamps that match the user being investigated, not an unbounded list of every draft in the collection.
+
+```console
+draft_usr_99812 2026-06-14T14:04:12.000Z
+draft_usr_99812_retry 2026-06-14T13:58:44.000Z
+```
+
 ## Indexes as Production Configuration
 <!-- section-summary: Firestore indexes are deployed infrastructure, and composite indexes should live beside the code that depends on them. -->
 
@@ -187,6 +197,14 @@ gcloud firestore indexes composite list \
 
 If the index state is still building, the application path should stay behind a release flag or rollout gate. After indexes support the reads, the next production concern is writes that happen at the same time.
 
+```console
+NAME                                                                 STATE  QUERY_SCOPE
+projects/shop-prod/databases/(default)/collectionGroups/checkoutDrafts/indexes/CICAgJ... READY  COLLECTION
+```
+
+![Firestore index query pipeline](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/index-query-pipeline.png)
+*The query filters map to an index lookup before Firestore fetches documents. This is why a composite index is production configuration, not an optional cleanup task.*
+
 ## Transactions, Batched Writes, and Idempotent Work
 <!-- section-summary: Transactions protect read-then-write decisions, while batched writes group known writes that use known paths. -->
 
@@ -230,7 +248,7 @@ Concurrency mode also matters for server libraries. Firestore supports database-
 
 Firestore has two access-control stories that beginners often mix together. **Firestore Security Rules** protect direct client access from Firebase mobile and web SDKs. **IAM** controls Google Cloud API access for backend services, administrators, CI/CD systems, and server client libraries. A production system can use both, but each one protects a different entry path.
 
-If the browser or mobile app reads and writes Firestore directly, Security Rules become part of the application boundary. A draft rule might allow a signed-in user to read and update only their own draft:
+If the browser or mobile app reads and writes Firestore directly, Security Rules sit on the application boundary. A draft rule might allow a signed-in user to read and update only their own draft:
 
 ```javascript
 rules_version = '2';
@@ -248,7 +266,7 @@ service cloud.firestore {
 }
 ```
 
-This example shows the access shape. A complete security review also needs tests, validation for fields that may change, and a clear answer for support tooling, admin jobs, and cleanup jobs. A rule that starts simple can become risky when new fields like `discountApproved` or `riskOverride` appear without matching validation.
+This example shows the access shape. A complete security review also needs tests, validation for fields that may change, and a clear answer for support tooling, admin jobs, and cleanup jobs. A simple first rule can turn risky when new fields like `discountApproved` or `riskOverride` appear without matching validation.
 
 If a Cloud Run backend owns Firestore access, the browser calls the backend and the backend uses a service account. In that design, IAM is the main cloud access layer:
 
@@ -321,6 +339,21 @@ gcloud firestore backups schedules list \
   --format='table(name,retention,dailyRecurrence)'
 ```
 
+The database output should show the intended location, native mode, delete protection, and PITR state. The backup schedule output should show retention and recurrence so the team can compare it to the product recovery target.
+
+```yaml
+name: projects/shop-prod/databases/(default)
+locationId: nam5
+type: FIRESTORE_NATIVE
+deleteProtectionState: DELETE_PROTECTION_ENABLED
+pointInTimeRecoveryEnablement: POINT_IN_TIME_RECOVERY_ENABLED
+```
+
+```console
+NAME                                                                    RETENTION  DAILY_RECURRENCE
+projects/shop-prod/databases/(default)/backupSchedules/6d8fb4a1         7d         02:00
+```
+
 Some teams also export selected collections to Cloud Storage for migration or offline review. Exports are useful for movement and inspection. A tested restore plan is still the recovery control the team needs during a bad write or accidental delete.
 
 ## gcloud and Terraform Baseline
@@ -340,6 +373,8 @@ gcloud firestore databases create \
   --delete-protection \
   --enable-pitr
 ```
+
+The create command is consumed by the Firestore control plane, but production teams should treat `describe` as the source of evidence. A project can have more than one database, so the database ID in the client configuration should match the database shown here.
 
 Here is the same kind of baseline in Terraform:
 
@@ -407,6 +442,13 @@ gcloud firestore indexes composite list \
   --format='table(name,state,queryScope)'
 ```
 
+If the index is still building, the output points to a release sequencing problem. If the index is ready and the query still fails, compare the field order and sort direction with the query in code.
+
+```console
+NAME                                                                 STATE     QUERY_SCOPE
+projects/shop-prod/databases/(default)/collectionGroups/checkoutDrafts/indexes/CICAgJ... CREATING  COLLECTION
+```
+
 Then check access. A backend access failure should show the service account and permission problem. Verify the Cloud Run service account, IAM role, and any deny policy or organization guardrail. If the browser talks directly to Firestore, test Security Rules with a realistic authenticated user and a realistic document payload.
 
 Then check query and write behavior. A query that returns too many documents can create latency and read cost. A write path that updates one shared document can create contention. Logs should include operation names such as `loadDraft`, `submitDraft`, and `supportSearch`, plus error codes for missing index, permission denied, transaction aborted, and deadline exceeded.
@@ -435,6 +477,9 @@ Firestore fits the checkout draft because the application has a small, document-
 The production design also keeps boundaries clear. Security Rules protect direct Firebase clients when they exist. IAM protects backend service accounts. Large histories move to subcollections or analytical systems. Hot counters spread across shard documents. Backups, PITR, TTL, and restore drills turn the data model into something the team can operate after a mistake.
 
 The final beginner checkpoint is this: **Firestore combines path design, query design, index configuration, safe write design, and recovery design in one service**.
+
+![Firestore summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-firestore-document-data-models/firestore-summary.png)
+*The complete Firestore design keeps documents, paths, indexes, transactions, hotspot limits, and recovery controls connected to the checkout draft workflow.*
 
 ## What's Next
 <!-- section-summary: The next article moves from document-shaped app state to analytical event data in BigQuery. -->

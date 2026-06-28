@@ -119,6 +119,39 @@ az storage blob upload \
 
 This upload example uses Azure CLI with Microsoft Entra sign-in through `--auth-mode login`. The caller still needs an Azure role that grants Blob data access. The metadata can help operations and downstream processing, but the order database remains the source of truth for order status, customer ownership, and receipt lookup.
 
+The useful output is the blob's service record, not a cheerful success message. In a healthy response, the reviewer should see the intended object name, a PDF content type, and metadata that matches the upload job.
+
+| Field from the response | Healthy value |
+| --- | --- |
+| `name` | `2026/05/order-417.pdf` |
+| `properties.contentSettings.contentType` | `application/pdf` |
+| `metadata.orderId` | `417` |
+| `metadata.documentType` | `receipt` |
+
+The read-back command should inspect the blob that storage actually saved:
+
+```bash
+az storage blob show \
+  --account-name stordersreceiptsprod \
+  --container-name receipts \
+  --name 2026/05/order-417.pdf \
+  --query "{name:name,contentType:properties.contentSettings.contentType,metadata:metadata}" \
+  --auth-mode login
+```
+
+Example output:
+
+```json
+{
+  "contentType": "application/pdf",
+  "metadata": {
+    "documentType": "receipt",
+    "orderId": "417"
+  },
+  "name": "2026/05/order-417.pdf"
+}
+```
+
 Metadata can feel tempting because it sits next to the file. Keep it modest. Store values that describe the object at the storage layer, such as document type, source job, or processing state. Keep business queries in the database where indexes, constraints, joins, and audit behavior are designed for that job.
 
 ## The Upload and Download Path
@@ -183,6 +216,15 @@ az storage blob generate-sas \
 ```
 
 The browser receives the blob URL with that token attached. The browser gets read access for that one PDF during the short window. The token excludes listing every receipt, deleting the object, overwriting the file, and using the URL after expiry.
+
+The command prints a query-string token, not a whole application decision. A reviewer should check that the token shape matches the story before the API returns it to the browser:
+
+| Token part | Healthy value for this download |
+| --- | --- |
+| `sp` | `r` for read-only access |
+| `spr` | `https` when HTTPS-only is enforced |
+| `se` | A UTC expiry about 15 minutes in the future |
+| Missing permissions | No list, write, create, or delete permission |
 
 SAS design should follow the actual user story. Download needs read permission. Upload needs create or write permission for a specific name. Listing is rarely needed by a browser. Long expiry values turn temporary links into long-lived secrets, so use the shortest useful duration and make the app capable of asking for a fresh link.
 
@@ -257,6 +299,16 @@ Archive needs a clear warning in production conversations. Archived blobs are of
 ```
 
 The exact numbers should come from product, legal, support, and cost requirements. The important habit is to write the lifecycle rule as part of the storage design. Without lifecycle rules, old files, old versions, and temporary objects can quietly become a large monthly bill.
+
+In practice, the JSON belongs in source control beside the storage infrastructure, then the deployment applies it to the storage account's management policy. A verification read should show the rule name, enabled flag, prefix, and version cleanup window before the team trusts the automation.
+
+| Policy field | Expected review value |
+| --- | --- |
+| `rules[0].name` | `receipt-tiering` |
+| `rules[0].enabled` | `true` |
+| `definition.filters.prefixMatch` | `["receipts/"]` |
+| `baseBlob.tierToCool.daysAfterModificationGreaterThan` | `30` |
+| `version.delete.daysAfterCreationGreaterThan` | `90` |
 
 ## Versioning, Soft Delete, and Retention
 <!-- section-summary: Blob data protection features preserve recoverable previous states after overwrites, deletes, and container mistakes. -->

@@ -12,74 +12,74 @@ aliases:
   - cloud-providers/aws/storage-databases/s3-object-storage-and-buckets.md
   - cloud-providers/aws/storage-databases/s3-buckets-objects-permissions-and-lifecycle.md
 ---
-
 ## Table of Contents
 
-1. [S3 Stores Whole Objects](#s3-stores-whole-objects)
-2. [Buckets and Object Keys](#buckets-and-object-keys)
-3. [Permissions, Public Access, and Encryption](#permissions-public-access-and-encryption)
-4. [Application Uploads with Presigned URLs](#application-uploads-with-presigned-urls)
-5. [Versioning, Lifecycle, and Retention](#versioning-lifecycle-and-retention)
-6. [Events, Inventory, and Bulk Operations](#events-inventory-and-bulk-operations)
-7. [Production Checklist](#production-checklist)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Start With One Uploaded File](#start-with-one-uploaded-file)
+2. [Buckets, Keys, and Objects](#buckets-keys-and-objects)
+3. [Access Control Layers](#access-control-layers)
+4. [Presigned Uploads](#presigned-uploads)
+5. [Versioning and Lifecycle](#versioning-and-lifecycle)
+6. [Events and Large Operations](#events-and-large-operations)
+7. [Operating Checklist](#operating-checklist)
+8. [References](#references)
 
-## S3 Stores Whole Objects
+## Start With One Uploaded File
 <!-- section-summary: S3 is the AWS home for durable whole-file data that applications read and write through an API. -->
 
-Amazon S3 stores **objects**. An object is a file-like value plus metadata, addressed by a bucket name and an object key. The object can be a product photo, a receipt PDF, a compressed log archive, a model artifact, a backup export, or a CSV report. Your application calls the S3 API to upload, download, copy, tag, list, and delete those objects.
+Maple Market lets a customer upload a return photo. The photo is a whole file. The app stores it, reads it later, maybe scans it, and eventually expires it according to a retention policy. That is a natural fit for Amazon S3.
 
-Back in the Maple Market example, product photos and invoice PDFs fit S3 very naturally. The customer uploads a complete image. The invoice worker writes a complete PDF. Finance downloads a complete CSV export. The application needs durable storage, object-level access rules, and a way to serve downloads without keeping files on a web server's local disk.
+**Amazon S3** stores objects in buckets. An object is the file bytes plus metadata, tags, permissions, and a key. The app usually keeps business records in a database and stores the object key in that record. For example, the order row can contain `returns/2026/06/ord_123/photo-1.jpg` as the pointer to the file.
 
-S3 sits behind an HTTP API, so the application does not mount it like a normal disk. A service usually writes an object with `PutObject`, reads it with `GetObject`, lists a prefix with `ListBucket`, and lets S3 handle the storage fleet behind that API. That API boundary is useful because many workers, web servers, and batch jobs can reach the same object store without sharing a host filesystem.
+S3 works well when the app treats data as whole objects through an API. It is used for uploads, exports, logs, static assets, backups, analytics files, and partner feeds.
 
-The main pieces are easy to name. These names show up in IAM policies, logs, lifecycle rules, and support tickets.
+The app should keep business truth outside the object body. For the return photo, the order database stores the order ID, customer ID, expected object key, upload status, scan status, and retention state. S3 stores the file and object metadata. That split lets support find the file through the order record, and it lets lifecycle rules clean up objects without guessing business meaning from filenames alone.
 
-| Piece | Plain meaning | Maple Market example |
-|---|---|---|
-| **Bucket** | Top-level container and policy boundary | `maple-prod-customer-media` |
-| **Object** | The stored payload plus metadata | A product photo file |
-| **Key** | The object's unique name inside the bucket | `uploads/raw/2026/06/item-8821.jpg` |
-| **Metadata** | Extra facts stored with the object | `Content-Type: image/jpeg` |
-| **Tags** | Key-value labels used by lifecycle, cost, and workflows | `purpose=temporary-upload` |
-
-Those pieces lead naturally into bucket and key design. A good bucket and key structure makes every later S3 feature easier to operate.
-
-![S3 object path infographic showing bucket policy boundary, prefix operating lane, object bytes and metadata, and object key](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-object-path.png)
-
-*A bucket is the policy boundary. The key is the object's address inside that boundary.*
-
-## Buckets and Object Keys
+## Buckets, Keys, and Objects
 <!-- section-summary: Buckets hold administrative policy, while keys give every object a stable address inside the bucket. -->
 
-A **bucket** is the outer container for S3 objects. It carries settings such as encryption, versioning, access policies, lifecycle rules, event notifications, replication, and logging. In production, teams usually create separate buckets when data has different security, retention, ownership, or billing needs.
+A **bucket** is the top-level container. It has a globally unique name, a Region, bucket policy, encryption settings, versioning settings, lifecycle rules, event notifications, and public access controls.
 
-Maple Market could use one bucket for customer media and another bucket for finance exports. Customer media is written by the web application and read through short-lived download URLs. Finance exports are written by a batch job and read by finance and analytics roles. Keeping those workloads in separate buckets makes policies and lifecycle rules much easier to review.
+An **object key** is the object's name inside the bucket. Keys look like paths, but S3 is an object store. Prefixes such as `returns/2026/06/` are naming conventions that help humans, applications, lifecycle rules, and analytics jobs organize objects.
 
-An **object key** is the name of an object inside a bucket. S3 keys look like paths because they often contain slashes, such as `invoices/2026/06/order-1004.pdf`. Those slashes are part of the key string. They help humans group objects and help tools list objects by prefix, but S3 is still addressing an object by bucket and key.
+A practical key plan might be:
 
-Good key design makes operations easier. A key should carry enough structure to support listing, lifecycle rules, and incident response. For Maple Market, these keys are easier to operate than one flat pile of random names:
+- `returns/{year}/{month}/{order_id}/{uuid}.jpg`
+- `exports/orders/{date}/orders.parquet`
+- `logs/api/{year}/{month}/{day}/{hour}/part-{uuid}.json.gz`
 
-```markdown
-uploads/raw/2026/06/13/customer-771/item-8821.jpg
-uploads/processed/2026/06/13/customer-771/item-8821.webp
-invoices/2026/06/order-1004.pdf
-exports/sales/dt=2026-06-13/orders.csv
+Good keys avoid putting too much meaning in one flat name. Include enough structure for lifecycle, access review, and operations, but keep the database as the source of truth for business state.
+
+Key design affects performance and operations too. Modern S3 automatically scales request rates across prefixes, but operational humans still need prefixes that are easy to filter, expire, inventory, and audit. A prefix such as `returns/year=2026/month=06/` can help analytics jobs and lifecycle rules. A random UUID at the end helps avoid collisions and keeps customer-supplied filenames out of the trusted key path.
+
+The application should store the S3 key beside the business record. A small database row for a return photo might store `order_id`, `uploaded_by`, `s3_bucket`, `s3_key`, `scan_status`, and `retention_until`. The app reads the row, then calls S3 for the bytes. That makes support work easier because the order screen can show whether the file is expected, uploaded, scanned, quarantined, or expired.
+
+```sql
+insert into return_photos (
+  order_id,
+  s3_bucket,
+  s3_key,
+  scan_status
+) values (
+  'ord_123',
+  'maple-returns-prod',
+  'returns/2026/06/ord_123/photo-1.jpg',
+  'waiting_for_scan'
+);
 ```
 
-The prefix tells you the workflow. The date helps lifecycle and analytics. The customer or order identifier helps support engineers find the right object. The suffix helps browsers and processing jobs understand file type. For analytics exports, partition-like prefixes such as `dt=2026-06-13/` also help query engines scan less data later.
+This split is also useful during cleanup. Lifecycle rules can expire `tmp/` objects after seven days, while the application decides whether an accepted return photo still belongs to an active order. The object key is the bridge between the app workflow and the S3 object store.
 
-Bucket names need planning because general purpose bucket names are globally unique within an AWS partition and cannot be renamed. Teams usually include the company or product name, environment, data purpose, and sometimes Region. A name like `maple-prod-customer-media` is easier to own than `uploads`.
+![The object path view shows how bucket name, key prefix, object metadata, versioning, and encryption describe one uploaded file](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-object-path.png)
 
-After the object has a home and a name, the next question is who can reach it. S3 access control brings IAM, resource policies, public access settings, and encryption into the same review.
+*The object path view shows how bucket name, key prefix, object metadata, versioning, and encryption describe one uploaded file.*
 
-## Permissions, Public Access, and Encryption
+
+## Access Control Layers
 <!-- section-summary: S3 access comes from IAM, bucket policies, public access settings, encryption settings, and sometimes KMS key policy. -->
 
-S3 permissions use the same IAM policy language as the rest of AWS, but S3 has a few details that trip up beginners. A caller usually needs permissions for both the bucket and the objects inside the bucket. Listing a bucket is an action on the bucket ARN. Reading an object is an action on the object ARN with `/*` at the end.
+S3 access usually involves several layers. The application role needs IAM permission. The bucket policy may allow or deny certain principals, VPC endpoints, TLS settings, or account paths. S3 Block Public Access settings protect against accidental public exposure. If the bucket uses AWS KMS encryption, the KMS key policy must also allow the needed use.
 
-Here is a scoped policy for Maple Market's invoice worker. It can list only the invoice prefix and write or read invoice objects. Notice that listing uses the bucket ARN, while object reads and writes use the object ARN pattern:
+A small IAM policy for writes to one prefix can look like this:
 
 ```json
 {
@@ -87,197 +87,205 @@ Here is a scoped policy for Maple Market's invoice worker. It can list only the 
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::maple-prod-finance-exports",
-      "Condition": {
-        "StringLike": {
-          "s3:prefix": "invoices/*"
-        }
-      }
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::maple-returns-prod/returns/*"
     },
     {
       "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": "arn:aws:s3:::maple-prod-finance-exports/invoices/*"
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::maple-returns-prod",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "returns/*"
+        }
+      }
     }
   ]
 }
 ```
 
-That policy is an **identity-based policy** because it attaches to the application role. A **bucket policy** attaches to the bucket itself and controls who can use the bucket from the resource side. In real systems, teams often use both. IAM roles grant the application what it needs, and bucket policies add resource-side controls such as requiring TLS, limiting cross-account access, or allowing a specific partner account.
+Notice the two resource shapes. Bucket-level actions such as `ListBucket` use the bucket ARN. Object-level actions such as `GetObject` and `PutObject` use the object ARN with `/*`.
 
-S3 **Block Public Access** is a major safety layer. It can block public ACLs and public bucket policies at account or bucket scope. New S3 buckets also use Object Ownership settings that disable ACLs by default in common workflows, which pushes teams toward IAM and bucket policies instead of object-level ACL habits. For beginner production work, that is a healthy default: keep Block Public Access on unless a reviewed public-hosting design explicitly requires otherwise.
+Production buckets often add explicit guardrails. Block Public Access should usually stay enabled. Bucket policies can require TLS with `aws:SecureTransport`, require a VPC endpoint with `aws:SourceVpce`, or restrict access to principals in an AWS Organization. If the bucket uses SSE-KMS, the KMS key policy must allow the same application role to use the key for the needed S3 operations.
 
-Encryption also belongs in the access conversation. S3 now applies server-side encryption by default for new objects, and many production teams still choose an explicit encryption setting so the design is visible in infrastructure code. If the bucket uses AWS KMS keys, the caller needs both S3 permissions and KMS permissions for actions such as encrypting, decrypting, and generating data keys. An `AccessDenied` on an encrypted object can come from S3 policy, bucket policy, KMS key policy, or a missing KMS grant.
+A bucket policy guardrail often uses an explicit deny. This example denies requests that do not use TLS:
 
-With permissions in place, Maple Market can let the browser upload safely without handing AWS credentials to customers. The application stays in charge of authorization while S3 handles the file transfer.
-
-## Application Uploads with Presigned URLs
-<!-- section-summary: Presigned URLs let an application delegate one temporary S3 upload or download without exposing AWS credentials. -->
-
-A common S3 production pattern is **direct browser upload**. The browser sends a file to S3 instead of streaming the whole file through the application server. This saves application CPU, memory, bandwidth, and timeout trouble. The application still controls the object key, content type, size policy, and expiration window.
-
-The usual flow has four steps. First, the customer chooses a product image in the Maple Market web app. Second, the web app calls Maple Market's API and asks for an upload slot. Third, the API checks that the customer is allowed to upload, chooses a key such as `uploads/raw/2026/06/13/customer-771/item-8821.jpg`, and creates a short-lived **presigned URL**. Fourth, the browser uploads the file directly to S3 with that URL.
-
-A presigned URL is a temporary signed request. It carries the permissions of the IAM principal that generated it, within the specific operation, key, and expiration time used during signing. The customer never receives AWS access keys. They receive one time-limited URL for one S3 operation.
-
-Here is a simplified Node-style example. The production version would also validate file size, customer ownership, and content type before returning the URL.
-
-```js
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-
-const s3 = new S3Client({ region: "us-east-1" });
-
-export async function createUploadUrl({ customerId, itemId, contentType }) {
-  const key = `uploads/raw/2026/06/13/${customerId}/${itemId}.jpg`;
-  const command = new PutObjectCommand({
-    Bucket: "maple-prod-customer-media",
-    Key: key,
-    ContentType: contentType,
-    Tagging: "purpose=temporary-upload"
-  });
-
-  return {
-    key,
-    url: await getSignedUrl(s3, command, { expiresIn: 300 })
-  };
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyInsecureTransport",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::maple-returns-prod",
+        "arn:aws:s3:::maple-returns-prod/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    }
+  ]
 }
 ```
 
-The important production work happens around this small function. The API should validate customer identity before creating the URL. It should choose the key itself instead of trusting the browser to choose any path. It should restrict content types and sizes in the application flow. It should record the expected upload in a database so a later worker can process the object and mark the upload complete.
+`Sid` gives the statement a human-readable name for review. `Principal: "*"` makes the deny apply to any caller. `Action: "s3:*"` covers all S3 actions on the listed bucket and object ARNs. The `Bool` condition checks `aws:SecureTransport`, and the request is denied when that value is `false`. This guardrail protects the bucket even if a future identity policy accidentally grants broader access.
 
-After upload, S3 can trigger an event notification. Maple Market might send an object-created event to EventBridge, SQS, or Lambda so an image worker can resize the photo, write the processed image to `uploads/processed/`, and update the product record in the database.
+When KMS encryption is involved, there are two permission checks. The role needs S3 permission to read or write the object, and it also needs KMS permission such as `kms:Decrypt` or `kms:GenerateDataKey` on the key. Many `AccessDenied` incidents come from fixing one layer while the other layer still blocks the request.
 
-![Presigned URL upload path showing browser, app authorization, short URL generation, S3 upload, processing worker, and saved record](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/presigned-url-upload-path.png)
+## Presigned Uploads
+<!-- section-summary: Presigned URLs let an application delegate one temporary S3 upload or download without exposing AWS credentials. -->
 
-*The browser receives one temporary upload path, while the application keeps control of authorization and object naming.*
+A browser can upload a return photo without receiving AWS access keys. A common pattern is a **presigned URL**. The application authenticates the customer, decides the customer may upload one file, asks AWS to sign a short-lived S3 request, and gives that URL to the browser.
 
-Now the object path exists. The next question is how long it should stay in each state.
+The browser uploads directly to S3 using the URL. The app keeps control because it chooses the key, expiry, content type, and allowed operation. After upload, an S3 event or application callback can start scanning and processing.
 
-## Versioning, Lifecycle, and Retention
+A small JavaScript shape with the AWS SDK might look like this:
+
+```js
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+const client = new S3Client({ region: "us-east-1" });
+
+const command = new PutObjectCommand({
+  Bucket: "maple-returns-prod",
+  Key: "returns/2026/06/ord_123/photo-1.jpg",
+  ContentType: "image/jpeg"
+});
+
+const uploadUrl = await getSignedUrl(client, command, { expiresIn: 300 });
+```
+
+Keep the expiry short and store the expected object key in the order workflow. The URL grants exactly the signed operation until it expires.
+
+A safer flow has the server choose a key under a customer- and order-scoped prefix, record an expected upload, sign only that operation, and verify content type and size through application rules or later scanning. The browser receives a delegated upload path, while the server keeps control of the trusted final key. Presigned URLs are delegation; they still need product and security boundaries.
+
+![The presigned upload path shows how the browser can upload directly to S3 while the app controls permission and object naming](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/presigned-url-upload-path.png)
+
+*The presigned upload path shows how the browser can upload directly to S3 while the app controls permission and object naming.*
+
+
+## Versioning and Lifecycle
 <!-- section-summary: Versioning and lifecycle rules control how S3 keeps old copies, cleans temporary objects, and moves colder data to cheaper storage classes. -->
 
-S3 **Versioning** keeps multiple versions of an object under the same key. When a new object is written to the same key, S3 keeps the old version with its own version ID. When a delete happens in a versioned bucket, S3 can create a delete marker instead of immediately erasing every historical version. This gives teams a recovery path for accidental overwrites and deletes.
+**Versioning** keeps older object versions when an object is overwritten or deleted. It helps with accidental deletes and bad uploads, but it also means old versions can add storage cost. Turn it on deliberately and pair it with lifecycle rules.
 
-Versioning helps Maple Market with invoices and processed customer files. If a bug overwrites `invoices/2026/06/order-1004.pdf`, the team can recover the previous version. Versioning also needs cost and retention planning because old versions continue to occupy storage until lifecycle rules remove or transition them.
+**Lifecycle rules** move or expire objects based on age, prefix, tags, or version status. Maple Market might keep return photos in S3 Standard for 30 days, transition older photos to S3 Standard-IA, and delete temporary upload objects after 7 days.
 
-S3 **Lifecycle** rules apply actions to objects over time. A rule can transition objects to another storage class, expire current versions, delete noncurrent versions, or clean up incomplete multipart uploads. The rule can match prefixes and tags, which is why key and tag design matter.
-
-Here is a lifecycle configuration for temporary raw uploads. It expires abandoned raw uploads, keeps processed files longer, and cleans incomplete multipart upload parts. The exact days should come from product support, compliance, and cost requirements:
+A lifecycle rule can look like this:
 
 ```json
 {
   "Rules": [
     {
-      "ID": "ExpireTemporaryRawUploads",
+      "ID": "expire-temporary-uploads",
       "Status": "Enabled",
       "Filter": {
-        "And": {
-          "Prefix": "uploads/raw/",
-          "Tags": [
-            {
-              "Key": "purpose",
-              "Value": "temporary-upload"
-            }
-          ]
-        }
+        "Prefix": "tmp/"
       },
       "Expiration": {
         "Days": 7
-      },
-      "AbortIncompleteMultipartUpload": {
-        "DaysAfterInitiation": 2
-      }
-    },
-    {
-      "ID": "TransitionOldInvoices",
-      "Status": "Enabled",
-      "Filter": {
-        "Prefix": "invoices/"
-      },
-      "Transitions": [
-        {
-          "Days": 90,
-          "StorageClass": "STANDARD_IA"
-        }
-      ],
-      "NoncurrentVersionExpiration": {
-        "NoncurrentDays": 365
       }
     }
   ]
 }
 ```
 
-Retention is a separate conversation from ordinary lifecycle cleanup. If a compliance process requires write-once protection, S3 Object Lock can place retention controls or legal holds on object versions. That should be planned carefully because compliance-mode retention can prevent deletion until the retention date passes. For normal application cleanup, lifecycle rules are usually the right tool. For regulated immutability, Object Lock needs a reviewed bucket design.
+`Rules` holds one or more lifecycle rules. `ID` gives this rule a reviewable name. `Status` turns the rule on. `Filter.Prefix` limits the rule to keys that start with `tmp/`. `Expiration.Days` tells S3 to expire matching current objects after seven days. A production rule may also include transitions to another storage class, cleanup for noncurrent versions, or cleanup for incomplete multipart uploads.
 
-S3 gives you the tools to keep files, recover old versions, and reduce storage cost. The operating habit is to write those decisions down per prefix instead of letting every object live forever by accident.
+Lifecycle should match the business retention policy. Keep data that support, finance, legal, or analytics still needs, even when the objects are old.
 
-## Events, Inventory, and Bulk Operations
+Versioning changes delete behavior. A delete usually creates a delete marker while older versions remain. That can save the team after an accidental delete, and it can also create unexpected storage cost. Lifecycle rules should cover current objects, noncurrent versions, incomplete multipart uploads, and temporary prefixes when those paths exist.
+
+## Events and Large Operations
 <!-- section-summary: S3 can start workflows when objects change and can handle large object management jobs without custom scripts scanning every key. -->
 
-Once objects accumulate, the next production need is workflow automation. S3 **event notifications** can publish events when objects are created, deleted, restored, or changed in other supported ways. Maple Market can route new raw uploads to an image processor, new finance exports to a data catalog job, and deleted sensitive files to an audit workflow.
+S3 can send event notifications when objects are created or removed. A return photo upload can trigger an SQS message, Lambda function, or EventBridge rule. The next step might scan the image, generate a thumbnail, or mark the return record as ready for review.
 
-For large buckets, teams also need visibility. S3 **Inventory** can produce scheduled reports about objects and metadata in a bucket. This is useful when you need to answer questions like "which objects are missing encryption metadata," "which old objects are still in Standard storage," or "which prefixes are growing fastest." Inventory is much safer than writing a one-off script that lists a massive bucket from a laptop during business hours.
+For large object sets, avoid writing one-off scripts that list millions of keys and perform changes slowly from a laptop. S3 Inventory can produce object listings, and S3 Batch Operations can apply actions to large sets of objects. This is useful for backfills, tagging, restores, or metadata cleanup.
 
-S3 **Batch Operations** runs large jobs across object lists. The job can copy objects, replace tags, invoke Lambda, restore archive objects, or perform other supported operations across very large object sets. For example, Maple Market could use Batch Operations to tag every old invoice object with `data-class=finance` based on an inventory manifest, then apply lifecycle rules to that tag.
+Operations should also include server access logs or CloudTrail data events when the audit need justifies the volume and cost. Access evidence matters when a bucket stores customer data.
 
-Replication is another bulk-adjacent tool. S3 replication can copy new objects asynchronously to another bucket, account, or Region. It is useful for data locality, compliance copies, and account separation. Existing objects need a different plan, such as Batch Replication or a migration job. The key point is that replication is a policy-driven data path, so it needs monitoring, permissions, KMS planning, and failure visibility.
+A realistic processing path might be: object uploaded to `tmp/`, S3 event sends a message to SQS, a scanner reads the object, the scanner writes a clean copy to `returns/`, and the app marks the return photo ready. If scanning fails, the object stays in `quarantine/` or expires from `tmp/`. That workflow gives operations a place to retry and a place to investigate bad files.
 
-S3 can look simple on day one and very large by month twelve. Events, Inventory, Batch Operations, and replication keep object operations visible and repeatable as the bucket grows.
+Operations should keep the event path idempotent. S3 event delivery can retry, and a scanner may see the same object more than once. Store a scan record keyed by bucket, key, version ID when versioning is enabled, and checksum or ETag where useful. If the scanner already processed the object, return success instead of creating a duplicate support record.
 
-## Production Checklist
+When an object workflow fails, check the object first, then the event path:
+
+```bash
+aws s3api head-object \
+  --bucket maple-returns-prod \
+  --key returns/2026/06/ord_123/photo-1.jpg
+
+aws sqs get-queue-attributes \
+  --queue-url "$RETURN_SCAN_QUEUE_URL" \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+
+`--bucket` names the bucket, and `--key` names the object inside that bucket. `head-object` proves the object exists and shows metadata, encryption, version, and size without downloading the image. A healthy response might look like this:
+
+```json
+{
+  "AcceptRanges": "bytes",
+  "LastModified": "2026-06-24T10:19:04+00:00",
+  "ContentLength": 482391,
+  "ETag": "\"9b2cf535f27731c974343645a3985328\"",
+  "VersionId": "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrH",
+  "ContentType": "image/jpeg",
+  "ServerSideEncryption": "aws:kms",
+  "SSEKMSKeyId": "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555",
+  "Metadata": {
+    "uploaded-by": "cust_123"
+  }
+}
+```
+
+`ContentLength` gives the size in bytes, `VersionId` matters when versioning is enabled, and `ServerSideEncryption` shows how the object is encrypted. If the command returns `403`, check read permission, bucket policy, endpoint policy, and KMS permission. If it returns `404`, confirm the key and whether the caller has list permission.
+
+For the queue command, `--queue-url` selects the exact scanner queue and `--attribute-names` limits the response to the two backlog counters the operator needs. A quiet queue looks like this:
+
+```json
+{
+  "Attributes": {
+    "ApproximateNumberOfMessages": "0",
+    "ApproximateNumberOfMessagesNotVisible": "1"
+  }
+}
+```
+
+`ApproximateNumberOfMessages` is waiting work. `ApproximateNumberOfMessagesNotVisible` is work currently held by consumers. If the app says "photo missing," the S3 object check and the queue check separate object storage from workflow processing.
+
+## Operating Checklist
 <!-- section-summary: A small checklist catches most S3 design mistakes before files start piling up. -->
 
-Before Maple Market ships a new S3-backed feature, the team should review the bucket as an operated resource, not just a place where files land. The checklist should be short enough to use during normal feature work.
+Review these items before production:
 
-| Area | Production check |
-|---|---|
-| Bucket ownership | Owner team, environment, data class, and cost tags are present |
-| Key design | Prefixes support support lookup, lifecycle, analytics, and incident response |
-| Public access | Block Public Access stays enabled unless a reviewed public design exists |
-| IAM | Application roles have only required bucket and object actions |
-| Bucket policy | Resource policy enforces required conditions such as TLS or account boundaries |
-| Encryption | Default encryption is visible, and KMS permissions are tested if KMS is used |
-| Upload path | Presigned URLs are short-lived, scoped, and generated after app authorization |
-| Lifecycle | Temporary objects, noncurrent versions, archive transitions, and incomplete uploads have rules |
-| Recovery | Versioning or another recovery path exists for important prefixes |
-| Observability | CloudTrail, S3 server access logs or access patterns, Inventory, metrics, and event failures are reviewable |
+- Bucket name, Region, owner account, and data classification are documented.
+- Block Public Access is enabled unless a reviewed public website pattern needs otherwise.
+- IAM policy, bucket policy, VPC endpoint policy, and KMS key policy agree.
+- Object keys support lifecycle, operations, and support lookup.
+- Versioning and lifecycle rules match recovery and retention needs.
+- Presigned URLs use short expiry and server-chosen keys.
+- Events, inventory, and batch operations are planned for processing and cleanup.
 
-One useful test is a full upload drill in a development account. Upload a file, verify the object key and tags, read it through the application path, trigger the processing event, check the IAM role used in CloudTrail, and confirm the lifecycle rule matches the prefix or tag. That small drill catches wrong prefixes, missing KMS permissions, broken event destinations, and accidental public exposure before production data arrives.
+S3 stays manageable when object naming, access, lifecycle, and automation are designed together. Treat the bucket as a production data boundary with policies, recovery choices, and operating rules.
 
-## Putting It All Together
-<!-- section-summary: S3 works well when object naming, access, lifecycle, and automation are designed together. -->
+Common mistakes include allowing `s3:*` on every bucket because a first upload failed, using one bucket for unrelated data with different retention rules, turning on versioning without noncurrent-version lifecycle, and treating `AccessDenied` as only an IAM problem. S3 authorization can involve IAM, bucket policy, endpoint policy, public access settings, object ownership, and KMS key policy.
 
-Maple Market uses S3 for object-shaped data: product photos, invoice PDFs, exports, logs, and archives. The team creates separate buckets when ownership or access rules differ. It names objects with prefixes that support operations. It gives applications scoped IAM policies. It keeps Block Public Access on for private buckets. It uses presigned URLs so browsers can upload directly without AWS credentials. It enables versioning where recovery matters and lifecycle rules where temporary and older objects need cleanup.
+![The operating loop connects permissions, encryption, lifecycle, events, inventory, monitoring, and restore tests for an S3 bucket](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-operating-loop.png)
 
-That is the S3 pattern. The bucket is not just a folder. It is a policy boundary, lifecycle boundary, event source, recovery surface, and cost surface. Once those pieces are designed together, S3 gives the application a durable object API that can grow far beyond one server's disk.
+*The operating loop connects permissions, encryption, lifecycle, events, inventory, monitoring, and restore tests for an S3 bucket.*
 
-![S3 operating loop with Block Public Access, scoped IAM, KMS, versioning, lifecycle rules, and events plus inventory](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-operating-loop.png)
 
-*A production bucket needs policy, recovery, cost, and workflow controls around the objects.*
+## References
 
-## What's Next
-<!-- section-summary: The next article moves from object APIs to storage that appears as disks and filesystems inside compute. -->
-
-S3 is great for whole objects. Some workloads still need a mounted disk or shared filesystem because the software expects normal operating system file paths. The next article covers EBS, EFS, and FSx, which handle those compute-attached and shared-filesystem cases.
-
----
-
-**References**
-
-- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html) - Defines S3 objects, buckets, keys, bucket policies, and storage behavior.
-- [Object key names](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html) - Explains S3 key naming and prefix-like organization.
-- [Object Ownership and disabling ACLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/about-object-ownership.html) - Documents bucket-owner-enforced ownership and ACL-disabled bucket behavior.
-- [Policies and permissions in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-policy-language-overview.html) - Explains bucket policies, user policies, actions, resources, conditions, and principals.
-- [S3 Block Public Access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html) - Documents the account-level and bucket-level public access protection settings.
-- [Download and upload objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) - Explains temporary signed S3 download and upload URLs.
-- [S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) - Covers version IDs, overwrite behavior, delete markers, and recovery behavior.
-- [Managing the lifecycle of objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html) - Documents transition and expiration lifecycle actions.
-- [Uploading and copying objects using multipart upload](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html) - Explains multipart upload behavior and incomplete upload cleanup concerns.
-- [S3 Batch Operations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/batch-ops.html) - Describes fully managed bulk operations across large object sets.
-- [Replicating objects within and across Regions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html) - Documents asynchronous S3 object replication.
+- [Amazon S3 documentation: What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)
+- [Amazon S3 documentation: Bucket policies](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-policies.html)
+- [Amazon S3 documentation: Blocking public access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html)
+- [Amazon S3 documentation: Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)
+- [Amazon S3 documentation: Lifecycle configuration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)

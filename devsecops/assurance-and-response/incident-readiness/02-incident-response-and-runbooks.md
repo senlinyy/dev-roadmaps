@@ -1,7 +1,7 @@
 ---
 title: "Incident Response and Runbooks"
-description: "Coordinate containment, evidence preservation, credential rotation, communication, recovery, and incident decisions."
-overview: "Runbooks turn a confirmed incident into coordinated work: preserve evidence, contain the threat, rotate credentials, recover service, and keep decisions visible. This article continues the leaked deployment token case from triage into response."
+description: "Respond to a confirmed suspicious signal with roles, evidence preservation, containment, credential rotation, recovery, and communication."
+overview: "A confirmed suspicious signal turns triage into coordinated response. This article continues the leaked deployment key case through incident roles, communication, decision records, evidence preservation, containment, credential rotation, recovery, and a practical runbook shape."
 tags: ["devsecops", "incident-response", "runbooks", "containment"]
 order: 2
 id: article-devsecops-compliance-incident-readiness-incident-response-and-runbooks
@@ -9,7 +9,7 @@ id: article-devsecops-compliance-incident-readiness-incident-response-and-runboo
 
 ## Table of Contents
 
-1. [Why Runbooks Matter](#why-runbooks-matter)
+1. [A Confirmed Suspicious Signal](#a-confirmed-suspicious-signal)
 2. [The Running Incident](#the-running-incident)
 3. [Roles and Communication](#roles-and-communication)
 4. [Severity and Decision Records](#severity-and-decision-records)
@@ -21,17 +21,18 @@ id: article-devsecops-compliance-incident-readiness-incident-response-and-runboo
 10. [A Runbook Shape](#a-runbook-shape)
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
+13. [References](#references)
 
-## Why Runbooks Matter
+## A Confirmed Suspicious Signal
 <!-- section-summary: A runbook turns incident response from improvised chat into a clear sequence of roles, evidence, actions, checks, and communication. -->
 
-The previous article ended with a triage decision. GitHub secret scanning found a production AWS deployment key in a branch, CloudTrail showed the key being used from an unfamiliar IP address, and no matching GitHub Actions workflow run explained the activity. That is enough to start incident response.
+The triage analyst has a confirmed suspicious signal. GitHub secret scanning found a production AWS deployment key in a branch, CloudTrail showed the key being used from an unfamiliar IP address, and no matching GitHub Actions workflow run explained the activity. That is enough to start incident response.
 
 **Incident response** is coordinated work during a security event. The team preserves evidence, limits damage, removes attacker access, restores trusted service, communicates status, and records decisions. It is part engineering, part investigation, and part calm coordination.
 
 A **runbook** is the written path for that work. It names the roles, the first checks, the containment steps, the verification steps, and the communication points. The runbook should be specific enough that an on-call engineer can act under pressure, while still leaving space for incident commander judgment when the facts change.
 
-This is the reason NIST SP 800-61 Rev. 3 and CISA-style playbooks matter for DevSecOps teams. They connect response to preparation, trained roles, evidence handling, recovery paths, and follow-up that improves the system after the incident. That wider view matches how real teams operate under pressure.
+NIST SP 800-61 Rev. 3 and CISA-style playbooks give DevSecOps teams useful structure for this moment. They connect response to preparation, trained roles, evidence handling, recovery paths, and follow-up that improves the system after the incident. That wider view matches how real teams operate under pressure.
 
 ## The Running Incident
 <!-- section-summary: The leaked deployment key case now has enough evidence for a response bridge, a contained scope, and a first working theory. -->
@@ -70,7 +71,7 @@ The leaked deployment key starts as a likely SEV2 because a production credentia
 
 Severity should drive response rhythm. A SEV2 may need a live bridge, a fifteen- or thirty-minute update cadence, service owner involvement, and leadership awareness. A SEV1 usually adds executive, legal, privacy, customer support, and possibly regulator-facing workflows depending on what data and jurisdictions are involved.
 
-The **decision record** is the response team's memory. It should capture the time, decision, owner, evidence, and expected effect. This matters because containment decisions can be disruptive. Disabling a production deploy key may pause emergency deployments, but leaving a used key active gives the attacker more time.
+The **decision record** is the response team's memory. It should capture the time, decision, owner, evidence, and expected effect. Containment decisions can be disruptive. Disabling a production deploy key may pause emergency deployments, but leaving a used key active gives the attacker more time.
 
 Here is a useful decision record shape:
 
@@ -100,6 +101,8 @@ aws cloudtrail lookup-events \
   --output json > evidence/cloudtrail-deploy-key-2026-06-22.json
 ```
 
+`AccessKeyId` ties the export to the leaked credential. The three-hour window includes the secret exposure, the first suspicious cloud calls, and the containment decision. `--output json` keeps the event bundle machine-readable, so the investigator can later filter by source IP, user agent, API name, and Region without rerunning the original search.
+
 The team should store evidence in a controlled location, such as an incident bucket or case system with restricted access. The storage should have write-once or versioned behavior when available, because responders need confidence that the records were not quietly edited. The incident record should also avoid pasting secret values into chat or tickets.
 
 Evidence collection should include permissions, because blast radius depends on what the key could do. For an IAM user, that means attached managed policies, inline policies, group memberships, access key metadata, and recent CloudTrail activity. If the identity can assume roles, the trust and permission path matters too.
@@ -111,7 +114,7 @@ aws iam list-groups-for-user --user-name deploy-bot-prod
 aws iam list-access-keys --user-name deploy-bot-prod
 ```
 
-These commands give the investigator a permission inventory that the response team can use while deciding containment and scoping. The full incident still needs timeline review, impact checks, and recovery verification.
+These commands give the investigator a permission inventory that the response team can use while deciding containment and scoping. Attached policies show managed permissions, inline policies show custom permissions, group membership can add inherited access, and access-key metadata shows which keys exist and whether they are active. The full incident still needs timeline review, impact checks, and recovery verification.
 
 ## Containment
 <!-- section-summary: Containment stops the attacker path while preserving enough service capability for recovery and investigation. -->
@@ -129,6 +132,8 @@ aws iam update-access-key \
 aws iam list-access-keys --user-name deploy-bot-prod
 ```
 
+`update-access-key` changes the known leaked key to `Inactive`, which blocks new API calls that use it. `list-access-keys` should then show the same key ID with `Status` set to `Inactive`. The team keeps the key record for investigation until the evidence review is complete.
+
 The GitHub side should remove the stored secret and pause the workflow that expects it. This prevents the next deployment run from failing in a confusing way or reintroducing a replacement static key under pressure.
 
 ```bash
@@ -136,6 +141,8 @@ gh secret delete AWS_ACCESS_KEY_ID --repo devpolaris/checkout-api
 gh secret delete AWS_SECRET_ACCESS_KEY --repo devpolaris/checkout-api
 gh workflow disable deploy-production.yml --repo devpolaris/checkout-api
 ```
+
+The two `gh secret delete` commands remove the stored AWS key names from the repository. `gh workflow disable` pauses the production deployment workflow that still expects those static secrets. A responder should verify the result with `gh secret list` and `gh workflow list` before marking containment complete.
 
 Containment also includes checking for persistence. The attacker may have created a new access key, added an IAM policy, changed a role trust policy, created a GitHub deploy key, altered a workflow file, or added a new Kubernetes secret. The response team should search for changes made by `deploy-bot-prod` and by any related GitHub actor around the same time window.
 
@@ -194,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: arn:aws:iam::123456789012:role/checkout-api-production-deploy
@@ -221,7 +228,7 @@ aws iam list-access-keys --user-name deploy-bot-prod
 aws sts get-caller-identity
 ```
 
-The first command helps check the last recorded use of the old key. The second confirms the key status. The third should be run inside the recovered workflow or deployment environment to prove the job is using the intended role identity instead of a leftover static key.
+The first command helps check the last recorded use of the old key. The second confirms the key status. The third should be run inside the recovered workflow or deployment environment. A healthy result should show the assumed role ARN for `checkout-api-production-deploy`, which proves the job is using the intended role identity instead of a leftover static key.
 
 The team should run one controlled deployment through the new path. A small no-op or safe patch release is useful because it tests GitHub environment approval, OIDC token issuance, AWS role assumption, deployment permissions, and post-deploy verification. The run ID, commit SHA, role session name, and CloudTrail events should go into the incident record.
 
@@ -323,11 +330,10 @@ Recovery closes the urgent part of the incident. The same incident still showed 
 
 The next article turns the incident record into hardening work. We will take the timeline, root causes, and decisions from this leaked deployment key case and convert them into preventive controls, detection rules, access reviews, verification checks, and tabletop practice.
 
----
-
-**References**
+## References
 
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations for Cybersecurity Risk Management](https://csrc.nist.gov/pubs/sp/800/61/r3/final) - Provides current NIST incident response recommendations aligned with CSF 2.0.
+- [NIST Cybersecurity Framework 2.0](https://www.nist.gov/cyberframework) - Organizes incident work across Detect, Respond, and Recover outcomes.
 - [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks) - Describes standardized incident and vulnerability response procedures.
 - [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Documents AWS account activity records and event history.
 - [Manage access keys for IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html) - Explains IAM access keys, monitoring recommendations, and key management.

@@ -17,349 +17,213 @@ aliases:
 
 ## Table of Contents
 
-1. [The Production Visibility Shift](#the-production-visibility-shift)
-2. [What Observability Means](#what-observability-means)
-3. [The Signals: Logs, Metrics, and Traces](#the-signals-logs-metrics-and-traces)
-4. [Start With KPIs and Service Health](#start-with-kpis-and-service-health)
-5. [Instrumentation: How Evidence Gets Emitted](#instrumentation-how-evidence-gets-emitted)
-6. [Correlation: How Separate Signals Tell One Story](#correlation-how-separate-signals-tell-one-story)
-7. [CloudWatch as the AWS Operating Workspace](#cloudwatch-as-the-aws-operating-workspace)
-8. [First Incident Evidence Bundle](#first-incident-evidence-bundle)
-9. [Dashboards, Alarms, and Response Loops](#dashboards-alarms-and-response-loops)
-10. [Multi-Account and OpenTelemetry in Real Teams](#multi-account-and-opentelemetry-in-real-teams)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [Start With Four Beginner Questions](#start-with-four-beginner-questions)
+2. [Meet the Simple App](#meet-the-simple-app)
+3. [Logs: What Happened](#logs-what-happened)
+4. [Metrics and Alarms: How Bad Is It](#metrics-and-alarms-how-bad-is-it)
+5. [Dashboards: Where Do We Look First](#dashboards-where-do-we-look-first)
+6. [Traces: Where Did the Request Spend Time](#traces-where-did-the-request-spend-time)
+7. [Changes: What Moved Before the Symptom](#changes-what-moved-before-the-symptom)
+8. [How the Signals Work Together](#how-the-signals-work-together)
+9. [A Beginner Response Flow](#a-beginner-response-flow)
+10. [What's Next](#whats-next)
+11. [References](#references)
 
-## The Production Visibility Shift
-<!-- section-summary: Local debugging gives direct access to one process, while AWS production work needs evidence emitted from many services and runtimes. -->
+## Start With Four Beginner Questions
+<!-- section-summary: Observability helps a team answer what happened, where it happened, how bad it is, and what changed. -->
 
-On your laptop, a small application can feel very visible. You start the server in one terminal, click a page in the browser, and watch the logs scroll by. If the checkout route throws an exception, you can add a breakpoint, inspect variables, restart the process, and try the request again. The database, the code, and the error output all sit close together.
+When a production app breaks, a beginner usually wants one clear place to look. AWS rarely works that way because even a small app can use a load balancer, containers, a database, a queue, a function, and a few managed services. The useful starting point is a small set of questions that work no matter which AWS service is involved.
 
-Production on AWS has a different shape. A single checkout request might enter through Amazon CloudFront, pass through an Application Load Balancer, reach an Amazon ECS service, call a payment provider, write an order to Amazon RDS, store a receipt in Amazon S3, and put a background email job into Amazon SQS. ECS runs containers. RDS runs managed relational databases. S3 stores objects. SQS stores messages until a worker can process them.
+The first question is **what happened?** A user saw a failed page, a worker crashed, a database call timed out, or a payment provider returned an error. The second question is **where did it happen?** The symptom may sit at the load balancer, the application, the database, a queue, a Lambda function, or an outside API. The third question is **how bad is it?** One failed request has a different response path from every checkout failing for ten minutes. The fourth question is **what changed?** A deployment, policy edit, scaling event, secret rotation, or network rule may explain why the system changed behavior.
 
-Now imagine a customer says, "I clicked pay and the page spun for ten seconds." That one sentence can mean many things. The load balancer might have sent the request to a slow target. The ECS task might have waited for a database connection. The payment provider might have returned errors. The queue might have grown so large that confirmation email jobs arrived late. A production team needs a way to see the request path, the system pressure, and the exact error details without opening a shell on every runtime.
+**Observability** is the practice of designing a workload so it emits evidence that answers those questions while it runs. The evidence is called **telemetry**. In AWS, telemetry usually means logs, metrics, traces, alarms, dashboards, and change records. Those signals help the team understand the app without signing in to every machine or guessing from one graph.
 
-That is the reason observability matters. AWS workloads run across accounts, Regions, managed services, and short-lived compute. The useful evidence has to be emitted while the workload runs, collected centrally, and shaped so an engineer can answer real questions during an incident.
+The goal here is to know what each signal is for and how a responder uses it. Later articles turn the same ideas into CloudWatch metric commands, Logs Insights queries, alarm settings, trace instrumentation, and service health targets.
 
-## What Observability Means
-<!-- section-summary: Observability is the practice of emitting enough external evidence to understand a workload's state and make operational decisions. -->
+![The signal map shows how logs, metrics, traces, and changes answer different beginner questions during an incident](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/three-signals-three-questions.png)
 
-**Observability** is the practice of designing a workload so it emits useful evidence about its behavior. That evidence is called **telemetry**. Telemetry includes the logs, metrics, traces, events, and service health data that tell you what the system did, how much pressure it was under, where time was spent, and which business outcome was affected.
+*The signal map shows how logs, metrics, traces, and changes answer different beginner questions during an incident.*
 
-In plain terms, observability means the system explains itself while it runs. A checkout service should emit more than `error happened`. It should tell you the route, service name, deployment version, request ID, trace ID, latency, dependency that failed, and whether the customer reached the business outcome. That turns a vague complaint into a set of facts you can query.
 
-AWS Well-Architected guidance describes observability as a way to understand workload state and make data-driven decisions based on business requirements. That business part matters. A CPU chart can tell you the servers are busy, but it cannot tell you whether customers are completing orders. A strong observability design includes both technical health and business health.
+## Meet the Simple App
+<!-- section-summary: A simple checkout app gives every signal a concrete job in one request path. -->
 
-For our checkout example, the first version of the observability map might look like this:
+We will use a small app called `tiny-checkout`. A customer opens a checkout page, submits an order, pays through a payment provider, and waits for a confirmation email. The app runs as an Amazon ECS service behind an Application Load Balancer. It writes order rows to Amazon RDS, sends email work to Amazon SQS, and uses a Lambda function for a fraud check.
 
-| Question | Signal that helps | Example |
+That sounds like a lot, but each piece has a normal job. The load balancer receives web traffic. ECS runs the application container. RDS stores rows. SQS holds background work. Lambda runs a small event-driven function. The payment provider is an outside dependency that the app calls during checkout.
+
+Here is the request path in plain language:
+
+| Step | What happens | Signal that helps later |
 |---|---|---|
-| Are customers completing checkout? | Business metric | `CompletedCheckouts` per minute |
-| Is the API slow? | Latency metric | `p95` target response time from the load balancer |
-| Which request failed? | Structured log | Log event with `requestId`, `orderId`, and `errorType` |
-| Which dependency caused the delay? | Distributed trace | Trace showing time spent in RDS or the payment API |
-| Who needs to act? | Alarm and notification | CloudWatch alarm routed through an SNS topic |
+| Customer submits checkout | The browser sends `POST /checkout` | Load balancer metrics and access logs |
+| App handles the request | ECS task validates the cart and starts payment | Application logs, custom metrics, and traces |
+| App stores the order | The app writes an order row to RDS | RDS metrics and application logs |
+| App calls payment provider | The app waits for authorization | Logs, dependency metrics, and trace spans |
+| App queues email work | The app sends a message to SQS | SQS metrics and trace context |
+| Worker sends email | Lambda handles the message later | Lambda metrics, logs, and traces |
 
-The flow starts with the customer outcome, then connects that outcome to technical signals. That order keeps observability useful because the team can see whether a technical spike actually matters to users.
+This article follows one incident: customers report that checkout is slow and sometimes fails. We will use the same four beginner questions all the way through: what happened, where did it happen, how bad is it, and what changed?
 
-![Production evidence loop showing customer report, metrics, logs, traces, and alarm routing as one incident workflow](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/production-evidence-loop.png)
+## Logs: What Happened
+<!-- section-summary: Logs are timestamped event records that explain specific requests, errors, and decisions. -->
 
-*The loop shows why observability is an operating workflow, not a pile of separate tools. A customer signal leads to scope, detail, request path, and action.*
+**Logs** are event records. A log event usually describes one thing that happened at one time: a request started, a payment call timed out, a database write failed, a worker retried a message, or a deployment script finished. Logs are the closest signal to the exact story of one request.
 
-## The Signals: Logs, Metrics, and Traces
-<!-- section-summary: Logs explain individual events, metrics summarize behavior over time, and traces connect the path of one request across services. -->
-
-Most AWS observability work starts with three signal types: **logs**, **metrics**, and **traces**. They overlap in useful ways, but each one answers a different kind of question.
-
-**Logs** are event records. A log event usually describes something that happened at a specific time: a request started, a payment provider returned a timeout, a database query failed, or a worker finished a job. Logs are strongest when they are structured as JSON because CloudWatch Logs can discover fields and query them by name.
+For `tiny-checkout`, a useful log event is structured as JSON. JSON gives every important fact a field name, so the team can search by `requestId`, filter by `level`, group by `errorType`, and connect the line to a trace. A plain sentence can help a human read one line, but structured fields help a responder search thousands of lines during an incident.
 
 ```json
 {
-  "timestamp": "2026-06-13T11:41:22.391Z",
+  "timestamp": "2026-06-13T10:15:22.481Z",
   "level": "ERROR",
   "service": "checkout-api",
   "environment": "prod",
+  "requestId": "req-7f3a8c",
+  "traceId": "1-666c182a-4f7d9b2e9a1d5c67b8142a10",
   "route": "POST /checkout",
-  "requestId": "req-7b91",
-  "traceId": "1-684d5b12-7f4c1e46a5b14d1a9d9e1052",
-  "orderId": "order-1042",
-  "dependency": "payment-provider",
-  "durationMs": 2480,
-  "message": "Payment authorization timed out"
+  "statusCode": 502,
+  "durationMs": 8420,
+  "errorType": "PaymentGatewayTimeout",
+  "message": "Payment authorization timed out after provider retry"
 }
 ```
 
-This log gives an engineer handles to grab during an incident. They can search by `requestId`, group by `dependency`, filter to `level = ERROR`, or follow the `traceId` into trace details. A plain sentence like `checkout failed` gives much less help because the useful fields are trapped inside unstructured text.
+This event answers **what happened**. The checkout API returned a `502` for `POST /checkout`, the request took `8420` milliseconds, and the error type was `PaymentGatewayTimeout`. It also gives the team handles for the next step. `requestId` helps find every line from the same request inside logs. `traceId` helps jump from one log line to the full request path. `service` and `environment` tell the responder which workload wrote the event.
 
-**Metrics** are numeric measurements over time. They compress behavior into values such as request count, error count, latency, CPU utilization, memory utilization, queue depth, and completed orders. Metrics are the first signal many teams look at during an incident because they are fast to graph and alarm on.
+CloudWatch Logs is the main AWS service for storing and querying logs. ECS containers, Lambda functions, EC2 instances, and many AWS services can send logs there. A good first production habit is simple: every important service should write logs to a log group with a clear owner, a clear retention period, and a small set of stable fields.
 
-For the checkout service, metrics can answer questions like: did latency climb gradually, did errors spike at the exact deployment time, did the queue backlog rise, and did completed checkouts drop? Metrics give the shape of the problem before anyone reads thousands of log events.
+## Metrics and Alarms: How Bad Is It
+<!-- section-summary: Metrics summarize behavior over time, and alarms turn important metric changes into action. -->
 
-**Traces** follow one request across service boundaries. A trace is made from spans or segments that record how long each part of the request took. If checkout calls the payment provider, then RDS, then SQS, a trace can show that the payment call took 2.4 seconds while the rest of the work took 80 milliseconds.
+**Metrics** are numbers recorded over time. A metric can count requests, errors, successful checkouts, queue depth, CPU usage, memory usage, database connections, or latency. Metrics help answer **how bad is it** because they show scale and trend.
 
-AWS X-Ray groups trace segments that belong to the same request and builds service graphs. CloudWatch also supports OpenTelemetry ingestion, and OpenTelemetry gives teams vendor-neutral APIs and attributes for metrics, logs, and traces. The important beginner idea is simple: traces connect the hops so you can see where one request spent its time.
+If one checkout request failed, the log line may be enough. If completed checkouts dropped by 80 percent, the team needs a different response. Metrics show whether the failure is isolated, growing, recovering, or spreading across the system.
 
-![Three observability signals with the question each one answers: logs, metrics, and traces](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/three-signals-three-questions.png)
+For `tiny-checkout`, the first metric set should connect customer outcome to technical pressure:
 
-*This separates the first diagnostic question each signal answers. Logs explain the event, metrics show the trend, and traces connect the route through services.*
-
-## Start With KPIs and Service Health
-<!-- section-summary: Good observability starts with the outcomes the workload must protect, then maps those outcomes to technical signals. -->
-
-A **key performance indicator**, or **KPI**, is a measurement that tells the team whether an important business or product outcome is healthy. In an online store, completed checkouts, payment approval rate, and order confirmation delay are KPIs. In a learning platform, successful lesson starts, video startup time, and exercise submission success rate might be KPIs.
-
-This matters because technical telemetry can look busy without saying whether users are being hurt. CPU at 85% may be normal for a batch worker. A single Lambda error may matter a lot if it breaks password reset. A queue with 5,000 messages may be fine for a nightly report job and terrible for a checkout confirmation flow.
-
-AWS Well-Architected guidance recommends identifying KPIs so monitoring stays aligned with business objectives. For our checkout service, a practical first pass could be:
-
-| Layer | Signal | Why the team watches it |
+| Question | Metric example | What the answer means |
 |---|---|---|
-| Customer outcome | `CompletedCheckouts` | Shows whether the core flow produces orders |
-| Customer experience | `CheckoutLatencyP95` | Shows whether the slowest common customer path is painful |
-| API edge | ALB `HTTPCode_Target_5XX_Count` | Shows backend errors behind the load balancer |
-| Compute | ECS `CPUUtilization` and `MemoryUtilization` | Shows whether tasks are resource constrained |
-| Data | RDS `DatabaseConnections` and write latency | Shows database pressure and connection pool risk |
-| Async work | SQS `ApproximateAgeOfOldestMessage` | Shows whether background jobs are falling behind |
+| Are customers completing checkout? | Custom `CompletedCheckouts` count | A drop means the user-facing flow is harmed |
+| Is the API slow? | ALB `TargetResponseTime` p95 | A rise means many users wait longer |
+| Are requests failing? | ALB `HTTPCode_Target_5XX_Count` | A rise means backend responses are failing |
+| Are containers saturated? | ECS CPU and memory utilization | High values can point to compute pressure |
+| Is the database under pressure? | RDS connections and latency | High values can point to connection or query trouble |
+| Is background work delayed? | SQS oldest message age | A rise means queued work is falling behind |
 
-The order in this table is intentional. Start with the user and the business outcome, then move down through the request path. During an incident, that lets the on-call engineer ask, "Are customers affected?" before spending time on a noisy infrastructure chart.
+An **alarm** watches a metric and changes state when the metric crosses a rule. In CloudWatch, an alarm can be `OK`, `ALARM`, or `INSUFFICIENT_DATA`. An alarm can notify a team through Amazon SNS, feed an incident tool, or support approved automation for some resource actions.
 
-Teams often turn KPIs into **service level indicators**, or **SLIs**. An SLI is a measurable health signal for a service, such as availability, latency, or fault rate. A **service level objective**, or **SLO**, gives that signal a target, such as "99.9% of checkout requests should finish successfully over 30 days." CloudWatch Application Signals can help monitor service health and SLOs for supported instrumented applications, but the team still needs to choose the outcomes that matter.
+For beginners, the important idea is that alarms should point to action. A useful alarm says something like "checkout p95 latency has been above two seconds for several minutes, and the checkout team should inspect the dashboard and runbook." A noisy alarm that fires for harmless one-minute spikes teaches people to ignore it. A missing alarm leaves the team waiting for a customer report.
 
-## Instrumentation: How Evidence Gets Emitted
-<!-- section-summary: Instrumentation adds the logging, metric, and tracing code or agents that send telemetry from applications and infrastructure. -->
+## Dashboards: Where Do We Look First
+<!-- section-summary: Dashboards put related metrics and status in one ordered view so responders can see customer impact and system pressure. -->
 
-**Instrumentation** means adding the code, libraries, agents, or service configuration that emits telemetry. Some telemetry appears automatically because AWS services publish CloudWatch metrics. For example, Application Load Balancer, Amazon ECS, Amazon RDS, AWS Lambda, and Amazon SQS publish service metrics that you can graph and alarm on.
+A **dashboard** is a shared view of health. In CloudWatch, a dashboard can show metrics, alarms, logs widgets, and text notes. A dashboard helps answer **where do we look first** because the responder can scan the request path instead of opening every AWS service page one by one.
 
-Your application still needs to emit its own evidence. AWS cannot infer that a payment was declined because the card was invalid, that an order failed a fraud rule, or that a new promotion code path slowed down checkout. The application has to log those facts, publish custom metrics, and propagate trace context.
+The order of the dashboard matters. Put the user outcome first, then the entry point, then the application, then the data and background systems. That shape teaches the on-call engineer to check customer impact before chasing a noisy infrastructure chart.
 
-A practical checkout service emits three layers of evidence:
-
-| Instrumentation point | What it emits | Example |
+| Dashboard row | `tiny-checkout` widgets | What the row tells the team |
 |---|---|---|
-| Application logger | Structured events | `payment_authorization_failed` with `requestId` and `traceId` |
-| Metric library or CloudWatch API | Business and technical numbers | `CompletedCheckouts`, `PaymentFailures`, `CheckoutLatency` |
-| OpenTelemetry or X-Ray instrumentation | Request path timing | Span for `POST /checkout`, subspan for `payment.authorize` |
+| Customer outcome | Completed checkouts, payment failures, checkout p95 latency | Whether users are actually affected |
+| Entry point | ALB request count, target 5xx, target response time | Whether traffic reaches healthy app targets |
+| Compute | ECS running task count, CPU, memory, deployments | Whether the app runtime has enough capacity |
+| Data | RDS connections, CPU, write latency | Whether database pressure lines up with symptoms |
+| Background work | SQS visible messages, oldest message age, Lambda errors | Whether async work is delayed or failing |
+| Response | Alarm state widgets, runbook link, owner notes | Who owns the next action |
 
-On Amazon EC2 instances, on-premises servers, and some container environments, the **CloudWatch agent** can collect system-level metrics, logs, StatsD or collectd custom metrics, and traces from OpenTelemetry or X-Ray client SDKs. A small agent configuration might collect one application log file and memory utilization like this:
+Dashboards give the first shape of the problem and point the next investigation step. If completed checkouts drop, target 5xx rises, and payment failures rise at the same time, the team can move toward payment logs and traces. If checkout completes normally while SQS age rises, the customer payment path may be healthy while confirmation emails lag.
 
-```json
-{
-  "agent": {
-    "metrics_collection_interval": 60
-  },
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/log/checkout/app.log",
-            "log_group_name": "/aws/ec2/checkout-api",
-            "log_stream_name": "{instance_id}"
-          }
-        ]
-      }
-    }
-  },
-  "metrics": {
-    "namespace": "CWAgent",
-    "metrics_collected": {
-      "mem": {
-        "measurement": ["mem_used_percent"]
-      }
-    }
-  }
-}
-```
+## Traces: Where Did the Request Spend Time
+<!-- section-summary: Traces connect the timed work inside one request as it moves through services and dependencies. -->
 
-For new application telemetry, AWS documentation now points teams toward **OpenTelemetry** for publishing custom metrics to CloudWatch. OpenTelemetry is an open-source framework for collecting metrics, logs, and traces with consistent attributes. In real teams, this helps because the same service name, environment, deployment version, and trace context can travel across all three signal types.
+**Traces** follow one request across service boundaries. A trace is made of timed pieces of work. In OpenTelemetry, those pieces are called **spans**. In AWS X-Ray, service-level records are called segments, and nested dependency records are called subsegments. The names differ, but the beginner idea is the same: a trace shows the path and timing of one request.
 
-## Correlation: How Separate Signals Tell One Story
-<!-- section-summary: Correlation joins logs, metrics, and traces with shared fields such as service name, environment, request ID, and trace ID. -->
+For `tiny-checkout`, one trace might show this:
 
-**Correlation** means joining separate pieces of telemetry so they describe the same production event. A metric might tell you checkout latency rose at 11:40. A dashboard might show the RDS connection count climbed at the same time. A trace might show long waits in the payment authorization call. A log might show the exact timeout error and request ID.
+| Timed work | Duration | What it suggests |
+|---|---:|---|
+| `POST /checkout` in `checkout-api` | 8,480 ms | The whole request was slow |
+| Validate cart | 18 ms | Local app work was fast |
+| Write order row to RDS | 42 ms | Database write was normal |
+| Authorize payment | 8,210 ms | Payment provider call dominated the request |
+| Send SQS email message | 25 ms | Queue handoff was normal |
 
-Without shared fields, these signals stay scattered. The application log uses `checkout-service`, the trace uses `orders`, the dashboard chart uses `api-prod`, and the alarm name says `latency-high`. A tired on-call engineer then has to translate between naming schemes during the incident.
+That table answers **where did it happen** in a way logs alone can struggle to show. The slow part was the payment authorization call, not the database or the queue. The trace also gives the team a path to the exact log events through the shared `traceId`.
 
-A production-ready naming scheme uses stable fields across telemetry:
+Traces need **context propagation**. That means the request carries a trace identity as it moves from one service to the next. With HTTP, that identity travels in headers. With queues, it may travel in message attributes or AWS-supported trace fields. Each service reads the incoming trace context, records its own span, and passes context to the next service.
 
-| Field | Where it appears | Example |
+AWS X-Ray is the AWS tracing service that stores and visualizes trace data. OpenTelemetry is the common instrumentation standard that creates spans and sends them through an SDK, agent, or collector. Later articles go deeper into X-Ray, OpenTelemetry, spans, collectors, and sampling. For this first article, remember the beginner job: traces show where one request spent time.
+
+## Changes: What Moved Before the Symptom
+<!-- section-summary: Change evidence connects symptoms to deployments, AWS API activity, scaling, policy edits, and configuration updates. -->
+
+The fourth beginner question is **what changed**. Many incidents start after a deployment, scaling event, feature flag change, secret rotation, IAM policy edit, security group update, database parameter change, or dependency outage. Observability includes these records because a symptom without change context can lead to slow guessing.
+
+AWS has several places to find change evidence. **AWS CloudTrail** records AWS API activity such as security group edits, IAM policy changes, Lambda configuration updates, and ECS service changes. Deployment tools record which application version went out. CloudWatch alarm history records when alarms changed state and why. Application logs can include `deploymentVersion` or `gitSha` so runtime behavior connects back to the release.
+
+For the checkout incident, a change table might look like this:
+
+| Time | Change evidence | Why it matters |
 |---|---|---|
-| `service` | Logs, traces, metrics, dashboards, alarms | `checkout-api` |
-| `environment` | Logs, metrics, traces | `prod` |
-| `traceId` | Logs and traces | `1-684d5b12-...` |
-| `requestId` | Logs and sometimes response headers | `req-7b91` |
-| `deploymentVersion` | Logs, traces, dashboards | `2026.06.13.4` |
-| `aws.account_id` or account label | Cross-account telemetry | `111122223333` |
+| 10:00 | ECS deployed `checkout-api:2026.06.13.4` | The app version changed before symptoms |
+| 10:03 | Payment timeout logs started rising | The failure started after the deployment |
+| 10:05 | Checkout p95 latency alarm entered `ALARM` | User-facing delay became sustained |
+| 10:07 | Completed checkouts dropped | Business impact appeared |
+| 10:09 | No RDS or SQS pressure changed | Database and queue look less likely |
 
-Keep request IDs and customer IDs out of metric dimensions because those values can create huge numbers of unique metric series. Put them in logs and traces where per-request detail belongs. Metrics should use low-cardinality dimensions like service, environment, endpoint, status class, and dependency. Low cardinality means the field has a small, stable set of values.
+That timing gives the team a strong next question: what changed in `checkout-api:2026.06.13.4` around payment authorization? The answer often guides the next action, such as rolling back, disabling a feature flag, or comparing traces between the old and new version.
 
-Now the incident flow makes sense. The alarm fires on `checkout-api` p95 latency in `prod`. The dashboard shows the same service and environment. Metrics show payment latency rose. Traces show `payment.authorize` spans at 2.4 seconds. Logs filtered by the same `traceId` show timeout messages for that dependency. The team can move from alert to evidence without guessing names.
+## How the Signals Work Together
+<!-- section-summary: Logs, metrics, traces, alarms, dashboards, and change records answer different parts of the same production question. -->
 
-## CloudWatch as the AWS Operating Workspace
-<!-- section-summary: CloudWatch brings AWS metrics, logs, dashboards, alarms, traces, Application Signals, and OpenTelemetry ingestion into the main AWS observability workspace. -->
+Each signal has a job. Logs explain individual events. Metrics show patterns over time. Alarms turn important metric changes into notifications. Dashboards organize the first view. Traces connect one request across services. Change records explain what moved before the symptom.
 
-**Amazon CloudWatch** is the main AWS service for monitoring AWS resources and applications in real time. It collects and stores metrics, centralizes logs, evaluates alarms, powers dashboards, supports Application Signals, and can work with traces and OpenTelemetry data. For many teams, CloudWatch is the first operating workspace during an AWS incident.
+The signals are strongest when they share names. If logs use `service=checkout-api`, metrics use `Service=checkout-api`, traces use `service.name=checkout-api`, and dashboards use the same service name, the team can move through evidence quickly. If every tool uses a different name, the incident starts with translation work.
 
-CloudWatch Metrics stores numeric time-series data. Many AWS services publish metrics automatically, and applications can publish custom metrics. CloudWatch Logs centralizes log events from systems, applications, and AWS services, then lets teams search, filter, query, retain, archive, and protect those logs. CloudWatch dashboards arrange metric and log views so responders can see health in one place.
+For `tiny-checkout`, the shared fields should include:
 
-AWS X-Ray and CloudWatch tracing views handle trace data and service maps. Application Signals can collect application metrics and traces for supported services, show call volume, availability, latency, faults, and errors, and help teams work with SLOs. OpenTelemetry support gives teams a path to send metrics, logs, and traces with consistent attributes, then query or explore them inside CloudWatch.
+| Shared field | Where it appears | Example |
+|---|---|---|
+| Service name | Logs, metrics, traces, dashboards, alarms | `checkout-api` |
+| Environment | Logs, metrics, traces | `prod` |
+| Request ID | Logs and response headers | `req-7f3a8c` |
+| Trace ID | Logs and traces | `1-666c182a-4f7d9b2e9a1d5c67b8142a10` |
+| Deployment version | Logs, traces, dashboards, release records | `2026.06.13.4` |
+| Route or operation | Logs, metrics, traces | `POST /checkout` |
 
-The beginner trap is treating CloudWatch as one page with many buttons. In production, it works best as a workflow:
+There is one important design habit here. Put high-cardinality values, such as request IDs, customer IDs, order IDs, and session IDs, in logs and traces. Keep metric dimensions limited to stable values such as service, environment, route, dependency, and status class. A metric dimension creates a separate metric series for each unique value, so per-request dimensions can create cost and noise.
 
-1. Metrics and alarms detect a symptom.
-2. Dashboards show the blast radius and affected dependency.
-3. Logs show exact events and error details.
-4. Traces show the request path and slow hop.
-5. Runbooks and incident tools guide the response.
+![The observability stack shows how application telemetry, AWS service signals, dashboards, alerts, and audit events fit into one view](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/aws-observability-stack.png)
 
-That workflow keeps the tool choice tied to the operational question. The team looks at metrics for scope, logs for details, and traces for the path.
+*The observability stack shows how application telemetry, AWS service signals, dashboards, alerts, and audit events fit into one view.*
 
-## First Incident Evidence Bundle
-<!-- section-summary: A useful first response pulls metric scope, alarm state, log details, and trace summaries into one short evidence bundle. -->
 
-When the checkout alarm fires, the on-call engineer needs a fast evidence bundle. The goal is to answer four questions: are customers affected, which dependency looks unhealthy, what exact errors appear in logs, and which request path shows the delay.
+## A Beginner Response Flow
+<!-- section-summary: A first response follows customer impact, scope, exact errors, request path, and recent changes in that order. -->
 
-The first command can check alarm state and timing:
+Now replay the incident from a beginner's point of view. A customer says checkout failed. The team should avoid jumping straight to one AWS service. The better first response follows the four questions and lets the evidence decide the next step.
 
-```bash
-aws cloudwatch describe-alarms \
-  --alarm-names checkout-prod-latency-high checkout-prod-5xx-high \
-  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Updated:StateUpdatedTimestamp,Reason:StateReason}'
-```
+| Step | Signal | Question it answers | Example finding |
+|---|---|---|---|
+| Check customer outcome | Business metrics and dashboard | How bad is it? | Completed checkouts dropped 40 percent |
+| Check entry point | ALB metrics and alarm state | Where is the symptom visible? | Target 5xx and p95 latency both rose |
+| Check exact errors | CloudWatch Logs | What happened? | `PaymentGatewayTimeout` dominates errors |
+| Check request path | X-Ray or trace view | Where did time go? | Payment authorization spans take 8 seconds |
+| Check recent changes | Deployment record and CloudTrail | What changed? | New checkout image deployed five minutes earlier |
+| Choose action | Runbook and owner decision | What should we do next? | Roll back the app version and keep watching metrics |
 
-Then the responder can pull metrics for the same window. This example uses ALB latency and target 5xx count because they sit close to the customer request path:
+This flow is intentionally simple. A real production incident may include database deep dives, provider status pages, feature flag checks, traffic shifts, customer support updates, and post-incident review. The beginner habit stays the same: use evidence to move from symptom to scope, detail, path, change, and action.
 
-```bash
-aws cloudwatch get-metric-data \
-  --metric-data-queries file://checkout-first-look-metrics.json \
-  --start-time 2026-06-13T10:00:00Z \
-  --end-time 2026-06-13T10:30:00Z
-```
+![The evidence loop shows how responders move from symptom to signal, suspected layer, recent change, action, and follow-up](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/production-evidence-loop.png)
 
-The log query should use the same service and time window. A focused Logs Insights query can group errors by dependency instead of scrolling raw log lines:
+*The evidence loop shows how responders move from symptom to signal, suspected layer, recent change, action, and follow-up.*
 
-```
-fields @timestamp, service, route, dependency, errorType, requestId, traceId
-| filter service = "checkout-api" and level = "ERROR"
-| stats count(*) as errors by dependency, errorType
-| sort errors desc
-| limit 20
-```
-
-```bash
-aws logs start-query \
-  --log-group-name /aws/ecs/checkout-api \
-  --start-time 1781344800 \
-  --end-time 1781346600 \
-  --query-string file://checkout-errors.query
-```
-
-Finally, trace summaries can show whether slow requests share one dependency or route:
-
-```bash
-aws xray get-trace-summaries \
-  --start-time 2026-06-13T10:00:00Z \
-  --end-time 2026-06-13T10:30:00Z \
-  --filter-expression 'service("checkout-api") { fault = true OR error = true OR responsetime > 2 }'
-```
-
-This bundle turns the first ten minutes of response into a repeatable path. The alarm shows that a threshold crossed. Metrics show blast radius. Logs name the error shape. Traces show where the request spent time. The team can then decide whether to roll back a deployment, scale a worker, contact a dependency owner, or open a deeper database investigation.
-
-## Dashboards, Alarms, and Response Loops
-<!-- section-summary: Dashboards help humans triage the current state, while alarms turn important metric changes into notifications or controlled automation. -->
-
-A **dashboard** is a shared visual view of workload health. In CloudWatch, a dashboard can show metrics, alarms, logs, text widgets, and cross-account or cross-Region data. A useful dashboard has an order. For checkout, the top row should show customer impact, the middle rows should show the request path, and the lower rows should show supporting dependencies.
-
-A practical dashboard layout for the checkout service might be:
-
-| Dashboard row | Widgets |
-|---|---|
-| Customer impact | Completed checkouts, checkout p95 latency, checkout 5xx count |
-| Ingress | ALB request count, target response time, healthy host count |
-| Compute | ECS running task count, CPU, memory |
-| Data | RDS connections, write latency, deadlocks or blocked transactions |
-| Async | SQS visible messages, age of oldest message, Lambda worker errors |
-| Changes | Recent deployment events, alarm state widgets, runbook links |
-
-An **alarm** is a rule that watches a metric or query and changes state. A CloudWatch alarm can be `OK`, `ALARM`, or `INSUFFICIENT_DATA`. It can notify an Amazon SNS topic, create operational items or incidents through supported integrations, or trigger specific actions such as Auto Scaling actions for metric alarms. SNS is a publish-subscribe notification service, so one alarm state change can route to email, chat, paging, or automation subscribers.
-
-Strong response loops include a human-readable alarm name, clear severity, a link to the dashboard, and a runbook. A runbook is the written response path for a known failure. For example, the `checkout-prod-sqs-age-high` alarm should tell the on-call engineer which queue is backed up, which worker service consumes it, which dashboard shows consumer errors, and which rollback or scaling action is approved.
-
-This is where observability turns into operations. The signal has to reach the person or automation that can act. A dashboard that nobody checks at 03:00 protects no workload. An alarm that pages for harmless one-minute spikes trains the team to ignore it. The response loop needs enough signal quality to earn trust.
-
-## Multi-Account and OpenTelemetry in Real Teams
-<!-- section-summary: Production AWS organizations usually centralize observability across accounts and use standard telemetry attributes so teams can operate shared systems. -->
-
-Small AWS environments often start in one account. Production AWS environments usually separate development, staging, production, security, networking, and shared services into multiple accounts. That separation helps security and ownership, but it can make incidents harder if every engineer has to switch accounts and Regions to find telemetry.
-
-CloudWatch cross-account observability solves that operating problem by using a **monitoring account** and **source accounts**. A monitoring account can view and analyze telemetry shared from source accounts. Source accounts generate the telemetry from the workloads they own. AWS recommends using AWS Organizations for this setup so new accounts can be onboarded consistently.
-
-The shared telemetry can include CloudWatch metrics, CloudWatch Logs log groups, AWS X-Ray traces, Application Signals services and SLOs, Application Insights applications, and Internet Monitor data. For our checkout service, the production account can keep owning the ECS service and RDS database while the central monitoring account gives the platform team one place to inspect the health of the whole application.
-
-OpenTelemetry helps with the other half of the problem: consistent naming and instrumentation across languages and teams. A Java checkout API, a Node.js payment worker, and a Python fraud service can all emit telemetry with the same attribute shape, such as `service.name`, `deployment.environment`, and trace context. CloudWatch supports OpenTelemetry across metrics, logs, and traces, and AWS Distro for OpenTelemetry gives AWS-supported OpenTelemetry components for common AWS workloads.
-
-In real production work, the pattern usually looks like this:
-
-| Concern | Practical choice |
-|---|---|
-| Central AWS operations | CloudWatch monitoring account with linked source accounts |
-| Application instrumentation | OpenTelemetry SDKs or ADOT where they fit the runtime |
-| AWS service metrics | Native CloudWatch metrics from services such as ALB, ECS, Lambda, RDS, and SQS |
-| Host and container telemetry | CloudWatch agent or ADOT collector, depending on runtime and signal needs |
-| Incident response | CloudWatch alarms routed through SNS to paging, chat, or incident tools |
-
-This gives each team local ownership while giving responders a shared operating view. The exact tooling can differ by workload, but the design goal stays steady: every important service emits evidence with names and labels that another engineer can understand during an incident.
-
-## Putting It All Together
-<!-- section-summary: A useful observability design connects business outcomes, telemetry signals, CloudWatch workflows, and response actions. -->
-
-Let's replay the checkout incident with the pieces connected.
-
-```mermaid
-flowchart LR
-    Customer[Customer checkout] --> ALB[Application Load Balancer]
-    ALB --> ECS[ECS checkout-api task]
-    ECS --> RDS[(Amazon RDS)]
-    ECS --> Pay[Payment provider]
-    ECS --> SQS[Amazon SQS email queue]
-
-    ECS --> Logs[Structured logs]
-    ECS --> Metrics[Custom metrics]
-    ECS --> Traces[Traces]
-    ALB --> Metrics
-    RDS --> Metrics
-    SQS --> Metrics
-
-    Metrics --> Alarm[CloudWatch alarms]
-    Metrics --> Dashboard[CloudWatch dashboard]
-    Logs --> Dashboard
-    Traces --> Dashboard
-    Alarm --> SNS[Amazon SNS]
-    SNS --> OnCall[On-call response]
-```
-
-The customer sees checkout latency. The load balancer and application metrics show p95 latency rising. The business metric shows completed checkouts dropping. The alarm routes through SNS to the on-call engineer. The dashboard shows the payment dependency row turning red. The trace shows most of the request time in `payment.authorize`. The structured logs show timeout errors with the affected deployment version.
-
-Good AWS observability connects several pieces of evidence so the team can move from "customers are affected" to "the payment authorization call is timing out after this deployment" with confidence.
-
-The practical checklist is:
-
-- **Define business KPIs first** so the team knows which outcomes matter.
-- **Emit structured logs** with request IDs, trace IDs, service names, environments, and useful error fields.
-- **Publish metrics** for latency, errors, saturation, throughput, and important business events.
-- **Instrument traces** across service and dependency boundaries so one request path can be reconstructed.
-- **Use dashboards for triage** with customer impact at the top and dependencies below.
-- **Use alarms for action** with clear thresholds, SNS routing, and runbook links.
-- **Centralize multi-account visibility** so responders can investigate without account switching.
-
-![Layered AWS observability stack from workload telemetry through CloudWatch storage, signals, dashboards, alarms, and team improvement](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/aws-observability-stack.png)
-
-*The summary image turns the article into one stack: workloads emit evidence, CloudWatch organizes it, and the team uses that evidence to improve the service.*
 
 ## What's Next
-<!-- section-summary: The next article turns the basics into concrete CloudWatch metric, dashboard, and alarm design. -->
+<!-- section-summary: The next article turns metrics, dashboards, and alarms into concrete CloudWatch operations. -->
 
-Now that the core pieces are connected, we can zoom in on the signal that usually starts production response: metrics. Metrics give fast health checks, dashboards, and alarms. The next article builds CloudWatch metrics, dashboard layout, Metrics Insights queries, anomaly detection, recommended alarms, and response-friendly alarm rules around the same checkout service.
+You now have the basic AWS observability map. Logs answer what happened. Metrics and alarms answer how bad it is. Dashboards organize where to look first. Traces show where one request spent time. Change records help explain why the behavior shifted.
+
+The next article goes one level deeper into CloudWatch metrics, dashboards, and alarms. We will publish and inspect metrics, build dashboard widgets, read alarm history, tune missing-data behavior, and connect alarms to action without losing the beginner questions that started this article.
 
 ---
 
@@ -370,8 +234,6 @@ Now that the core pieces are connected, we can zoom in on the signal that usuall
 - [OPS04-BP01 Identify key performance indicators](https://docs.aws.amazon.com/wellarchitected/latest/operational-excellence-pillar/ops_observability_identify_kpis.html) - AWS guidance to align observability with business objectives and revisit KPIs as workloads evolve.
 - [OPS04-BP02 Implement application telemetry](https://docs.aws.amazon.com/wellarchitected/latest/operational-excellence-pillar/ops_observability_application_telemetry.html) - AWS guidance on application telemetry, business KPIs, CloudWatch, X-Ray, and the CloudWatch agent.
 - [What is Amazon CloudWatch Logs?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Documents centralized log storage, querying, field filtering, metric filters, log classes, retention, and data protection.
-- [Collect metrics, logs, and traces using the CloudWatch agent](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Install-CloudWatch-Agent.html) - Documents CloudWatch agent support for system metrics, logs, StatsD, collectd, OpenTelemetry traces, and X-Ray traces.
 - [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html) - Explains traces, segments, subsegments, service graphs, and trace IDs for distributed request paths.
-- [OpenTelemetry - Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-OpenTelemetry-Sections.html) - Documents CloudWatch support for OpenTelemetry metrics, logs, traces, PromQL, Logs Insights, and Transaction Search.
 - [CloudWatch cross-account observability](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Unified-Cross-Account.html) - Documents monitoring accounts, source accounts, Observability Access Manager, and shared telemetry types.
 - [Application Signals - Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Monitoring-Sections.html) - Documents application health views, SLOs, services, dependencies, key metrics, and cross-account Application Signals.

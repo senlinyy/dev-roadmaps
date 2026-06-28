@@ -40,6 +40,9 @@ That one checkout flow creates several different storage jobs. The receipt PDF a
 
 Those jobs should not all land in one service just because they came from one feature. A senior engineer would slow the conversation down and ask what each piece of data needs to do after the write succeeds. That answer usually points to the right Google Cloud service before the service names start arguing with each other.
 
+![E-commerce checkout state split](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/ecommerce-state-split.png)
+*The checkout app creates receipts, orders, drafts, analytics events, and recovery copies. Each arrow represents a different storage job, so the service choice starts with the data shape.*
+
 ## What Storage Means In Google Cloud
 <!-- section-summary: Storage means durable state, and each service makes different promises about reads, writes, queries, access, and recovery. -->
 
@@ -58,6 +61,9 @@ A good storage discussion starts with four plain questions. What is the smallest
 | Previous good copies | Restore points | **Backups, snapshots, versions, soft delete, and time travel** | Recovery needs a copy outside the active write path |
 
 This table gives a first filter, not a final architecture. Real systems can mix services because one product can produce many data shapes. The important habit is to make each service own a clear job instead of asking one storage product to behave like every other storage product.
+
+![GCP data shapes map](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/data-shapes-map.png)
+*The same application state can split into objects, rows, documents, analytical facts, attached storage, and recovery copies. The labels are simple on purpose: name the shape before picking the product.*
 
 ## Receipt PDFs: Cloud Storage
 <!-- section-summary: Receipt PDFs and uploads belong in Cloud Storage when the app stores and retrieves whole byte payloads by object name. -->
@@ -78,6 +84,12 @@ gcloud storage buckets create gs://orders-prod-receipts-us \
 ```
 
 That command creates a regional bucket, turns on **uniform bucket-level access**, and enforces **public access prevention**. Uniform bucket-level access makes IAM the control point for the bucket and its objects. Public access prevention blocks common accidental public exposure paths. The next article goes deep on those controls, but the beginner design choice is already visible: receipt storage starts private, and the app grants narrow temporary access only when a customer needs a specific file.
+
+A successful create command usually prints a short confirmation. The useful part is the bucket URL because it confirms the exact global bucket name the later upload, IAM, lifecycle, and restore commands will use.
+
+```console
+Creating gs://orders-prod-receipts-us/...
+```
 
 Object names deserve real design attention. Names such as `receipt.pdf` or `uploads/photo.jpg` collide quickly and tell operators almost nothing. Names such as `receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf` group related objects by tenant, date, and order while still leaving the database as the source for search and ownership.
 
@@ -216,7 +228,7 @@ Recovery mechanisms differ by storage shape. Cloud Storage has object versioning
 | VM worker disks | Snapshots and image rebuild procedures | Can a worker VM rebuild without losing business records? |
 | Shared review media in Filestore | Backups or snapshots with mount-level restore steps | Can the team restore a single path or a whole share in a test project? |
 
-A recovery plan needs a test, not only a checkbox. For Cloud SQL, a team might create a monthly restore drill where it restores the latest backup into a temporary instance, runs a few verification queries, and deletes the temporary instance after recording the result. For BigQuery, the team might practice copying a table from a time before a bad load job into a recovery dataset and comparing row counts.
+A recovery plan needs a test and written evidence. For Cloud SQL, a team might create a monthly restore drill where it restores the latest backup into a temporary instance, runs a few verification queries, and deletes the temporary instance after recording the result. For BigQuery, the team might practice copying a table from a time before a bad load job into a recovery dataset and comparing row counts.
 
 ```bash
 bq cp \
@@ -226,10 +238,25 @@ bq cp \
 
 That example uses BigQuery's time travel table decorator syntax to copy the table as it existed one hour ago into a recovery dataset. The exact recovery window depends on the table and project settings, so production teams write the limit into their runbook and test the command before they need it.
 
+A healthy copy job shows a completed table copy, and the follow-up check should show a row count that matches the expected pre-incident window.
+
+```console
+Table 'orders_recovery.checkout_events_before_bad_load' successfully copied.
+
+bq query --use_legacy_sql=false \
+  'SELECT COUNT(*) AS rows FROM `orders_recovery.checkout_events_before_bad_load`'
+
++---------+
+|  rows   |
++---------+
+| 8421930 |
++---------+
+```
+
 ## First Inventory Checks
 <!-- section-summary: A storage map should be backed by commands that prove each state type has a real service, owner, location, and recovery setting. -->
 
-The Orders data map should eventually become an inventory that operators can verify. A table in a design doc helps the team choose services, and commands prove what actually exists in the project. The first inventory pass can stay small: list the active buckets, database instances, Firestore databases, BigQuery datasets, disks, and file shares that carry production state.
+The Orders data map should eventually turn into an inventory that operators can verify. A table in a design doc helps the team choose services, and commands prove what actually exists in the project. The first inventory pass can stay small: list the active buckets, database instances, Firestore databases, BigQuery datasets, disks, and file shares that carry production state.
 
 For object storage, confirm the bucket location, uniform access, public access prevention, soft delete, labels, and lifecycle policy:
 
@@ -299,6 +326,9 @@ The Orders product creates many kinds of state during one checkout flow. Receipt
 Checkout events fit BigQuery because the team asks questions across many historical facts. VM scratch and shared review media fit Persistent Disk or Filestore when the workload needs operating-system paths. Recovery copies sit beside every one of those choices because durable storage can preserve mistakes unless the team keeps previous good copies and practices restore.
 
 The beginner mistake is looking for one storage product that can hold everything. The production habit is mapping each piece of state to the access pattern, update pattern, and recovery story it needs. Once the team can say those things out loud, the Google Cloud service choice has a solid reason behind it.
+
+![Storage choice summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/storage-choice-summary.png)
+*The final map keeps the checkout scenario connected: files go to object storage, business rows go to a relational database, drafts go to documents, events go to analytics, mounted paths go to disk or file shares, and each one needs a recovery path.*
 
 ## What's Next
 

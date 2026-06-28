@@ -224,6 +224,31 @@ az ad group member add \
   --member-id "user-nina-object-id"
 ```
 
+The add command is usually quiet, so we verify membership with a read command. This also gives the launch evidence pack a small record that shows the support group has the expected people before the dashboard is opened.
+
+```bash
+az ad group member list \
+  --group "grp-orders-support" \
+  --query "[].{displayName:displayName, userPrincipalName:userPrincipalName, id:id}"
+```
+
+The output should contain only the launch support users. If an old contractor or a platform admin appears here, the dashboard assignment would grant more access than the workbook intended.
+
+```json
+[
+  {
+    "displayName": "Maya Chen",
+    "userPrincipalName": "maya@devpolaris.com",
+    "id": "user-maya-object-id"
+  },
+  {
+    "displayName": "Nina Patel",
+    "userPrincipalName": "nina@devpolaris.com",
+    "id": "user-nina-object-id"
+  }
+]
+```
+
 Now we create the production Azure boundary. An **Azure subscription** holds Azure resources and billing. A **resource group** is a smaller container for related resources. Azure RBAC can assign roles at management group, subscription, resource group, or resource scope, and the scope matters because it controls how far the permission reaches.
 
 ```bash
@@ -433,6 +458,20 @@ az containerapp identity assign \
   --user-assigned "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod"
 ```
 
+The output should show the Container App identity block with the user-assigned identity resource ID. This proves the runtime can ask Azure for a token as `mi-orders-api-prod`; it still says nothing about Key Vault or Storage permission yet.
+
+```json
+{
+  "type": "UserAssigned",
+  "userAssignedIdentities": {
+    "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
+      "clientId": "client-mi-orders-api-prod",
+      "principalId": "principal-mi-orders-api-prod"
+    }
+  }
+}
+```
+
 The application code uses the Azure SDK credential chain. In production, `AZURE_CLIENT_ID` selects `mi-orders-api-prod`. The code carries the vault URL and identity client ID, while Azure provides the credential path.
 
 ```ts
@@ -513,6 +552,17 @@ az role assignment create \
   --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
 ```
 
+The output should point at the storage account scope. The API should not receive this role at subscription scope unless the workload truly writes across many storage accounts.
+
+```json
+{
+  "principalId": "principal-mi-orders-api-prod",
+  "principalType": "ServicePrincipal",
+  "roleDefinitionName": "Storage Blob Data Contributor",
+  "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod/providers/Microsoft.Storage/storageAccounts/stordersprodexports"
+}
+```
+
 For production automation, use role IDs because Microsoft notes that role names can change. We show role names in the tutorial so the permission is readable, and the production script should resolve or pin the role definition ID.
 
 Now we create the vault. **Azure Key Vault** stores secrets, keys, and certificates. Key Vault guidance recommends a vault per application per environment, with roles assigned at the vault scope. We follow that pattern with `kv-orders-prod`.
@@ -524,6 +574,24 @@ az keyvault create \
   --location uksouth \
   --enable-rbac-authorization true \
   --tags product=orders environment=prod owner=platform
+```
+
+The useful output proves the vault uses Azure RBAC authorization. If `enableRbacAuthorization` is false, the later RBAC data-role assignments will not control secret access the way this walkthrough expects.
+
+```json
+{
+  "name": "kv-orders-prod",
+  "resourceGroup": "rg-orders-prod",
+  "properties": {
+    "enableRbacAuthorization": true,
+    "vaultUri": "https://kv-orders-prod.vault.azure.net/"
+  },
+  "tags": {
+    "environment": "prod",
+    "owner": "platform",
+    "product": "orders"
+  }
+}
 ```
 
 Key Vault has a **control plane** and a **data plane**. The control plane manages the vault resource. The data plane reads and writes secrets, keys, and certificates. Microsoft documents that `Key Vault Contributor` manages the vault resource and grants no access to secret contents, while data roles such as `Key Vault Secrets User` cover secret value access when the vault uses Azure RBAC.
@@ -587,7 +655,7 @@ azure_devops_service_connection:
   deployment_scope: rg-orders-prod
 ```
 
-For this tutorial, we show a common bootstrap choice: `Contributor` at the Orders production resource group. This is still scoped to `rg-orders-prod`, so it cannot deploy across the whole subscription. The production standard is stricter. After you know the actual deployment operations, replace this with a custom deployment role that lists explicit actions and avoids wildcards, because Azure RBAC guidance recommends least privilege and explicit permissions for custom roles.
+For this tutorial, we show a common bootstrap choice: `Contributor` at the Orders production resource group. The scope stays at `rg-orders-prod`, which confines the bootstrap assignment to the Orders production resources. The production version should move to a custom deployment role after the team knows the exact deployment operations, because Azure RBAC guidance recommends least privilege and explicit permissions for custom roles.
 
 ```bash
 az role assignment create \
@@ -595,6 +663,17 @@ az role assignment create \
   --assignee-principal-type ServicePrincipal \
   --role "Contributor" \
   --scope "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod"
+```
+
+The output should name the deployment service principal and the resource group scope. This row belongs in the evidence pack because it proves the pipeline can deploy Orders resources without receiving subscription-wide access.
+
+```json
+{
+  "principalId": "principal-spn-azdo-orders-deploy-prod",
+  "principalType": "ServicePrincipal",
+  "roleDefinitionName": "Contributor",
+  "scope": "/subscriptions/sub-devpolaris-prod/resourceGroups/rg-orders-prod"
+}
 ```
 
 The pipeline references the service connection by name. Azure DevOps handles the federated token exchange behind the task.

@@ -22,11 +22,13 @@ id: article-containers-orchestration-kubernetes-operations-logs-and-events
 ## Two Stories in One Incident
 <!-- section-summary: Logs explain what the application process said, while events explain what Kubernetes did around that process. -->
 
-When a Kubernetes workload fails, two different stories are usually unfolding at the same time. The application writes one story to stdout and stderr, and Kubernetes writes another story through object status and events. You need both if you want to understand what happened without guessing.
+A failed rollout often starts with one line that looks almost too small for the size of the incident: `POSTGRES_URL missing from environment`. That line came from the application. At the same time, Kubernetes may be writing events that say the container restarted, a Secret did not mount, or a readiness probe failed.
 
 The running scenario stays with **devpolaris-orders-api** in the `orders` namespace. The team rolled out a new image after adding better health probes. A few minutes later, the Deployment shows only two available replicas out of three, and checkout traffic has started to produce intermittent errors.
 
-**Container logs** are the lines your process writes. For a web API, that might include startup messages, request errors, database connection errors, and shutdown messages. **Kubernetes events** are short records from platform components such as the scheduler, kubelet, controllers, and admission flow. Events include image pull failures, missing Secrets, probe failures, failed scheduling, and container restarts.
+**Container logs** are the lines your process writes to stdout and stderr. For a web API, that might include startup messages, request errors, database connection errors, and shutdown messages. **Kubernetes events** are short records from platform components such as the scheduler, kubelet, controllers, and admission flow. Events include image pull failures, missing Secrets, probe failures, failed scheduling, and container restarts.
+
+The concrete workflow is simple. Use object state to find the exact failing Pod, read current logs for what the running container says, read previous logs if the container crashed, and read events for what Kubernetes did around the container. The first useful answer usually comes from matching the same timestamp across those signals.
 
 These two stories answer different questions. Keep them side by side until they point to the same fix:
 

@@ -1,7 +1,7 @@
 ---
 title: "Hardening Container Images"
-description: "Build smaller, safer images with minimal packages, non-root users, and fewer runtime privileges."
-overview: "Follow a payments-api image before it reaches the registry, and learn how to reduce what ships in it: trusted base images, pinned versions, multi-stage builds, fewer packages, non-root users, safe file ownership, clean build secrets, and a read-only-friendly runtime layout."
+description: "Build smaller, safer container images with trusted bases, pinned versions, non-root users, clean secrets, and read-only-friendly layouts."
+overview: "Start with a container image as the shipping box for payments-api. Then build the box step by step: choose a trusted minimal base, pin versions and digests, separate build and runtime stages, reduce packages, run as a non-root user, set file ownership, protect build secrets, design for read-only runtime, and inspect and scan before push."
 tags: ["devsecops", "containers", "image-hardening", "docker"]
 order: 1
 id: article-devsecops-container-image-security-minimal-base-images
@@ -9,8 +9,8 @@ id: article-devsecops-container-image-security-minimal-base-images
 
 ## Table of Contents
 
-1. [The Build We Are Hardening](#the-build-we-are-hardening)
-2. [Choose A Trusted Minimal Base](#choose-a-trusted-minimal-base)
+1. [The Shipping Box We Are Hardening](#the-shipping-box-we-are-hardening)
+2. [Choose a Trusted Minimal Base](#choose-a-trusted-minimal-base)
 3. [Pin The Parts That Must Repeat](#pin-the-parts-that-must-repeat)
 4. [Use Multi-stage Builds](#use-multi-stage-builds)
 5. [Reduce Packages And Files](#reduce-packages-and-files)
@@ -21,39 +21,52 @@ id: article-devsecops-container-image-security-minimal-base-images
 10. [Inspect And Scan Before Push](#inspect-and-scan-before-push)
 11. [A Local And CI Checklist](#a-local-and-ci-checklist)
 12. [What's Next](#whats-next)
+13. [References](#references)
 
-## The Build We Are Hardening
-<!-- section-summary: The team wants the payments-api image to carry only the runtime pieces it needs before CI pushes it to the private registry. -->
+## The Shipping Box We Are Hardening
+<!-- section-summary: A container image is the shipping box for the app, so the team first decides what belongs in that box before it reaches the registry. -->
 
-Let's follow one small team. They build a `payments-api` service in a CI pipeline, push the image into a private registry, and run it on Kubernetes. The service handles payment requests, calls a database, writes logs to standard output, and exposes an HTTP port for the cluster.
+A **container image** is the shipping box for an application. It holds the files and startup instructions that a container runtime uses later. For `payments-api`, the box needs the compiled app, the Node.js runtime, production dependencies, CA certificates for HTTPS calls, a normal Linux user, and the command that starts the service.
 
-A **container image** is the packaged filesystem and startup configuration that a container runtime uses to start a container. It usually contains the operating system libraries, language runtime, application code, dependencies, environment defaults, user settings, and the command that starts the process. For example, a Node.js API image may contain Node.js, compiled JavaScript, production `node_modules`, CA certificates for HTTPS calls, and a `CMD` that runs `node dist/server.js`.
+The build can use the compiler, test tools, source-control client, package-manager tokens, local `.env` files, and debugging helpers, then keep them outside the runtime box that production pulls.
 
-The important part is that an image travels. The same image can move from a developer laptop to CI, from CI to the private registry, and from the registry into Kubernetes. If the image carries an old base image, a shell full of debugging tools, a leaked package token, or a process that runs as root, that risk travels with it.
+Here is the smallest Dockerfile skeleton for the story. This first version is intentionally small. It shows the four ideas every later section will improve: start from a base image, put files in `/app`, choose a runtime user, and start the process.
 
-So this first article stays before the registry. The team has one job: make the `payments-api` image smaller, clearer, and safer before any scanner, registry policy, admission controller, or Kubernetes deployment has to deal with it. Later articles can handle trust, SBOMs, signing, registry controls, and runtime policy. Right now, the Dockerfile itself is the main place where the team can remove unnecessary risk.
+```dockerfile
+FROM node:22-bookworm-slim
+WORKDIR /app
+COPY . .
+USER node
+CMD ["node", "dist/server.js"]
+```
+
+`FROM` names the starting image. `WORKDIR` sets the application directory. `COPY` puts files into the image. `USER` chooses the Linux user for the process. `CMD` tells the runtime how to start the API. The rest of the article turns this rough box into a production-ready one.
+
+Let's follow one small team. They build `payments-api` in CI, push the image into a private registry, and run it on Kubernetes. The service handles payment requests, calls a database, writes logs to standard output, and exposes an HTTP port for the cluster. If the image carries an old base image, a shell full of debugging tools, a leaked package token, or a process that runs as root, that risk travels from laptop to CI to registry to Kubernetes.
+
+So this first article stays before the registry. The team has one job: make the `payments-api` image smaller, clearer, and safer before scanners, registry policy, admission controllers, and Kubernetes deployments have to evaluate it. Later articles handle trust, SBOMs, signing, registry controls, and runtime policy. Right now, the Dockerfile itself is the main place where the team can remove unnecessary risk.
 
 Here is the path we will take. Each row names the image-hardening choice first, then connects it to the reason the team checks it before push.
 
-| Step | What the team checks | Why it matters before the registry |
+| Step | What the team checks | Pre-registry result |
 |---|---|---|
-| **Base image** | The image starts from a trusted, maintained, minimal base | Old or random base images bring unknown packages and unknown maintenance |
-| **Pins and digests** | Versions repeat in CI, and digest updates happen through review | Rebuilds produce explainable changes instead of surprise changes |
-| **Multi-stage builds** | Build tools stay in builder stages | Compilers, test tools, and caches do not ship to production |
-| **Package reduction** | The final image carries only runtime dependencies | Fewer packages means fewer CVEs and fewer tools for an attacker |
-| **Non-root user** | The app process runs as a numeric non-root UID | A compromised process gets fewer permissions inside the container |
-| **File ownership** | The app user owns only the paths it needs | Permissions match the runtime user instead of relying on root |
-| **Secret hygiene** | Build tokens never land in layers or history | Private registry and package tokens do not travel inside the image |
-| **Read-only layout** | Writable paths are explicit and temporary | Kubernetes can later run the container with a read-only root filesystem |
+| **Base image** | The image starts from a trusted, maintained, minimal base | The runtime box starts from a known supplier and package family |
+| **Pins and digests** | Versions repeat in CI, and digest updates happen through review | Rebuilds produce explainable changes |
+| **Multi-stage builds** | Build tools stay in builder stages | Compilers, test tools, and caches stay out of production |
+| **Package reduction** | The final image carries only runtime dependencies | Fewer packages create fewer vulnerability and maintenance findings |
+| **Non-root user** | The app process runs as a numeric non-root UID | A compromised process receives fewer permissions inside the container |
+| **File ownership** | The app user owns only the paths it needs | Permissions match the runtime user without relying on root |
+| **Secret hygiene** | Build tokens never land in layers or history | Private package tokens stay out of the image |
+| **Read-only layout** | Writable paths are explicit and temporary | Kubernetes can later lock the root filesystem |
 | **Local and CI checks** | Build, inspect, scan, and smoke-test happen before push | The private registry receives an image that already passed basic safety checks |
 
 ![Image hardening path infographic showing payments-api moving through trusted base, pinned digest, multi-stage build, non-root user, clean secrets, and read-only readiness before the private registry](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/image-hardening-path.png)
 
 *The image-hardening path is easiest to review as a pre-registry gate: the team removes risky defaults before the image is a shared release artifact.*
 
-The rest of the article walks through those steps with the same `payments-api` example. We will use Dockerfile snippets and terminal commands, and each command will connect back to what a small production team would actually check.
+The rest of the article walks through those steps with the same `payments-api` example. We will start small, then add the production controls one at a time.
 
-## Choose A Trusted Minimal Base
+## Choose a Trusted Minimal Base
 <!-- section-summary: Base images set the first layer of risk, so the team starts with a maintained image that contains only the runtime family they need. -->
 
 A **base image** is the image named in a Dockerfile `FROM` line. Every file and package from that base image travels into your image unless a later stage changes the structure. If `payments-api` starts from `node:latest`, it inherits whatever `node:latest` points to at build time. If it starts from a random image maintained by an unknown account, it inherits that maintainer's patch habits and packaging decisions too.
@@ -95,7 +108,7 @@ FROM node:${NODE_VERSION}-bookworm-slim@sha256:<reviewed-base-image-digest> AS b
 WORKDIR /app
 ```
 
-The `<reviewed-base-image-digest>` marker matters in this learning example because a real digest changes by platform and update cycle. In a real repository, the team would paste the actual digest from the registry or let tooling update it. The important behavior is that CI receives a known base image instead of silently accepting a different one during a rebuild.
+The `<reviewed-base-image-digest>` marker appears in this learning example because a real digest changes by platform and update cycle. In a real repository, the team would paste the actual digest from the registry or let tooling update it. The important behavior is that CI receives a known base image instead of silently accepting a different one during a rebuild.
 
 The same idea applies to package managers. If `payments-api` uses Node.js, `package-lock.json` records exact dependency versions. In a Docker build, `npm ci` installs from that lockfile and fails if `package.json` and the lockfile disagree. That gives the team a repeatable dependency install instead of an install that floats every time CI runs.
 
@@ -165,7 +178,7 @@ Now the Dockerfile has a clean build shape. The next step is to check what the f
 ## Reduce Packages And Files
 <!-- section-summary: Package and file reduction removes tools, caches, source files, and accidental build-context content from the production image. -->
 
-**Package reduction** means the final image contains only the operating system packages, language packages, and files the service needs at runtime. This matters because every extra package can add vulnerabilities, licenses, update work, and tools an attacker can use after compromising the app. If `payments-api` ships `curl`, `git`, `bash`, compilers, and a package manager, a shell inside that container has more tools available than the API needs.
+**Package reduction** means the final image contains only the operating system packages, language packages, and files the service needs at runtime. Every extra package can add vulnerabilities, licenses, update work, and tools an attacker can use after compromising the app. If `payments-api` ships `curl`, `git`, `bash`, compilers, and a package manager, a shell inside that container has more tools available than the API needs.
 
 The first place to reduce files is `.dockerignore`. The **build context** is the set of files Docker sends to the builder before the build starts. A broad context can send local secrets, test fixtures, coverage reports, Git history, and editor files into the build environment. A careful `.dockerignore` keeps that accidental material away from the builder.
 
@@ -253,7 +266,7 @@ Now the process runs as a non-root user. The next issue is file ownership, becau
 ## Own The Files The App Needs
 <!-- section-summary: File ownership makes the non-root user practical, because the process can read app files and write only to the small paths designed for runtime data. -->
 
-**File ownership** controls which user and group can read, write, or execute each path in the image. When Docker copies files into an image, those files often land as root-owned unless the Dockerfile says otherwise. If `payments-api` runs as UID `10001`, it can read world-readable files, but it cannot write to root-owned directories without write permissions.
+**File ownership** controls which user and group can read, write, or execute each path in the image. Files copied into an image often land as root-owned unless the Dockerfile says otherwise. If `payments-api` runs as UID `10001`, it can read world-readable files, but it cannot write to root-owned directories without write permissions.
 
 Production services should need very few writable paths. A payment API should write logs to standard output so the platform can collect them. It should read configuration from environment variables or mounted files. It may need a temporary directory for a short-lived upload, cache, or socket, but that directory should be explicit and small.
 
@@ -344,7 +357,7 @@ Now the build no longer leaves obvious secrets behind. The image still needs to 
 
 A **read-only root filesystem** means the container cannot write to its image filesystem after it starts. In Kubernetes, this is commonly configured with `readOnlyRootFilesystem: true`. The app can still write to explicitly mounted volumes, such as an `emptyDir` mounted at `/tmp`, but it cannot quietly create files anywhere in `/app`, `/usr`, or other image paths.
 
-This matters for `payments-api` because accidental writes hide inside application code. A framework might write compiled templates to the current directory. A library might create a cache under the user's home directory. A developer might configure file logging to `/app/logs` during local testing. Those choices work while the filesystem is writable, then fail when the platform team enables a read-only root filesystem.
+For `payments-api`, accidental writes can hide inside application code. A framework might write compiled templates to the current directory. A library might create a cache under the user's home directory. A developer might configure file logging to `/app/logs` during local testing. Those choices work while the filesystem is writable, then fail when the platform team enables a read-only root filesystem.
 
 The image can prepare for this by making app code read-only in practice and moving runtime writes to a known temporary path. These environment variables also give application code a clear place to look for temporary storage.
 
@@ -439,7 +452,7 @@ This command asks Docker Scout to report only critical and high CVEs and return 
 
 Scanning should feed review, not replace review. A small image can still contain a dangerous app bug. A large image can sometimes have a CVE in a package the app never calls. The scanner gives evidence, and the team still decides how to update the base image, bump an application dependency, remove a package, or document a temporary exception.
 
-The team should also scan for base-image freshness. A digest-pinned Dockerfile can intentionally hold an old base image, so a tool like Docker Scout's base-image policy or a dependency bot should open pull requests when the pinned digest has a newer secure replacement. That keeps repeatability and patching connected instead of choosing one and forgetting the other.
+The team should also scan for base-image freshness. A digest-pinned Dockerfile can intentionally hold an old base image, so a tool like Docker Scout's base-image policy or a dependency bot should open pull requests for newer secure replacements. That keeps repeatability and patching connected instead of choosing one and forgetting the other.
 
 Now the team has the checks. The final section turns those checks into a local and CI routine the team can reuse for every `payments-api` image.
 
@@ -503,7 +516,7 @@ jobs:
           docker scout cves payments-api:${{ github.sha }} --only-severity critical,high --exit-code
 ```
 
-The build step uses `load: true` so later shell commands can inspect the local image by tag. The `secrets` block passes the npm configuration as a BuildKit secret instead of putting it in a Dockerfile argument. The inspect step makes the non-root user a hard pipeline rule. The scan step blocks the pull request when Docker Scout reports critical or high vulnerabilities.
+The build step uses `load: true` so later shell commands can inspect the local image by tag. The `secrets` block passes the npm configuration as a BuildKit secret instead of putting it in a Dockerfile argument. The inspect step makes the non-root user a hard pipeline rule. The scan step blocks the pull request if Docker Scout reports critical or high vulnerabilities.
 
 A production pipeline would add tests, labels, provenance or attestations, SBOM generation, signing, and then a push to the private registry after the pre-push checks pass. Those topics belong to the next articles in the module. For this first article, the team has already done the essential image hardening work before the registry sees anything.
 
@@ -560,9 +573,7 @@ Hardening the image reduces what the team ships. The next question is how the te
 
 The next article moves from image contents to image trust and SBOMs. We will follow the same `payments-api` image into the private registry and look at package inventories, provenance, signing, and the checks that tell Kubernetes and security teams where the image came from.
 
----
-
-**References**
+## References
 
 - [Docker build best practices](https://docs.docker.com/build/building/best-practices/) - Covers base-image choice, pinned base images, `.dockerignore`, package reduction, frequent rebuilds, and CI builds.
 - [Docker base images](https://docs.docker.com/build/building/base-images/) - Explains what a base image is, Docker Official Images, verified publisher images, and minimal `scratch` images.

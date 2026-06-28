@@ -9,101 +9,131 @@ id: article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize
 
 ## Table of Contents
 
-1. [The Shared Goal](#the-shared-goal)
-2. [How Helm Packages an App](#how-helm-packages-an-app)
-3. [How Kustomize Packages an App](#how-kustomize-packages-an-app)
-4. [Ownership and Reuse](#ownership-and-reuse)
-5. [Release Lifecycle and Rollback](#release-lifecycle-and-rollback)
-6. [GitOps and Reviewability](#gitops-and-reviewability)
-7. [Incident Response](#incident-response)
-8. [A Decision for devpolaris-orders-api](#a-decision-for-devpolaris-orders-api)
+1. [One Goal, Two Source Shapes](#one-goal-two-source-shapes)
+2. [The Same Tiny Release In Helm](#the-same-tiny-release-in-helm)
+3. [The Same Tiny Release In Kustomize](#the-same-tiny-release-in-kustomize)
+4. [Ownership Drives The Choice](#ownership-drives-the-choice)
+5. [Reuse And Distribution](#reuse-and-distribution)
+6. [Release History And Rollback](#release-history-and-rollback)
+7. [GitOps And Review Flow](#gitops-and-review-flow)
+8. [How To Compare Rendered Output](#how-to-compare-rendered-output)
 9. [A Practical Selection Checklist](#a-practical-selection-checklist)
 10. [What's Next](#whats-next)
 
-## The Shared Goal
-<!-- section-summary: Helm and Kustomize both produce Kubernetes objects, so the final rendered YAML remains the main evidence. -->
+## One Goal, Two Source Shapes
+<!-- section-summary: Helm and Kustomize both produce Kubernetes YAML, but they ask teams to maintain different source shapes. -->
 
-Helm and Kustomize solve the same broad problem. Teams need a repeatable way to produce Kubernetes manifests for Deployments, Services, ConfigMaps, Secrets, Ingresses, Gateway routes, and other API objects.
+The team starts with readable Kubernetes YAML. Then dev, staging, and production need different image tags, replicas, config values, and hostnames. Copying the YAML into three folders repeats the same selectors, ports, labels, and probes, so the team reaches for a packaging tool.
 
-The cluster receives the same kind of final objects either way. Kubernetes does not care whether a Deployment came from a Helm template or a Kustomize overlay; it cares about the API version, kind, metadata, spec, selectors, ports, probes, resources, and labels in the final request.
+**Helm** packages Kubernetes templates, default values, chart metadata, dependencies, and release commands. A Helm chart can expose inputs such as image tag, replica count, host, and resources, then render Deployments, Services, ConfigMaps, and routes.
 
-That shared endpoint should calm down the tool debate a little. The practical question is which source format helps your team change and review `devpolaris-orders-api` with fewer surprises.
+**Kustomize** starts from valid Kubernetes YAML, then applies overlays, patches, generators, labels, names, images, and replicas. A Kustomize base can contain a real Deployment and Service, while each overlay describes staging or production choices.
 
-In this article, the release is the same release from the previous lesson. Production should run `ghcr.io/devpolaris/orders-api:2026.05.07`, use three replicas, serve traffic through `orders.devpolaris.example`, and keep the Service selector matched to the Pod labels. Helm and Kustomize can both express that result, and the team still needs to render the output before trusting it.
+The plain-English choice is about source shape and operations. Helm says, "Keep a package with values and templates, then let Helm record releases." Kustomize says, "Keep real YAML in a base, then layer environment changes on top." The orders API team can choose either source shape and still ask the same production question: what exact objects will Kubernetes receive?
 
 ![Helm chart and Kustomize overlay both producing rendered YAML, Kubernetes API input, and review evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/one-shared-goal.png)
 
 *The source format differs, but the review target stays the same: rendered Kubernetes YAML that the API server can receive.*
 
-## How Helm Packages an App
-<!-- section-summary: Helm packages templates, values, metadata, and release commands into a chart. -->
+## The Same Tiny Release In Helm
+<!-- section-summary: Helm fits a chart-shaped workflow where templates consume values and Helm records release revisions. -->
 
-Helm uses a package format called a **chart**. A chart is a directory of files that describes a related set of Kubernetes resources, and it can include templates, default values, metadata, helper templates, and optional chart dependencies.
+Start with the smallest Helm version of the orders API release.
 
-For the orders API, a small chart might use this layout. The chart owns the reusable templates, while the environment values files carry release choices.
+```
+charts/orders-api/
+  Chart.yaml
+  values.yaml
+  templates/
+    deployment.yaml
+    service.yaml
+```
 
-- `charts/orders-api/Chart.yaml`
-- `charts/orders-api/values.yaml`
-- `charts/orders-api/templates/deployment.yaml`
-- `charts/orders-api/templates/service.yaml`
-- `charts/orders-api/templates/configmap.yaml`
-- `charts/orders-api/templates/ingress.yaml`
-- `environments/staging.values.yaml`
-- `environments/prod.values.yaml`
-
-The values file carries release decisions. For production, the values might name the image tag, replica count, log level, catalog API URL, and public host.
+The values file describes release inputs.
 
 ```yaml
 replicaCount: 3
 image:
   repository: ghcr.io/devpolaris/orders-api
-  tag: "2026.05.07"
-config:
-  logLevel: info
-  catalogApiUrl: http://catalog-api.devpolaris-prod.svc.cluster.local:8080
-ingress:
-  enabled: true
-  host: orders.devpolaris.example
+  tag: "2026.06.16.1"
+service:
+  port: 80
+  targetPort: 8080
 ```
 
-The template reads those values and renders Kubernetes YAML. A Deployment template can keep the workload shape visible while still accepting the parts that change per environment.
+The Deployment template consumes image and replicas.
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ include "orders-api.fullname" . }}
 spec:
   replicas: {{ .Values.replicaCount }}
   template:
     spec:
       containers:
-        - name: api
+        - name: orders-api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          envFrom:
-            - configMapRef:
-                name: {{ include "orders-api.fullname" . }}-config
 ```
 
-Helm also gives a release workflow. The team can install, upgrade, inspect history, roll back to an earlier revision, and uninstall a release with Helm commands. That release layer matters for teams that deploy with Helm directly or use a Helm-aware delivery controller.
+Render for review.
 
-The cost is that templates can hide behavior. If the chart has many helpers and conditionals, a reviewer may need to read several files before they know which image or selector reaches production. Helm works well when the chart has a clear values contract and the team renders the manifest as part of every review.
+```bash
+$ helm template orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  > rendered/helm-prod.yaml
+```
 
-## How Kustomize Packages an App
-<!-- section-summary: Kustomize starts with plain YAML and applies overlays, patches, generators, labels, images, and replicas. -->
+Install or upgrade with Helm when the release is approved.
 
-Kustomize starts from valid Kubernetes YAML. The base contains objects such as `deployment.yaml` and `service.yaml`, and each overlay references the base while adding environment-specific changes.
+```bash
+$ helm upgrade --install orders ./charts/orders-api \
+  -f environments/prod.values.yaml \
+  -n devpolaris-prod \
+  --wait \
+  --timeout 5m
+```
 
-For the orders API, the Kustomize layout might look like this. The base holds shared Kubernetes objects, and each overlay holds the environment-specific changes.
+The Helm workflow gives operators release history.
 
-- `k8s/base/kustomization.yaml`
-- `k8s/base/deployment.yaml`
-- `k8s/base/service.yaml`
-- `k8s/overlays/staging/kustomization.yaml`
-- `k8s/overlays/prod/kustomization.yaml`
-- `k8s/overlays/prod/deployment-prod-patch.yaml`
+```bash
+$ helm history orders -n devpolaris-prod
+REVISION  STATUS    CHART             APP VERSION
+1         deployed  orders-api-0.1.0  2026.06.16.1
+```
 
-Production can set the image and replicas directly in the overlay. The file reads like a list of production decisions rather than a second Deployment copy.
+Helm fits well when a team wants a packaged chart, reusable values, chart dependencies, and built-in release operations.
+
+## The Same Tiny Release In Kustomize
+<!-- section-summary: Kustomize fits a YAML-first workflow where bases stay readable and overlays carry environment differences. -->
+
+The Kustomize version starts from valid YAML.
+
+```
+k8s/
+  base/
+    deployment.yaml
+    service.yaml
+    kustomization.yaml
+  overlays/
+    prod/
+      kustomization.yaml
+```
+
+The base Deployment is a normal Kubernetes object.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpolaris-orders-api
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: orders-api
+          image: ghcr.io/devpolaris/orders-api:2026.06.16-dev
+```
+
+The production overlay describes environment choices.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -113,143 +143,141 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/devpolaris/orders-api
-    newTag: 2026.05.07
+    newTag: 2026.06.16.1
 replicas:
   - name: devpolaris-orders-api
     count: 3
-patches:
-  - path: deployment-prod-patch.yaml
 ```
 
-That shape helps learners because the base files stay readable as Kubernetes objects. A teammate can open `deployment.yaml`, see a real Deployment, and then open the overlay to see the production changes.
-
-Kustomize has a smaller release layer than Helm. It builds YAML, and then `kubectl`, Git history, a GitOps controller, or a deployment pipeline handles apply history and rollback. That can work very well, especially in repositories where an environment folder already represents desired state.
-
-The cost appears when overlays accumulate many patches. A base plus ten patches can force reviewers to reconstruct the object from fragments. Kustomize works best when the base stays clear and overlays stay small.
-
-## Ownership and Reuse
-<!-- section-summary: Helm often fits platform-owned reusable packages, while Kustomize often fits app-owned manifests with environment overlays. -->
-
-Ownership means who maintains the package and who carries the support burden during a release. This matters more than the tool name because the owners decide what the package exposes and how reviewers prove safety.
-
-Kustomize often fits an app team that owns its Kubernetes manifests directly. The orders team can keep the Deployment and Service in the app repository, add staging and production overlays, and review environment differences without learning a template language first.
-
-Helm often fits a platform team that owns a reusable application contract. If twenty internal HTTP APIs share the same labels, probes, resource defaults, service ports, Ingress structure, and rollout strategy, a shared chart can reduce repeated work across services.
-
-The Helm chart should still have a clear boundary. Values such as image tag, replica count, public host, and resource requests are real service decisions. Internal label helpers, naming rules, and safe defaults can stay in the chart. A chart that exposes every Kubernetes field as a value has moved the complexity into another file rather than reducing it.
-
-Third-party software changes the decision too. Many controllers and platform tools ship official or community Helm charts, and installing those charts can make more sense than rewriting every object by hand. In that case, the local review focuses on chart version, values, rendered output, CRDs, and upgrade notes.
-
-## Release Lifecycle and Rollback
-<!-- section-summary: Helm stores release history, while Kustomize usually relies on Git, rendered artifacts, and the delivery system. -->
-
-A **release lifecycle** is the path for install, upgrade, rollback, and uninstall. Helm has this lifecycle built into the tool, so the team can ask Helm for release history and roll back a release to a previous revision.
+Render for review.
 
 ```bash
-$ helm history orders -n devpolaris-prod
-REVISION  STATUS      CHART             DESCRIPTION
-1         superseded  orders-api-0.1.0  Install complete
-2         deployed    orders-api-0.1.1  Upgrade complete
+$ kubectl kustomize k8s/overlays/prod \
+  > rendered/kustomize-prod.yaml
 ```
 
-If revision 2 has a bad image tag or a broken route, Helm gives the operator a direct rollback command. That command uses Helm's stored release history instead of asking the operator to find a previous YAML file first.
+Apply through Kustomize after approval.
 
 ```bash
-$ helm rollback orders 1 -n devpolaris-prod
-Rollback was a success! Happy Helming!
-```
-
-Kustomize usually uses a different release memory. The repository commit, rendered YAML artifact, GitOps sync record, or deployment pipeline record tells the team what changed and how to restore the previous desired state.
-
-```bash
-$ git log --oneline -- k8s/overlays/prod
-$ git revert <bad-release-commit>
 $ kubectl apply -k k8s/overlays/prod
+deployment.apps/devpolaris-orders-api configured
+service/devpolaris-orders-api unchanged
 ```
 
-Neither workflow removes the need to understand Kubernetes rollout behavior. A Helm rollback still changes Kubernetes objects and waits on controllers. A Kustomize revert still needs a rollout check. The difference is where the team finds the previous desired state and which command starts the recovery.
+Kustomize fits well when the app team owns plain Kubernetes YAML, environment changes are modest, and rollback lives in Git history, rendered artifacts, or the GitOps controller.
+
+## Ownership Drives The Choice
+<!-- section-summary: Tool choice should start with who owns the package and who supports it during releases and incidents. -->
+
+**Ownership** means who maintains the package and who answers for it during release review and incidents. The owner decides which fields are configurable, how validation works, where rendered output appears, and how rollback happens.
+
+Helm often fits platform-owned reusable packages. For example, a platform team might maintain one `http-api` chart used by twenty services. Each app team supplies values for image, replicas, resources, config, and route. The platform team owns the chart contract and keeps common probes, labels, and policies consistent.
+
+Kustomize often fits app-owned manifests. For example, the orders API team may own its Deployment and Service directly, then keep `staging` and `prod` overlays in the same repository. The app team can read the YAML, patch the fields they own, and review the production overlay without learning a shared chart API.
+
+The weak version of either workflow is unclear ownership. A shared Helm chart nobody owns can turn every release into template archaeology. A Kustomize overlay copied by five teams can drift into five private workload definitions. The tool should match the owner who will keep the package readable.
+
+## Reuse And Distribution
+<!-- section-summary: Helm usually gives stronger package distribution, while Kustomize keeps small service-specific YAML close to the app. -->
+
+**Reuse** means how many services or teams share the same packaging contract. Helm has a strong distribution story through chart repositories and OCI registries. A platform team can version a chart, publish it, and let many services consume it with values files.
+
+For example, DevPolaris might publish an internal `http-api` chart. Orders, catalog, billing, and inventory can all use the same chart, while each service supplies its own image and host.
+
+```yaml
+image:
+  repository: ghcr.io/devpolaris/orders-api
+  tag: "2026.06.16.1"
+ingress:
+  host: orders.devpolaris.example
+```
+
+Kustomize reuse usually looks more local. A base can be shared inside one app repository, then overlays customize staging, production, and preview. Kustomize can also compose remote bases, but teams should be careful with versioning and ownership when remote bases enter production.
+
+For the orders API, Kustomize may be enough if only one service needs this exact shape. Helm may pay off if many services need the same chart behavior and the organization can support a chart contract.
 
 ![Tool choice map showing ownership, reuse, release history, GitOps, incident evidence, and choosing between Helm and Kustomize](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/tool-choice-map.png)
 
 *Tool choice should rest on ownership, reuse, release history, GitOps workflow, and incident evidence instead of tool popularity.*
 
-## GitOps and Reviewability
-<!-- section-summary: GitOps workflows can use either tool, but every workflow needs rendered output that reviewers can inspect. -->
+## Release History And Rollback
+<!-- section-summary: Helm records release revisions, while Kustomize teams usually depend on Git, artifacts, or GitOps history for rollback. -->
 
-GitOps means the repository describes the desired cluster state, and a controller or pipeline reconciles the cluster toward that state. Both Helm and Kustomize can participate in GitOps workflows, depending on the controller and repository structure.
+**Release history** is the record that tells operators what was deployed and how to return to a previous state. Helm stores release revisions in the cluster. Kustomize does not add a release record by itself.
 
-Kustomize maps naturally to environment folders. A controller can point at `k8s/overlays/prod`, render that directory, and apply the result. The overlay directory itself acts like the production package.
-
-Helm maps naturally to chart plus values. A controller can point at `charts/orders-api` with `environments/prod.values.yaml`, render the chart, and apply the result. The values file acts like the production release input.
-
-Reviewability is the practical test for both choices. A reviewer should be able to render the proposed package, find the final Deployment image, verify the Service selector, inspect ConfigMap references, and compare the route host with the intended environment.
-
-```bash
-$ helm template orders ./charts/orders-api \
-  -f environments/prod.values.yaml > rendered/prod.yaml
-
-$ kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
-```
-
-The render command should appear in the repository or pull request template. If nobody can name the command, the team has not finished designing the packaging workflow. A packaging tool should make production changes easier to inspect, and rendered output is the inspection surface.
-
-## Incident Response
-<!-- section-summary: During incidents, the tool choice changes where operators find release evidence. -->
-
-Imagine production traffic starts failing after the orders API release. The team needs to know which image reached the cluster, which values or overlay produced it, whether the Service still selects the Pods, and which release can restore traffic.
-
-With Helm, the operator starts from the release record. That keeps the first questions close to the tool that performed the release.
+With Helm, rollback can start from Helm history.
 
 ```bash
 $ helm history orders -n devpolaris-prod
-$ helm get values orders -n devpolaris-prod
-$ helm get manifest orders -n devpolaris-prod > /tmp/orders-release.yaml
+REVISION  STATUS      CHART             APP VERSION
+1         deployed    orders-api-0.1.0  2026.06.16.1
+2         failed      orders-api-0.1.1  2026.06.16.2
+
+$ helm rollback orders 1 -n devpolaris-prod --wait --timeout 5m
+Rollback was a success! Happy Helming!
 ```
 
-Those commands show the Helm revision timeline, the values Helm stored for the release, and the manifest Helm rendered for the deployed revision. After that, the operator moves into normal Kubernetes checks.
+With Kustomize, rollback usually starts from Git or a stored rendered artifact.
 
 ```bash
-$ kubectl rollout status deployment/devpolaris-orders-api -n devpolaris-prod
-$ kubectl describe deployment devpolaris-orders-api -n devpolaris-prod
-$ kubectl get endpointslice -n devpolaris-prod -l kubernetes.io/service-name=devpolaris-orders-api
+$ git revert <overlay-change-commit>
+$ kubectl apply -k k8s/overlays/prod
 ```
 
-With Kustomize, the operator usually starts from Git and the desired overlay. That keeps the first questions close to the repository state and the delivery controller.
+Some GitOps systems add their own history and sync controls. In that workflow, the operator may revert a Git commit or ask the controller to sync a previous revision. The important part is not the brand of tool; the team needs a documented rollback path before production release.
 
-```bash
-$ git log --oneline -- k8s/overlays/prod
-$ kubectl kustomize k8s/overlays/prod > /tmp/orders-desired.yaml
-$ kubectl diff -f /tmp/orders-desired.yaml
+For stateful applications, both tools need extra care. Rolling back manifests does not automatically undo database migrations, emitted events, cache writes, or external API changes.
+
+## GitOps And Review Flow
+<!-- section-summary: GitOps workflows care most about rendered evidence, stable ownership, and a clear controller path from Git to cluster. -->
+
+**GitOps** means Git acts as the desired-state source, and a controller applies changes to the cluster. Helm and Kustomize both fit GitOps, but they place the package source in different shapes.
+
+In a Helm GitOps flow, the repository may store a chart reference and values files. The controller renders the chart and applies the output. Reviewers need the values diff, chart version, rendered manifest, and controller sync status.
+
+In a Kustomize GitOps flow, the repository may store bases and overlays directly. The controller builds the overlay and applies the output. Reviewers need the overlay diff, rendered manifest, and controller sync status.
+
+The orders API team should write down the same evidence either way.
+
+```yaml
+ReviewEvidence:
+  renderedManifest: rendered/prod.yaml
+  liveDiff: kubectl diff output or controller diff
+  rolloutCheck: kubectl rollout status deployment/devpolaris-orders-api
+  rollbackPath: Helm revision, Git revert, or previous artifact
 ```
 
-If a GitOps controller manages the overlay, its sync status joins the evidence. The operator checks whether the controller applied the commit, whether the live cluster drifted from the desired output, and whether reverting the commit will restore the previous object state.
+The rendered manifest prevents tool arguments from drifting away from production reality. Helm source and Kustomize source both need the same final proof.
 
-The same production questions show up in both workflows. The difference is the first evidence source: Helm release history for Helm, and Git plus delivery-controller history for Kustomize.
+## How To Compare Rendered Output
+<!-- section-summary: Comparing Helm and Kustomize should focus on the Kubernetes fields that affect runtime behavior. -->
 
-## A Decision for devpolaris-orders-api
-<!-- section-summary: The orders API can start with Kustomize and move to Helm if reuse and release needs justify the extra package layer. -->
+When evaluating tools, compare rendered YAML from the same release goal. The files may not match byte for byte. Field order, labels, annotations, and generated names can differ. Focus on runtime behavior.
 
-For the first version of `devpolaris-orders-api`, Kustomize is a strong fit. The team owns a small set of plain manifests, needs staging and production differences, and benefits from source files that look like the Kubernetes objects learners are studying.
-
-The production overlay can stay small: namespace, image tag, replica count, ConfigMap values, resource patch, and optional Ingress or Gateway route. CI can render the overlay, store the YAML artifact, and run a server-side dry run against a validation cluster.
-
-Helm starts to make more sense when the same workload pattern repeats across many services. If the platform team already knows that every API should expose the same values, labels, probes, rollout defaults, Service shape, and route options, a shared chart can reduce repeated decisions.
-
-A migration from Kustomize to Helm should prove that the runtime behavior stays the same. The team can render the old Kustomize overlay and the new Helm chart, then compare the important fields.
+Render both versions.
 
 ```bash
-$ kubectl kustomize k8s/overlays/prod > /tmp/orders-kustomize.yaml
 $ helm template orders ./charts/orders-api \
-  -f environments/prod.values.yaml > /tmp/orders-helm.yaml
-$ diff -u /tmp/orders-kustomize.yaml /tmp/orders-helm.yaml
+  -f environments/prod.values.yaml \
+  > rendered/helm-prod.yaml
+
+$ kubectl kustomize k8s/overlays/prod \
+  > rendered/kustomize-prod.yaml
 ```
 
-The files may not match byte for byte because tools can order fields and labels differently. The reviewer should focus on image, replicas, selectors, ports, probes, resources, namespace, ConfigMap references, and route host.
+Check the fields that carry risk.
+
+```bash
+$ grep -n "replicas:\\|image:\\|targetPort:\\|host:" rendered/helm-prod.yaml
+$ grep -n "replicas:\\|image:\\|targetPort:\\|host:" rendered/kustomize-prod.yaml
+```
+
+The reviewer should inspect image, replicas, selectors, ports, probes, resources, namespace, ConfigMap references, and route host. If both workflows render the same production behavior, the choice can move to ownership, reuse, release history, and team fluency.
 
 ## A Practical Selection Checklist
-<!-- section-summary: The right tool is the one that matches ownership, reuse, release history, review path, and incident workflow. -->
+<!-- section-summary: A checklist turns the decision into concrete production questions instead of a tool popularity contest. -->
 
-This checklist turns the tool choice into production questions. It helps the team avoid a popularity contest and pick the workflow they can operate.
+Use this checklist before choosing one tool for a service or module.
 
 | Question | Helm usually fits when... | Kustomize usually fits when... |
 |---|---|---|
@@ -262,7 +290,7 @@ This checklist turns the tool choice into production questions. It helps the tea
 
 For the orders API, the answer can change over time. A small team can start with Kustomize while the app shape settles, then move to Helm after the organization standardizes many APIs around the same package contract.
 
-The team should write down the render, diff, apply, and rollback commands in the repository either way. The package choice matters less than the review habit that proves what Kubernetes will receive.
+The team should write down the render, diff, apply, verify, and rollback commands either way. The package choice has value only when the team can operate it under production pressure.
 
 ![Selection checklist with ownership, reuse, rollback path, review path, and production fit questions](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/selection-checklist.png)
 

@@ -12,488 +12,466 @@ aliases:
 
 ## Table of Contents
 
-1. [The Pieces Around a Deployment](#the-pieces-around-a-deployment)
-2. [What a Deployment Is](#what-a-deployment-is)
+1. [From One Pod to a Managed Service](#from-one-pod-to-a-managed-service)
+2. [What a Deployment Adds](#what-a-deployment-adds)
 3. [ReplicaSets and Desired Replicas](#replicasets-and-desired-replicas)
 4. [Labels and Selectors](#labels-and-selectors)
-5. [A Production-Ready Deployment Manifest](#a-production-ready-deployment-manifest)
-6. [Applying and Inspecting the Deployment](#applying-and-inspecting-the-deployment)
-7. [Template Changes and Rollouts](#template-changes-and-rollouts)
-8. [Scaling and Self-Healing](#scaling-and-self-healing)
-9. [Debugging a Deployment](#debugging-a-deployment)
-10. [Common Selector Mistakes](#common-selector-mistakes)
-11. [Production Review Checklist](#production-review-checklist)
-12. [References](#references)
+5. [Start with a Deployment Skeleton](#start-with-a-deployment-skeleton)
+6. [Add Replicas and a Pod Template](#add-replicas-and-a-pod-template)
+7. [Add Production Runtime Details](#add-production-runtime-details)
+8. [Applying and Inspecting the Deployment](#applying-and-inspecting-the-deployment)
+9. [Template Changes and Rollouts](#template-changes-and-rollouts)
+10. [Scaling and Self-Healing](#scaling-and-self-healing)
+11. [Debugging a Deployment](#debugging-a-deployment)
+12. [Common Selector Mistakes](#common-selector-mistakes)
+13. [Production Review Checklist](#production-review-checklist)
 
-## The Pieces Around a Deployment
-<!-- section-summary: A Deployment sits above ReplicaSets and Pods, so it can keep a stateless service replicated, replaced, and updated. -->
+## From One Pod to a Managed Service
+<!-- section-summary: One Pod can run a container, and a Deployment adds the controller layer that keeps stateless service Pods replicated, replaced, and updated. -->
 
-The Pods article followed `devpolaris-orders-api` as one runnable unit. That was the right place to learn how Kubernetes starts containers, reports Pod status, runs probes, and exposes failure reasons such as `ImagePullBackOff` or `CrashLoopBackOff`.
+Start with the Pod from the previous article. One `notification-api` Pod can run the API container, get an internal IP, pass readiness checks, and serve traffic through a Service. That proves Kubernetes can run the application.
 
-A production API needs one more layer. The team wants three healthy copies of the orders API, a replacement when one Pod dies, and a careful path for shipping a new image. That is the job of a **Deployment**.
+A real service needs more than one Pod. If that single Pod is deleted, the API should come back. If traffic grows, the team may want three replicas. If a new image ships, Kubernetes should bring up new Pods and remove old Pods in a controlled order. Those are controller jobs, and the normal controller for a stateless application is a **Deployment**.
 
-Here is the article map before we write any YAML:
+For the Customer Notification Platform, the Deployment describes the desired service: keep three healthy `notification-api` Pods available, replace failed Pods, and roll out a new Pod template when the team publishes image `2026.06.14-2`.
 
-| Concept | Plain meaning | How it shows up for `devpolaris-orders-api` |
+Here is the article map before we write the full YAML:
+
+| Concept | Plain meaning | Notification example |
 |---|---|---|
-| **Deployment** | The object that describes the desired running application | Keep three orders API Pods available and roll out new templates |
+| **Deployment** | The object that describes the desired running application | Keep three `notification-api` Pods available and roll out new templates |
 | **ReplicaSet** | The lower-level controller that keeps a matching number of Pods alive | Maintain the Pods for one template revision |
 | **Replica count** | The number of matching Pods Kubernetes should keep | `replicas: 3` for normal traffic |
-| **Selector** | The label query that decides which Pods belong to the controller | `app: devpolaris-orders-api` |
+| **Selector** | The label query that decides which Pods belong to the controller | `app.kubernetes.io/name: notification-api` |
 | **Pod template** | The blueprint used to create new Pods | Image, probes, ports, resources, and labels for each replica |
-| **Rollout** | The process of moving from one Pod template revision to another | Ship image `2026-06-14.2` without dropping all traffic at once |
+| **Rollout** | The process of moving from one Pod template revision to another | Ship image `2026.06.14-2` without dropping all traffic at once |
 
-This chain explains why Kubernetes has more than one workload object. Pods run containers. ReplicaSets maintain a count of Pods. Deployments manage ReplicaSets so teams can update a stateless service with history and controlled replacement.
+Pods run containers. ReplicaSets maintain a count of Pods. Deployments manage ReplicaSets so teams can update a stateless service with history and controlled replacement.
 
 ![Deployment ownership chain infographic showing a Deployment with replicas, a ReplicaSet with desired count, ready and unready Pods, and a Service routing only to ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-ownership-chain.png)
 
 _This infographic shows the ownership chain from Deployment to ReplicaSet to Pod, while the Service only sends traffic to Pods that are ready._
 
-## What a Deployment Is
-<!-- section-summary: A Deployment declares the desired state for a stateless workload and lets the Deployment controller move the cluster toward that state. -->
+## What a Deployment Adds
+<!-- section-summary: A Deployment declares the desired state for a stateless workload and lets the Deployment controller keep the cluster aligned with that state. -->
 
-A **Deployment** is a Kubernetes workload object for running a set of replaceable Pods, usually for an application whose durable state lives outside any single Pod. The Deployment says how many replicas should exist, which Pods count as part of the application, and what new Pods should look like.
+A **Deployment** is a Kubernetes workload object for running a set of replaceable Pods. It says how many replicas should exist, which Pods count as part of the application, and what new Pods should look like.
 
-For `devpolaris-orders-api`, stateless means any healthy replica can handle an order request because durable data lives in PostgreSQL, object storage, a message queue, or another external system. The Pod can keep short-lived memory caches and open connections, but the business record of an order cannot depend on one Pod name staying alive forever.
+For `notification-api`, stateless means any healthy replica can receive a request to create a notification because durable state lives outside the Pod. The API writes notification records to a database and publishes work to a queue. The Pod can keep short-lived memory caches and open connections, but the business record cannot depend on one Pod name staying alive forever.
 
-The Deployment controller watches the desired state and the actual state. If the desired state says three replicas and the actual state has two ready Pods, the controller path creates another Pod through a ReplicaSet. If the Pod template changes because the image tag changed, the Deployment creates a new ReplicaSet for that new template and scales it in while scaling the old one out.
+The Deployment controller watches desired state and actual state. If the desired state says three replicas and the actual state has two ready Pods, the controller path creates another Pod through a ReplicaSet. If the Pod template changes because the image tag changed, the Deployment creates a new ReplicaSet for that new template and scales it in while scaling the old one out.
 
-This gives the team an operating promise that a direct Pod cannot express by itself. The team can review a manifest, apply it, watch the rollout, inspect old ReplicaSets, and roll back to an earlier revision when a new version fails. The Deployment owns the daily interface, while the ReplicaSet handles the lower-level count.
+That gives the team an operating interface that a direct Pod cannot provide. The team can review a manifest, apply it, watch rollout progress, inspect old ReplicaSets, and roll back to an earlier revision when a new version fails.
+
+`notification-worker` is also a good Deployment candidate. It reads from a queue, processes messages, and sends emails or SMS messages. If one worker Pod disappears, another worker can pick up the next message. The API and worker should usually be separate Deployments because they scale and fail in different ways.
 
 ## ReplicaSets and Desired Replicas
 <!-- section-summary: A ReplicaSet keeps a stable number of matching Pods running for one Pod template revision, and a Deployment normally manages ReplicaSets for you. -->
 
 A **ReplicaSet** is the controller that keeps a specified number of matching Pods running. It has three core pieces: a selector that identifies Pods, a replica count that says how many should exist, and a Pod template used when it needs to create new Pods.
 
-In normal production work, teams usually create a Deployment and let the Deployment create ReplicaSets. The ReplicaSet still matters because it shows what Kubernetes is doing during a rollout. When image `2026-06-14.1` runs, there is a ReplicaSet for that template. When image `2026-06-14.2` ships, the Deployment creates a new ReplicaSet for the new template.
+In normal production work, teams usually create a Deployment and let the Deployment create ReplicaSets. ReplicaSets still deserve attention during rollout debugging. When image `2026.06.14-1` runs, there is a ReplicaSet for that template. When image `2026.06.14-2` ships, the Deployment creates a new ReplicaSet for the new template.
 
 The relationship looks like this in the API:
 
 ```bash
-$ kubectl get deployment,replicaset,pod -l app=devpolaris-orders-api
-NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/devpolaris-orders-api    3/3     3            3           4m
+$ kubectl get deployment,replicaset,pod -n notifications \
+  -l app.kubernetes.io/name=notification-api
+NAME                              READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/notification-api  3/3     3            3           4m
 
-NAME                                                DESIRED   CURRENT   READY   AGE
-replicaset.apps/devpolaris-orders-api-6b8c9b6c7f    3         3         3       4m
+NAME                                         DESIRED   CURRENT   READY   AGE
+replicaset.apps/notification-api-6b8c9b6c7f  3         3         3       4m
 
-NAME                                      READY   STATUS    RESTARTS   AGE
-pod/devpolaris-orders-api-6b8c9b6c7f-2m9hx 1/1     Running   0          3m55s
-pod/devpolaris-orders-api-6b8c9b6c7f-h7t4q 1/1     Running   0          3m55s
-pod/devpolaris-orders-api-6b8c9b6c7f-vm5pb 1/1     Running   0          3m55s
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/notification-api-6b8c9b6c7f-a  1/1     Running   0          3m
 ```
 
-The Deployment row gives the service-level view. The ReplicaSet row gives the count for the current template revision. The Pod rows show the actual runnable units. That outside-to-inside reading is the habit you want during incidents.
-
-The generated suffix matters. Kubernetes adds a `pod-template-hash` label so the ReplicaSet for one template revision can identify its Pods. Kubernetes chooses that hash for the team. It lets old and new ReplicaSets exist at the same time during an update without both controllers claiming the same Pods.
+The Deployment is the object you edit. The ReplicaSet is the object maintaining the current template's Pods. The Pods are the runnable units.
 
 ## Labels and Selectors
-<!-- section-summary: Labels describe Kubernetes objects, and selectors decide which Pods a controller or Service will act on. -->
+<!-- section-summary: Labels and selectors define ownership, so the Deployment, ReplicaSet, Pod template, and Service must agree on the same stable identity. -->
 
-**Labels** are key-value pairs attached to Kubernetes objects. They describe identity and grouping in a way humans, controllers, and commands can use. A Pod can have labels such as `app=devpolaris-orders-api`, `component=api`, and `environment=production`.
+A **label** is a key-value tag on a Kubernetes object. A **selector** is a query that matches labels. Deployments use selectors to decide which Pods belong to them. Services use selectors to decide which Pods receive traffic.
 
-A **selector** is a query over labels. In a Deployment, the selector tells the ReplicaSet which Pods belong to it. In a Service, the selector tells Kubernetes which Pods should receive traffic. That makes labels and selectors a real contract between workload ownership and network routing.
+For `notification-api`, the stable app identity can be:
 
-Here is the key part of the orders API Deployment:
+```yaml
+app.kubernetes.io/name: notification-api
+app.kubernetes.io/component: api
+app.kubernetes.io/part-of: customer-notification-platform
+```
+
+The Deployment selector must match the Pod template labels:
 
 ```yaml
 spec:
   selector:
     matchLabels:
-      app: devpolaris-orders-api
-      component: api
+      app.kubernetes.io/name: notification-api
+      app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app: devpolaris-orders-api
-        component: api
+        app.kubernetes.io/name: notification-api
+        app.kubernetes.io/component: api
 ```
 
-The selector and template labels match. That means Pods created from the template will be counted by the ReplicaSet. A Service can use the same stable identity labels to route traffic:
+Those two blocks form the ownership contract. If the selector and template labels do not match, Kubernetes rejects the Deployment. If a Service selector drifts away from those labels, the Deployment can be healthy while traffic goes nowhere.
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: devpolaris-orders-api
-spec:
-  selector:
-    app: devpolaris-orders-api
-    component: api
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-```
+Selectors also create a long-term constraint. In an existing Deployment, `.spec.selector` is effectively something you plan carefully up front. Changing it later is limited, and the safer migration often creates a new Deployment with a new name and selector.
 
-The labels should describe stable application identity rather than temporary implementation details. An image tag is a poor Service selector because the tag changes during a rollout. A stable label such as `app=devpolaris-orders-api` lets old and new Pods both receive traffic when they are ready, which is exactly what a rolling update needs.
+## Start with a Deployment Skeleton
+<!-- section-summary: The Deployment skeleton shows the controller shape before adding every runtime detail. -->
 
-## A Production-Ready Deployment Manifest
-<!-- section-summary: A practical Deployment manifest combines replicas, selectors, a Pod template, probes, resources, and rollout settings. -->
-
-A production Deployment manifest is the versioned description of how the service should run. Teams often keep this YAML in a Git repository, sometimes rendered by Helm, Kustomize, or another delivery tool. The important part is that the desired state is reviewable and repeatable.
-
-Here is a realistic starting manifest for `devpolaris-orders-api`:
+The smallest useful Deployment shape has identity, a selector, and an empty Pod template area that we can fill in:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: devpolaris-orders-api
-  labels:
-    app: devpolaris-orders-api
-    component: api
+  name: notification-api
+  namespace: notifications
 spec:
-  replicas: 3
-  revisionHistoryLimit: 5
-  progressDeadlineSeconds: 300
-  minReadySeconds: 10
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
   selector:
     matchLabels:
-      app: devpolaris-orders-api
-      component: api
+      app.kubernetes.io/name: notification-api
+      app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app: devpolaris-orders-api
-        component: api
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:2026-06-14.1
-          ports:
-            - name: http
-              containerPort: 8080
-          envFrom:
-            - configMapRef:
-                name: orders-api-config
-            - secretRef:
-                name: orders-api-secrets
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
-          startupProbe:
-            httpGet:
-              path: /health/startup
-              port: http
-            periodSeconds: 5
-            failureThreshold: 24
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: http
-            periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: /health/live
-              port: http
-            periodSeconds: 20
-            timeoutSeconds: 2
-            failureThreshold: 3
+        app.kubernetes.io/name: notification-api
+        app.kubernetes.io/component: api
 ```
 
-Several fields deserve attention. `replicas: 3` asks for three matching Pods. `revisionHistoryLimit: 5` keeps a small number of old ReplicaSets so rollback has history without keeping old objects forever. `progressDeadlineSeconds` gives Kubernetes a time window for rollout progress before it marks the rollout as failed.
+This snippet is not enough to run yet because the Pod template has no `spec.containers`. It gives you the main shape without hiding the important relationship: the selector and template labels must agree.
 
-The rolling update settings control replacement pace. `maxSurge: 1` allows one extra Pod above the desired count during the rollout. `maxUnavailable: 0` asks Kubernetes to keep the existing ready capacity available while new Pods come up. These values cost extra temporary capacity, but they suit a small API where dropping ready replicas during deployment would hurt users.
+Add the desired replica count next:
 
-The Pod template contains the same Pod concerns from the previous article. Probes protect traffic and restart behavior. Resource requests help scheduling. Configuration comes from ConfigMaps and Secrets rather than raw values pasted through the manifest. The Deployment is only as healthy as the Pod template it keeps creating.
+```yaml
+spec:
+  replicas: 3
+```
+
+`replicas: 3` means Kubernetes should keep three matching Pods alive. It does not mean three nodes. The scheduler may place multiple replicas on one node unless other rules, topology settings, or capacity limits spread them out.
+
+## Add Replicas and a Pod Template
+<!-- section-summary: The Pod template is the blueprint each ReplicaSet uses when it needs to create another matching Pod. -->
+
+A **Pod template** is the `spec.template` section inside a Deployment. It describes the Pods the Deployment should create. Any meaningful change inside the template, such as a new image, environment variable, label, resource setting, or probe, creates a new template revision.
+
+Here is the first runnable container part of the template:
+
+```yaml
+template:
+  metadata:
+    labels:
+      app.kubernetes.io/name: notification-api
+      app.kubernetes.io/component: api
+  spec:
+    containers:
+      - name: api
+        image: ghcr.io/customer-notification/notification-api:2026.06.14-1
+        ports:
+          - name: http
+            containerPort: 8080
+```
+
+This looks like the direct Pod article because the Deployment eventually creates Pods. The difference is ownership. If a Pod created from this template disappears, the ReplicaSet notices the count dropped and creates a replacement.
+
+The worker service would use the same Deployment pattern with a different component label and container command:
+
+```yaml
+metadata:
+  name: notification-worker
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-worker
+```
+
+That small split helps operations. Scaling the API does not accidentally scale the worker. Rolling back the worker does not roll back the public API.
+
+## Add Production Runtime Details
+<!-- section-summary: Production templates add resource settings, probes, configuration references, and rollout limits so the Deployment can update safely. -->
+
+After the skeleton and container shape are clear, add runtime fields that affect production behavior.
+
+**Resource requests and limits** describe the capacity shape. The scheduler uses requests for placement, and the kubelet/runtime enforce limits after the container starts.
+
+```yaml
+resources:
+  requests:
+    cpu: 300m
+    memory: 384Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+```
+
+**Readiness probes** protect traffic. The Pod can be running while the app is still connecting to the database or queue. The Service should only route to the Pod after readiness passes.
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  periodSeconds: 5
+  failureThreshold: 3
+```
+
+**Rollout settings** control replacement speed. For a small critical API, `maxUnavailable: 0` and `maxSurge: 1` keep all old replicas serving while Kubernetes adds one extra new Pod at a time.
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+progressDeadlineSeconds: 300
+revisionHistoryLimit: 5
+```
+
+`progressDeadlineSeconds` makes a stuck rollout visible as a Deployment condition. `revisionHistoryLimit` keeps old ReplicaSets around so rollback has previous templates available.
 
 ## Applying and Inspecting the Deployment
-<!-- section-summary: Deployment inspection starts from desired and available counts, then moves through ReplicaSets and Pods until the failing layer is clear. -->
+<!-- section-summary: Applying a Deployment should be followed by checks on the Deployment, ReplicaSet, Pods, rollout status, and traffic readiness. -->
 
-The team can apply the manifest through the normal Kubernetes API path. In a production workflow, CI or GitOps automation may run the apply step, but the commands are the same shape.
-
-```bash
-$ kubectl apply -f deployment.yaml
-deployment.apps/devpolaris-orders-api created
-
-$ kubectl rollout status deployment/devpolaris-orders-api
-deployment "devpolaris-orders-api" successfully rolled out
-```
-
-The first inspection compares the desired state with current availability:
+Apply the manifest through your normal delivery path. In a local learning cluster, that may be a direct command:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   3/3     3            3           2m
+$ kubectl apply -f notification-api-deployment.yaml
+deployment.apps/notification-api created
+
+$ kubectl rollout status deployment/notification-api -n notifications --timeout=5m
+deployment "notification-api" successfully rolled out
 ```
 
-`READY` shows ready replicas over desired replicas. `UP-TO-DATE` shows how many Pods match the latest template. `AVAILABLE` shows how many Pods have been ready long enough to count as available. Those numbers tell you whether the rollout reached the intended steady state.
+`kubectl apply` sends the desired state to the API server. `kubectl rollout status` watches the Deployment until the rollout reaches the requested state or the timeout is reached.
 
-The next inspection includes the ownership chain:
+Then inspect the controller chain:
 
 ```bash
-$ kubectl get rs,pod -l app=devpolaris-orders-api,component=api
-NAME                                                DESIRED   CURRENT   READY   AGE
-replicaset.apps/devpolaris-orders-api-6b8c9b6c7f    3         3         3       2m
+$ kubectl get deployment,rs,pod -n notifications \
+  -l app.kubernetes.io/name=notification-api
+NAME                              READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/notification-api  3/3     3            3           5m
 
-NAME                                      READY   STATUS    RESTARTS   AGE
-pod/devpolaris-orders-api-6b8c9b6c7f-2m9hx 1/1     Running   0          2m
-pod/devpolaris-orders-api-6b8c9b6c7f-h7t4q 1/1     Running   0          2m
-pod/devpolaris-orders-api-6b8c9b6c7f-vm5pb 1/1     Running   0          2m
+NAME                                         DESIRED   CURRENT   READY   AGE
+replicaset.apps/notification-api-85d6ccf8d8  3         3         3       5m
+
+NAME                               READY   STATUS    RESTARTS   AGE
+pod/notification-api-85d6ccf8d8-a  1/1     Running   0          4m
+pod/notification-api-85d6ccf8d8-b  1/1     Running   0          4m
+pod/notification-api-85d6ccf8d8-c  1/1     Running   0          4m
 ```
 
-If the Deployment says `1/3`, this chain shows whether the ReplicaSet created three Pods and whether those Pods are failing individually. That saves the team from treating every Deployment problem as a Deployment-controller problem.
+That output proves that the Deployment has three available replicas, the ReplicaSet has the desired count, and each Pod is ready. A smoke test should follow Kubernetes success:
+
+```bash
+$ curl -fsS https://notify.devpolaris.example/internal/smoke/template-preview
+{"status":"ok","channel":"email","template":"password-reset"}
+```
+
+Kubernetes can tell you the Pods are ready. The smoke test tells you the application path works.
 
 ## Template Changes and Rollouts
-<!-- section-summary: A Deployment creates a new ReplicaSet when the Pod template changes, and rollout commands show whether the new revision is progressing. -->
+<!-- section-summary: Changing the Pod template creates a new ReplicaSet, and the Deployment shifts traffic capacity from old Pods to new Pods. -->
 
-A **rollout** is the transition from one Deployment revision to another. Kubernetes creates a new revision when the Deployment’s Pod template changes. Updating the image, probes, environment sources, resource requests, labels inside the template, or container command can all create a new ReplicaSet.
+A **rollout** starts when the Deployment Pod template changes. Updating only `metadata.annotations` on the Deployment object does not create new Pods. Updating the image, environment variables, template labels, probes, or resources does.
 
-The orders API team ships image `2026-06-14.2` after fixing a checkout bug. The template change can come from editing YAML in Git, from CI updating a rendered manifest, or from a direct command during a training exercise.
-
-```bash
-$ kubectl set image deployment/devpolaris-orders-api api=ghcr.io/devpolaris/orders-api:2026-06-14.2
-deployment.apps/devpolaris-orders-api image updated
-
-$ kubectl rollout status deployment/devpolaris-orders-api
-Waiting for deployment "devpolaris-orders-api" rollout to finish: 1 out of 3 new replicas have been updated...
-deployment "devpolaris-orders-api" successfully rolled out
-```
-
-During the rollout, the Deployment scales the new ReplicaSet up and the old ReplicaSet down according to the strategy. Readiness probes decide when each new Pod can count as ready. With `maxUnavailable: 0`, Kubernetes waits for new ready capacity before reducing old ready capacity.
-
-Rollout history gives the team a quick view of revisions:
+The notification team ships version `2026.06.14-2` with better provider retry handling:
 
 ```bash
-$ kubectl rollout history deployment/devpolaris-orders-api
-deployment.apps/devpolaris-orders-api
-REVISION  CHANGE-CAUSE
-1         <none>
-2         <none>
+$ kubectl set image deployment/notification-api -n notifications \
+  api=ghcr.io/customer-notification/notification-api:2026.06.14-2
+deployment.apps/notification-api image updated
 ```
 
-When a new version fails, the team can return to the previous Deployment revision:
+Now the Deployment owns two ReplicaSets for a while:
 
 ```bash
-$ kubectl rollout undo deployment/devpolaris-orders-api
-deployment.apps/devpolaris-orders-api rolled back
-
-$ kubectl rollout status deployment/devpolaris-orders-api
-deployment "devpolaris-orders-api" successfully rolled out
+$ kubectl get rs -n notifications -l app.kubernetes.io/name=notification-api
+NAME                         DESIRED   CURRENT   READY   AGE
+notification-api-85d6ccf8d8  2         2         2       20m
+notification-api-6f8f7b9d88  2         2         1       45s
 ```
 
-Rollback is strongest when every release has a clear image tag, the Deployment keeps enough revision history, and database changes stay backward-compatible with the previous application version. A rollback command can move Pods back to an older template, but it cannot automatically undo a destructive database migration.
+The new ReplicaSet grows as new Pods become ready. The old ReplicaSet shrinks only when the strategy permits removal. With `maxUnavailable: 0`, Kubernetes avoids reducing available capacity below the desired replica count during the update.
 
 ![Rolling update with two ReplicaSets infographic showing an old ReplicaSet serving v1 Pods while a new ReplicaSet brings up v2 Pods through readiness and maxSurge one](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/rolling-update-two-replicasets.png)
 
 _This infographic makes the rollout handoff visible: the new ReplicaSet grows only as new Pods become ready, while the old ReplicaSet shrinks after capacity is safe._
 
 ## Scaling and Self-Healing
-<!-- section-summary: Scaling changes the desired replica count, and self-healing is the controller loop replacing Pods that no longer match that desired count. -->
+<!-- section-summary: Deployments keep the requested replica count by creating replacement Pods and by scaling the active ReplicaSet. -->
 
-**Scaling** changes how many replicas the Deployment should maintain. If traffic rises for the orders API during a launch, the team may need five Pods instead of three. A direct command can change the live replica count quickly.
-
-```bash
-$ kubectl scale deployment devpolaris-orders-api --replicas=5
-deployment.apps/devpolaris-orders-api scaled
-
-$ kubectl get deployment devpolaris-orders-api
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   5/5     5            5           18m
-```
-
-In a Git-managed production workflow, the team usually follows up by changing the replica count in the manifest or values file. That keeps the intended steady state visible in review. A manual scale can help during an incident, and a recorded configuration change keeps the cluster from drifting away from the declared desired state.
-
-Some clusters use a HorizontalPodAutoscaler to manage replicas from metrics such as CPU or custom request traffic. When an autoscaler owns the replica count, teams usually let it manage `.spec.replicas` instead of repeatedly overwriting it through Deployment YAML. The Deployment still owns the Pod template and rollout behavior.
-
-Self-healing uses the same desired-count loop. If one orders API Pod is deleted, the ReplicaSet notices that only four of five matching Pods remain and creates a replacement.
+**Scaling** changes the desired replica count. If notification traffic increases during a marketing campaign, the team may scale the API from three replicas to five:
 
 ```bash
-$ kubectl delete pod devpolaris-orders-api-6b8c9b6c7f-h7t4q
-pod "devpolaris-orders-api-6b8c9b6c7f-h7t4q" deleted
+$ kubectl scale deployment/notification-api -n notifications --replicas=5
+deployment.apps/notification-api scaled
 
-$ kubectl get pods -l app=devpolaris-orders-api,component=api
-NAME                                      READY   STATUS              RESTARTS   AGE
-devpolaris-orders-api-6b8c9b6c7f-2m9hx   1/1     Running             0          22m
-devpolaris-orders-api-6b8c9b6c7f-vm5pb   1/1     Running             0          22m
-devpolaris-orders-api-6b8c9b6c7f-xd8fc   0/1     ContainerCreating   0          4s
+$ kubectl get deployment notification-api -n notifications
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+notification-api   5/5     5            5           30m
 ```
 
-The replacement Pod has a different name because the Deployment treats these Pods as replaceable replicas. That is a good fit for stateless APIs. Workloads that need stable Pod names and stable volume identity usually use StatefulSets instead.
+Kubernetes creates or removes Pods through the active ReplicaSet to match the new desired count. A Horizontal Pod Autoscaler can change this number automatically, but the Deployment still owns the Pod template and rollout history.
+
+**Self-healing** means the controller repairs drift from the desired state. If one Pod is deleted, the ReplicaSet creates another:
+
+```bash
+$ kubectl delete pod -n notifications notification-api-85d6ccf8d8-a
+pod "notification-api-85d6ccf8d8-a" deleted
+
+$ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-api
+NAME                               READY   STATUS              AGE
+notification-api-85d6ccf8d8-b      1/1     Running             31m
+notification-api-85d6ccf8d8-c      1/1     Running             31m
+notification-api-85d6ccf8d8-r9k2m  0/1     ContainerCreating   3s
+```
+
+The replacement Pod gets a new name. That is normal for stateless services. Clients should use a Service, not individual Pod names.
 
 ## Debugging a Deployment
-<!-- section-summary: Deployment debugging reads from the controller outward, then follows the ownership chain to ReplicaSets, Pods, events, and logs. -->
+<!-- section-summary: Deployment debugging starts at rollout status, then moves through Deployment conditions, ReplicaSets, Pod events, and application logs. -->
 
-Deployment debugging starts with one question: did the Deployment create the desired Pods, and did those Pods become available? The answer lives in status fields, events, ReplicaSet counts, Pod status, and logs.
-
-The first command gives the high-level rollout state:
+When a Deployment looks stuck, start with rollout status:
 
 ```bash
-$ kubectl describe deployment devpolaris-orders-api
-Name:                   devpolaris-orders-api
-Replicas:               3 desired | 2 updated | 4 total | 2 available | 2 unavailable
-StrategyType:           RollingUpdate
-MinReadySeconds:        10
+$ kubectl rollout status deployment/notification-api -n notifications --timeout=60s
+Waiting for deployment "notification-api" rollout to finish: 1 out of 3 new replicas have been updated...
+error: timed out waiting for the condition
+```
+
+Then check the Deployment conditions and recent events:
+
+```bash
+$ kubectl describe deployment notification-api -n notifications
 Conditions:
   Type           Status  Reason
-  Available      False   MinimumReplicasUnavailable
-  Progressing    True    ReplicaSetUpdated
+  Available      True    MinimumReplicasAvailable
+  Progressing    False   ProgressDeadlineExceeded
 Events:
-  Type    Reason             Age   From                   Message
-  Normal  ScalingReplicaSet  45s   deployment-controller  Scaled up replica set devpolaris-orders-api-85d6ccf8d8 to 2
+  Normal   ScalingReplicaSet  Scaled up replica set notification-api-7c9d4c685b to 1
 ```
 
-This says the rollout is still in progress and the available replica count is below the target. The next command shows which ReplicaSets exist:
+The Deployment tells you progress stalled. The Pods usually tell you why:
 
 ```bash
-$ kubectl get rs -l app=devpolaris-orders-api,component=api
-NAME                                  DESIRED   CURRENT   READY   AGE
-devpolaris-orders-api-6b8c9b6c7f      2         2         2       1h
-devpolaris-orders-api-85d6ccf8d8      2         2         0       2m
+$ kubectl get pods -n notifications \
+  -l app.kubernetes.io/name=notification-api -L pod-template-hash
+NAME                               READY   STATUS             HASH
+notification-api-85d6ccf8d8-a      1/1     Running            85d6ccf8d8
+notification-api-85d6ccf8d8-b      1/1     Running            85d6ccf8d8
+notification-api-7c9d4c685b-m8vnn  0/1     CrashLoopBackOff   7c9d4c685b
 ```
 
-The new ReplicaSet has zero ready Pods, so the investigation moves to Pods for that hash:
+Now inspect the failing Pod:
 
 ```bash
-$ kubectl get pod -l pod-template-hash=85d6ccf8d8
-NAME                                      READY   STATUS             RESTARTS   AGE
-devpolaris-orders-api-85d6ccf8d8-9p2sr   0/1     CrashLoopBackOff   4          2m
-devpolaris-orders-api-85d6ccf8d8-cb76n   0/1     CrashLoopBackOff   4          2m
-
-$ kubectl logs devpolaris-orders-api-85d6ccf8d8-9p2sr -c api --previous --tail=40
-2026-06-14T11:18:03Z fatal: missing ORDERS_DB_HOST
+$ kubectl logs -n notifications notification-api-7c9d4c685b-m8vnn --previous --tail=40
+Error: NOTIFICATION_EVENT_TOPIC is required
 ```
 
-Now the failure has a specific cause. The new template points to an app version or configuration path that starts without the required environment variable. The team can fix the manifest and roll forward, or undo the rollout if the current live state needs fast recovery.
-
-For image pull failures, the Deployment view may only show stuck progress. The Pod events reveal the real reason:
-
-```bash
-$ kubectl describe pod devpolaris-orders-api-85d6ccf8d8-9p2sr
-Events:
-  Type     Reason   Age   From     Message
-  Warning  Failed   51s   kubelet  Failed to pull image: unauthorized
-```
-
-For readiness failures, the Pods may be running while the Deployment remains unavailable:
-
-```bash
-$ kubectl describe pod devpolaris-orders-api-85d6ccf8d8-9p2sr
-Events:
-  Type     Reason     Age   From     Message
-  Warning  Unhealthy  24s   kubelet  Readiness probe failed: HTTP probe failed with statuscode: 503
-```
-
-The Deployment controller is doing its job in all of these examples. It is waiting because the Pods created by the new ReplicaSet cannot become ready. That distinction matters during incidents because the fix belongs in the template, image, config, dependency, or registry path rather than in the controller itself.
+This is a template bug, not a cluster capacity problem. The repair may be a forward patch that adds the missing environment variable or a rollback to the previous revision.
 
 ## Common Selector Mistakes
-<!-- section-summary: Selector mistakes either block the Deployment update, leave Pods outside controller ownership, or send Service traffic to the wrong Pods. -->
+<!-- section-summary: Selector mistakes cause ownership and routing bugs, so teams should keep app identity labels stable and avoid broad Service selectors. -->
 
-Selector mistakes cause some of the most confusing Kubernetes workload problems because the YAML can look almost correct. The fields are small, but they decide ownership and traffic.
+The first mistake is a mismatch between `spec.selector.matchLabels` and `spec.template.metadata.labels`. Kubernetes rejects that Deployment because it would create Pods the Deployment does not own.
 
-The first mistake is a selector that differs from the Pod template labels. Kubernetes validates new Deployments and rejects this shape because the Deployment would create Pods it cannot select.
+The second mistake is trying to change the selector on an existing Deployment as part of a rename. If `notification-api` needs to become `message-api`, create a planned migration. A new Deployment with a new name and selector lets the team adjust the Service selector deliberately, verify traffic, and then remove the old Deployment.
 
-```yaml
-spec:
-  selector:
-    matchLabels:
-      app: devpolaris-orders-api
-  template:
-    metadata:
-      labels:
-        app: orders-api
-```
-
-The error points directly at the mismatch:
-
-```bash
-$ kubectl apply -f deployment.yaml
-The Deployment "devpolaris-orders-api" is invalid:
-spec.template.metadata.labels: Invalid value: map[string]string{"app":"orders-api"}:
-`selector` does not match template `labels`
-```
-
-The second mistake is trying to change the selector on an existing Deployment. In `apps/v1`, the selector is immutable after creation. Kubernetes rejects the update because changing ownership rules underneath live ReplicaSets could orphan Pods or make controllers fight over them.
-
-```bash
-$ kubectl apply -f deployment.yaml
-The Deployment "devpolaris-orders-api" is invalid:
-spec.selector: Invalid value: v1.LabelSelector{MatchLabels:map[string]string{"app":"orders-api"}}:
-field is immutable
-```
-
-When this happens, the team should inspect the live selector and align the file with it if the live selector is correct:
-
-```bash
-$ kubectl get deployment devpolaris-orders-api -o yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-spec:
-  selector:
-    matchLabels:
-      app: devpolaris-orders-api
-      component: api
-```
-
-If the label contract truly needs to change, the safer path is a planned migration. The migration creates a new Deployment with a new name and selector, adjusts the Service selector deliberately, verifies traffic, and then removes the old Deployment. That keeps ownership and routing changes visible instead of hiding them inside one failed update.
-
-The third mistake is a Service selector that is too broad. A Service selector such as `component: api` may match several APIs in the same namespace. For the orders API, the Service should include the stable app identity as well as the component.
+The third mistake is a Service selector that is too broad. A Service selector such as `app.kubernetes.io/component: api` may match several APIs in the same namespace. The notification API Service should include the stable app identity as well as the component.
 
 ```yaml
 spec:
   selector:
-    app: devpolaris-orders-api
-    component: api
+    app.kubernetes.io/name: notification-api
+    app.kubernetes.io/component: api
 ```
 
-This avoids accidental traffic to a different API that happens to share `component=api`. Labels are powerful because many objects can use them, and that same power means teams need a consistent label vocabulary.
+Labels are powerful because many objects can use them. That same power means teams need a consistent label vocabulary and careful selector review.
 
 ## Production Review Checklist
 <!-- section-summary: Deployment review checks the fields that affect ownership, availability, rollout behavior, capacity, and recovery. -->
 
 A Deployment review asks whether Kubernetes will create the right Pods, route traffic only to ready Pods, and recover cleanly when something fails. The review should focus on fields that change runtime behavior rather than formatting alone.
 
-For `devpolaris-orders-api`, the team should check the selector and template labels first. They define controller ownership. Then the team should check the Service selector because it defines traffic ownership. The Deployment can be perfect and the Service can still send traffic nowhere if the selector labels drift apart.
+For `notification-api`, the team should check the selector and template labels first. They define controller ownership. Then the team should check the Service selector because it defines traffic ownership. The Deployment can be correct while the Service sends traffic nowhere if selector labels drift apart.
 
-The image should be an immutable release artifact, usually a specific tag or digest produced by CI. A broad tag such as `latest` makes rollback and incident review harder because the tag can point to different content over time. A precise tag such as `2026-06-14.2` or an image digest gives the team a real release identity.
+After walking through each field, the complete manifest can fit together like this:
 
-Readiness should protect users from a Pod that has started but cannot serve real traffic. Liveness should restart a stuck process without turning dependency outages into restart storms. Startup probes should give slow-starting applications enough time before liveness begins.
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-api
+  namespace: notifications
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 300
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-api
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notification-api
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/customer-notification/notification-api:2026.06.14-2
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: notification-api-config
+          resources:
+            requests:
+              cpu: 300m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+```
 
-Resource requests should reflect measured needs so the scheduler has useful information. Limits should protect the node without making normal traffic hit avoidable throttling or memory kills. Teams often start with conservative values, observe real metrics, and adjust through normal review.
-
-Rollout settings should fit the service and cluster capacity. `maxUnavailable: 0` and `maxSurge: 1` suit a small critical API when the cluster has room for one extra Pod. A larger service may use percentages. A workload with expensive startup may need careful `minReadySeconds` and `progressDeadlineSeconds` values so the rollout status matches real operational expectations.
+The image should be an immutable release artifact, usually a specific tag or digest produced by CI. Readiness should protect users from a Pod that has started but cannot serve real traffic. Resource requests should reflect measured needs so the scheduler has useful information. Rollout settings should fit the service and cluster capacity.
 
 The final verification commands keep the review grounded:
 
 ```bash
-$ kubectl rollout status deployment/devpolaris-orders-api
-deployment "devpolaris-orders-api" successfully rolled out
+$ kubectl rollout status deployment/notification-api -n notifications
+deployment "notification-api" successfully rolled out
 
-$ kubectl get deployment,rs,pod -l app=devpolaris-orders-api,component=api
-NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/devpolaris-orders-api    3/3     3            3           5m
-
-NAME                                                DESIRED   CURRENT   READY   AGE
-replicaset.apps/devpolaris-orders-api-85d6ccf8d8    3         3         3       5m
-
-NAME                                      READY   STATUS    RESTARTS   AGE
-pod/devpolaris-orders-api-85d6ccf8d8-4t9qp 1/1     Running   0          4m
-pod/devpolaris-orders-api-85d6ccf8d8-kb2nd 1/1     Running   0          4m
-pod/devpolaris-orders-api-85d6ccf8d8-xq6nm 1/1     Running   0          4m
+$ kubectl get deployment,rs,pod -n notifications \
+  -l app.kubernetes.io/name=notification-api,app.kubernetes.io/component=api
+NAME                              READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/notification-api  3/3     3            3           5m
 ```
 
-Those commands prove that the Deployment finished, the ReplicaSet has the requested count, and the Pods are ready. After that, application-level checks such as smoke tests, synthetic requests, dashboards, and alert silence confirm that the orders API is serving the real user path.
+Those commands prove that the Deployment finished and the available count matches the desired count. Application-level checks such as smoke tests, synthetic requests, dashboards, and alert silence confirm that the notification API is serving the real user path.
 
 ![Deployment production review infographic showing selectors, image, probes, resources, rollout, verify, rollout status, ReplicaSets, and ready Pods around a Deployment manifest](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-production-review.png)
 
 _This infographic summarizes the Deployment review habit: check ownership, artifact identity, readiness, capacity, rollout behavior, and verification evidence together._
 
-## References
+**References**
 
 - [Kubernetes Workloads](https://kubernetes.io/docs/concepts/workloads/) - Official overview of workload resources and workload management.
 - [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official Deployment concept guide, including use cases, rollouts, rollbacks, scaling, and Deployment spec details.

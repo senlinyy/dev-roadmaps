@@ -1,7 +1,7 @@
 ---
 title: "Artifact Signing and Verification"
-description: "Use digests, Cosign signatures, OIDC identities, transparency logs, and admission policy so production rejects untrusted artifacts."
-overview: "Artifact signing connects an immutable artifact digest to the build identity that produced it. This article follows a production container from CI to Kubernetes admission so you can see how Cosign keyless signing, Rekor, and verification policy keep untrusted images out of production."
+description: "Use digests, signatures, signer identity, keyless signing, transparency logs, deploy-time verification, Kubernetes admission, failure handling, and rollback controls."
+overview: "Start with the sealed delivery box from the DevSecOps trust model. Follow one Harbor Books image from digest to signature, signer identity, Cosign keyless signing, Rekor, deploy-time verification, Kubernetes admission policy, failure handling, and rollback."
 tags: ["devsecops", "signing", "cosign", "verification"]
 order: 4
 id: article-devsecops-software-supply-chain-artifact-signing-verification
@@ -9,133 +9,138 @@ id: article-devsecops-software-supply-chain-artifact-signing-verification
 
 ## Table of Contents
 
-1. [The Production Gate](#the-production-gate)
-2. [Digests](#digests)
-3. [Signatures](#signatures)
-4. [Cosign Keyless Signing](#cosign-keyless-signing)
-5. [Transparency Logs and Rekor](#transparency-logs-and-rekor)
-6. [Public Key and Keyless Flows](#public-key-and-keyless-flows)
-7. [Verification Before Deployment](#verification-before-deployment)
-8. [Kubernetes Admission Policy](#kubernetes-admission-policy)
-9. [Verification Failure Handling](#verification-failure-handling)
-10. [Rollout and Rollback Operations](#rollout-and-rollback-operations)
-11. [Putting It All Together](#putting-it-all-together)
+1. [The Sealed Delivery Box](#the-sealed-delivery-box)
+2. [Digest First](#digest-first)
+3. [What a Signature Proves](#what-a-signature-proves)
+4. [Signer Identity](#signer-identity)
+5. [Cosign Keyless Signing](#cosign-keyless-signing)
+6. [Transparency Logs and Rekor](#transparency-logs-and-rekor)
+7. [Public Key and Keyless Flows](#public-key-and-keyless-flows)
+8. [Deploy-Time Verification](#deploy-time-verification)
+9. [Kubernetes Admission Policy](#kubernetes-admission-policy)
+10. [Failure Handling](#failure-handling)
+11. [Rollback](#rollback)
+12. [Production Checklist](#production-checklist)
+13. [References](#references)
 
-## The Production Gate
-<!-- section-summary: Production needs a repeatable way to accept artifacts from approved build paths and reject everything else before a workload starts. -->
+## The Sealed Delivery Box
+<!-- section-summary: Artifact signing is the sealed-box check from the delivery trust model, applied to exact software artifacts. -->
 
-Imagine a company called Meridian Retail. The checkout team ships a service named `payments-api`, and that service runs in a production Kubernetes cluster. The team already has a CI pipeline that builds the image, scans it, creates an SBOM, and records how the image was built. The next question is the production question: how does the cluster know the image came from that approved pipeline instead of from a laptop, a compromised registry token, or an old build someone pushed under the same tag?
+In the delivery trust model, Harbor Books treats a finished release like a sealed delivery box. The kitchen can prepare the meal correctly, but the waiter still checks the seal before handing it to the customer. Software delivery needs the same kind of final artifact check before production runs a workload.
 
-An **artifact** is the file-like output that a delivery pipeline ships. In this article, the artifact is a container image. The same idea also applies to binaries, Helm charts, language packages, and release archives. **Artifact signing** means the release system attaches a cryptographic approval to the artifact. **Artifact verification** means another system checks that approval before it lets the artifact move forward.
+For `checkout-api`, the sealed box is the container image digest in the registry. The build already created an SBOM and provenance attestation. Now the release system needs to attach a cryptographic approval to the exact digest, and production needs to verify that approval before a Pod starts.
 
-The release path has four connected pieces. The **digest** identifies the exact artifact. The **signature** proves that a trusted signer approved that digest. The **identity** tells us who or what signed it. The **verification policy** tells production which identities and artifacts count as trusted. Each piece matters because production needs a simple answer at deploy time: should this exact artifact be allowed to run?
+**Artifact signing** means creating a signature for a release artifact. **Artifact verification** means checking the artifact, signature, signer identity, and policy before accepting it. The four pieces work together:
 
-| Piece | Simple meaning | Production example |
+| Piece | Plain meaning | Harbor Books example |
 |---|---|---|
-| **Digest** | The immutable address of the artifact content | `ghcr.io/meridian-retail/payments-api@sha256:...` |
-| **Signature** | Cryptographic proof attached to that digest | Cosign signs the image digest after CI builds it |
-| **Identity** | The trusted signer behind the signature | GitHub Actions workflow `release.yml` on a protected tag |
-| **Verification policy** | The rule that checks the digest, signature, and identity | Kubernetes admission rejects unsigned images in `production` |
+| Digest | Exact content identifier | `ghcr.io/harborbooks/checkout-api@sha256:9f3e...` |
+| Signature | Cryptographic approval for that digest | Cosign signs the image digest |
+| Signer identity | Who or what signed it | GitHub Actions release workflow |
+| Verification policy | Which signatures production accepts | Deployment and admission checks require the expected workflow identity |
 
-That is the path for this article. First we pin the image to a digest, then we sign that digest, then we connect the signature to a CI identity, then we let Kubernetes reject anything outside the approved release path.
+The rest of the article follows that path. Pin the image to a digest, sign the digest, verify the signer identity, record the signing event, enforce the rule during deployment, and keep a failure and rollback runbook ready.
 
-## Digests
-<!-- section-summary: A digest identifies exact artifact content, so signing and deployment can talk about one unchanging image instead of a movable tag. -->
+## Digest First
+<!-- section-summary: A digest identifies exact artifact content, so signing and deployment can refer to one unchanging image. -->
 
-A **digest** is a content-based identifier. For container images, the registry calculates a cryptographic hash of the image manifest and gives it a name that starts with `sha256:`. If the image content changes, the digest changes. This gives the release process a stable way to point at exactly one artifact.
+A **digest** is a content-based identifier. For container images, registries use hashes such as `sha256:...` to identify the image manifest. If the image content changes, the digest changes. That gives signing and deployment one stable object to discuss.
 
-A tag is the friendly name humans like to type, such as `1.8.3` or `main`. Teams use tags because they are readable, and a tag can move to a different image when someone pushes again. A digest gives production the exact object that the registry stored. The release record, the signature, the SBOM, the scan result, and the deployment manifest can all point to the same digest.
+Tags are readable labels. Harbor Books may tag an image as `checkout-api-v2.4.2` for release notes. A tag can point to a different digest later if someone pushes again. The digest is the value the release should sign and the value production should run.
 
-The Meridian pipeline might build and push this image tag:
+The build can push a tag:
 
 ```bash
 docker buildx build \
   --platform linux/amd64 \
-  --tag ghcr.io/meridian-retail/payments-api:1.8.3 \
+  --tag ghcr.io/harborbooks/checkout-api:checkout-api-v2.4.2 \
   --push .
 ```
 
-After the push, the pipeline asks the registry for the digest behind the tag:
+The command builds a Linux AMD64 image, tags it for humans, and pushes it to the registry. After the push, the pipeline should read the digest behind the tag:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/meridian-retail/payments-api:1.8.3
+docker buildx imagetools inspect ghcr.io/harborbooks/checkout-api:checkout-api-v2.4.2
 ```
 
-The digest form is the value the deployment should carry forward:
+Example output:
 
 ```bash
-IMAGE="ghcr.io/meridian-retail/payments-api@sha256:9e3d1f5b7c4a8c6d0e2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a2b4c6d"
+Name:      ghcr.io/harborbooks/checkout-api:checkout-api-v2.4.2
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6
 ```
 
-Kubernetes can use the digest directly in the Pod template. The tag can still exist for humans and release notes, while the manifest uses the immutable reference:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: payments-api
-  namespace: production
-spec:
-  template:
-    spec:
-      containers:
-        - name: payments-api
-          image: ghcr.io/meridian-retail/payments-api@sha256:9e3d1f5b7c4a8c6d0e2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a2b4c6d
-```
-
-This digest gives the signing step a precise target. The signer should approve the artifact content that passed the release workflow and leave the human-readable name as release metadata.
-
-## Signatures
-<!-- section-summary: A signature binds trust to a digest, which lets a verifier check both artifact integrity and approved origin. -->
-
-A **digital signature** is cryptographic proof that a trusted signer approved a specific piece of data. With container signing, the data is usually the image digest. The signing tool creates signature material for that digest, stores it where verifiers can find it, and lets other systems check it later with public verification information.
-
-Think about the release meeting for `payments-api`. The useful production question is whether the exact digest was signed by the approved release path. A signature answers that question. It says this digest passed through a signer that production trusts, and that answer matters more than the friendly tag name.
-
-Cosign is the common signing tool in the Sigstore project. With a traditional key pair, the release team creates a private key and a public key. The private key signs the image digest. The public key verifies the signature later.
+The release record should carry the digest form:
 
 ```bash
-cosign generate-key-pair
-
-cosign sign --key cosign.key "$IMAGE"
-
-cosign verify --key cosign.pub "$IMAGE"
+IMAGE="ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6"
 ```
 
-The private key is sensitive because anyone who has it can sign artifacts that look trusted. In a production system, that key usually belongs in a key management service, hardware-backed signing service, or a tightly controlled secret store. Teams also need rotation rules, emergency revocation steps, access reviews, and logs that show who used the key.
-
-The signature gives strong evidence for **integrity** and **origin**. Integrity means the artifact still matches the digest that was signed. Origin means the signature came from a trusted signing path. Other controls still answer other release questions. Tests answer whether the application behaves correctly. Scanners answer whether known vulnerabilities are present. Provenance answers how the artifact was built. The signature connects those release decisions to the exact artifact production wants to run.
+That exact image reference is the signing target, the verification target, and the deployment target.
 
 ![Trust the digest infographic showing a movable tag, pinned digest, signature, verifier, and allow decision](/content-assets/articles/article-devsecops-software-supply-chain-artifact-signing-verification/trust-the-digest.png)
 
-*Signing works best when the trust decision follows the digest, because the digest identifies the exact artifact while a tag can move.*
+*Signing follows the digest because the digest identifies exact artifact content while a tag is a movable label.*
 
-Key management is where many teams get stuck. CI jobs need to sign releases, and long-lived private keys inside CI secrets create another powerful credential to protect. That is why many modern pipelines use keyless signing.
+## What a Signature Proves
+<!-- section-summary: A signature binds a trusted approval to an artifact digest so verifiers can check integrity and origin. -->
+
+A **digital signature** is cryptographic proof that a trusted signer approved a specific piece of data. In container signing, the data is usually the image digest. The signing tool creates signature material for that digest and stores it where verifiers can find it.
+
+For `checkout-api`, the useful production question is: did the approved release path sign this exact digest? A signature helps answer that question. It shows that the digest has an approval attached, and verification checks whether the signer is one Harbor Books trusts.
+
+Cosign is the signing tool from the Sigstore project. With a traditional key pair, Harbor Books could create a private key and public key:
+
+```bash
+cosign generate-key-pair
+cosign sign --key cosign.key "$IMAGE"
+cosign verify --key cosign.pub "$IMAGE"
+```
+
+`cosign generate-key-pair` creates signing and verification keys. `cosign sign --key` signs the digest with the private key. `cosign verify --key` verifies the signature with the public key. The private key is powerful because anyone who can use it can sign artifacts that look trusted.
+
+Signatures give two kinds of evidence. **Integrity** means the digest being verified is the same digest that was signed. **Origin** means the signature came from an approved signing source. Tests, scanners, SBOMs, and provenance still answer other release questions. The signature attaches the release approval to the exact artifact production wants to run.
+
+Key management is where many teams spend operational effort. Private keys need storage, access control, rotation, revocation, audit logs, and break-glass procedures. Keyless signing reduces that key-management load by using workload identity.
+
+## Signer Identity
+<!-- section-summary: Verification policy should check which person, key, workflow, or workload identity signed the artifact. -->
+
+**Signer identity** is the identity behind the signature. A signature alone says a key or identity approved a digest. Verification policy says which signers count as trusted for a given artifact.
+
+For Harbor Books, production should trust the `checkout-api` release workflow on protected release refs. It should reject a signature from a developer laptop, a test workflow, a fork, or an unreviewed branch. That rule makes signer identity as important as the cryptographic signature.
+
+In a public-key flow, signer identity usually maps to a public key, key management service key, HSM key, or signing service account. The policy asks whether the signature verifies with the expected key and whether the key is still trusted.
+
+In a keyless flow, signer identity comes from a workload identity token and certificate. For GitHub Actions, the identity can include repository, workflow path, branch or tag, and issuer. Harbor Books can require a signer identity like this:
+
+```bash
+https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/tags/checkout-api-v2.4.2
+```
+
+This identity names the GitHub repository, workflow file, and release tag. A renamed workflow, different branch, or different repository should fail verification unless policy has been updated and reviewed.
 
 ## Cosign Keyless Signing
-<!-- section-summary: Keyless signing lets CI sign an artifact through a short-lived OIDC identity instead of storing a long-lived signing key. -->
+<!-- section-summary: Keyless signing lets CI sign an artifact through short-lived OIDC identity instead of storing a long-lived private key. -->
 
-**Keyless signing** means the CI job signs with a short-lived identity instead of a long-lived private key stored in the pipeline. The word keyless can sound strange because cryptography still uses keys under the hood. The important part is that the release team avoids managing a permanent signing private key for the workflow.
+**Keyless signing** means the CI job signs through a short-lived workload identity rather than a long-lived private signing key stored in CI secrets. Cryptography still uses keys under the hood. The operational change keeps a permanent private key out of workflow secrets.
 
-The identity usually comes from **OpenID Connect**, often shortened to OIDC. OIDC is a standard way for one system to say, with a signed token, who a workload is and where it is running. In GitHub Actions, a workflow can request an OIDC token that says which repository, workflow file, branch or tag, and job context created the token. The signing system can use that token as the signer identity.
-
-With Sigstore keyless signing, the flow looks like this:
+The identity usually comes from **OpenID Connect**, or **OIDC**. OIDC lets a CI platform issue a signed token that says which workload is running. In GitHub Actions, the token can identify the repository, workflow file, ref, and job context. Sigstore can bind that identity into a short-lived signing certificate.
 
 ![Keyless signing flow infographic showing CI job, OIDC, Fulcio, Cosign, Rekor, and registry stages connected through a signing pipeline](/content-assets/articles/article-devsecops-software-supply-chain-artifact-signing-verification/keyless-signing-flow.png)
 
-*Keyless signing lets the CI job use a short-lived workload identity, receive signing credentials, sign the digest, record the event, and publish the signed artifact.*
+*Keyless signing lets the CI job use a short-lived workload identity, sign the digest, record the event, and publish evidence for verifiers.*
 
-Fulcio is the Sigstore certificate authority used by public Sigstore keyless signing. The CI job proves its OIDC identity to Fulcio. Fulcio issues a short-lived signing certificate that includes that identity. Cosign signs the image digest and records enough information for later verification. Rekor, the transparency log, gives the signature a public audit trail.
-
-A GitHub Actions release job for Meridian might look like this:
+A GitHub Actions release job can sign the image digest with Cosign:
 
 ```yaml
-name: release-payments-api
+name: release-checkout
 
 on:
   push:
     tags:
-      - "payments-api-v*"
+      - "checkout-api-v*"
 
 permissions:
   contents: read
@@ -144,7 +149,7 @@ permissions:
 
 jobs:
   build-sign:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -161,111 +166,115 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/meridian-retail/payments-api:${{ github.ref_name }}
+          tags: ghcr.io/harborbooks/checkout-api:${{ github.ref_name }}
 
       - name: Sign image digest
         env:
-          IMAGE: ghcr.io/meridian-retail/payments-api@${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/harborbooks/checkout-api@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE"
 ```
 
-The important line is `id-token: write`. That permission lets the workflow request an OIDC token for this job. The registry write access still comes from the registry login. In a production repository, teams usually pin third-party GitHub Actions to reviewed commit SHAs, protect the release workflow file with code owners, and allow release tags only through the normal release process.
+`id-token: write` lets the job request a GitHub OIDC token. Cosign uses that workload identity during keyless signing. `packages: write` lets the workflow push the image. In production, Harbor Books would protect release tags, restrict who can edit the workflow, and pin third-party actions to reviewed versions or commit SHAs.
 
-Now production can verify more than "someone signed this." Production can verify "the `payments-api` release workflow in the Meridian repository signed this digest from a release tag." That identity check is the heart of keyless signing.
+After this job runs, production can verify the exact digest and the identity that signed it.
 
 ## Transparency Logs and Rekor
-<!-- section-summary: Rekor records signing events in an append-only log so teams can audit which identities signed which artifacts. -->
+<!-- section-summary: Rekor records Sigstore signing events in an append-only log so teams can audit artifact signing history. -->
 
-A **transparency log** is an append-only record of security events. Append-only means entries can be added and audited in order. The log gives verifiers and auditors a shared place to check that a signing event happened and to look for suspicious signing activity.
+A **transparency log** is an append-only record of security events. Append-only logs help auditors and verifiers review signing history and detect unexpected events. Sigstore's transparency log is **Rekor**.
 
-Rekor is Sigstore's transparency log. When Cosign signs through the public Sigstore flow, the signing event can be recorded in Rekor. A verifier can check that the signature and certificate information line up with the log entry. This gives the release team more than a private conversation between one CI job and one cluster. It gives them an auditable record that security tooling can inspect later.
+With public Sigstore keyless signing, Cosign can record signing metadata in Rekor. A verifier can check that the signature, certificate, and log entry line up. Harbor Books can also search for unexpected signing activity, such as a different workflow signing the same image repository.
 
-For the `payments-api` team, Rekor helps answer practical incident questions. Did the approved `release.yml` workflow sign this digest? Did any unexpected workflow sign an image under the same package name? Did a release happen from a branch when policy only expects tags? Those questions matter during an incident because responders need evidence quickly.
-
-Verification usually checks the certificate identity, the OIDC issuer, and the log-backed signing material together:
+The normal verification command checks the image signature and identity constraints together:
 
 ```bash
 cosign verify "$IMAGE" \
-  --certificate-identity "https://github.com/meridian-retail/payments-api/.github/workflows/release.yml@refs/tags/payments-api-v1.8.3" \
+  --certificate-identity "https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/tags/checkout-api-v2.4.2" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
 
-The command succeeds when Cosign can verify the signature for that image and match the expected identity constraints. Teams often wrap this command in release scripts, deployment jobs, and incident runbooks so the same trust rule appears everywhere.
+`--certificate-identity` names the exact workflow identity Harbor Books trusts. `--certificate-oidc-issuer` pins the identity provider to GitHub Actions. The final argument, `$IMAGE`, must be the digest-pinned image reference.
 
-Public transparency logs work well for public or internet-reachable signing flows. Some companies use private Sigstore deployments or private policy systems when artifact names, repository names, or release timing are sensitive. The operational idea stays the same: signing events should leave reviewable evidence, and production should check that evidence before it accepts an artifact.
+Example output:
+
+```bash
+Verification for ghcr.io/harborbooks/checkout-api@sha256:9f3e...
+The following checks were performed:
+  - The cosign claims were validated
+  - The certificate was verified against Fulcio roots
+  - The certificate identity matched the expected identity
+```
+
+Some organizations use private Sigstore deployments or private transparency systems when artifact names, repository names, or release timing are sensitive. The production habit stays the same: signing events should leave reviewable evidence, and verification should check that evidence before accepting an artifact.
 
 ## Public Key and Keyless Flows
-<!-- section-summary: Public-key signing and keyless signing both create valid signatures and place trust in different systems. -->
+<!-- section-summary: Public-key signing and keyless signing both sign digests, but they place trust in different operational systems. -->
 
-Public-key signing and keyless signing both create signatures over artifact digests. The difference is where production places trust. A public-key flow trusts a key or key service. A keyless flow trusts an identity provider, a certificate authority, and the identity rules inside the verification policy.
-
-Meridian might use both patterns in different places. The cloud platform team may sign a base image with a KMS-backed key because the base image pipeline runs in a private network and has strict change control. The application team may sign `payments-api` with GitHub Actions keyless signing because the workflow identity already describes the release source clearly.
+Public-key signing and keyless signing both create signatures over artifact digests. The difference is where Harbor Books places trust.
 
 | Flow | What production trusts | Strong fit | Operations work |
 |---|---|---|---|
-| **Public key** | A public key, KMS key, HSM key, or signing service | Internal build systems, offline releases, regulated key custody | Key creation, access control, rotation, backup, revocation, audit |
-| **Keyless** | OIDC identity, Fulcio certificate, Rekor log, and policy constraints | CI systems with strong workload identity, open source releases, cloud-native pipelines | OIDC permissions, workflow protection, identity matching, log monitoring |
+| Public key | A public key, KMS key, HSM key, or signing service | Internal build systems, offline releases, regulated key custody | Key storage, access control, rotation, revocation, backup, and audit |
+| Keyless | OIDC issuer, signing certificate, workflow identity, transparency log, and policy constraints | CI systems with strong workload identity and protected workflows | OIDC permissions, workflow protection, identity matching, and log monitoring |
 
-Teams get into trouble when they treat the signature as the whole policy. A public key can be shared too broadly. A keyless workflow can allow too many branches or repositories. The signature gives a cryptographic check, and the verification policy decides which signing source production should trust.
+Harbor Books may use both. The platform team might sign a base image with a KMS-backed key. The `checkout-api` release workflow might use GitHub Actions keyless signing because the workflow identity clearly names the repository, workflow, and ref.
 
-For key-based signing, a production review usually asks these questions. Who can use the private key? Where is the key stored? How is the key rotated? How does the team revoke trust after a leak? Which systems log key usage? For keyless signing, the review asks a different set of questions. Which OIDC issuer is trusted? Which repository and workflow are trusted? Which branches or tags may release? Who can edit that workflow? How are unexpected Rekor entries investigated?
+The signature should never stand alone as the whole trust rule. A public key can be used by too many systems. A keyless workflow can allow too many refs. Verification policy should say exactly which key or identity can sign which artifact for which environment.
 
-Those questions lead naturally into deployment verification. The signature has value after the deployment path checks it.
+## Deploy-Time Verification
+<!-- section-summary: A deployment gate verifies digest, signature, OIDC issuer, and signer identity before updating production. -->
 
-## Verification Before Deployment
-<!-- section-summary: A deployment gate checks the image digest, signature, signer identity, and expected issuer before it changes production. -->
+**Verification** is the act of checking an artifact against the trust rule. For `checkout-api`, the rule says production images must be digest-pinned and signed by the release workflow in `harborbooks/checkout-api` through GitHub Actions OIDC.
 
-**Verification** is the act of checking the artifact against the trust rule. For `payments-api`, the rule says the deployed image must be signed by the release workflow in the `meridian-retail/payments-api` repository, and the OIDC issuer must be GitHub Actions. The deployment job can check that rule before it updates Kubernetes.
-
-Here is a simple deploy gate. The same image reference that will go into the manifest is the image reference Cosign verifies:
+The deployment job should verify the same image reference it plans to deploy:
 
 ```bash
-IMAGE="ghcr.io/meridian-retail/payments-api@sha256:9e3d1f5b7c4a8c6d0e2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a2b4c6d"
+IMAGE="ghcr.io/harborbooks/checkout-api@sha256:9f3e6f3b1d7e8e8b5f7c6a2e4d1c9b0a4f7e2d6c8b1a0f5e4d3c2b1a09f8e7d6"
 
 cosign verify "$IMAGE" \
-  --certificate-identity "https://github.com/meridian-retail/payments-api/.github/workflows/release.yml@refs/tags/payments-api-v1.8.3" \
+  --certificate-identity "https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/tags/checkout-api-v2.4.2" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
-kubectl -n production set image deployment/payments-api payments-api="$IMAGE"
+kubectl -n checkout set image deployment/checkout-api checkout-api="$IMAGE"
 ```
 
-That gate catches common release mistakes. If someone tries to deploy a tag without a digest, the release job can fail its own manifest check. If someone signs from a test workflow, the certificate identity will differ. If someone pushes a new image to the same tag after the release, the digest in the manifest still points to the signed image.
+The Cosign command runs first. It verifies the signature and identity for the digest-pinned image. `kubectl set image` runs only after that check succeeds. The Deployment then references the exact signed digest.
 
-Real teams usually add a few more guardrails around this step. The deploy job should accept only digest-pinned image references. It should keep the verified digest in release metadata. It should show the signing identity in the change record so reviewers see the source of the artifact. It should run the same verification logic in staging and production so the rule has already passed before the production window.
+Deployment verification catches common release mistakes. A tag-only manifest can be rejected before rollout. A signature from a test workflow fails the identity check. A new image pushed under the same tag after release leaves the digest in the manifest unchanged.
 
-This deploy-time check is useful. Every deployment path still has to run it. Kubernetes admission policy moves the check into the cluster so the API server can block bad workloads even when a script, human, or alternate tool tries to create them.
+Every deployment path should use the same rule. A script, GitOps controller, emergency command, and release pipeline should all converge on digest-pinned signed images.
 
 ## Kubernetes Admission Policy
-<!-- section-summary: Admission policy puts signature verification at the cluster boundary, so untrusted images fail before Pods start. -->
+<!-- section-summary: Admission policy repeats verification at the cluster boundary so untrusted images fail before Pods start. -->
 
-**Admission control** is the Kubernetes checkpoint that evaluates a request before the API server stores it. After a caller authenticates and Kubernetes checks authorization, admission controllers can validate or mutate the object. Image verification policies use that checkpoint to inspect Pod images before the workload runs.
+**Admission control** is the Kubernetes checkpoint that evaluates a request before the API server stores it. After authentication and authorization, admission controllers can validate or mutate objects. Image verification policies use that checkpoint to inspect Pod images before they run.
 
-This matters because production clusters receive changes from many paths. A GitOps controller may sync a manifest. A deploy job may run `kubectl`. An on-call engineer may apply an emergency patch. Admission policy gives the cluster one shared rule: images in the production namespace must match trusted signing requirements.
+Admission policy helps because production clusters receive changes from several paths. A GitOps controller may sync a manifest. A release job may run `kubectl`. An on-call engineer may apply an emergency patch. The cluster should still enforce one rule for production namespaces.
 
-Many teams use Kyverno, Sigstore policy-controller, or a similar admission policy system for this. The example below uses Kyverno because it can verify Cosign signatures and keyless identities directly in Kubernetes policy. Meridian starts in `Audit` mode in staging, reviews violations, then changes production to `Enforce` after the release path is clean.
+Many teams use Kyverno, Sigstore policy-controller, or another admission system. This Kyverno example verifies keyless Cosign signatures for `checkout-api`:
 
 ```yaml
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
-  name: require-signed-payments-api
+  name: require-signed-checkout-api
 spec:
   webhookConfiguration:
     failurePolicy: Fail
     timeoutSeconds: 30
   background: false
   rules:
-    - name: verify-payments-api-signature
+    - name: verify-checkout-api-signature
       match:
         any:
           - resources:
               kinds:
                 - Pod
               namespaces:
-                - production
+                - checkout
       verifyImages:
         - imageReferences:
-            - "ghcr.io/meridian-retail/payments-api*"
+            - "ghcr.io/harborbooks/checkout-api*"
           mutateDigest: true
           verifyDigest: true
           required: true
@@ -273,126 +282,116 @@ spec:
           attestors:
             - entries:
                 - keyless:
-                    subjectRegExp: "^https://github\\.com/meridian-retail/payments-api/\\.github/workflows/release\\.yml@refs/tags/payments-api-v[0-9]+\\.[0-9]+\\.[0-9]+$"
+                    subjectRegExp: "^https://github\\.com/harborbooks/checkout-api/\\.github/workflows/release-checkout\\.yml@refs/tags/checkout-api-v[0-9]+\\.[0-9]+\\.[0-9]+$"
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: "https://rekor.sigstore.dev"
 ```
 
-There are several important details in this policy. `imageReferences` scopes the rule to the `payments-api` package. `mutateDigest: true` lets the policy resolve tags to digests where the policy engine supports that behavior. `verifyDigest: true` requires the final image reference to use a digest. `required: true` makes a missing signature fail the rule. `failureAction: Enforce` blocks the request after the rollout has moved past audit mode.
+`imageReferences` scopes the rule to the image repository. `mutateDigest` lets the policy engine resolve supported tag references to digests. `verifyDigest` requires a digest. `required` makes a missing signature fail. `failureAction: Enforce` blocks the request.
 
-The `subjectRegExp` is the keyless identity rule. It allows the release workflow on release tags and excludes other branches and workflows. The `issuer` pins the identity provider to GitHub Actions. The Rekor URL tells the verifier which transparency log to use for the keyless signature evidence.
+The keyless `subjectRegExp` allows release workflow signatures on release tags and excludes other refs. `issuer` pins GitHub Actions as the OIDC issuer. `rekor.url` tells the verifier which transparency log to use.
 
-The rollout should test both the success path and the failure path:
+The rollout should test both paths:
 
 ```bash
-kubectl apply -f require-signed-payments-api.yaml
+kubectl apply -f require-signed-checkout-api.yaml
 
-kubectl -n production apply -f signed-payments-api-deployment.yaml
+kubectl -n checkout apply -f signed-checkout-api-deployment.yaml
 
-kubectl -n production run unsigned-test \
-  --image=ghcr.io/meridian-retail/payments-api:dev-local \
+kubectl -n checkout run unsigned-test \
+  --image=ghcr.io/harborbooks/checkout-api:dev-local \
   --restart=Never
 ```
 
-The signed deployment should pass. The unsigned test Pod should fail admission. That failure is useful because it proves the policy can reject an untrusted artifact before it reaches a node.
+The signed Deployment should pass. The unsigned test Pod should fail admission. That failure is a successful test because the cluster rejected an untrusted artifact before a node pulled it.
 
-## Verification Failure Handling
-<!-- section-summary: A failed verification should trigger a small incident workflow that checks the digest, signer identity, policy, and release source. -->
+## Failure Handling
+<!-- section-summary: Verification failures need a runbook that checks image reference, signature, signer identity, policy, and release source. -->
 
-Verification failures need a calm runbook because they usually happen during a release window. A failure may mean the image has no signature, the manifest points to the wrong digest, the workflow identity changed, the Rekor check failed, or someone is trying to deploy an artifact from outside the approved path. The team needs a quick way to separate a release mistake from a real security problem.
+Verification failures usually appear during a release window, so Harbor Books needs a calm runbook. A failure may mean the image lacks a signature, the manifest points to the wrong digest, the signer identity changed, Rekor is unreachable, or someone tried to deploy from outside the approved path.
 
-The first check is the image reference. The release owner should confirm that the manifest uses a digest and that the digest matches the image the pipeline built. If the manifest uses a tag only, the fix belongs in the release process. The deployment should move to the signed digest that CI produced.
+The first check is the image reference:
 
 ```bash
-kubectl -n production get events --sort-by='.lastTimestamp'
+kubectl -n checkout get events --sort-by='.lastTimestamp'
 
-kubectl -n production get deployment payments-api \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="payments-api")].image}'
+kubectl -n checkout get deployment checkout-api \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="checkout-api")].image}{"\n"}'
 ```
 
-The next check is the signature and identity. The responder can run the same Cosign verification outside the cluster and compare the identity in the certificate with the expected workflow rule. A mismatch often points to a renamed workflow file, a release from the wrong branch, or a manual signing attempt.
+The events command shows admission or rollout errors. The JSONPath command prints the image currently configured in the Deployment. The responder checks for a digest-pinned reference and compares it with the release record.
+
+The next check is the signature identity:
 
 ```bash
 cosign verify "$IMAGE" \
-  --certificate-identity-regexp "^https://github\\.com/meridian-retail/payments-api/\\.github/workflows/release\\.yml@refs/tags/payments-api-v[0-9]+\\.[0-9]+\\.[0-9]+$" \
+  --certificate-identity-regexp "^https://github\\.com/harborbooks/checkout-api/\\.github/workflows/release-checkout\\.yml@refs/tags/checkout-api-v[0-9]+\\.[0-9]+\\.[0-9]+$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
 
-If the image is unsigned, the safest repair is to rebuild or promote it through the approved release workflow so the signature, SBOM, scan result, and deployment record all match the same digest. Re-signing an image manually can hide the path that created it, so production teams usually reserve manual signing for documented break-glass procedures with a separate trusted identity.
+The regular expression allows release tags that match the expected pattern. A failure may point to a renamed workflow, an unprotected branch, a missing signature, or a policy expression that no longer matches the release process.
 
-If Rekor or the registry is unavailable, the response depends on the risk level of the service and the policy mode. High-risk production namespaces usually fail closed because an unavailable verifier should block unknown images. During rollout, teams often run new policies in `Audit` first so networking and trust-store problems appear before enforcement. When enforcement is active, a temporary exception should be narrow: one namespace, one image digest, one short expiration, one incident ticket, and one follow-up to remove it.
+If the image is unsigned, the safest repair is to rebuild or promote it through the approved release workflow so signature, SBOM, provenance, scan result, and deployment record all point to the same digest. Manual re-signing should use a documented break-glass identity, narrow approval, a short-lived exception, and an incident ticket.
 
-The failure runbook should end with evidence. The ticket should include the image digest, the expected signer identity, the actual signer identity if one exists, the admission error, and the decision that released or blocked the artifact. That evidence makes the next incident faster and helps reviewers improve the policy.
+If Rekor, the registry, or the admission verifier is unavailable, the response depends on the namespace risk. High-risk production namespaces usually fail closed. During early rollout, teams often run new policies in audit mode first so network and trust-store problems surface before enforcement.
 
-## Rollout and Rollback Operations
-<!-- section-summary: Rollout and rollback work best when every candidate image is digest-pinned and verified before Kubernetes changes the Deployment. -->
+Every failure ticket should include image digest, expected signer identity, actual signer identity if present, policy error, admission event, release record, and final decision. That evidence helps the next response and improves the policy.
 
-Signing and verification need both a build step and an operations plan. The first rollout should start in a lower environment with audit mode. The team gathers policy reports, fixes unsigned sidecars or init containers, and checks that the release workflow signs every image the Deployment needs. Then production can move to enforcement with fewer surprises.
+## Rollback
+<!-- section-summary: Rollback should use a previously signed digest and the same verification rule as forward deployment. -->
 
-A normal rollout verifies the new digest, updates the Deployment, and waits for Kubernetes to finish the rollout:
-
-```bash
-NEW_IMAGE="ghcr.io/meridian-retail/payments-api@sha256:9e3d1f5b7c4a8c6d0e2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a2b4c6d"
-
-cosign verify "$NEW_IMAGE" \
-  --certificate-identity "https://github.com/meridian-retail/payments-api/.github/workflows/release.yml@refs/tags/payments-api-v1.8.3" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
-
-kubectl -n production set image deployment/payments-api payments-api="$NEW_IMAGE"
-
-kubectl -n production rollout status deployment/payments-api
-```
-
-Rollback follows the same trust rule. The previous image should already have a digest and a valid signature from the approved release workflow. The release record should store that previous digest so the team avoids searching through mutable tags during an incident.
+Rollback is part of signing design. The previous production image should already have a digest, signature, SBOM, provenance, and release record. During an incident, the team should verify the rollback digest before updating Kubernetes.
 
 ```bash
-PREVIOUS_IMAGE="ghcr.io/meridian-retail/payments-api@sha256:2a4c6e8f0b1d3f5a7c9e0d2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a"
+PREVIOUS_IMAGE="ghcr.io/harborbooks/checkout-api@sha256:2a4c6e8f0b1d3f5a7c9e0d2f4a6b8c1d3e5f7a9b0c2d4e6f8a1b3c5d7e9f0a"
 
 cosign verify "$PREVIOUS_IMAGE" \
-  --certificate-identity "https://github.com/meridian-retail/payments-api/.github/workflows/release.yml@refs/tags/payments-api-v1.8.2" \
+  --certificate-identity "https://github.com/harborbooks/checkout-api/.github/workflows/release-checkout.yml@refs/tags/checkout-api-v2.4.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
-kubectl -n production set image deployment/payments-api payments-api="$PREVIOUS_IMAGE"
+kubectl -n checkout set image deployment/checkout-api checkout-api="$PREVIOUS_IMAGE"
 
-kubectl -n production rollout status deployment/payments-api
+kubectl -n checkout rollout status deployment/checkout-api
 ```
 
-`kubectl rollout undo` can still help when the previous ReplicaSet already contains a digest-pinned, signed image. Many teams prefer an explicit rollback digest in the incident ticket because it keeps the verification command, the change record, and the final Deployment image aligned.
+The command verifies the old signed digest, updates the Deployment, and waits for rollout completion. The release record should store `PREVIOUS_IMAGE` so responders avoid searching through tags during a stressful incident.
 
-The release team also needs a break-glass path before the first emergency. A good break-glass path uses a separate trusted signing identity, requires approval from the incident commander and security owner, records the exact digest, and expires any temporary policy exception after the incident. The goal is to keep production moving during a real outage while preserving the evidence that makes the exception reviewable.
+`kubectl rollout undo` can help when the previous ReplicaSet already contains a digest-pinned signed image. Many teams still prefer an explicit rollback digest in the incident ticket because it keeps verification, change record, and final Deployment image aligned.
 
-## Putting It All Together
-<!-- section-summary: A trusted delivery path signs exact digests, verifies signer identities, enforces the rule in Kubernetes, and rehearses failure handling. -->
+Break-glass rollback should be rare and documented before the emergency. A narrow temporary exception should name one namespace, one digest, one signer or approval path, one expiry, and one incident ticket. After the incident, remove the exception and rebuild the artifact through the normal signed path.
 
-The full path for Meridian is now connected. CI builds `payments-api` and pushes it to the registry. The release workflow gets the image digest, signs that digest with Cosign keyless signing, and records the signing event through the Sigstore flow. The deployment job verifies the digest against the expected GitHub Actions identity. Kubernetes admission policy repeats the check at the cluster boundary and rejects workloads outside that rule.
+## Production Checklist
+<!-- section-summary: A trusted artifact path signs exact digests, verifies signer identity, enforces admission policy, and rehearses rollback. -->
 
-A production review for artifact signing should cover these checks:
+The signed delivery path for Harbor Books is now complete. CI builds `checkout-api`, captures the image digest, signs that digest through Cosign keyless signing, and records the signing event. The deployment job verifies the signature and workflow identity. Kubernetes admission repeats the check at the cluster boundary. Rollback uses the same rule.
 
-| Review area | What the reviewer looks for |
+| Review area | What Harbor Books checks |
 |---|---|
-| **Digest discipline** | Deployment manifests use image digests, release records store the exact digest, and tags stay out of the trust decision |
-| **Signer identity** | Verification policy names the expected OIDC issuer, repository, workflow, and protected release ref |
-| **Workflow protection** | Only trusted maintainers can edit the release workflow, create release tags, or change signing steps |
-| **Transparency evidence** | Signing events can be audited through Rekor or the organization's chosen transparency system |
-| **Admission enforcement** | Production namespaces enforce signature policy and fail closed for high-risk workloads |
-| **Failure runbook** | Responders can check image references, signatures, identities, policy errors, and rollback digests quickly |
+| Digest discipline | Manifests and release records use digest-pinned image references |
+| Signature coverage | Every production image, sidecar, and init container has a valid signature |
+| Signer identity | Policy names the expected OIDC issuer, repository, workflow, and release ref |
+| Workflow protection | Trusted maintainers review changes to signing workflows and release tags |
+| Transparency evidence | Rekor or the chosen transparency system records signing activity |
+| Admission enforcement | Production namespaces enforce signature policy and fail closed |
+| Failure handling | Responders can inspect image refs, signatures, identities, policy errors, and release records |
+| Rollback | Previous signed digests are stored and verified before rollback |
 
 ![Deploy-time verification infographic showing registry image, admission gate checks for digest, signer, issuer, policy, and Rekor evidence, then allow pod, reject pod, or rollback to last signed digest](/content-assets/articles/article-devsecops-software-supply-chain-artifact-signing-verification/deploy-time-verification.png)
 
-*Deploy-time verification repeats the trust check at the cluster boundary, so production accepts signed digests from approved identities and rejects everything else.*
+*Deploy-time verification repeats the sealed-box check at the cluster boundary before production runs the artifact.*
 
-Daily operation is simple. Production should run artifacts from the trusted release path and reject artifacts that lack evidence for that path. Digests name the exact thing. Signatures attach approval to that thing. OIDC identities explain which workflow signed it. Transparency logs make signing activity reviewable. Admission policy turns all of that into a production gate.
+Daily operation should feel predictable. Digests name the exact thing. Signatures attach approval to that thing. Signer identity explains which release path approved it. Transparency logs make signing activity reviewable. Admission policy turns the evidence into an enforceable production rule.
 
 ---
 
-**References**
+## References
 
-- [Sigstore Cosign signing overview](https://docs.sigstore.dev/cosign/signing/overview/) - Explains Cosign signing flows for container images, including keyless signing.
-- [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/) - Documents signature verification, certificate identity checks, and OIDC issuer checks.
-- [Sigstore keyless signing](https://docs.sigstore.dev/certificate_authority/overview/) - Describes how Sigstore uses short-lived certificates and workload identities in keyless signing.
-- [Sigstore Rekor](https://docs.sigstore.dev/logging/overview/) - Describes Rekor as Sigstore's transparency log for signing metadata.
-- [GitHub Actions OIDC security hardening](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - Explains GitHub Actions OIDC tokens and the `id-token: write` permission.
-- [Kubernetes images](https://kubernetes.io/docs/concepts/containers/images/) - Documents image names, tags, and digest-pinned image references.
-- [Kubernetes admission controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/) - Explains admission control in the Kubernetes API request flow.
-- [Kyverno verifyImages with Sigstore](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/sigstore/) - Documents Kyverno image signature verification with Cosign, keyless identities, and Rekor.
+- [Sigstore Cosign signing overview](https://docs.sigstore.dev/cosign/signing/overview/) - Sigstore documentation for Cosign signing flows, including keyless signing.
+- [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/) - Sigstore documentation for verifying signatures, certificate identities, and OIDC issuers.
+- [Sigstore certificate authority overview](https://docs.sigstore.dev/certificate_authority/overview/) - Sigstore documentation for Fulcio and keyless signing certificates.
+- [Sigstore Rekor](https://docs.sigstore.dev/logging/overview/) - Sigstore documentation for Rekor transparency logging.
+- [GitHub Actions OIDC security hardening](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub documentation for OIDC tokens and `id-token: write`.
+- [Kubernetes images](https://kubernetes.io/docs/concepts/containers/images/) - Kubernetes documentation for image names, tags, and digest references.
+- [Kubernetes admission controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/) - Kubernetes documentation for the admission control request flow.
+- [Kyverno verifyImages with Sigstore](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/sigstore/) - Kyverno documentation for Cosign and keyless image verification.

@@ -1,6 +1,6 @@
 ---
-title: "Advanced Configuration"
-description: "Master loops, conditionals, and deployment lifecycles to build complex, highly dynamic infrastructure."
-tags: ["terraform", "loops", "conditionals", "lifecycles"]
+title: "Advanced Configuration and Change Safety"
+description: "Control Terraform resource behavior with meta-arguments, repetition, conditionals, and safer replacement patterns."
+tags: ["terraform", "meta-arguments", "loops", "conditionals", "lifecycles"]
 order: 7
 ---

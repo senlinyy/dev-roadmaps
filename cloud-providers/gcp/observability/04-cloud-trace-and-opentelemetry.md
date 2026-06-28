@@ -38,24 +38,8 @@ In Google Cloud, **Cloud Trace** stores and displays trace data. **OpenTelemetry
 
 For a failed checkout request, a trace might look like this:
 
-```mermaid
-sequenceDiagram
-    participant Browser as Customer browser
-    participant Checkout as checkout-api
-    participant Inventory as inventory-api
-    participant Provider as Payment provider
-    participant SQL as Cloud SQL
-    participant PubSub as Pub/Sub
-
-    Browser->>Checkout: POST /checkout
-    Checkout->>Inventory: Reserve items
-    Inventory-->>Checkout: Reserved
-    Checkout->>Provider: Authorize payment
-    Provider-->>Checkout: Timeout
-    Checkout->>SQL: Mark order failed
-    Checkout->>PubSub: Publish receipt-failed event
-    Checkout-->>Browser: HTTP 500
-```
+![Infographic showing one checkout request moving from browser to checkout-api, inventory-api, payment provider, database, queue, and worker, with the payment span highlighted as the timeout that caused HTTP 500.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-trace-and-opentelemetry/checkout-trace-path.png)
+*The trace turns one customer action into a timed path. In this incident, the slow error span points the team toward payment authorization before they dig into code.*
 
 Cloud Trace can show the timing for each span. The `POST /checkout` span might last 3.2 seconds. The inventory span might finish in 80 milliseconds. The payment provider span might last 2.8 seconds and end with an error status. That timing view is exactly what logs alone struggle to show.
 
@@ -77,6 +61,9 @@ The header has four parts. `00` is the version. `4bf92f3577b34da6a3ce929d0e0e473
 Google Cloud services can also participate in context propagation, and support varies by service and configuration. Cloud Run, Cloud Load Balancing, Pub/Sub, Cloud Tasks, App Engine, and other services can sit in request paths where context matters. The important production habit is to test the path your system actually uses, because one missing propagation step can split the trace.
 
 Here is the practical flow in `checkout-api`. The service receives a request with incoming context, or it starts a new trace if no context exists. The HTTP server instrumentation creates a server span for `POST /checkout`. The HTTP client instrumentation injects context into the inventory and payment calls. The database instrumentation records the Cloud SQL query. The Pub/Sub instrumentation or application code carries enough context into the message so a worker can continue the story.
+
+![Infographic explaining the traceparent header parts and showing trace context moving from checkout-api to inventory-api and payment-api.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-trace-and-opentelemetry/trace-context-propagation.png)
+*Trace context keeps the same trace ID across services while each operation creates its own span. A missing propagation step splits one checkout into separate traces.*
 
 ## Spans And Attributes
 <!-- section-summary: Spans are timed units of work, and attributes add searchable context when teams choose stable fields. -->
@@ -116,6 +103,15 @@ npm install \
   @opentelemetry/exporter-trace-otlp-http
 ```
 
+This command adds the OpenTelemetry SDK, common Node auto-instrumentations, and an OTLP HTTP trace exporter. The SDK starts the telemetry pipeline, auto-instrumentations create spans for supported framework and client calls, and the exporter sends spans to the collector endpoint.
+
+```console
+added 84 packages, and audited 512 packages in 7s
+found 0 vulnerabilities
+```
+
+Healthy install output completes without dependency conflicts. Suspicious output includes peer dependency warnings around the framework or exporter versions, because instrumentation that fails to load can leave Cloud Trace with only partial spans.
+
 ```javascript
 const { NodeSDK } = require("@opentelemetry/sdk-node");
 const { getNodeAutoInstrumentations } = require("@opentelemetry/auto-instrumentations-node");
@@ -137,6 +133,16 @@ OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod,service.version=2026-06-14.
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces \
 node --require ./instrumentation.js server.js
 ```
+
+The environment variables are part of the telemetry contract. `OTEL_SERVICE_NAME` gives Cloud Trace and logs a stable service name. `OTEL_RESOURCE_ATTRIBUTES` attaches production and release context to the spans. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` points at the local collector endpoint, and `node --require ./instrumentation.js` loads instrumentation before the application starts handling requests.
+
+```console
+OpenTelemetry SDK started for service checkout-api
+Listening on port 8080
+OTLP trace exporter endpoint http://127.0.0.1:4318/v1/traces
+```
+
+Healthy startup output confirms that the SDK starts before the server accepts traffic. Suspicious startup output includes connection refused errors to the collector, a missing `service.name`, or instrumentation loaded after the HTTP server has already initialized.
 
 This code starts the pipeline, and the team still designs the important span names and attributes. Auto-instrumentation can create spans for common framework and library calls, while the team adds custom spans around domain-specific business steps such as `payment.authorize` or `fraud.score`.
 
@@ -168,11 +174,27 @@ service:
       exporters: [googlecloud]
 ```
 
+The receiver accepts OTLP traffic from the application. The batch processor groups spans before export, which reduces overhead. The `googlecloud` exporter sends traces to Google Cloud using the workload identity or service account available to the collector runtime.
+
+A healthy collector startup log should show the pipeline components starting and the collector listening for OTLP traffic:
+
+```console
+info    service@v0.102.0/service.go:110    Starting otelcol
+info    otlpreceiver@v0.102.0/otlp.go:152  Starting GRPC server endpoint=0.0.0.0:4317
+info    otlpreceiver@v0.102.0/otlp.go:100  Starting HTTP server endpoint=0.0.0.0:4318
+info    service@v0.102.0/service.go:137    Everything is ready. Begin running and processing data.
+```
+
+Suspicious collector output includes authentication failures, permission denied errors from the exporter, repeated retry messages, or no OTLP receiver listening on the port the application uses.
+
 The application sends spans to the collector. The collector sends those spans to Google Cloud, where Cloud Trace can store and display them. The same general pattern can also support metrics and logs when the collector and application are configured for those signals.
 
 Authentication depends on where the code runs. Workloads running on Google Cloud usually use the runtime service account and Application Default Credentials. Workloads outside Google Cloud need an explicit credential path or workload identity setup. In production, the service account should have only the roles needed to write telemetry, and collector configuration should avoid embedding secrets directly.
 
 The verification step matters. After deployment, the team should send a known request, find the trace in Cloud Trace, confirm that the service name and version are correct, confirm that downstream spans appear, and confirm that trace-linked logs can be found in Cloud Logging. Missing smoke tests often leave tracing failures hidden until an incident needs the data.
+
+![Infographic showing checkout-api sending OTLP telemetry to a collector, which batches and exports spans to trace viewer, log search, and metric charts.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-trace-and-opentelemetry/otel-collector-pipeline.png)
+*The collector gives the team one standard telemetry path. The verification checklist should confirm service name, release version, downstream spans, and trace-linked logs.*
 
 ## Trace-To-Log Correlation
 <!-- section-summary: Trace-to-log correlation lets a slow span open the exact logs written during the same request. -->
@@ -207,6 +229,18 @@ gcloud logging read \
   --format='table(timestamp,resource.labels.service_name,severity,jsonPayload.message,jsonPayload.error_code)'
 ```
 
+This query starts from a trace ID found in Cloud Trace and asks Cloud Logging for the logs written during the same request. The table format keeps the request journal readable during incident chat.
+
+```console
+TIMESTAMP                    SERVICE_NAME    SEVERITY  MESSAGE                                      ERROR_CODE
+2026-06-14T14:04:11.902Z     checkout-api    INFO      checkout request received
+2026-06-14T14:04:12.004Z     inventory-api   INFO      inventory reservation completed
+2026-06-14T14:04:12.221Z     checkout-api    ERROR     payment authorization timed out after retry   provider_timeout
+2026-06-14T14:04:12.236Z     checkout-api    ERROR     returning checkout failure response           provider_timeout
+```
+
+Healthy output shows a connected request story with the expected services and no unexpected context break. Suspicious output shows only `checkout-api` logs when downstream services should appear, or it shows the payment error without the earlier inventory span, which means propagation or logging hooks may be incomplete.
+
 That query turns a trace ID into a readable request journal. The trace gives timing and topology. The logs give application detail. Together they let the team explain one failed checkout without guessing which log lines belong to the same customer action.
 
 ## Async Work, Pub/Sub, And Background Jobs
@@ -230,6 +264,23 @@ A practical Pub/Sub message can carry both forms of context. Trace context helps
   }
 }
 ```
+
+The `traceparent` attribute carries trace context across the message boundary. `checkout_id` gives humans a durable search handle even if a downstream worker starts a separate trace. `service_version` helps the team connect the async work to the same release that changed the API.
+
+A consumer log that proves the handoff worked might look like this:
+
+```json
+{
+  "severity": "INFO",
+  "message": "receipt worker started checkout receipt job",
+  "checkout_id": "chk_9f21",
+  "service_version": "2026-06-14.3",
+  "logging.googleapis.com/trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736",
+  "logging.googleapis.com/spanId": "9c82b41acb7e2a33"
+}
+```
+
+Healthy async output keeps the same trace ID or at least the same durable business ID across producer and consumer logs. Suspicious output has a worker log with no trace field and no `checkout_id`, because the responder cannot confidently connect the background work to the customer request.
 
 The consumer reads the `traceparent` attribute, starts a consumer span, and records its own work. If it sends an email, writes a receipt record, or calls another service, it injects context again. The trace then shows the handoff from API to message to worker instead of treating the worker as a separate mystery.
 

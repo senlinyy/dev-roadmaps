@@ -98,6 +98,9 @@ Our Orders and billing platform can use both:
 
 The connection between sections is important here. Once a trigger can deliver work automatically, the next question is what happens when delivery repeats. Event systems are reliable because they retry, and retrying changes how handlers must write side effects.
 
+![Event sources routed through triggers to bounded handlers](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/event-to-handler-path.png)
+*The event source and trigger decide when the handler runs, while the handler stays small enough to validate input, perform one side effect, and log the result.*
+
 ## At-Least-Once Delivery and Idempotency
 <!-- section-summary: Event-driven functions can receive the same event more than once, so production handlers need an idempotency guard before external side effects. -->
 
@@ -129,6 +132,9 @@ Then the receipt handler follows a very ordinary order:
 | Act | Send the email using the order ID and email address | The side effect happens after the duplicate guard. |
 | Record | Mark the claim as completed and log the result | Operators can tell whether the event finished. |
 | Duplicate | Return success if the claim already exists | The platform stops retrying without another email. |
+
+![Retry-safe Cloud Run function flow](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/retry-safe-function-loop.png)
+*A retry-safe function claims the event before the side effect, so duplicate deliveries can exit cleanly without duplicating customer-visible work.*
 
 This pattern is boring, which is exactly what we want near billing. Retries can happen, logs can show duplicates, and customers still receive one receipt for one checkout.
 
@@ -228,6 +234,13 @@ gcloud run deploy send-order-receipt \
 
 That command deploys the code and service configuration. The event source still needs a route. For Pub/Sub, the team can create or reuse a topic, then create an Eventarc trigger that sends message-published events to the function's Cloud Run service:
 
+The output should show the Cloud Run-backed service revision and URL. The URL is useful for platform verification, but for an event-driven function the trigger is what normally invokes the handler.
+
+```console
+Service [send-order-receipt] revision [send-order-receipt-00007-yem] has been deployed.
+Service URL: https://send-order-receipt-7a2b3c-uc.a.run.app
+```
+
 ```bash
 gcloud pubsub topics create checkout-events \
   --project=PROJECT_ID
@@ -242,6 +255,13 @@ gcloud eventarc triggers create send-receipt-from-pubsub \
   --service-account=receipt-trigger-invoker@PROJECT_ID.iam.gserviceaccount.com
 ```
 
+```console
+Created topic [projects/PROJECT_ID/topics/checkout-events].
+Created trigger [send-receipt-from-pubsub] in location [us-central1].
+Destination: Cloud Run service [send-order-receipt]
+Transport topic: projects/PROJECT_ID/topics/checkout-events
+```
+
 For the upload processor, the trigger filters Cloud Storage object events from the billing uploads bucket:
 
 ```bash
@@ -253,6 +273,14 @@ gcloud eventarc triggers create process-billing-upload \
   --event-filters=type=google.cloud.storage.object.v1.finalized \
   --event-filters=bucket=billing-uploads-prod \
   --service-account=upload-trigger-invoker@PROJECT_ID.iam.gserviceaccount.com
+```
+
+```console
+Created trigger [process-billing-upload] in location [us-central1].
+Event filters:
+  type: google.cloud.storage.object.v1.finalized
+  bucket: billing-uploads-prod
+Destination: Cloud Run service [process-billing-upload]
 ```
 
 In production, these commands usually live as Terraform or another reviewed deployment artifact. The key is the same either way: function deploy config answers how the code runs, and trigger config answers what invokes it.
@@ -326,6 +354,20 @@ gcloud eventarc triggers list \
   --project=PROJECT_ID \
   --location=us-central1
 ```
+
+The logs should show event identity, business identity, and whether the handler skipped a duplicate. Trigger inventory should show the active routes the team expects before anyone starts replaying events.
+
+```console
+2026-06-27T20:18:11Z INFO eventKey=//pubsub.googleapis.com/projects/PROJECT_ID/topics/checkout-events/1096437892045551 orderId=ORD-10492 status=sent duplicate=false
+2026-06-27T20:19:02Z INFO eventKey=//pubsub.googleapis.com/projects/PROJECT_ID/topics/checkout-events/1096437892045551 orderId=ORD-10492 status=skipped duplicate=true
+
+NAME                       TYPE                                           DESTINATION
+send-receipt-from-pubsub   google.cloud.pubsub.topic.v1.messagePublished send-order-receipt
+process-billing-upload     google.cloud.storage.object.v1.finalized       process-billing-upload
+```
+
+![Cloud Run functions operations checklist](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/function-operations-checklist.png)
+*Function operations focus on the event path: trigger state, latest revision, retry count, dead-letter handling, correlation IDs, and runtime access.*
 
 For a team that is new to event-driven work, the biggest cultural change is accepting that the customer request and the background result are separate. The API can succeed while the receipt function later fails. That is fine only if logs, claims, retry policy, and operator actions are designed up front.
 

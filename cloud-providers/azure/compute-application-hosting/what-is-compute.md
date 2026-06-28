@@ -38,6 +38,33 @@ When someone says **compute** in Azure, they mean the hosting model for the reso
 
 We will keep one example system in our hands for the whole article. The system is `devpolaris-orders`, a small ecommerce backend in `rg-devpolaris-orders-prod`. It has a public Orders API, a containerized checkout service, a receipt job, and one old inventory daemon that still expects a normal Linux server. That mix is useful because different parts of the system ask for different runtime contracts.
 
+Start with the version of this app a beginner has probably run already. On a laptop, the Orders API might be a local process:
+
+```bash
+npm run dev
+```
+
+```console
+orders-api ready on http://localhost:3000
+connected to local database devpolaris_orders_dev
+```
+
+That process works while the laptop is awake, the terminal is open, the local database exists, and the developer is the only user. A Docker version is one step closer to cloud work because it packages the runtime with the code:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -e ORDERS_ENV=dev \
+  orders-api:local
+```
+
+```console
+listening on 0.0.0.0:8080
+health check ready at /healthz
+```
+
+That container still runs on one developer machine. Moving to Azure compute means Azure starts the process or container on managed infrastructure, gives it a stable network path, restarts it after failures, connects it to identity and logs, and scales it when traffic changes. The same application code now needs a production runtime contract instead of a local terminal.
+
 Here is the map we will build before we talk about product names. Each row gives us one question to carry through the whole article, from the first service choice to the first production incident.
 
 | Concept | Plain meaning | Orders system example |
@@ -67,7 +94,7 @@ Imagine the Orders API receives a checkout request. The request reaches a public
 The ownership boundary matters because cloud platforms share the work. Azure usually owns the physical datacenter, the physical servers, the host networking, and many managed platform pieces. Your team still owns the application code, runtime configuration, secrets, identity assignment, health behavior, and cost choices. The exact split changes from service to service, so the next useful idea is workload shape.
 
 ## Workload Shape
-<!-- section-summary: Workload shape describes how code naturally wants to run, and Azure compute choices line up better when the team names that shape before choosing a service. -->
+<!-- section-summary: Workload shape describes how code naturally wants to run, and Azure compute choices line up cleanly when the team names that shape before choosing a service. -->
 
 **Workload shape** means the natural running pattern of a piece of software. Some code wants a full server because it needs OS control. Some code wants a web platform because it mainly answers HTTP requests. Some code wants a container platform because the team ships Docker images and needs revision-based releases. Some code wants event execution because it wakes up only when a queue message, timer, or file upload appears.
 
@@ -108,6 +135,15 @@ az vm get-instance-view \
   --name vm-devpolaris-orders-legacy-01 \
   --query "instanceView.statuses[].displayStatus"
 ```
+
+```console
+[
+  "Provisioning succeeded",
+  "VM running"
+]
+```
+
+That output says Azure sees the VM resource as provisioned and powered on. The inventory daemon inside Linux still needs its own health evidence, so the VM article later adds guest checks such as `systemctl`, mounted disks, and journal logs.
 
 A VM gives maximum runtime freedom in this module, and that freedom comes with operating work. The public Orders API has a different shape. It is a normal HTTP service, and the team wants deployment slots, managed host patching, app settings, diagnostics, and scale controls while Azure carries the host maintenance. That moves the conversation to App Service.
 
@@ -159,6 +195,19 @@ az webapp show \
   --query "{state:state, hostNames:enabledHostNames, plan:serverFarmId}"
 ```
 
+```console
+{
+  "state": "Running",
+  "hostNames": [
+    "app-devpolaris-orders-api-prod.azurewebsites.net",
+    "api.orders.example.com"
+  ],
+  "plan": "/subscriptions/.../serverfarms/asp-devpolaris-orders-prod"
+}
+```
+
+That output proves the Web App resource is running, shows the hostnames customers or smoke tests can reach, and points back to the App Service plan that supplies worker capacity. If the app is running but requests fail, the next checks move to slots, startup command, app settings, logs, and health check behavior.
+
 App Service works well when the code fits the managed web app shape. The checkout worker has a slightly different story because the team already packages it as a container image and wants event-aware scaling. That leads to Container Apps.
 
 ## Container Apps
@@ -186,6 +235,12 @@ az containerapp create \
   --max-replicas 10
 ```
 
+```console
+Container app created. Latest revision: ca-devpolaris-orders-api-prod--0000001
+Ingress FQDN: ca-devpolaris-orders-api-prod.blue-hill-123456.eastus.azurecontainerapps.io
+Provisioning state: Succeeded
+```
+
 Container Apps also changes how releases work. A new image or template change can create a new revision. In multiple revision mode, the team can send a small percentage of traffic to a new revision, watch logs and metrics, then move more traffic when the evidence looks healthy. During an incident, the operator checks the active revision, traffic weights, image tag, replica count, scale rule, target port, secrets, managed identity, and logs:
 
 ```bash
@@ -194,6 +249,16 @@ az containerapp show \
   --name ca-devpolaris-orders-api-prod \
   --query "{state:properties.provisioningState, latestRevision:properties.latestRevisionName, mode:properties.configuration.activeRevisionsMode}"
 ```
+
+```console
+{
+  "state": "Succeeded",
+  "latestRevision": "ca-devpolaris-orders-api-prod--0000002",
+  "mode": "multiple"
+}
+```
+
+The create output gives the first hostname and revision. The show output later tells the operator whether Azure has accepted the newest template and whether the app is using single or multiple revision mode. In multiple mode, the next inspection usually checks traffic weights before a canary gets more users.
 
 Container Apps fits many modern microservices because it keeps the container artifact while reducing platform work. The receipt sender in our Orders system has an even smaller runtime shape. It wakes from an order event, runs the receipt logic, records the result, and goes idle. That is the natural home for Azure Functions.
 
@@ -216,6 +281,16 @@ az functionapp show \
   --name func-devpolaris-orders-jobs-prod \
   --query "{state:state, kind:kind, plan:serverFarmId}"
 ```
+
+```console
+{
+  "state": "Running",
+  "kind": "functionapp,linux",
+  "plan": "/subscriptions/.../serverfarms/asp-devpolaris-functions-prod"
+}
+```
+
+That output confirms the function app resource is running and shows the hosting plan behind it. It still leaves the operator to inspect triggers, disabled functions, app settings, invocation failures, retry counts, and queue or poison-queue evidence.
 
 Functions works best when the unit of work starts from an event and finishes cleanly. A platform team has a different kind of problem when it needs shared Kubernetes APIs, custom controllers, namespace policy, service mesh choices, and deeper control over container scheduling. That is where AKS enters the picture.
 
@@ -281,6 +356,18 @@ az resource list \
   --output table
 ```
 
+```console
+Name                                  Type                                      Location
+------------------------------------  ----------------------------------------  --------
+app-devpolaris-orders-api-prod        Microsoft.Web/sites                       eastus
+ca-devpolaris-orders-api-prod         Microsoft.App/containerApps               eastus
+func-devpolaris-orders-jobs-prod      Microsoft.Web/sites                       eastus
+vm-devpolaris-orders-legacy-01        Microsoft.Compute/virtualMachines         eastus
+aks-devpolaris-platform-prod          Microsoft.ContainerService/managedClusters eastus
+```
+
+This output is useful because each resource type points to a different next check. `Microsoft.Web/sites` can be an App Service app or a Function App, so the operator still checks the `kind`, hosting plan, and app settings before assuming which runtime is involved.
+
 This evidence-first habit also improves architecture reviews. When the team proposes a compute service, the review should include what the deployment artifact is, what the rollback path looks like, how the runtime scales, where logs and metrics go, which identity the workload uses, and what an on-call engineer checks at 02:00. The service choice then connects to daily operations and stays more useful than a diagram label.
 
 ## Putting It All Together
@@ -308,7 +395,7 @@ The Orders system now has a practical compute map. Each component has a runtime 
 
 ## What's Next
 
-The next article focuses on Azure Virtual Machines. We will take the server-shaped part of the Orders system and look closely at VM images, VM sizes, managed disks, network interfaces, scale sets, extensions, startup behavior, process supervision, patching, and logs.
+The next article focuses on App Service. We will take the web-app-shaped part of the Orders system and look closely at plans, Web Apps, runtime settings, managed identity, deployment slots, networking, scale, health checks, and production release evidence.
 
 ---
 
