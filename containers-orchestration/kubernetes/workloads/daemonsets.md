@@ -1,17 +1,16 @@
 ---
 title: "DaemonSets"
 description: "Run one Kubernetes Pod on each eligible node for logging, monitoring, networking, and node-local helpers."
-overview: "DaemonSets are for node-level work. This article shows how a cluster-wide helper supports the Customer Notification Platform, why it follows nodes instead of replica counts, and how to debug missing DaemonSet Pods."
+overview: "DaemonSets are for node-level work. A cluster-wide helper supports the Customer Notification Platform by following eligible nodes and exposing missing-agent symptoms."
 tags: ["daemonsets", "nodes", "logging", "kubectl"]
 order: 5
 id: article-containers-orchestration-kubernetes-workloads-daemonsets
 ---
-
 ## Table of Contents
 
-1. [One Agent Per Node](#one-agent-per-node)
+1. [DaemonSets Run Node-Level Agents](#daemonsets-run-node-level-agents)
 2. [Node-Local Pods](#node-local-pods)
-3. [Start with a DaemonSet Skeleton](#start-with-a-daemonset-skeleton)
+3. [A DaemonSet Skeleton](#a-daemonset-skeleton)
 4. [Add Node Selection and Tolerations](#add-node-selection-and-tolerations)
 5. [Add the Agent Container and Node Mounts](#add-the-agent-container-and-node-mounts)
 6. [Inspecting DaemonSet Coverage](#inspecting-daemonset-coverage)
@@ -19,17 +18,16 @@ id: article-containers-orchestration-kubernetes-workloads-daemonsets
 8. [Debugging Missing Pods and Stuck Updates](#debugging-missing-pods-and-stuck-updates)
 9. [Production Runbooks](#production-runbooks)
 10. [Choosing DaemonSet or Another Workload](#choosing-daemonset-or-another-workload)
+11. [References](#references)
 
-## One Agent Per Node
-<!-- section-summary: DaemonSets start from node-level helpers, where the useful unit is one Pod per eligible node rather than a fixed replica count. -->
+## DaemonSets Run Node-Level Agents
+<!-- section-summary: DaemonSets run node-level helpers, where the useful unit is one Pod per eligible node rather than a fixed replica count. -->
 
-Start with one worker node. If `notification-api` runs on `worker-a`, a log agent on `worker-a` can read that node's container log files and forward them to the central logging system. If the API later runs on `worker-b`, the team needs a log agent on `worker-b` as well.
+A **DaemonSet** runs one Pod on each eligible node. It fits node-level helpers such as log agents, metrics collectors, networking helpers, security sensors, and storage daemons. The desired count comes from the nodes that match the DaemonSet rules rather than from a `replicas` number.
 
-That placement rule is different from a Deployment. `notification-api` and `notification-worker` need enough healthy replicas for user traffic and queue processing. A node agent needs coverage across the nodes themselves. The useful question is "which nodes need this helper Pod?"
+For the Customer Notification Platform, application Pods may move across worker nodes during rollouts, scaling, and repairs. The platform team still needs logs and node-level signals from every eligible application worker. If `notification-api` runs on `worker-a`, a log agent on `worker-a` can read that node's container log files and forward them. If the API later runs on `worker-b`, the same kind of agent needs to exist there too.
 
-A **DaemonSet** is the Kubernetes workload object for that kind of node-local work. It creates one Pod on each eligible node, adds Pods when new eligible nodes join, and removes Pods when nodes leave or stop matching the rules. The count follows node coverage rather than an application replica number.
-
-We will follow a practical story. The platform team adds a log agent for the Customer Notification Platform, limits it to the application node pool, handles taints and tolerations, checks coverage, rolls out a new agent image, and debugs missing Pods when one node has no logs.
+The node-coverage problem leads to a DaemonSet skeleton, node selection, tolerations, hostPath mounts, coverage checks, rolling updates, and debugging commands for missing agents.
 
 ## Node-Local Pods
 <!-- section-summary: A DaemonSet is for software that must run on nodes because the node itself is part of the job. -->
@@ -44,12 +42,14 @@ Logging agents, node exporters, security sensors, storage daemons, CNI plugin co
 
 ![DaemonSet node coverage infographic showing a DaemonSet placing one log agent Pod on each eligible node and automatically adding an agent when a new app node appears](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-node-coverage.png)
 
-_This infographic shows the DaemonSet coverage loop: the desired count follows eligible nodes, not an application replica number._
+*A DaemonSet follows eligible nodes, so node growth and node labels directly change where agent Pods appear.*
 
-## Start with a DaemonSet Skeleton
+_This infographic shows the DaemonSet coverage loop: the desired count follows eligible nodes instead of an application replica number._
+
+## A DaemonSet Skeleton
 <!-- section-summary: The DaemonSet skeleton looks like a controller around a Pod template, with a selector that must match template labels. -->
 
-Start with the controller shape before adding node-specific details:
+The skeleton should look familiar because a DaemonSet still wraps a Pod template. The difference is the count. The log agent count comes from eligible nodes rather than a fixed `replicas` field. For the notification platform, the first thing to protect is the ownership link between the DaemonSet selector and the labels copied onto every node-local agent Pod, since that link decides which Pods the controller manages on each node pool.
 
 ```yaml
 apiVersion: apps/v1
@@ -69,12 +69,20 @@ spec:
 
 The selector and template labels form the ownership contract. The DaemonSet controller creates and manages Pods with those labels. As with Deployments, the selector should be planned carefully because it is part of the controller identity.
 
+The skeleton has three field groups to read first:
+
+- `metadata.name` and `metadata.namespace` name the node agent object.
+- `spec.selector.matchLabels` defines which Pods the DaemonSet owns.
+- `spec.template.metadata.labels` defines the labels copied onto each node-local Pod.
+
 The skeleton has no container yet and no placement rules yet. If we added only a container, the DaemonSet would try to run on every eligible node in the cluster. For the notification platform, the team wants only the app node pool.
 
 ## Add Node Selection and Tolerations
 <!-- section-summary: Node selectors choose which nodes should receive DaemonSet Pods, while tolerations let trusted Pods run on intentionally tainted nodes. -->
 
 An **eligible node** is a node that matches the DaemonSet's placement rules and can run the Pod. A DaemonSet may use `nodeSelector`, node affinity, taints and tolerations, or other scheduling constraints to define eligibility.
+
+The notification log agent should follow application nodes only. Control-plane nodes, GPU nodes, storage nodes, and special-purpose nodes may have different security or performance requirements. Placement rules let the platform team state which node pool should receive the agent before the DaemonSet starts creating Pods across the fleet.
 
 A **node selector** is the simplest placement rule. It says the node must have a matching label:
 
@@ -103,12 +111,16 @@ Node selection chooses the target pool. Tolerations let the Pod pass intentional
 
 ![DaemonSet eligibility filters infographic showing app, gpu, and control nodes passing or skipping nodeSelector and toleration filters before an agent Pod is placed](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-eligibility-filters.png)
 
+*Node selectors and tolerations decide which nodes receive the agent before the Pod can run.*
+
 _This infographic separates the two placement questions: node selection chooses the target pool, and tolerations let trusted DaemonSet Pods pass intentional taints._
 
 ## Add the Agent Container and Node Mounts
 <!-- section-summary: A node log agent usually needs a container image, resource settings, and read-only hostPath mounts into node log directories. -->
 
 The container block looks familiar from Pods and Deployments. The difference is the job the container performs. The log agent must read log files from the node, enrich them with metadata, and forward them to a central system.
+
+That job makes resource and mount choices more sensitive than they may look. One small agent runs on every eligible node, so the total CPU and memory request grows with the node count. The agent also reads node files through a hostPath mount, so the manifest should keep the mount read-only and focused on the log directory it truly needs.
 
 ```yaml
 containers:
@@ -146,7 +158,7 @@ containers:
 ## Inspecting DaemonSet Coverage
 <!-- section-summary: Coverage checks compare desired, current, ready, and available DaemonSet Pods against the eligible node set. -->
 
-After applying the DaemonSet, inspect the coverage:
+Coverage is the main health signal for a DaemonSet. The notification team wants one ready agent on each eligible application node. The first command compares desired, current, ready, and available counts so the team can see whether Kubernetes coverage matches the node pool before checking the logging system or agent configuration. This is the Kubernetes layer of the symptom, before downstream log delivery.
 
 ```bash
 $ kubectl get daemonset -n observability notification-log-agent
@@ -188,6 +200,8 @@ If there are four eligible nodes and four ready DaemonSet Pods, the Kubernetes c
 
 DaemonSets support rolling updates. The update strategy controls how many agent Pods can be unavailable during the update:
 
+Updating a node agent can affect every workload on the node, so the rollout pace deserves the same care as an application release. For the log agent, a brief gap may mean missing logs from one node. For networking or storage agents, a bad update can affect application traffic directly. The strategy below keeps only one agent unavailable at a time in the training example.
+
 ```yaml
 spec:
   updateStrategy:
@@ -222,7 +236,9 @@ After a rollback, verify both Kubernetes and the downstream system. A ready agen
 ## Debugging Missing Pods and Stuck Updates
 <!-- section-summary: DaemonSet debugging starts with node eligibility, then checks taints, scheduling events, Pod logs, and rollout status. -->
 
-When a node has no DaemonSet Pod, start with eligibility. A DaemonSet creates Pods for eligible nodes, so compare the node labels to the DaemonSet placement rules.
+When a node has no DaemonSet Pod, eligibility is the first check. A DaemonSet creates Pods for eligible nodes, so compare the node labels to the DaemonSet placement rules.
+
+The first useful question is why Kubernetes thinks the node qualifies. A missing label, an unmatched taint, a resource shortage, an image failure, or a broken hostPath mount can all produce a node without a healthy agent. Eligibility evidence prevents the team from chasing agent logs on a Pod Kubernetes never created.
 
 ```bash
 $ kubectl get node worker-c --show-labels
@@ -307,11 +323,11 @@ For DaemonSets, inspect nodes and Pods together. Check labels, selectors, taints
 
 ![DaemonSet debug runbook infographic showing symptom, coverage, node state, agent logs, downstream logs, and rollback as the troubleshooting path](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-debug-runbook.png)
 
+*A missing-agent investigation should prove node eligibility, Pod health, downstream delivery, and rollback evidence in order.*
+
 _This infographic summarizes the DaemonSet runbook: start from the missing node-local symptom, prove coverage, inspect node state and agent logs, then verify the downstream system._
 
----
-
-**References**
+## References
 
 - [Kubernetes Workloads](https://kubernetes.io/docs/concepts/workloads/) - Overview of Kubernetes workload resources and controllers.
 - [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/) - Official DaemonSet behavior, required fields, selectors, node selection, scheduling, tolerations, communication patterns, and alternatives.

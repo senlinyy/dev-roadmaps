@@ -1,104 +1,73 @@
 ---
 title: "Pod Security"
 description: "Harden Kubernetes Pods with safe security contexts, restricted defaults, and practical runtime boundaries."
-overview: "Pod security is about reducing what a compromised container can do. You will harden devpolaris-orders-api with security contexts, namespace labels, and review habits that keep normal deploys practical."
+overview: "Pod security reduces what a compromised container can do. Security contexts, namespace labels, and review habits harden devpolaris-orders-api while normal deploys stay practical."
 tags: ["security", "pods", "securitycontext", "psa"]
 order: 6
 id: article-containers-orchestration-kubernetes-operations-pod-security
 ---
-
 ## Table of Contents
 
 1. [Why Pod Security Matters](#why-pod-security-matters)
-2. [Start With the Restricted Shape](#start-with-the-restricted-shape)
+2. [The Restricted Pod Shape](#the-restricted-pod-shape)
 3. [Security Contexts on Pods and Containers](#security-contexts-on-pods-and-containers)
 4. [Run as a Non-Root User](#run-as-a-non-root-user)
 5. [Make Writes Explicit](#make-writes-explicit)
 6. [Drop Capabilities, Block Escalation, and Use Seccomp](#drop-capabilities-block-escalation-and-use-seccomp)
-7. [Use Pod Security Admission](#use-pod-security-admission)
+7. [Pod Security Admission](#pod-security-admission)
 8. [Fix Images That Depend on Root](#fix-images-that-depend-on-root)
 9. [Prove the Running Pod Matches the Review](#prove-the-running-pod-matches-the-review)
 10. [Operational Checklist](#operational-checklist)
+11. [References](#references)
 
 ## Why Pod Security Matters
-<!-- section-summary: Pod security reduces what an attacker or broken process can do after reaching the container. -->
+<!-- section-summary: Pod security reduces what a compromised or faulty container can do on the node and inside the cluster. -->
 
-An ordinary API container still needs clear boundaries. For `devpolaris-orders-api`, imagine a bug in the order creation endpoint allows an attacker to run a shell command inside the container. The safest Pod is one where that command has very little room to move.
+Kubernetes **Pod security** is the practice of shaping Pods so containers run with limited Linux privileges, explicit write paths, and safer defaults. It reduces the damage from a vulnerable app, a bad image, or an accidental shell command inside a container.
 
-**Pod security** is the practice of limiting what a Pod can do at runtime. The beginner question is simple: if this container is compromised or misconfigured, what should it still be unable to do?
+For `devpolaris-orders-api`, the goal is practical: the API should serve traffic as a non-root user, write only to declared temporary storage, drop extra Linux capabilities, block privilege escalation, and use the runtime default seccomp profile.
 
-Here is the concrete target. The orders API should run as a non-root user, drop extra Linux capabilities, use the runtime default seccomp profile, keep the root filesystem read-only, write only to explicit mounted directories such as `/tmp`, and avoid a Kubernetes API token unless the application has a real API use.
+Think of this as a production review of the Pod shape. The app still runs normally, but risky defaults are removed before the workload reaches the node.
 
-The technical field names come later, but the review idea starts here. A Pod spec that grants privileged mode, host networking, host process access, or broad filesystem writes can give a compromised workload a much larger path through the node.
+## The Restricted Pod Shape
+<!-- section-summary: The restricted Pod shape gives most application workloads a strong default posture without requiring custom kernel knowledge. -->
 
-The normal orders API is a good candidate for strict settings. It listens for HTTP requests, calls application dependencies, writes temporary files only when needed, and does not administer the cluster. That gives us a clear target: the Pod should look like a boring application workload with explicit runtime boundaries.
+Kubernetes Pod Security Standards define levels named privileged, baseline, and restricted. Most application Deployments should aim for the **restricted** shape unless a documented platform need requires an exception.
 
-We start with the Kubernetes Pod Security Standards because they give the cluster a shared language for that target.
-
-## Start With the Restricted Shape
-<!-- section-summary: The restricted Pod Security Standard is the right starting target for ordinary application Pods such as the orders API. -->
-
-Kubernetes defines **Pod Security Standards** as three policy profiles: `privileged`, `baseline`, and `restricted`. The `privileged` profile allows highly trusted workloads that need host-level power. The `baseline` profile blocks common privilege escalations while staying compatible with many workloads. The `restricted` profile sets stronger expectations for ordinary application Pods.
-
-For `devpolaris-orders-api`, aim for the restricted shape. The service does not need host networking, host PID access, privileged mode, extra Linux capabilities, or root access. It should run as a non-root user, use the runtime default seccomp profile, block privilege escalation, and drop Linux capabilities.
-
-Start with the Pod-level security shape. These settings apply to the Pod as a whole and give the process a non-root identity:
+The baseline restricted shape looks like this:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-  namespace: orders
-spec:
-  template:
-    spec:
-      serviceAccountName: orders-api
-      automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-        seccompProfile:
-          type: RuntimeDefault
+securityContext:
+  runAsNonRoot: true
+containers:
+  - name: api
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
 ```
 
-Then add the container-level restrictions and an explicit writable scratch directory:
+What this shape does:
 
-```yaml
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:2026-05-07.1
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: tmp
-          emptyDir:
-            sizeLimit: 256Mi
-```
+- Requires the process to run as a non-root user.
+- Blocks privilege escalation through setuid-style paths.
+- Makes the image filesystem read-only.
+- Removes default Linux capabilities.
+- Uses the container runtime default seccomp profile.
 
 ![Restricted Pod shape infographic showing runAsNonRoot, readOnlyRootFilesystem, dropped capabilities, seccomp, no privilege escalation, and a non-root image](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/restricted-pod-shape.png)
 
-*The restricted shape visual groups the settings that make an ordinary API Pod boring in production: non-root execution, explicit writes, fewer Linux powers, and no easy privilege jump.*
-
-Together, these fields say the Pod should run as UID `10001`, use the runtime's default seccomp profile, avoid a mounted Kubernetes API token, block privilege escalation, drop all Linux capabilities, and keep the root filesystem read-only. It still gives the application `/tmp` as explicit scratch space.
-
-That YAML is easier to understand once we separate Pod-level and container-level security settings.
+*The restricted shape gives reviewers a concrete target for normal application Pods.*
 
 ## Security Contexts on Pods and Containers
-<!-- section-summary: Security contexts make runtime safety settings explicit instead of depending on image defaults. -->
+<!-- section-summary: Pod-level and container-level security contexts work together, with container fields taking the closest control over the running process. -->
 
-A **security context** is a group of runtime security settings on a Pod or container. Pod-level settings usually apply to every container in the Pod, while container-level settings control one container more directly. Some fields only exist at one level, so you usually use both.
+Kubernetes exposes security settings in `securityContext` at the Pod and container levels. Pod-level fields set defaults for the whole Pod. Container-level fields control the actual container process and can be more specific.
 
-Pod-level settings are a good place for user and group IDs that should apply to the whole Pod:
+Example for the orders API:
 
 ```yaml
 spec:
@@ -107,332 +76,197 @@ spec:
     runAsUser: 10001
     runAsGroup: 10001
     fsGroup: 10001
-    seccompProfile:
-      type: RuntimeDefault
+  containers:
+    - name: api
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
 ```
 
-Container-level settings are a good place for privilege escalation, capabilities, and root filesystem behavior:
+What this means:
 
-```yaml
-containers:
-  - name: api
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop:
-          - ALL
-```
-
-Here is what each important field is doing:
-
-| Field | What it controls | Orders API target |
-|---|---|---|
-| `runAsNonRoot` | Rejects containers that try to run as UID `0` | `true` |
-| `runAsUser` | Sets the Linux user ID for the process | `10001` |
-| `runAsGroup` | Sets the primary Linux group ID | `10001` |
-| `fsGroup` | Sets group ownership behavior for supported volumes | `10001` |
-| `seccompProfile` | Filters available system calls | `RuntimeDefault` |
-| `allowPrivilegeEscalation` | Blocks gaining more privileges than the parent process | `false` |
-| `readOnlyRootFilesystem` | Mounts the image filesystem read-only | `true` |
-| `capabilities.drop` | Removes Linux capabilities from the container | `["ALL"]` |
-
-Use numeric IDs in manifests. Names such as `appuser` depend on `/etc/passwd` inside the image, while numeric IDs are clear to Kubernetes and the container runtime. The image should still create the user for file ownership and developer clarity, but the manifest should not rely on a name lookup.
-
-The first field most teams meet in practice is non-root execution.
+- The process runs as UID and GID `10001`.
+- Mounted volumes can be group-owned for application writes.
+- The container root filesystem stays read-only.
 
 ## Run as a Non-Root User
-<!-- section-summary: Running as a numeric non-root UID reduces the damage from file permission mistakes and container breakouts. -->
+<!-- section-summary: Non-root execution limits what an attacker or faulty process can do inside the container and mounted filesystem. -->
 
-**Root** is Linux user ID `0`. A process running as root inside a container has the broadest permissions inside that container's namespace. Isolation still limits it, but many security problems get worse when the process has root privileges from launch time.
+Running as root inside a container still gives the process powerful file and process privileges inside the container namespace. A non-root user gives the workload a smaller local blast radius.
 
-For the orders API, run the process as UID `10001` and make the image compatible with that UID. The Kubernetes manifest can require the UID, while the image build should create the user and set ownership on application files.
+The image should support the same UID used in the Pod:
 
 ```dockerfile
-FROM node:22-alpine
-
-RUN addgroup -S app -g 10001 \
-  && adduser -S app -u 10001 -G app
-
-WORKDIR /app
-COPY --chown=10001:10001 package.json package-lock.json ./
-RUN npm ci --omit=dev
-COPY --chown=10001:10001 . .
-
+RUN addgroup --system --gid 10001 app && adduser --system --uid 10001 --ingroup app app
 USER 10001:10001
-CMD ["node", "server.js"]
 ```
 
-The matching Pod security context keeps the runtime honest:
+What this image setup provides:
 
-```yaml
-securityContext:
-  runAsNonRoot: true
-  runAsUser: 10001
-  runAsGroup: 10001
+- The image has a named app user.
+- The runtime UID matches the Kubernetes security context.
+- File ownership can be prepared during image build.
+
+Verify the running Pod:
+
+```bash
+$ kubectl -n orders exec deploy/devpolaris-orders-api -c api -- id
+uid=10001(app) gid=10001(app) groups=10001(app)
 ```
 
-If the image accidentally switches back to root, `runAsNonRoot: true` helps catch it before the workload runs. If files under `/app` are owned by root and the process needs to write there, the app will fail. That failure is useful because it reveals a hidden runtime assumption. The better fix is to move runtime writes to an explicit writable location, not to run the whole container as root.
-
-That brings us to filesystem writes.
+The output proves the running process uses the intended user and group.
 
 ## Make Writes Explicit
-<!-- section-summary: A read-only root filesystem works best when temporary and persistent writes have intentional mounts. -->
+<!-- section-summary: Read-only images force the workload to declare where runtime files can be written. -->
 
-`readOnlyRootFilesystem: true` mounts the container image filesystem as read-only. The application can still write to mounted volumes. This setting is valuable because it stops accidental writes into application directories and makes runtime state visible in the Pod spec.
-
-For `devpolaris-orders-api`, the common writable path is temporary scratch space. Give it `/tmp` through `emptyDir` and keep the rest of the image read-only.
+Many apps write temporary files, caches, or sockets. A read-only root filesystem is still practical when those paths are explicit volumes.
 
 ```yaml
 containers:
   - name: api
-    securityContext:
-      readOnlyRootFilesystem: true
-    env:
-      - name: TMPDIR
-        value: /tmp
     volumeMounts:
       - name: tmp
         mountPath: /tmp
+      - name: cache
+        mountPath: /app/cache
 volumes:
   - name: tmp
-    emptyDir:
-      sizeLimit: 256Mi
+    emptyDir: {}
+  - name: cache
+    emptyDir: {}
 ```
 
-An `emptyDir` volume starts empty when the Pod starts and disappears when the Pod is removed. The size limit keeps temporary writes from growing without a boundary. If the service needs durable state, use a proper storage design. An API container should not quietly turn its image filesystem into a database.
+What this does:
 
-Here are runtime checks that prove the expected behavior:
+- The image filesystem remains read-only.
+- Runtime write paths are visible in the manifest.
+- The storage is temporary and tied to the Pod lifecycle.
 
-```bash
-kubectl -n orders exec deploy/devpolaris-orders-api -- id
-kubectl -n orders exec deploy/devpolaris-orders-api -- sh -c 'touch /app/check'
-kubectl -n orders exec deploy/devpolaris-orders-api -- sh -c 'touch /tmp/check && ls -l /tmp/check'
-```
-
-The expected result is a non-root UID, a read-only error for `/app/check`, and a successful file in `/tmp`.
-
-```console
-uid=10001 gid=10001 groups=10001
-touch: /app/check: Read-only file system
--rw-r--r--    1 10001    10001           0 May  7 11:24 /tmp/check
-```
-
-Filesystem boundaries are one layer. Kernel privilege boundaries are another.
+If the app crashes after this change, move writes into declared paths or update the app config before reopening the whole root filesystem.
 
 ## Drop Capabilities, Block Escalation, and Use Seccomp
-<!-- section-summary: Capabilities, privilege escalation, and seccomp control how much power the process has against the Linux kernel. -->
+<!-- section-summary: Linux capabilities, privilege escalation, and seccomp control the kernel-facing powers available to the container. -->
 
-Linux **capabilities** split root-like power into smaller pieces. Examples include changing network settings, bypassing file permissions, and performing broad system administration operations. Most HTTP APIs run without these powers. Dropping all capabilities is a strong default for `devpolaris-orders-api`.
-
-```yaml
-securityContext:
-  capabilities:
-    drop:
-      - ALL
-```
-
-If a workload needs a capability, add it explicitly and review the reason. A packet capture troubleshooting Pod may need a network capability for a short-lived task. The orders API should not need `NET_ADMIN`, `SYS_ADMIN`, or similar powers to process orders.
-
-**Privilege escalation** controls whether a process can gain more privileges than its parent process, including paths involving setuid binaries. Set it to false for application containers.
+Linux capabilities split root-like powers into smaller pieces. Most application containers need none of the default extra capabilities. Dropping all capabilities is a strong default.
 
 ```yaml
 securityContext:
   allowPrivilegeEscalation: false
-```
-
-**Seccomp** filters system calls into the kernel. `RuntimeDefault` tells Kubernetes to use the default seccomp profile from the container runtime. That default is a practical baseline for ordinary workloads because it blocks some risky system calls while keeping common application behavior working.
-
-```yaml
-securityContext:
+  capabilities:
+    drop: ["ALL"]
   seccompProfile:
     type: RuntimeDefault
 ```
 
+What these fields protect:
+
+- `allowPrivilegeEscalation: false` blocks gaining more privilege during execution.
+- `drop: ["ALL"]` removes default Linux capabilities.
+- `RuntimeDefault` applies the runtime's standard syscall filter.
+
 ![Runtime hardening boundary showing writable volume, read-only image, dropped capabilities, seccomp profile, app user, and evidence checks](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/runtime-hardening-boundary.png)
 
-*The boundary image separates what the app may do from what the runtime blocks. That distinction helps reviewers avoid weakening the whole Pod just to fix one writable path.*
+*The boundary view shows the application inside a smaller runtime box: non-root user, explicit writes, fewer kernel powers, and a seccomp profile.*
 
-You can inspect the running Pod spec:
+## Pod Security Admission
+<!-- section-summary: Pod Security Admission enforces Pod Security Standards at namespace admission time. -->
 
-```bash
-kubectl -n orders get pod -l app=devpolaris-orders-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.securityContext.seccompProfile.type}{"\n"}{end}'
+**Pod Security Admission** checks Pod specs when they reach the API server. Namespace labels tell Kubernetes whether to enforce, warn, or audit a Pod Security Standard level.
 
-kubectl -n orders get pod -l app=devpolaris-orders-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.containers[0].securityContext}{"\n"}{end}'
-```
-
-Those commands confirm the spec Kubernetes stored. Runtime checks, such as `id` and write tests, confirm what the process experiences.
-
-Now make those expectations automatic at the namespace level.
-
-## Use Pod Security Admission
-<!-- section-summary: Pod Security Admission applies Kubernetes Pod Security Standards through namespace labels. -->
-
-**Pod Security Admission** is a built-in Kubernetes admission controller that applies Pod Security Standards through namespace labels. An admission controller checks API requests as they enter the API server. For Pod security, it can warn, audit, or reject Pods that violate the selected profile.
-
-The three modes are **warn**, **audit**, and **enforce**. Warn returns a user-facing warning while allowing the request. Audit adds audit information for policy violations. Enforce rejects violating Pods. A namespace can use more than one mode at the same time.
-
-For the `orders` namespace, start by warning and auditing the restricted profile:
+Start in warn and audit mode before enforcement:
 
 ```bash
-kubectl label namespace orders \
+$ kubectl label namespace orders \
   pod-security.kubernetes.io/warn=restricted \
-  pod-security.kubernetes.io/audit=restricted \
-  --overwrite
+  pod-security.kubernetes.io/audit=restricted
+namespace/orders labeled
 ```
 
-Then test the Deployment with server-side dry run:
+What this output means:
+
+- The namespace now warns and audits restricted policy violations.
+- Existing Pods keep running.
+- New or updated Pods produce review evidence before deny mode.
+
+Move to enforce after the workload passes:
 
 ```bash
-kubectl -n orders apply --dry-run=server -f k8s/orders/deployment.yaml
+$ kubectl label namespace orders pod-security.kubernetes.io/enforce=restricted --overwrite
+namespace/orders labeled
 ```
 
-If the manifest violates restricted policy, Kubernetes prints warnings that name the missing fields.
-
-```console
-Warning: would violate PodSecurity "restricted:latest": allowPrivilegeEscalation != false,
-unrestricted capabilities, runAsNonRoot != true, seccompProfile
-deployment.apps/devpolaris-orders-api configured (server dry run)
-```
-
-After the team fixes warnings for normal workloads, add enforcement:
-
-```bash
-kubectl label namespace orders \
-  pod-security.kubernetes.io/enforce=restricted \
-  --overwrite
-```
-
-Some teams also pin the policy version, such as `pod-security.kubernetes.io/enforce-version=v1.36`, so a Kubernetes minor upgrade does not change enforcement rules without a planned review. Other teams use `latest` so namespaces follow the current cluster behavior. Choose one deliberately and document it in the platform runbook.
-
-Pod Security Admission works at the namespace boundary. It gives the namespace a guardrail that catches unsafe Pod specs before they run, while individual workload manifests still need review.
-
-The most common friction appears when an image was built with root-only assumptions.
+This result means future violating Pods in `orders` will be rejected at admission.
 
 ## Fix Images That Depend on Root
-<!-- section-summary: Root-dependent images usually need ownership fixes, explicit writable paths, or environment changes rather than weaker Pod security. -->
+<!-- section-summary: Root-dependent images need application fixes, file ownership fixes, or explicit exceptions rather than silent security rollback. -->
 
-A **root-dependent image** is an image that only starts when the process runs as UID `0` or can write into root-owned directories. Hardening exposes this quickly. You add `runAsNonRoot` and `readOnlyRootFilesystem`, then the Pod starts failing with permission errors.
+Some images expect root because files are owned by root, the app writes under `/var`, or the process binds privileged ports. Treat those as work items.
 
-```bash
-kubectl -n orders logs deploy/devpolaris-orders-api --tail=40
-```
+Common fixes:
 
-```console
-2026-05-07T11:06:12Z error failed to open cache path=/app/.cache/orders
-2026-05-07T11:06:12Z error EACCES: permission denied, mkdir '/app/.cache'
-```
+| Symptom | Better fix |
+|---|---|
+| Cannot write `/tmp` | Mount `emptyDir` at `/tmp` |
+| Cannot write app cache | Create a writable cache volume |
+| Permission denied on app files | Set ownership during image build |
+| Needs port `80` | Listen on `8080` and map Service port `80` |
+| Needs package install at runtime | Move install work into the image build |
 
-Handle this as an application packaging issue. First, decide whether the path should be writable at runtime. For a cache, move it to `/tmp` or another explicit `emptyDir` mount. For persistent data, use real storage. For build artifacts, fix the Dockerfile so the runtime image already contains what it needs.
-
-Node.js services often need cache or temporary directories set through environment variables. Python services may need bytecode cache behavior reviewed. Java services may need temporary directory settings. The exact knob depends on the runtime, but the principle is the same: writes should land in an intentional writable path.
-
-```yaml
-env:
-  - name: TMPDIR
-    value: /tmp
-  - name: ORDERS_CACHE_DIR
-    value: /tmp/orders-cache
-volumeMounts:
-  - name: tmp
-    mountPath: /tmp
-volumes:
-  - name: tmp
-    emptyDir:
-      sizeLimit: 256Mi
-```
-
-If the image has root-owned application files that the process only needs to read, that is usually fine. If it needs to write to application files, change the image design. Runtime containers should be predictable: code and dependencies are read-only, runtime state goes to explicit writable storage, and long-lived business data goes to an external data store.
-
-After fixing the image or manifest, prove the running Pod matches the security review.
+If a workload truly needs an exception, name the reason and scope it to that namespace or workload. Silent rollback to privileged settings creates a future incident.
 
 ## Prove the Running Pod Matches the Review
-<!-- section-summary: Runtime proof checks the actual Pod after rollout as well as the YAML reviewed in a pull request. -->
+<!-- section-summary: Pod security review should end with live evidence from the running Pod and namespace admission state. -->
 
-A hardening pull request should include both the manifest and runtime proof. The manifest shows what you asked Kubernetes to run. Runtime proof shows what actually started after defaults, admission, image behavior, and rollout.
-
-Start with rollout and Pod status:
+After deployment, prove the running Pod matches the manifest review:
 
 ```bash
-kubectl -n orders rollout status deploy/devpolaris-orders-api
-kubectl -n orders get pods -l app=devpolaris-orders-api
+$ kubectl -n orders get pod -l app.kubernetes.io/name=devpolaris-orders-api -o jsonpath='{.items[0].spec.securityContext.runAsNonRoot}'
+true
+
+$ kubectl -n orders exec deploy/devpolaris-orders-api -c api -- sh -c 'touch /root/probe'
+touch: /root/probe: Read-only file system
 ```
 
-Check the user and filesystem behavior:
+What this proves:
+
+- The Pod spec requires non-root execution.
+- The root filesystem blocks writes in the image layer.
+- The failure is expected and useful evidence.
+
+Check namespace labels too:
 
 ```bash
-kubectl -n orders exec deploy/devpolaris-orders-api -- id
-kubectl -n orders exec deploy/devpolaris-orders-api -- sh -c 'touch /app/check'
-kubectl -n orders exec deploy/devpolaris-orders-api -- sh -c 'touch /tmp/check && rm /tmp/check'
+$ kubectl get namespace orders --show-labels
+NAME     STATUS   AGE   LABELS
+orders   Active   30d   pod-security.kubernetes.io/enforce=restricted,pod-security.kubernetes.io/warn=restricted
 ```
 
-Check the security context fields Kubernetes stored:
-
-```bash
-kubectl -n orders get pod -l app=devpolaris-orders-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" runAsNonRoot="}{.spec.securityContext.runAsNonRoot}{" seccomp="}{.spec.securityContext.seccompProfile.type}{"\n"}{end}'
-
-kubectl -n orders get pod -l app=devpolaris-orders-api \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" allowPrivilegeEscalation="}{.spec.containers[0].securityContext.allowPrivilegeEscalation}{" readOnlyRootFilesystem="}{.spec.containers[0].securityContext.readOnlyRootFilesystem}{"\n"}{end}'
-```
-
-Check that no service account token is mounted when the app does not need the Kubernetes API:
-
-```bash
-kubectl -n orders exec deploy/devpolaris-orders-api -- \
-  ls /var/run/secrets/kubernetes.io/serviceaccount
-```
-
-The expected result is a "No such file or directory" error. If the directory exists, inspect the Pod spec for `automountServiceAccountToken` at the Pod and ServiceAccount levels.
-
-Finally, keep exceptions written and time-bound. Some workloads legitimately need host access or extra capabilities, such as CNI plugins, node agents, storage drivers, and short-lived debug tools. An exception should name the workload, namespace, field, reason, owner, and review date.
-
-```console
-Exception request:
-  workload: packet-capture-debug
-  namespace: platform-debug
-  field: hostNetwork true
-  reason: short-lived network diagnosis on worker nodes
-  owner: platform
-  expires: 2026-05-14
-```
-
-That exception shape keeps the ordinary orders API strict while allowing real platform work to happen with review.
+This output shows admission policy is active on the namespace.
 
 ## Operational Checklist
-<!-- section-summary: A practical Pod security review checks identity, users, filesystem writes, kernel powers, admission policy, and runtime proof. -->
+<!-- section-summary: A strong Pod security review checks the manifest, the image, namespace admission, and live runtime evidence. -->
 
 Use this checklist for `devpolaris-orders-api`:
 
 | Check | Expected result |
 |---|---|
-| Kubernetes API token | `automountServiceAccountToken: false` unless the app needs the API |
-| Linux user | Pod runs as non-root UID `10001` |
+| Non-root user | Pod and image use an app UID such as `10001` |
 | Root filesystem | `readOnlyRootFilesystem: true` |
-| Writable paths | `/tmp` or another explicit mount handles temporary writes |
+| Writable paths | `/tmp` and app cache paths use explicit volumes |
 | Capabilities | Container drops `ALL` capabilities |
-| Privilege escalation | `allowPrivilegeEscalation: false` |
-| Seccomp | Pod uses `RuntimeDefault` |
-| Host access | No host network, host PID, host IPC, privileged mode, or hostPath volumes for the API |
-| Namespace policy | `orders` uses restricted warn/audit and planned enforcement |
-| Runtime proof | `kubectl exec` and `jsonpath` checks are included in the review |
-| Exceptions | Any deviation has an owner, reason, and expiration |
+| Escalation | `allowPrivilegeEscalation: false` |
+| Seccomp | `RuntimeDefault` profile is set |
+| Namespace policy | Pod Security Admission warns, audits, then enforces restricted |
+| Live proof | `id` and write tests match the intended shape |
 
 ![Pod Security operations checklist with restricted start, non-root user, explicit writes, dropped Linux powers, PSA enforcement, and live Pod verification](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/pod-security-operations-checklist.png)
 
-*The checklist connects manifest review with runtime proof, so the team verifies the Pod that actually started rather than trusting YAML alone.*
+*The checklist keeps Pod security practical: define the restricted shape, fix the image, enforce at admission, and prove the live Pod matches the review.*
 
-Pod security works best as a normal review habit, not a once-a-year hardening project. The orders API should carry clear runtime boundaries every time it ships. When those boundaries are visible in the manifest, enforced at the namespace, and proven after rollout, a compromised container has fewer useful places to go.
+## References
 
----
-
-**References**
-
-- [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Official `privileged`, `baseline`, and `restricted` profiles.
-- [Kubernetes Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/) - Explains namespace labels for `warn`, `audit`, and `enforce` modes.
-- [Configure a Security Context for a Pod or Container](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Official guide to `runAsUser`, `runAsGroup`, `fsGroup`, `allowPrivilegeEscalation`, capabilities, seccomp, and read-only root filesystems.
-- [Kubernetes Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/) - Background for workload identities and service account tokens.
-- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Useful adjacent control for limiting Pod-to-Pod traffic after runtime hardening.
-- [Kubernetes RBAC good practices](https://kubernetes.io/docs/concepts/security/rbac-good-practices/) - Related guidance for reducing what a mounted service account token can do.
+- [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Official restricted, baseline, and privileged policy definitions.
+- [Kubernetes Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/) - Explains namespace labels for enforce, audit, and warn modes.
+- [Kubernetes Security Context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Official guide to Pod and container security context fields.
+- [Kubernetes Configure a Security Context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Practical examples for users, groups, capabilities, and seccomp.
+- [Kubernetes Good Practices: Security](https://kubernetes.io/docs/concepts/security/security-checklist/) - Security checklist for Kubernetes workloads and clusters.

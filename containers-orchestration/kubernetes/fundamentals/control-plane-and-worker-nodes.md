@@ -9,12 +9,11 @@ aliases:
   - containers-orchestration/orchestration-k8s/k8s-architecture.md
   - article-containers-orchestration-orchestration-k8s-k8s-architecture
 ---
-
 ## Table of Contents
 
-1. [One Pod Needs a Place to Run](#one-pod-needs-a-place-to-run)
-2. [The App We Will Deploy](#the-app-we-will-deploy)
-3. [From Request to Running Pod](#from-request-to-running-pod)
+1. [From API Request To Running Pod](#from-api-request-to-running-pod)
+2. [The App Used In The Examples](#the-app-used-in-the-examples)
+3. [The First Deployment Request](#the-first-deployment-request)
 4. [The API Server and Kubernetes API](#the-api-server-and-kubernetes-api)
 5. [etcd: The Cluster State Store](#etcd-the-cluster-state-store)
 6. [Controllers and the Scheduler](#controllers-and-the-scheduler)
@@ -24,26 +23,39 @@ aliases:
 10. [Managed Kubernetes Responsibilities](#managed-kubernetes-responsibilities)
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
+13. [References](#references)
 
-## One Pod Needs a Place to Run
-<!-- section-summary: One container runs inside one Pod, and that Pod needs a worker node plus a control plane that coordinates placement. -->
+## From API Request To Running Pod
+<!-- section-summary: The control plane coordinates cluster state, while worker nodes run Pods and report what happened. -->
 
-A **container** is a packaged application process with the files it needs to run. For example, the `notification-api` container image can hold the API code, installed dependencies, and the command that starts the HTTP server. A container image answers the packaging question: what should run?
+A **control plane** is the coordination side of Kubernetes. It exposes the API, stores cluster records, runs controllers, chooses nodes for unscheduled Pods, and receives status from the machines that run the work. **Worker nodes** are those machines. They pull images, start containers inside Pods, run health checks, attach networking, and report back through the API.
 
-A **Pod** is the smallest runtime unit Kubernetes schedules. One `notification-api` Pod usually wraps one API container and gives it a cluster network identity, health checks, and a place in the Kubernetes API. A Pod answers the first runtime question: what is one running copy of the app?
+The hand-off between those two sides is the heart of the control-plane and worker-node split. A deployment request enters the Kubernetes API, gets stored, turns into Pod work, gets assigned to a worker node, and finally reaches a node agent that can start the application container.
 
-A **worker node** is a physical or virtual machine that runs Pods. The node supplies CPU, memory, local disk, and networking. Each worker node runs a local agent called the kubelet, a container runtime such as containerd or CRI-O, and networking components that let Pods communicate.
+The Customer Notification Platform gives the hand-off a concrete shape. The `notification-api` needs Pods that can receive HTTP traffic, and the worker needs Pods that can process queued messages. Both workloads rely on the same Kubernetes machinery even though their application jobs differ. The practical goal is simple: know which component owns each step during a deploy, and know where to look after the hand-off stalls.
 
-A **Kubernetes cluster** is a group of worker nodes managed under one API. The cluster needs a coordination layer because many Pods need placement, many nodes report health, and many users or pipelines can ask for changes. That coordination layer is the **control plane**.
+Imagine you have already written a Deployment for `notification-api` and run the command that sends it to Kubernetes.
 
-A **control plane** is the set of Kubernetes components that expose the API and keep cluster state moving toward the requested configuration. It includes the API server, etcd, the scheduler, and controllers. The API server accepts requests, etcd stores cluster data, the scheduler chooses nodes for Pods, and controllers keep checking whether the cluster matches what was requested.
+```bash
+kubectl apply -f notification-api-deployment.yaml
+```
 
-This article follows that split in the order work actually travels. We will start with the shared application, send a deployment request, follow the API server and etcd, then follow controllers, scheduler, kubelet, runtime, networking, and operations. By the end, a Kubernetes rollout should read like a chain of concrete jobs.
+The terminal can answer quickly:
 
-## The App We Will Deploy
+```bash
+deployment.apps/notification-api created
+```
+
+That output means the API server accepted the request. The API container is not serving traffic yet. Kubernetes still has to create Pod records, choose machines with enough CPU and memory, ask the right node agents to start containers, attach networking, run health checks, and report status back.
+
+The main control plane pieces have concrete jobs. The **API server** accepts requests from `kubectl`, CI, Helm, GitOps tools, and controllers. **etcd** stores cluster data. **Controllers** notice that a Deployment needs Pods. The **scheduler** chooses a worker node for each pending Pod. On the selected node, the **kubelet** asks the container runtime to start the container and reports Pod status back to the API server.
+
+The split follows the order work actually travels: a deployment request reaches the API server and etcd, controllers create the needed lower-level objects, the scheduler chooses a node, kubelet and the runtime start containers, networking carries traffic, and operations evidence shows where the chain stalled.
+
+## The App Used In The Examples
 <!-- section-summary: The Customer Notification Platform gives every component a concrete job: API traffic, worker processing, database dependency, rollout, and operations. -->
 
-We will use a Customer Notification Platform for the whole article. It has a `notification-api` service that receives HTTP requests from other product systems, such as checkout or billing. It validates the request, stores a notification record in a database, and returns a response. It also has a `notification-worker` process that picks up pending notifications and sends email, SMS, or push messages.
+The Customer Notification Platform has a `notification-api` service that receives HTTP requests from other product systems, such as checkout or billing. It validates the request, stores a notification record in a database, and returns a response. It also has a `notification-worker` process that picks up pending notifications and sends email, SMS, or push messages.
 
 Many Kubernetes failures show up as application symptoms. The `notification-api` Pod can start successfully while the database connection fails. The worker can keep running while it falls behind after database latency increases. Kubernetes can help route traffic only to healthy Pods, restart failed containers, and schedule replacement Pods, but the app still needs good probes, logs, resource requests, and rollout settings.
 
@@ -60,14 +72,14 @@ In this scenario, the platform usually has these Kubernetes objects. Each one li
 
 The same example also gives us realistic operations work. A new image version rolls out after a bug fix. Traffic must reach ready API Pods. Worker replicas may need scaling during a marketing campaign. A database outage should show up in readiness, logs, and metrics. A node upgrade should drain Pods safely without losing notification requests halfway through processing.
 
-## From Request to Running Pod
+## The First Deployment Request
 <!-- section-summary: A Kubernetes request moves from desired state to API object, then through controllers, scheduler, kubelet, runtime, and networking before traffic reaches a Pod. -->
 
 A **manifest** is a YAML or JSON file that describes a Kubernetes object. The file says what you want the cluster to manage. For `notification-api`, a manifest can describe the image, replicas, port, database Secret, health checks, and resource requests. A resource request tells Kubernetes how much CPU or memory the container expects to need for scheduling.
 
 The manifest is the desired state. For example, `replicas: 2` asks Kubernetes to keep two API Pods running. The rest of the cluster then works from that stored request: controllers create Pod records, the scheduler chooses nodes, and kubelets start containers on the selected machines.
 
-Start with the smallest Deployment skeleton. It gives the API two replicas and enough labels for controllers to connect the Deployment to the Pods it creates.
+The smallest Deployment skeleton gives the API two replicas and enough labels for controllers to connect the Deployment to the Pods it creates.
 
 ```yaml
 apiVersion: apps/v1
@@ -176,10 +188,24 @@ You can ask Kubernetes whether your current identity has permission before a rol
 kubectl auth can-i update deployments -n notifications-prod
 ```
 
+Example output:
+
+```bash
+yes
+```
+
+`yes` means the current identity can update Deployment objects in that namespace. A `no` result means the caller may view cluster data but cannot perform the rollout action, so the RBAC rule or service account needs review before the release continues.
+
 You can also call the API directly through `kubectl get --raw`. This helps you remember that `kubectl` is a client for an HTTP API, and other clients can use the same API through official client libraries.
 
 ```bash
 kubectl get --raw /apis/apps/v1/namespaces/notifications-prod/deployments/notification-api
+```
+
+The output is raw JSON from the API server. A shortened view of the first identifying fields looks like this:
+
+```bash
+{"kind":"Deployment","apiVersion":"apps/v1","metadata":{"name":"notification-api","namespace":"notifications-prod"}}
 ```
 
 A key API behavior is a **watch**. A watch is a long-running API request that streams changes as objects update. Controllers, the scheduler, and kubelets use watches so they can react quickly when a Deployment changes, a Pod needs placement, or a Pod status needs reporting. This is why Kubernetes can coordinate many independent components without one giant process doing every job.
@@ -193,7 +219,7 @@ The API server is the normal path into etcd. Controllers, schedulers, kubelets, 
 
 For our platform, etcd stores the `notification-api` Deployment and the Pod records created from it. Your customer notification rows belong in the application database, such as PostgreSQL. The database stores business facts: who needs a notification, delivery state, retry count, and timestamps. etcd stores cluster facts: which Kubernetes objects exist, which Pods are assigned to which nodes, and what status those Pods reported.
 
-This difference shows up during incidents. If PostgreSQL has a regional outage, Kubernetes can still show Deployments, Pods, and Events because those records live in etcd. The application may mark readiness as failed, and the Service should stop routing traffic to unhealthy API Pods. If etcd loses quorum in a self-managed control plane, existing Linux container processes can continue running for a while, while new deploys, scale changes, and scheduler bindings stop until the storage layer recovers.
+This separation matters during outages. If PostgreSQL has a regional outage, Kubernetes can still show Deployments, Pods, and Events because those records live in etcd. The application may mark readiness as failed, and the Service should stop routing traffic to unhealthy API Pods. If etcd loses quorum in a self-managed control plane, existing Linux container processes can continue running for a while, while new deploys, scale changes, and scheduler bindings stop until the storage layer recovers.
 
 Self-managed clusters need a serious etcd plan. Real teams run etcd on reliable storage, protect it with TLS, keep access narrow, monitor disk latency and leader health, and take regular snapshots. A snapshot command in a self-managed environment often looks like this, with real certificate paths supplied by your cluster setup.
 
@@ -205,6 +231,14 @@ ETCDCTL_API=3 etcdctl \
   --key=/etc/kubernetes/pki/etcd/server.key \
   snapshot save /backup/etcd-$(date +%F).db
 ```
+
+Example output:
+
+```bash
+Snapshot saved at /backup/etcd-2026-06-29.db
+```
+
+The important pieces are the endpoint and certificates. They tell `etcdctl` which etcd server to contact and which trusted credentials to use. Managed Kubernetes usually hides this command from application teams, but self-managed clusters need a tested backup and restore process.
 
 Managed Kubernetes changes the day-to-day work around etcd, because the provider usually operates the control-plane storage. The concept still matters for troubleshooting. If your API server gets slow during a rollout, the cause may sit in control-plane health, admission webhooks, or etcd performance, while a Pod crash points you toward worker nodes, runtime, or application behavior.
 
@@ -235,11 +269,20 @@ topologySpreadConstraints:
         app: notification-api
 ```
 
+The fields guide the scheduler:
+
+- `topologyKey: topology.kubernetes.io/zone` tells Kubernetes to compare Pods by zone.
+- `maxSkew: 1` asks the scheduler to keep the zone counts close instead of placing every API Pod in one zone.
+- `whenUnsatisfiable: ScheduleAnyway` keeps the rule flexible, so a temporary zone shortage can still allow the Pod to run.
+- `labelSelector.matchLabels.app: notification-api` limits the spread calculation to API Pods with that label.
+
 When a Pod stays in `Pending`, scheduler events usually come before random setting changes. The describe output often tells you the real blocker, such as `Insufficient memory`, a missing toleration, or a node selector that matches zero nodes.
 
 ```bash
 kubectl -n notifications-prod describe pod notification-api-7f5c9d6c8f-q2m8n
 ```
+
+The command asks for one Pod's detailed record in the production namespace. The useful parts of the output are usually the `Node`, `Conditions`, and `Events` sections. `Events` often names the scheduling reason directly, such as insufficient memory or a missing toleration.
 
 The fix depends on the event. Add node capacity when the cluster lacks resources. Correct the request if the app asked for more CPU or memory than it uses. Add a toleration only when the Pod truly belongs on a tainted node. Change labels or affinity rules when a scheduling policy points at the wrong node pool.
 
@@ -268,6 +311,13 @@ kubectl -n notifications-prod describe pod notification-api-7f5c9d6c8f-q2m8n
 kubectl -n notifications-prod logs deployment/notification-api -c api
 ```
 
+Each command answers a different node-runtime question:
+
+- `kubectl get nodes -o wide` shows node readiness, version, internal IP, OS image, and container runtime summary.
+- `kubectl -n notifications-prod get pods -o wide` connects Pods to nodes through the `NODE` column.
+- `kubectl -n notifications-prod describe pod ...` shows events from scheduling, image pull, volume setup, probes, and restarts.
+- `kubectl -n notifications-prod logs deployment/notification-api -c api` reads the application stream from the `api` container selected through the Deployment.
+
 Node maintenance uses the same control-plane and node split. `cordon` marks a node unschedulable for new Pods. `drain` evicts eligible Pods so controllers can create replacements on other nodes. After maintenance, `uncordon` lets the scheduler place new Pods on that node again.
 
 ```bash
@@ -275,6 +325,8 @@ kubectl cordon worker-02
 kubectl drain worker-02 --ignore-daemonsets --delete-emptydir-data
 kubectl uncordon worker-02
 ```
+
+The flags deserve care. `--ignore-daemonsets` allows the drain to proceed even though DaemonSet-managed Pods are expected to stay on nodes. `--delete-emptydir-data` confirms that Pods using temporary `emptyDir` storage may lose that local data during eviction. A production drain should use those flags only after the team understands which Pods live on the node.
 
 Production teams usually combine draining with **PodDisruptionBudgets**. A PodDisruptionBudget, or PDB, tells Kubernetes how many Pods for an app must remain available during voluntary disruptions such as node drains. For the API, a PDB can protect customer traffic during node upgrades. For the worker, the budget may allow more disruption if jobs can retry safely.
 
@@ -314,12 +366,14 @@ kubectl -n notifications-prod get endpointslices -l kubernetes.io/service-name=n
 kubectl -n notifications-prod describe pod -l app=notification-api
 ```
 
+The three reads line up with the traffic path. The Service read shows the stable name, port, and selector. The EndpointSlice read shows the current backend Pod IPs Kubernetes can route to. The Pod describe command explains readiness, probe failures, and labels when the endpoint set is empty or surprising.
+
 The node component traditionally associated with Service routing is **kube-proxy**. It maintains network rules on nodes so Services can reach Pods. Some modern networking stacks implement Service behavior with other data-plane approaches, such as eBPF, but the Kubernetes idea stays the same: traffic targets a Service, the Service selects ready Pods, and node networking delivers packets to the right Pod IPs.
 
 ## Operations: Debugging the Hand-Offs
 <!-- section-summary: Good Kubernetes operations follow the hand-off chain: API request, stored state, controller work, scheduling, node startup, readiness, and traffic. -->
 
-At this point, the cluster has enough moving parts that guessing wastes time. A better habit is to follow the hand-offs in order. During an incident, the team first identifies which component last did its job successfully, then inspects the next component in the chain.
+At this point, the cluster has enough moving parts that guessing wastes time. Follow the hand-offs in order. During a production issue, the team first identifies which component last did its job successfully, then inspects the next component in the chain.
 
 A new `notification-api` version rolls out, and checkout traffic starts failing. The deployment pipeline succeeded, so the first question is whether the API server accepted the current desired state. Then the team checks whether controllers created new ReplicaSets and Pods, whether the scheduler placed those Pods, whether kubelets started containers, whether readiness passed, and whether the Service has endpoints.
 
@@ -333,6 +387,8 @@ kubectl -n notifications-prod rollout status deployment/notification-api
 kubectl -n notifications-prod get deploy,rs,pods -l app=notification-api
 ```
 
+The first command changes the Deployment's Pod template by replacing the `api` container image. The rollout status command watches the Deployment controller until the new ReplicaSet reaches the expected condition. The final `get` command lists the Deployment, ReplicaSets, and Pods under the same label so you can see where the rollout currently sits.
+
 If the rollout fails after the new image starts crashing, rollback is a normal operational action. The Deployment controller keeps rollout history, so you can ask Kubernetes to return to the previous ReplicaSet.
 
 ```bash
@@ -340,7 +396,9 @@ kubectl -n notifications-prod rollout undo deployment/notification-api
 kubectl -n notifications-prod rollout status deployment/notification-api
 ```
 
-Here is the debugging path I would walk with a junior engineer during that incident. Each row maps one question to the component that owns the next hand-off.
+`rollout undo` changes the Deployment back to the previous Pod template revision. The follow-up status command matters because undo also creates rollout work; the team still needs to verify that the restored template reaches available Pods.
+
+Here is the debugging path I would walk with a junior engineer during that production issue. Each row maps one question to the component that owns the next hand-off.
 
 | Question | Command | What the answer tells you |
 |---|---|---|
@@ -366,7 +424,7 @@ This responsibility line matters during production planning. If the provider man
 
 Worker nodes may still belong to your team. Managed node groups can automate parts of node provisioning and upgrades, but you choose instance types, capacity, labels, taints, autoscaling settings, security updates, and networking add-ons. Serverless or autopilot-style Kubernetes offerings move more node operations to the provider, while application specs still shape scheduling, health checks, and traffic behavior.
 
-A simple production checklist for this article's boundary looks like this. The point is ownership: the team responsible for a layer should know its alerts, change process, and rollback path.
+A simple production checklist for this responsibility boundary looks like this. The point is ownership: the team responsible for a layer should know its alerts, change process, and rollback path.
 
 | Area | Common owner | What to verify |
 |---|---|---|
@@ -443,19 +501,17 @@ That is the core of control plane and worker nodes. The control plane accepts, s
 
 ## What's Next
 
-This article focused on the components that cooperate inside a cluster. The next article goes deeper into **desired state and reconciliation**, which is the Kubernetes pattern behind Deployments, ReplicaSets, node health, and many higher-level tools.
+The cluster components now have clear responsibilities. The next article goes deeper into **desired state and reconciliation**, which is the Kubernetes pattern behind Deployments, ReplicaSets, node health, and many higher-level tools.
 
 That topic makes controllers more concrete. You will see how Kubernetes keeps comparing the requested state with the observed state, why it keeps retrying after failures, and how that loop changes the way you deploy, scale, and recover applications like the Customer Notification Platform.
 
----
+## References
 
-**References**
-
-- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/)
-- [The Kubernetes API](https://kubernetes.io/docs/concepts/overview/kubernetes-api/)
-- [Nodes](https://kubernetes.io/docs/concepts/architecture/nodes/)
-- [kubelet](https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/)
-- [Container Runtimes](https://kubernetes.io/docs/setup/production-environment/container-runtimes/)
-- [Kubernetes Scheduler](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/)
-- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/)
-- [Operating etcd clusters for Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/)
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official overview of control plane components, node components, API server, etcd, scheduler, controller manager, kubelet, kube-proxy, and container runtime.
+- [The Kubernetes API](https://kubernetes.io/docs/concepts/overview/kubernetes-api/) - Official explanation of the API server, API objects, API discovery, OpenAPI, and how clients interact with Kubernetes.
+- [Nodes](https://kubernetes.io/docs/concepts/architecture/nodes/) - Official node concept page for worker machines, node status, node management, heartbeats, and capacity.
+- [kubelet](https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/) - Official kubelet reference for the node agent that starts Pods and reports node and Pod status.
+- [Container Runtimes](https://kubernetes.io/docs/setup/production-environment/container-runtimes/) - Official setup guidance for runtimes such as containerd and CRI-O.
+- [Kubernetes Scheduler](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/) - Official scheduler concept page covering how unassigned Pods receive node placement.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official description of controllers as control loops that watch cluster state and make or request changes.
+- [Operating etcd clusters for Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/) - Official task guide for etcd operation, secure access, and snapshot-based backup in self-managed clusters.

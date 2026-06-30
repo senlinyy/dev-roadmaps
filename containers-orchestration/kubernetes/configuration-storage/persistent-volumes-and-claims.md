@@ -6,10 +6,9 @@ tags: ["kubernetes", "persistent-volumes", "pvc", "storage"]
 order: 5
 id: article-containers-orchestration-kubernetes-configuration-storage-persistent-volumes-and-claims
 ---
-
 ## Table of Contents
 
-1. [Start with One Lost File](#start-with-one-lost-file)
+1. [Durable Data Beyond a Pod](#durable-data-beyond-a-pod)
 2. [Why Pod Files Disappear](#why-pod-files-disappear)
 3. [PV and PVC Have Different Jobs](#pv-and-pvc-have-different-jobs)
 4. [Dynamic Provisioning Through a StorageClass](#dynamic-provisioning-through-a-storageclass)
@@ -22,13 +21,18 @@ id: article-containers-orchestration-kubernetes-configuration-storage-persistent
 11. [Assembled Example](#assembled-example)
 12. [Production Tradeoffs](#production-tradeoffs)
 13. [Review Checklist](#review-checklist)
+14. [References](#references)
 
-## Start with One Lost File
-<!-- section-summary: PVCs and PVs give important files a storage path outside the short-lived container filesystem. -->
+## Durable Data Beyond a Pod
+<!-- section-summary: PVCs and PVs give important data a storage path outside the short-lived container filesystem. -->
 
-A common first storage bug is a file disappearing after a container restart. A training version of `notification-postgres` writes database files under `/var/lib/postgresql/data`. The container crashes, Kubernetes starts a replacement, and anything written only to the old container filesystem is gone.
+Mounted ConfigMaps and Secrets solve file delivery for configuration. They are still configuration sources, not a place for application data. A Pod can disappear and return with a fresh container filesystem, so databases, brokers, search indexes, and file stores need a durable storage lane outside the short-lived container.
 
-A **PersistentVolumeClaim**, usually shortened to **PVC**, is the application team's request for durable storage. A **PersistentVolume**, usually shortened to **PV**, is the cluster storage resource that satisfies that request. The claim says how much storage the workload needs, and the PV represents the real backing volume.
+Kubernetes uses **PersistentVolumes** and **PersistentVolumeClaims** for that durable data lane. A **PersistentVolumeClaim**, usually shortened to **PVC**, is the application team's request for storage. A **PersistentVolume**, usually shortened to **PV**, is the cluster storage resource that satisfies the request. The claim says how much storage the workload needs, and the PV represents the real backing volume.
+
+In the Customer Notification Platform, the stateless `notification-api` and `notification-worker` should keep customer state in external systems. A small `notification-postgres` training workload gives us a concrete way to learn durable Kubernetes storage, from the claim request to binding, mounting, access modes, and recovery expectations.
+
+The bug to avoid is simple: `notification-postgres` writes database files under `/var/lib/postgresql/data`, the Pod is replaced, and data written only to the old container filesystem vanishes with that old container. A PVC gives the database path storage that can be mounted again by the replacement Pod.
 
 Here is the smallest useful claim for that PostgreSQL data directory:
 
@@ -46,6 +50,13 @@ spec:
       storage: 20Gi
 ```
 
+The PVC is the workload request:
+
+- `kind: PersistentVolumeClaim` creates a namespaced request for storage.
+- `accessModes: ReadWriteOnce` asks for a volume that one node can mount read-write.
+- `resources.requests.storage: 20Gi` names the requested capacity.
+- The claim later binds to a PV, either an existing one or one created by a StorageClass.
+
 This claim asks Kubernetes for `20Gi` of storage that can be mounted read-write by one node. The Pod later mounts the claim at the path the database already uses:
 
 ```yaml
@@ -54,7 +65,12 @@ volumeMounts:
     mountPath: /var/lib/postgresql/data
 ```
 
-The claim does not name a disk, cloud volume, or storage appliance. The cluster storage layer decides what actual backing PV can satisfy the request.
+The mount path is the application side of the storage contract:
+
+- `name: postgres-data` must match the Pod volume that references the PVC.
+- `mountPath` points at the directory PostgreSQL already uses for data files.
+
+The claim names the storage need rather than a specific disk, cloud volume, or storage appliance. The cluster storage layer decides what actual backing PV can satisfy the request.
 
 ## Why Pod Files Disappear
 <!-- section-summary: A container filesystem is tied to the container lifecycle, so important data needs a volume outside the container image. -->
@@ -63,7 +79,7 @@ Containers have writable filesystems, but those files belong to the container in
 
 For `notification-api` and `notification-worker`, most production state should live outside the Pod in systems such as managed PostgreSQL, a message broker, or object storage. That is the normal production path for customer notifications, delivery history, and provider payloads.
 
-PersistentVolumes still matter. Stateful workloads such as a self-managed PostgreSQL training database, a search index, a message broker, or a single-writer file store need durable storage that survives Pod replacement. In this article, `notification-postgres` gives us a concrete storage example for the same platform.
+PersistentVolumes still matter. Stateful workloads such as a self-managed PostgreSQL training database, a search index, a message broker, or a single-writer file store need durable storage that survives Pod replacement. Here, `notification-postgres` gives us a concrete storage example for the same platform.
 
 ![PV and PVC binding flow](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-persistent-volumes-and-claims/pv-pvc-binding-flow.png)
 
@@ -85,6 +101,8 @@ The PVC also gives Kubernetes a stable object for scheduling and lifecycle. A St
 
 **Dynamic provisioning** means Kubernetes creates the backing PV after a PVC asks for storage. The PVC references a **StorageClass**, and the StorageClass points to a CSI provisioner that knows how to create storage on the real platform.
 
+This is the common path in modern clusters because application teams rarely create PV objects by hand. The app team writes the storage request, the platform team publishes storage profiles, and the provisioner creates the real volume when the claim needs it. For `notification-postgres`, that keeps the manifest focused on durable database data instead of cloud disk IDs or storage-array details.
+
 Add a StorageClass name to the claim:
 
 ```yaml
@@ -97,6 +115,11 @@ spec:
       storage: 20Gi
 ```
 
+The added field makes the storage profile explicit:
+
+- `storageClassName: fast-ssd` asks for the platform team's low-latency profile.
+- The access mode and requested size still live on the PVC because they are workload needs.
+
 In a cloud cluster, `fast-ssd` might create an SSD-backed disk. In an on-prem cluster, it might create a volume from a storage array. The application manifest keeps the request stable while the platform changes the implementation behind the class.
 
 If `storageClassName` is omitted, Kubernetes may use the default StorageClass for the cluster. That can be convenient, but production teams usually make important storage choices explicit so reviewers know which performance, topology, and reclaim behavior the workload expects.
@@ -106,8 +129,18 @@ If `storageClassName` is omitted, Kubernetes may use the default StorageClass fo
 
 Apply the claim:
 
+A claim should be inspected before any Pod depends on it. The PVC is the durable-data request, and its status tells you whether Kubernetes found a matching backing volume. For a database, this check is important because a Pod that schedules without usable storage can fail at startup or write data to the wrong place. The first commands confirm the request reached the cluster and bound correctly.
+
+This gives the team a clean checkpoint between asking for storage and mounting it into a stateful workload.
+
 ```bash
 kubectl apply -f k8s/customer-notifications/notification-postgres-pvc.yaml
+```
+
+Kubernetes should report that it created or updated the claim:
+
+```console
+persistentvolumeclaim/notification-postgres-data configured
 ```
 
 Then inspect it:
@@ -123,7 +156,7 @@ NAME                         STATUS   VOLUME                                    
 notification-postgres-data   Bound    pvc-0d2df0c0-97d6-4d0d-a0a0-4a9d6e91a111   20Gi       RWO            fast-ssd
 ```
 
-`STATUS=Bound` means Kubernetes found or created a PV for the claim. The generated PV name often starts with `pvc-`, which tells you the volume came from a claim-driven workflow.
+`STATUS=Bound` means Kubernetes found or created a PV for the claim. A generated PV name such as `pvc-0d2df0c0-97d6-4d0d-a0a0-4a9d6e91a111` tells you the volume came from a claim-driven workflow.
 
 For more detail, describe the claim:
 
@@ -136,7 +169,9 @@ Useful details include the StorageClass, events, selected node, requested size, 
 ## Mount the Claim into a Pod
 <!-- section-summary: A Pod uses a PVC by declaring a volume that references the claim and mounting that volume into a container path. -->
 
-A **persistentVolumeClaim volume** makes a PVC available to a Pod. The Pod does not talk to the PV directly. It references the claim by name.
+A **persistentVolumeClaim volume** makes a PVC available to a Pod. The Pod references the claim by name, and Kubernetes handles the connection to the backing PV.
+
+This step connects the durable-data lane to the container path the application already uses. The PVC owns the storage request and binding. The Pod owns the mount decision. For `notification-postgres`, the database expects its data directory at `/var/lib/postgresql/data`, so the manifest mounts the claim there instead of asking the database to write somewhere temporary.
 
 First, define the volume:
 
@@ -157,6 +192,12 @@ containers:
         mountPath: /var/lib/postgresql/data
 ```
 
+The two snippets work together:
+
+- `persistentVolumeClaim.claimName` selects the namespaced PVC.
+- `volumeMounts[].name` attaches that selected volume to the `postgres` container.
+- `mountPath` chooses the filesystem location the database writes to.
+
 The container sees a normal directory at `/var/lib/postgresql/data`. Kubernetes and the storage driver attach and mount the underlying volume on the node where the Pod runs.
 
 In production, StatefulSets usually create one claim per Pod through `volumeClaimTemplates`. A standalone PVC is still useful for learning, simple single-instance workloads, and understanding the underlying mechanics.
@@ -165,6 +206,8 @@ In production, StatefulSets usually create one claim per Pod through `volumeClai
 <!-- section-summary: Access modes describe how a volume can be mounted, while volume mode describes whether the container sees a filesystem or a raw block device. -->
 
 An **access mode** describes how many nodes or Pods can mount a volume and whether the mount is read-write. It is a scheduling and storage capability, not an application-level locking system.
+
+This distinction matters for stateful workloads. A storage driver may allow a volume to attach to one node or many nodes, but the application still has to handle concurrent reads and writes correctly. PostgreSQL data files expect a single writer, so the access mode should match that application reality instead of trying to create sharing through storage alone.
 
 | Access mode | Plain-English meaning | Common use |
 |---|---|---|
@@ -195,7 +238,11 @@ PVC expansion is another lifecycle operation. If the StorageClass allows expansi
 ## Troubleshoot Pending Claims
 <!-- section-summary: Pending claims usually point to a missing StorageClass, unavailable topology, quota, or unsupported access mode. -->
 
-A PVC stuck in `Pending` needs event inspection. Start with:
+A PVC stuck in `Pending` needs event inspection. Run:
+
+A pending PVC points to storage negotiation before application code. The claim has asked for capacity, an access mode, and maybe a StorageClass, but Kubernetes has not bound it to a usable PV yet. Events usually name the missing class, unsupported access mode, quota issue, or scheduling dependency. Start there before changing the database Deployment.
+
+For zonal storage, remember that a pending claim can also be waiting for the first Pod placement decision.
 
 ```bash
 kubectl describe pvc notification-postgres-data -n customer-notifications
@@ -223,14 +270,16 @@ fast-ssd             csi.example.com             Delete          WaitForFirstCon
 standard (default)   csi.example.com             Delete          Immediate
 ```
 
-If the class exists, ask the platform team whether the requested size, access mode, and zone are supported. PVC events usually provide the best first clue.
+If the class exists, ask the platform team whether the requested size, access mode, and zone are supported. PVC events usually provide the first useful clue.
 
 ## Troubleshoot Write and Permission Problems
 <!-- section-summary: Bound storage can still fail at runtime when filesystem ownership, security context, or application paths are wrong. -->
 
-`STATUS=Bound` only confirms the volume exists and can attach. The process can still fail to write if the directory ownership, security context, or mount path does not match the container.
+`STATUS=Bound` only confirms the volume exists and can attach. The process can still fail to write if the directory ownership, security context, or mount path conflicts with the container.
 
-Check the mount from inside the Pod:
+Runtime write failures live one layer below claim binding. Kubernetes may attach the volume successfully, while the database process still lacks permission to create files in the mounted directory. The debug path should prove the mount is present, then prove the process user can read and write the expected path. That separates storage provisioning issues from Linux filesystem and security-context issues.
+
+The mount can be checked from inside the Pod:
 
 ```bash
 kubectl exec statefulset/notification-postgres -n customer-notifications -- df -h /var/lib/postgresql/data
@@ -249,12 +298,22 @@ Then check ownership:
 kubectl exec statefulset/notification-postgres -n customer-notifications -- ls -ld /var/lib/postgresql/data
 ```
 
+Healthy output should show the directory owner and mode, for example:
+
+```console
+drwx------ 19 postgres postgres 4096 Jun 28 11:04 /var/lib/postgresql/data
+```
+
 If the database runs as a non-root user, the volume may need `fsGroup`, an init container that prepares ownership, or a storage driver that honors filesystem group settings. Handle this in the workload manifest rather than asking the application to run as root.
 
 ## Assembled Example
 <!-- section-summary: The full example shows a PVC mounted into a single-instance PostgreSQL workload for the notification platform. -->
 
 Here is the assembled example. It keeps the storage request separate from the Pod that mounts it.
+
+The complete manifest shows the two halves of durable Kubernetes storage. The PVC asks for `20Gi` of the `fast-ssd` profile, and the StatefulSet mounts that claim into the database path. Reviewers can inspect capacity, access mode, and storage class separately from the container image and application settings.
+
+That separation is the main habit to keep: the claim names the data need, and the workload chooses where that data appears in the container.
 
 ```yaml
 apiVersion: v1
@@ -301,12 +360,18 @@ spec:
             claimName: notification-postgres-data
 ```
 
+The full example keeps the storage request and mount separate:
+
+- The PVC asks for `20Gi` from the `fast-ssd` class.
+- The StatefulSet mounts the claim into the PostgreSQL data directory.
+- `PGDATA` keeps database files in a subdirectory under the mounted path, which avoids common PostgreSQL initialization issues with mounted volume roots.
+
 This example teaches the binding and mount path. A production PostgreSQL deployment also needs Secret-managed credentials, backups, probes, resource requests, security context, upgrade planning, and a clear decision between self-managed and managed database operations.
 
 ## Production Tradeoffs
 <!-- section-summary: Durable Kubernetes volumes are powerful, but production data systems also need backup, restore, scaling, and failure-domain planning. -->
 
-PVCs solve durable filesystem attachment inside Kubernetes. They do not automatically solve database replication, backup retention, cross-zone failover, application-level consistency, or performance tuning.
+PVCs solve durable filesystem attachment inside Kubernetes. Database replication, backup retention, cross-zone failover, application-level consistency, and performance tuning still need their own design.
 
 For the Customer Notification Platform, production teams often use managed PostgreSQL, managed queues, and object storage for core business state. Kubernetes PVCs still appear in self-managed databases, brokers, search clusters, caches with persistence, and tools that need a durable filesystem.
 
@@ -321,6 +386,10 @@ The decision should name the operator. If the platform team runs the database in
 
 Use this checklist before merging PVC-backed workloads:
 
+The checklist exists because a bound PVC is only one part of running stateful software safely. A production review should confirm that the request matches the workload, the backing class has the right lifecycle behavior, the process can write to the mounted path, and someone owns backup and restore before valuable data lands on the volume.
+
+For `notification-postgres`, each checklist item protects either the database files, the restore path, or the operator who has to debug a storage incident.
+
 | Check | What to confirm |
 |---|---|
 | StorageClass | The class exists and matches the performance and topology need |
@@ -330,8 +399,9 @@ Use this checklist before merging PVC-backed workloads:
 | Permissions | The security context lets the process read and write safely |
 | Backup | The backup and restore owner is named before production data lands on the volume |
 
-**References**
+## References
 
 - [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 - [StorageClasses](https://kubernetes.io/docs/concepts/storage/storage-classes/)
+- [Dynamic Volume Provisioning](https://kubernetes.io/docs/concepts/storage/dynamic-provisioning/)
 - [StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)

@@ -1,7 +1,7 @@
 ---
 title: "Helm Values"
 description: "Use Helm values files to configure chart output while keeping environment differences explicit and reviewable."
-overview: "Helm values are the inputs that make one chart render differently for staging, production, or another service. This article shows how to use them for `devpolaris-orders-api` without turning values into a hidden programming layer."
+overview: "Helm values are release inputs that land in rendered Kubernetes YAML. Values are easiest to learn through the template syntax that consumes them: braces, dot context, values paths, built-in objects, whitespace control, functions, merge order, validation, secrets, and CI review."
 tags: ["helm", "values", "configuration", "yaml"]
 order: 3
 id: article-containers-orchestration-kubernetes-packaging-helm-values
@@ -9,565 +9,598 @@ id: article-containers-orchestration-kubernetes-packaging-helm-values
 
 ## Table of Contents
 
-1. [Values Are Template Inputs](#values-are-template-inputs)
-2. [Start With A Tiny Values Skeleton](#start-with-a-tiny-values-skeleton)
-3. [Deployment Values: Image And Replicas](#deployment-values-image-and-replicas)
-4. [Service Values: Stable Network Access](#service-values-stable-network-access)
-5. [Config Values: Plain Runtime Settings](#config-values-plain-runtime-settings)
-6. [Ingress Values: The Outside Route](#ingress-values-the-outside-route)
-7. [How Helm Builds The Final Values](#how-helm-builds-the-final-values)
-8. [Staging And Production Values Files](#staging-and-production-values-files)
-9. [Required Values And Schema Validation](#required-values-and-schema-validation)
-10. [Keeping Secrets Out Of Values](#keeping-secrets-out-of-values)
-11. [Reviewing Values In CI](#reviewing-values-in-ci)
-12. [Production Review Habits](#production-review-habits)
-13. [What's Next](#whats-next)
+1. [What Helm Values Do](#what-helm-values-do)
+2. [The Template Syntax You Will See](#the-template-syntax-you-will-see)
+3. [Double Braces Run Template Code](#double-braces-run-template-code)
+4. [The Dot Context](#the-dot-context)
+5. [The Values Tree](#the-values-tree)
+6. [Whitespace Control](#whitespace-control)
+7. [Pipes and Functions](#pipes-and-functions)
+8. [Conditionals](#conditionals)
+9. [Trace Values Into Kubernetes Objects](#trace-values-into-kubernetes-objects)
+10. [Values Merge Order](#values-merge-order)
+11. [Values Schema Validation](#values-schema-validation)
+12. [Secret Values and Secret References](#secret-values-and-secret-references)
+13. [Review Values in CI](#review-values-in-ci)
+14. [Putting It All Together](#putting-it-all-together)
+15. [What's Next](#whats-next)
+16. [References](#references)
 
-## Values Are Template Inputs
-<!-- section-summary: Helm values are the inputs templates read through .Values, and every important value should land in a rendered Kubernetes field. -->
+## What Helm Values Do
+<!-- section-summary: Helm values are release inputs, and templates decide where those inputs appear in Kubernetes YAML. -->
 
-Start with one line in a values file: `replicaCount: 3`. That line earns its place when the rendered Deployment shows `spec.replicas: 3`. The same habit works for image tags, Service ports, ConfigMap settings, and hostnames: one value should visibly land in one rendered field.
+A **Helm value** is an input that a chart template reads while Helm renders Kubernetes YAML. The value by itself is only data. The template gives that data a destination. For example, `replicaCount: 3` matters because a Deployment template can place it under `spec.replicas`, and Kubernetes can then maintain three Pods.
 
-**Helm values** are YAML inputs that chart templates read through `.Values`. A value can choose the image tag, replica count, Service port, resource request, runtime setting, or route hostname for a release. Helm merges the inputs, renders templates, and sends Kubernetes the final manifests.
+The running example is `devpolaris-orders-api`. Development runs a small release. Production runs more replicas, a stable image tag, a Service port, a ConfigMap setting, and an internal hostname. The chart owns the shared Kubernetes shape, while values files carry the choices that differ by environment.
 
-For `devpolaris-orders-api`, the chart owns the reusable shape: Deployment, Service, ConfigMap, and optional Ingress. Values answer environment and release questions. Staging can run one replica with a staging hostname. Production can run three replicas with a production hostname and higher resource requests.
-
-A useful value has a visible destination. If `replicaCount: 3` appears in a values file, reviewers should find `spec.replicas: 3` in the rendered Deployment. If `ingress.host` appears in a values file, reviewers should find the same hostname in the rendered Ingress. This article keeps that connection visible from the first snippet.
-
-## Start With A Tiny Values Skeleton
-<!-- section-summary: The first values file should expose only the inputs the first template actually consumes. -->
-
-Start with the smallest values skeleton that can render a Deployment. The chart can grow later, but the first step should connect inputs to output without a giant configuration blob.
+Here is the production values file for the example release:
 
 ```yaml
-replicaCount: 1
+replicaCount: 3
+
 image:
   repository: ghcr.io/devpolaris/orders-api
-  tag: "2026.06.16-dev"
-```
+  tag: "2026.06.16.1"
 
-The matching Deployment template consumes only those values.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-spec:
-  replicas: {{ .Values.replicaCount }}
-  template:
-    spec:
-      containers:
-        - name: orders-api
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-```
-
-Render it.
-
-```bash
-$ helm template orders ./charts/orders-api
-```
-
-The rendered output shows the values in Kubernetes fields.
-
-```yaml
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-spec:
-  replicas: 1
-  template:
-    spec:
-      containers:
-        - name: orders-api
-          image: ghcr.io/devpolaris/orders-api:2026.06.16-dev
-```
-
-This is the habit to keep as the chart grows. Add a value, show the template that consumes it, then inspect the rendered object.
-
-## Deployment Values: Image And Replicas
-<!-- section-summary: Deployment values control workload size, image version, resources, and probes that affect how Pods run. -->
-
-A **Deployment** manages a set of Pods from a Pod template. In a Helm chart, Deployment values usually control the number of replicas, container image, resource requests, and health checks. These values affect the running workload directly.
-
-Add resource requests to the values skeleton. A **resource request** tells the scheduler how much CPU and memory the Pod expects. In production, requests help the cluster place Pods predictably.
-
-```yaml
-replicaCount: 1
-image:
-  repository: ghcr.io/devpolaris/orders-api
-  tag: "2026.06.16-dev"
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-  limits:
-    memory: 256Mi
-```
-
-The Deployment template consumes `resources` under the container.
-
-```yaml
-containers:
-  - name: orders-api
-    image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-    resources:
-      {{- toYaml .Values.resources | nindent 6 }}
-```
-
-Rendered output should be easy to inspect.
-
-```yaml
-containers:
-  - name: orders-api
-    image: ghcr.io/devpolaris/orders-api:2026.06.16-dev
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        memory: 256Mi
-```
-
-The `toYaml` function converts the nested values map back into YAML. `nindent 6` places that YAML under the container's `resources` key. Without the right indentation, Helm may render invalid YAML or put fields in the wrong place.
-
-## Service Values: Stable Network Access
-<!-- section-summary: Service values describe the port contract between cluster clients and the API Pods. -->
-
-A **Service** gives matching Pods a stable network address. Pods can be recreated with new IP addresses, but the Service name stays stable. For the orders API, clients call Service port `80`, and the container receives traffic on port `8080`.
-
-Add only the Service inputs.
-
-```yaml
 service:
   port: 80
   targetPort: 8080
+  enableMetrics: true
+
+config:
+  logLevel: info
+  catalogUrl: http://catalog-api.devpolaris-prod.svc.cluster.local:8080
+
+ingress:
+  enabled: true
+  host: orders.example.internal
 ```
 
-The Service template consumes those values in the `ports` list.
+Important points in this file:
+
+- `replicaCount` is a release decision about scale. It should land in a Deployment field.
+- `image.repository` and `image.tag` identify the application build. They should land in the container image.
+- `service.port` is the port callers use through the Service.
+- `service.targetPort` is the port the application container listens on.
+- `config` contains ordinary settings that are safe to store in Git.
+- `ingress.enabled` controls whether Helm renders an Ingress object.
+- `ingress.host` is the hostname reviewers should see in the final route.
+
+The rest of the article explains the template syntax that turns this values file into Kubernetes YAML.
+
+## The Template Syntax You Will See
+<!-- section-summary: Helm templates are normal Kubernetes YAML plus Go-template expressions that Helm evaluates during rendering. -->
+
+Helm uses the Go template language, plus Helm objects and helper functions, to inject values into YAML. Everything outside a template expression stays as normal YAML text. Everything inside `{{ ... }}` is template code that Helm evaluates.
+
+For a beginner, the safest way to read a Helm template is to keep two layers in mind. The first layer is still Kubernetes YAML: `apiVersion`, `kind`, `metadata`, `spec`, ports, labels, and other object fields. The second layer is Helm syntax that fills in release-specific pieces during rendering. In the orders API chart, that syntax places the release name and Service port into fields that Kubernetes already understands.
+
+A tiny template can look like this:
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: devpolaris-orders-api
+  name: {{ .Release.Name }}-orders-api
 spec:
-  selector:
-    app.kubernetes.io/name: devpolaris-orders-api
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
 ```
 
-The Deployment should also consume `targetPort` for the container port, so the Service and container stay aligned.
+Important points in this template:
+
+- `apiVersion`, `kind`, `metadata`, and `spec` are normal Kubernetes YAML.
+- `{{ .Release.Name }}` asks Helm for the release name, then inserts it into the YAML.
+- `{{ .Values.service.port }}` asks Helm for a value from the values file.
+- The rendered file should be ordinary YAML with no `{{ ... }}` expressions left.
+
+That syntax is small, but it introduces the main pieces beginners need: double braces, dot context, values paths, and built-in Helm objects.
+
+## Double Braces Run Template Code
+<!-- section-summary: Double braces mark the parts of a template that Helm should evaluate and replace. -->
+
+The double curly braces, `{{ }}`, tell Helm to run template code. Text outside the braces stays static. Code inside the braces gets evaluated and replaced with the result.
+
+This is the smallest unit of Helm template syntax. When the chart renders, Helm reads the expression inside the braces, calculates a value, and writes that value into the YAML stream. Kubernetes receives only the rendered result. For the orders API, double braces are how the same template can use `orders-dev` in one release and `orders` in production while keeping the Kubernetes object shape the same.
+
+Here is the simplest version:
+
+```yaml
+metadata:
+  name: {{ .Values.appName }}
+```
+
+Important points in this example:
+
+- `metadata:` and `name:` are static YAML text. Helm leaves them alone.
+- `{{ .Values.appName }}` is dynamic template code. Helm replaces it.
+- If `values.yaml` contains `appName: orders-api`, the rendered YAML contains `name: orders-api`.
+- The final YAML is what Kubernetes receives. Kubernetes never sees the template expression.
+
+A template has two layers: the Kubernetes shape outside the braces and the dynamic values inside the braces. That separation keeps the template from looking like a different language hiding inside YAML.
+
+## The Dot Context
+<!-- section-summary: The dot is the current context, and at the top level it gives access to Helm objects such as Values, Release, and Chart. -->
+
+The period, `.`, is one of the most important symbols in a Helm template. At the top of a template, `.` means the current top-level Helm context. From that context, you can reach different buckets of information.
+
+That context is the bundle Helm carries while rendering. It includes the values files, release information, chart metadata, and cluster capability data. The dot is the starting point for asking Helm for one of those pieces. In the orders API chart, a template can ask the same context for the production Service port through `.Values` and the release name through `.Release`.
+
+Common top-level objects include:
+
+| Template path | What it means | Example use |
+| --- | --- | --- |
+| `.Values` | Data from values files and overrides | `{{ .Values.replicaCount }}` |
+| `.Release` | Information about this Helm release | `{{ .Release.Name }}` |
+| `.Chart` | Metadata from `Chart.yaml` | `{{ .Chart.Version }}` |
+| `.Capabilities` | Kubernetes API versions and cluster capability data | Checking whether an API is available |
+
+Here is a metadata block that uses `.Release` and `.Chart`:
+
+```yaml
+metadata:
+  name: {{ .Release.Name }}-orders-api
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+```
+
+Important points in this example:
+
+- `.Release.Name` is the name used during `helm install` or `helm upgrade`.
+- `.Release.Service` is usually `Helm`, which helps show the object is managed by Helm.
+- `.Chart.Name` and `.Chart.Version` come from `Chart.yaml`.
+- The label values should be quoted if they may contain characters that YAML could read in a surprising way.
+
+The dot can change inside loops and helper templates. For a beginner values article, the safe first rule is this: at the top level, start from `.` and then choose the bucket you need.
+
+## The Values Tree
+<!-- section-summary: Values paths follow the YAML tree, so each dot after Values walks one level deeper into the values file. -->
+
+`.Values` opens the values data. The dots after `.Values` walk down the YAML tree.
+
+This path syntax follows the shape of the values file. If the values file has nested maps, each dot moves one level deeper. That is why values structure deserves design attention before a chart grows. A shallow, named path such as `.Values.image.tag` is easy for a reviewer to trace into a container image. A deeply nested path forces reviewers to jump through too many levels before they know which release choice changed.
+
+Imagine this values file:
+
+```yaml
+database:
+  mysql:
+    username: admin
+```
+
+Important points in this values shape:
+
+- `database` groups values related to the database.
+- `mysql` names the specific database type in this example.
+- `username` is the final value the template will read.
+
+The template path follows the same nesting:
+
+```yaml
+env:
+  - name: DB_USER
+    value: {{ .Values.database.mysql.username | quote }}
+```
+
+Important points in this example:
+
+- `.Values` opens the values file data.
+- `.database` moves into the `database:` map.
+- `.mysql` moves into the nested `mysql:` map.
+- `.username` selects the final value, `admin`.
+- `| quote` wraps the rendered string in quotes, which is safer for YAML values.
+
+This is the reason values files should stay organized. Deep paths such as `.Values.global.platform.defaults.networking.primary.service.http.port` are hard for beginners and reviewers. A chart should use nested values for groups that make the release choice simple to understand.
+
+## Whitespace Control
+<!-- section-summary: Whitespace control removes extra spaces and blank lines that template logic can leave in YAML. -->
+
+YAML cares about indentation and structure. Helm template logic can leave blank lines or extra spaces after conditions and loops. Helm uses hyphens inside the template braces to trim whitespace.
+
+Whitespace control exists because templates are removed during rendering, but the surrounding YAML still needs clean indentation. A blank line rarely breaks YAML by itself, while a misplaced indentation level can change the structure or fail parsing. The orders API chart uses whitespace trimming around optional blocks such as metrics ports or Ingress sections so the rendered Service and route stay readable after Helm evaluates the condition.
+
+The common forms are:
+
+| Syntax | Plain meaning |
+| --- | --- |
+| `{{- ... }}` | Trim whitespace on the left side of the template expression |
+| `{{ ... -}}` | Trim whitespace on the right side of the template expression |
+| `{{- ... -}}` | Trim whitespace on both sides |
+
+Here is a conditional Service port without whitespace trimming:
 
 ```yaml
 ports:
-  - containerPort: {{ .Values.service.targetPort }}
+  - name: http
+    port: {{ .Values.service.port }}
+  {{ if .Values.service.enableMetrics }}
+  - name: metrics
+    port: 9090
+  {{ end }}
 ```
 
-Rendered output gives reviewers a simple check.
+Important points in this example:
+
+- `if` starts a conditional block.
+- `end` closes the conditional block.
+- If `enableMetrics` is false, Helm removes the metrics port.
+- The template markers can leave extra blank lines because they occupy their own lines.
+
+Here is the same idea with left-side whitespace trimming:
 
 ```yaml
-kind: Service
-spec:
-  ports:
-    - port: 80
-      targetPort: 8080
+ports:
+  - name: http
+    port: {{ .Values.service.port }}
+  {{- if .Values.service.enableMetrics }}
+  - name: metrics
+    port: 9090
+  {{- end }}
 ```
 
-A Service value should not hide selector behavior. Selectors should stay visible and consistent with Pod labels. If a values file changes selector labels casually, a release can create healthy Pods that receive no traffic.
+Important points in the trimmed version:
 
-## Config Values: Plain Runtime Settings
-<!-- section-summary: Config values belong in a ConfigMap when they are safe to store in Git and useful to the app at runtime. -->
+- `{{- if ... }}` trims whitespace before the `if` expression.
+- `{{- end }}` trims whitespace before the closing expression.
+- The rendered YAML stays tighter after Helm removes the conditional markers.
+- Whitespace trimming helps readability, but indentation still has to match valid YAML.
 
-A **ConfigMap** stores non-secret configuration data. It fits values such as log level, feature flags that are safe to expose, and internal service URLs. It should not hold passwords, API tokens, private keys, or signing secrets.
+Whitespace bugs are common in Helm charts. If a rendered manifest fails YAML parsing, inspect the rendered output together with the template source.
 
-Add a small config section to the values file.
+## Pipes and Functions
+<!-- section-summary: Pipes send a value through a function so templates can quote, default, indent, or format rendered output. -->
+
+A **function** transforms a value inside the template. A **pipe**, `|`, sends the value on the left into the function on the right. Helm's documentation calls this a common pattern for template functions.
+
+Functions help the template produce YAML that is both valid and clear. The most common beginner examples are quoting strings, supplying a fallback, and formatting nested maps with the right indentation. These functions should support review rather than hide release choices. In the orders API chart, a function can quote `LOG_LEVEL`, but the value still needs to land in a ConfigMap field the reviewer can find.
+
+Here is a ConfigMap value with `quote`:
 
 ```yaml
-config:
-  logLevel: info
-  catalogUrl: http://catalog-api.devpolaris-dev.svc.cluster.local:8080
-```
-
-The ConfigMap template consumes the config values.
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: orders-api-config
 data:
   LOG_LEVEL: {{ .Values.config.logLevel | quote }}
-  CATALOG_URL: {{ .Values.config.catalogUrl | quote }}
 ```
 
-The Deployment consumes that ConfigMap through `envFrom`.
+Important points in this example:
+
+- `.Values.config.logLevel` reads `info` from the values file.
+- `| quote` sends that value into the `quote` function.
+- The rendered YAML contains `LOG_LEVEL: "info"`.
+- Quoting strings avoids YAML surprises around values such as `on`, `off`, `yes`, `no`, or version-looking numbers.
+
+`default` supplies a backup value:
 
 ```yaml
-envFrom:
-  - configMapRef:
-      name: orders-api-config
+image: "nginx:{{ .Values.image.tag | default "latest" }}"
 ```
 
-Rendered output should show both sides: the ConfigMap data and the Deployment reference.
+Important points in this example:
+
+- Helm reads `.Values.image.tag`.
+- If the value is empty, `default "latest"` supplies `latest`.
+- This is useful for computed fallbacks, but stable chart defaults usually belong in `values.yaml`.
+- Production charts should avoid hiding important release decisions behind too many defaults.
+
+`toYaml` and `nindent` help render nested maps cleanly:
 
 ```yaml
-kind: ConfigMap
-data:
-  LOG_LEVEL: "info"
-  CATALOG_URL: "http://catalog-api.devpolaris-dev.svc.cluster.local:8080"
----
-kind: Deployment
-spec:
-  template:
-    spec:
-      containers:
-        - envFrom:
-            - configMapRef:
-                name: orders-api-config
+resources:
+{{- toYaml .Values.resources | nindent 2 }}
 ```
 
-This gives reviewers two concrete questions. Are the settings safe to store in Git? Does the Deployment actually consume the ConfigMap the chart renders?
+Important points in this example:
 
-## Ingress Values: The Outside Route
-<!-- section-summary: Ingress values should expose the hostname and TLS choices that route outside traffic into the Service. -->
+- `.Values.resources` might contain a nested CPU and memory map.
+- `toYaml` converts that map into YAML.
+- `nindent 2` adds a newline and indents the rendered block by two spaces.
+- This pattern is useful for nested Kubernetes fields such as `resources`, `nodeSelector`, `affinity`, and `tolerations`.
 
-An **Ingress** is a Kubernetes object that describes HTTP routing from outside the cluster to a Service. In production, the host and TLS settings carry real user traffic, so values should make those choices explicit.
+The danger is review clarity. A short `toYaml` block can be helpful. A large `toYaml` escape hatch can hide too much runtime behavior from the template reviewer.
 
-Add a small Ingress section.
+## Conditionals
+<!-- section-summary: Conditionals let a chart render optional Kubernetes objects or fields from explicit values. -->
 
-```yaml
-ingress:
-  enabled: true
-  className: nginx
-  host: orders.staging.devpolaris.example
-  tlsSecretName: orders-api-staging-tls
-```
+A conditional lets a chart include a block only if a value asks for it. This is common for optional Ingress, metrics ports, or extra annotations.
 
-The template should render an Ingress only when the route is enabled.
+Conditionals should represent a real optional resource or field. For the orders API, development might run without an Ingress, while production needs a route host. The value `ingress.enabled` gives that choice a name, and the template turns the choice into either a rendered Ingress object or no Ingress object. Reviewers should always check the rendered output because the absence of a resource is still a release decision.
+
+Here is an Ingress guarded by `ingress.enabled`:
 
 ```yaml
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: devpolaris-orders-api
+  name: {{ .Release.Name }}-orders-api
 spec:
-  ingressClassName: {{ .Values.ingress.className | quote }}
-  tls:
-    - hosts:
-        - {{ .Values.ingress.host | quote }}
-      secretName: {{ .Values.ingress.tlsSecretName | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-orders-api
+                port:
+                  number: {{ .Values.service.port }}
 {{- end }}
 ```
 
-Then connect the hostname to the backend Service.
+Important points in this example:
 
-```yaml
-rules:
-  - host: {{ .Values.ingress.host | quote }}
-    http:
-      paths:
-        - path: /
-          pathType: Prefix
-          backend:
-            service:
-              name: devpolaris-orders-api
-              port:
-                number: {{ .Values.service.port }}
-```
+- `if .Values.ingress.enabled` controls whether Helm renders the whole Ingress.
+- `.Values.ingress.host | quote` places the environment hostname into the route.
+- `.Release.Name` keeps the resource name tied to the Helm release.
+- `.Values.service.port` connects the Ingress backend to the Service port.
+- `{{- end }}` closes the conditional and trims the whitespace before it.
 
-Rendered output should show the host, TLS Secret name, backend Service, and backend port.
+Conditionals should represent real optional behavior. If production always needs an Ingress, the value should not make it easy to accidentally remove the route without review.
 
-```yaml
-kind: Ingress
-spec:
-  ingressClassName: "nginx"
-  tls:
-    - hosts:
-        - "orders.staging.devpolaris.example"
-      secretName: "orders-api-staging-tls"
-  rules:
-    - host: "orders.staging.devpolaris.example"
-```
+## Trace Values Into Kubernetes Objects
+<!-- section-summary: Each important value should have a visible destination in the rendered Deployment, Service, ConfigMap, or route. -->
 
-Route values deserve careful review. A wrong hostname can send users to the wrong environment, and a wrong backend Service can route traffic away from the API Pods.
+After the syntax is clear, the review habit is simple: trace the input, the template destination, and the rendered Kubernetes field.
 
-![Helm values becoming Kubernetes objects, with image tag, replicas, resources, and host landing in Deployment, Service, and Ingress output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-become-objects.png)
+This trace is where values stop feeling like random settings. A value has production meaning only after it reaches a Kubernetes object or a clear application contract. For the orders API, the reviewer should be able to point from `replicaCount` to Deployment replicas, from `image.tag` to the container image, from `config.logLevel` to ConfigMap data, and from `ingress.host` to the route that receives traffic.
 
-*Values stay understandable when each important input maps to a real Kubernetes field reviewers can inspect in the rendered output.*
+![Helm values flowing into Kubernetes objects, with replica count, image tag, service port, config, and host landing in rendered output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-flow-objects.png)
 
-## How Helm Builds The Final Values
-<!-- section-summary: Helm merges chart defaults, values files, and command-line overrides into one final values object before rendering templates. -->
+*Values stay reviewable because every important input lands in a visible Deployment, Service, ConfigMap, or route field.*
 
-**Merge order** is the rule Helm uses when more than one input sets the same value. Helm starts with the chart's `values.yaml`, then applies values files in the order passed with `-f`, then applies command-line overrides such as `--set`. Later inputs win for the same key.
+Here is the trace for the Orders API:
 
-Here is a default.
+| Value | Template destination | Rendered Kubernetes result |
+| --- | --- | --- |
+| `replicaCount: 3` | `Deployment.spec.replicas` | The Deployment asks for three Pods |
+| `image.repository` + `image.tag` | Container `image` | Kubernetes runs `ghcr.io/devpolaris/orders-api:2026.06.16.1` |
+| `service.targetPort: 8080` | Container `ports[].containerPort` | The Pod exposes port `8080` |
+| `service.port: 80` | Service `ports[].port` | Callers use Service port `80` |
+| `config.logLevel: info` | ConfigMap `data.LOG_LEVEL` | The app receives `LOG_LEVEL=info` |
+| `ingress.host` | Ingress `rules[].host` | The environment hostname routes to the Service |
 
-```yaml
-replicaCount: 1
-image:
-  tag: "2026.06.16-dev"
-```
+Useful review questions:
 
-Here is a production override.
+- Can the reviewer find the template field that consumes each value?
+- Can the reviewer inspect the rendered YAML that Kubernetes will receive?
+- Does the value describe a real release choice?
+- Does the chart keep dangerous fields, such as selectors, under tight control?
+- Does the application actually consume the rendered ConfigMap or Secret reference?
 
-```yaml
-replicaCount: 3
-image:
-  tag: "2026.06.16.1"
-```
+The goal is to expose the release choices that should vary across environments and keep the rest of the Kubernetes shape stable.
 
-Render with the production file.
+## Values Merge Order
+<!-- section-summary: Helm merges defaults, values files, and command-line overrides in a predictable order, so release commands need review. -->
+
+Helm can receive values from several places. Chart defaults usually live in `values.yaml`. Environment files can override those defaults. Command-line flags such as `--set` can override file values.
+
+Merge order matters during review because the last input can change what every earlier file appeared to say. A chart default may set a development image tag, a production file may replace it with an approved tag, and CI may add a short command-line override for a release candidate. The final rendered manifest is the reliable place to confirm which value won.
+
+This render command uses two values files:
 
 ```bash
-$ helm template orders ./charts/orders-api \
+helm template orders ./charts/orders-api \
+  -f values.yaml \
   -f environments/prod.values.yaml
 ```
 
-The rendered Deployment shows the final result, not the merge history.
+Important points in this command:
 
-```yaml
-spec:
-  replicas: 3
-containers:
-  - image: ghcr.io/devpolaris/orders-api:2026.06.16.1
-```
-
-Use `--debug` when you need to see more about the values Helm used.
-
-```bash
-$ helm template orders ./charts/orders-api \
-  -f environments/prod.values.yaml \
-  --debug
-COMPUTED VALUES:
-replicaCount: 3
-image:
-  repository: ghcr.io/devpolaris/orders-api
-  tag: 2026.06.16.1
-```
-
-The computed values help explain where the render came from. Kubernetes still receives only the rendered manifests.
+- `helm template` renders manifests without changing the cluster.
+- `orders` is the release name for this render.
+- `./charts/orders-api` points at the chart directory.
+- `-f values.yaml` loads the chart's shared defaults.
+- `-f environments/prod.values.yaml` loads production overrides after the defaults.
+- The later file wins for matching keys.
 
 ![Helm values merge order showing chart defaults, staging file, production file, CLI override, final values, and later inputs winning](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-merge-order.png)
 
-*The merge stack shows where final values came from, while Kubernetes only receives the rendered result.*
+*Review the final merged values through rendered manifests, especially for release commands that supply several files.*
 
-## Staging And Production Values Files
-<!-- section-summary: Environment values files should show the choices unique to that environment rather than copying every default. -->
-
-An **environment values file** holds the choices for one target environment. Staging and production run the same orders API shape, but they choose different capacity, hostnames, runtime URLs, and sometimes image tags.
-
-Staging can stay small.
-
-```yaml
-replicaCount: 1
-image:
-  tag: "2026.06.16-rc.1"
-config:
-  catalogUrl: http://catalog-api.devpolaris-staging.svc.cluster.local:8080
-ingress:
-  host: orders.staging.devpolaris.example
-  tlsSecretName: orders-api-staging-tls
-```
-
-Production can show the higher-risk choices.
-
-```yaml
-replicaCount: 3
-image:
-  tag: "2026.06.16.1"
-config:
-  catalogUrl: http://catalog-api.devpolaris-prod.svc.cluster.local:8080
-ingress:
-  host: orders.devpolaris.example
-  tlsSecretName: orders-api-prod-tls
-resources:
-  requests:
-    cpu: 400m
-    memory: 512Mi
-```
-
-These files should not copy the whole default file. Repeated defaults hide the actual decision. A reviewer should quickly see what production changes: capacity, image, dependency URL, host, TLS Secret name, and resources.
-
-When multiple values files are used together, keep the command explicit.
+Command-line overrides are useful in automation, but they are easy to miss during review:
 
 ```bash
-$ helm template orders ./charts/orders-api \
-  -f values/common.yaml \
-  -f environments/prod.values.yaml
+helm upgrade orders ./charts/orders-api \
+  -f values.yaml \
+  -f environments/prod.values.yaml \
+  --set image.tag=2026.06.16.2
 ```
 
-The order matters. `prod.values.yaml` appears later, so it wins over `values/common.yaml` for the same keys.
+Important points in this command:
 
-## Required Values And Schema Validation
-<!-- section-summary: Required values and schema files catch missing or malformed inputs before Helm renders a surprising manifest. -->
+- `helm upgrade` updates an existing release.
+- The two `-f` flags load defaults and production values.
+- `--set image.tag=...` overrides the final image tag after the files.
+- CI should print the full command and attach rendered YAML so reviewers see the real final input.
 
-A **required value** is an input the chart refuses to render without. Helm templates can use the `required` function to stop rendering with a clear message. The image tag is a good example, since an empty tag can create a broken or ambiguous image reference.
+For production, prefer reviewed values files for most changes. Use `--set` for controlled automation paths that also publish the final rendered manifest.
 
-```yaml
-image: "{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
-```
+## Values Schema Validation
+<!-- section-summary: A values schema catches missing or wrong-shaped inputs before Helm renders or installs a chart. -->
 
-The failure should tell the release author what to fix.
+A **values schema** is a JSON Schema file named `values.schema.json` in the chart. Helm uses it to validate values during commands such as `helm lint`, `helm template`, `helm install`, and `helm upgrade`.
 
-```bash
-$ helm template orders ./charts/orders-api --set image.tag=
-Error: execution error at (orders-api/templates/deployment.yaml:18:45):
-image.tag is required
-```
+Schema validation gives a chart a basic contract for its inputs. It can catch a missing image tag, a string where a number should be, or a boolean written as free-form text. That is especially helpful for production values because a typo in a values file can otherwise travel all the way into rendered YAML. The schema checks the shape before the orders API release reaches the cluster.
 
-A **values schema** is a `values.schema.json` file that describes allowed value types, required fields, and simple constraints. Helm validates values against that schema during commands such as install, upgrade, lint, and template.
+Here is a small schema for the Orders API values:
 
 ```json
 {
   "type": "object",
-  "required": ["image"],
   "properties": {
-    "replicaCount": { "type": "integer", "minimum": 1 },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
     "image": {
       "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      },
       "required": ["repository", "tag"]
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "host": { "type": "string" }
+      }
     }
-  }
+  },
+  "required": ["replicaCount", "image"]
 }
 ```
 
-Schema validation catches input shape problems. Rendered review catches output meaning. Real teams use both: schema for the contract, rendered YAML for the production consequence.
+Important points in this schema:
 
-## Keeping Secrets Out Of Values
-<!-- section-summary: Values files should reference secret objects by name instead of storing secret data directly. -->
+- `replicaCount` must be an integer and at least `1`.
+- `image.repository` and `image.tag` must be non-empty strings.
+- `ingress.enabled` must be a boolean, so `"yes"` or `"enabled"` fails validation.
+- `required` catches missing values before the chart reaches a cluster.
+- Schema validation checks shape and required fields. It can still accept an image tag that passes the schema but points to the wrong build.
 
-A **Secret** stores sensitive data for Pods. Kubernetes Secrets still need careful access control and encryption decisions, but they are a better boundary than plain values files for passwords, API tokens, private keys, and signing secrets.
+Run lint with the production values:
 
-Do not put raw secret data in a normal values file.
-
-```yaml
-databasePassword: "do-not-commit-real-passwords"
+```bash
+helm lint ./charts/orders-api -f environments/prod.values.yaml
 ```
 
-Use values to reference an existing Secret name instead.
+Important points in this command:
+
+- `helm lint` checks chart structure and values schema.
+- `-f environments/prod.values.yaml` validates the production input together with the chart defaults.
+- A successful lint result should still be followed by rendered YAML review.
+
+## Secret Values and Secret References
+<!-- section-summary: Values files often live in Git, so secret material should use a separate secret-management path. -->
+
+Many teams store chart source and values files in Git. That is useful for review, but it means passwords, tokens, private keys, and signing secrets should stay out of ordinary values files.
+
+The practical pattern is to let the chart name the secret contract while another system manages the secret material. The orders API still needs to know which Kubernetes Secret to read, and reviewers still need to verify that the Deployment references the expected object. The password itself should come from a controlled secret workflow, such as a cloud secret manager, sealed secret process, or platform-managed injection path.
+
+Use values to name the Secret contract while secret material stays in the controlled secret workflow:
 
 ```yaml
-secretRefs:
-  runtime: orders-api-runtime-secrets
+secrets:
+  databaseSecretName: orders-api-database
 ```
 
-Then let the Deployment consume the Secret by name.
+Important points in this values example:
+
+- The value names a Kubernetes Secret object.
+- The value contains only the Secret object name, never the database password.
+- The Secret can be created by a separate secret-management workflow.
+- The chart can still wire the application to the Secret name.
+
+The Deployment template can consume that Secret name:
 
 ```yaml
 envFrom:
-  - configMapRef:
-      name: orders-api-config
   - secretRef:
-      name: {{ .Values.secretRefs.runtime | quote }}
+      name: {{ .Values.secrets.databaseSecretName }}
 ```
 
-The rendered Deployment should show only the Secret reference.
+Important points in this template:
 
-```yaml
-envFrom:
-  - configMapRef:
-      name: orders-api-config
-  - secretRef:
-      name: "orders-api-runtime-secrets"
-```
+- `secretRef` tells Kubernetes to expose all keys from the named Secret as environment variables.
+- `.Values.secrets.databaseSecretName` controls the object name.
+- The actual secret values stay outside the chart values file.
+- For tighter review, explicit `secretKeyRef` entries can show exactly which keys the container reads.
 
-Some teams use External Secrets Operator, Sealed Secrets, SOPS, or cloud secret managers. The tool choice can vary. The chart should keep the boundary clear: values may name the Secret object, while the secret data comes from a controlled secret workflow.
+Real teams often use External Secrets Operator, Sealed Secrets, SOPS, a cloud secret manager, or a platform-managed secret pipeline. The chart should document the expected Secret name and keys, while secret material follows the controlled path chosen by the organization.
 
-## Reviewing Values In CI
-<!-- section-summary: CI should validate values, render each important environment, and attach the manifest diff for review. -->
+## Review Values in CI
+<!-- section-summary: CI should validate values, render each changed environment, and attach final manifests for review. -->
 
-A values change deserves rendered evidence. A pull request that only changes `prod.values.yaml` can still change Deployments, Services, ConfigMaps, Ingresses, and Secret references.
+A values review should include the rendered objects for every environment changed by the pull request. CI can make that routine.
 
-Run chart checks first.
+This section turns the earlier syntax rules into a repeatable gate. CI should validate the chart, render the affected environments, and publish the final YAML so reviewers can inspect the Deployment, Service, ConfigMap, Secret references, and route. For the orders API, a values-only pull request still deserves rendered evidence because a small input change can alter the object Kubernetes receives.
 
 ```bash
-$ helm lint ./charts/orders-api \
-  -f environments/prod.values.yaml
-==> Linting ./charts/orders-api
-1 chart(s) linted, 0 chart(s) failed
-```
-
-Render staging and production.
-
-```bash
-$ helm template orders ./charts/orders-api \
-  -f environments/staging.values.yaml \
-  > rendered/staging.yaml
-$ helm template orders ./charts/orders-api \
+helm lint ./charts/orders-api -f environments/prod.values.yaml
+helm template orders ./charts/orders-api \
+  -f values.yaml \
   -f environments/prod.values.yaml \
-  > rendered/prod.yaml
+  > rendered/orders-api-prod.yaml
+kubectl apply --dry-run=server -f rendered/orders-api-prod.yaml
 ```
 
-Then produce a focused diff or summary. This example checks high-risk fields.
+Important points in this CI example:
 
-```bash
-$ grep -n "replicas:\\|image:\\|host:\\|secretRef:" rendered/prod.yaml
-10:  replicas: 3
-34:          image: ghcr.io/devpolaris/orders-api:2026.06.16.1
-61:            - secretRef:
-96:    - host: "orders.devpolaris.example"
-```
-
-If the team can reach a cluster API from CI, add server-side dry run or `kubectl diff` for the environment. The rendered manifest remains the common evidence either way.
+- The first command validates chart structure and values schema.
+- The second command saves the final rendered Kubernetes YAML as an artifact.
+- The third command asks the Kubernetes API server to validate the rendered objects.
+- `--dry-run=server` performs server-side validation without storing the objects.
+- The artifact should be attached to the pull request so reviewers can inspect the final Deployment, Service, ConfigMap, and Ingress.
 
 ![Helm values CI review showing schema check, render each environment, secret boundary, diff, and approval](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-ci-review.png)
 
-*CI keeps values changes reviewable by validating the input contract, rendering every important environment, checking secret boundaries, and showing the diff before approval.*
+*CI should show reviewers the final rendered objects together with the values file diff.*
 
-## Production Review Habits
-<!-- section-summary: Production values review follows each changed input to the Kubernetes field it changes. -->
+## Putting It All Together
+<!-- section-summary: A complete values review connects syntax, inputs, templates, rendered output, validation, and the release decision. -->
 
-A **production values review** follows each changed input into the rendered output. The reviewer should never approve a values change from the input file alone. Values exist to change manifests, so the rendered manifests need to appear in the review.
+Here is a compact Service example that uses the main Helm values ideas together:
 
-Use a checklist that names both the input and the output.
+This final example combines built-in objects, values paths, functions, defaults, and a conditional block. The Kubernetes Service shape stays visible while each Helm expression has a clear destination in the rendered YAML. Optional metrics behavior is controlled by a named value.
 
-| Area | Values input | Rendered output to inspect |
-|---|---|---|
-| Image | `image.tag` | Deployment container image |
-| Capacity | `replicaCount`, `resources` | Deployment replicas and container resources |
-| Configuration | `config.*` | ConfigMap data and Deployment `envFrom` |
-| Routing | `ingress.host`, `ingress.tlsSecretName` | Ingress host, TLS Secret, backend Service |
-| Secrets | `secretRefs.runtime` | Deployment Secret reference only |
-| Validation | schema and lint result | CI logs plus rendered manifest diff |
-
-Here is a realistic review note for a production capacity change.
+For the orders API, this is the kind of template a reviewer can trace without opening five files. The release name labels the object, the chart metadata records package provenance, the Service port comes from values, and the metrics port appears only when the release asks for it.
 
 ```yaml
-Change:
-  file: environments/prod.values.yaml
-  replicaCount: 2 -> 3
-  resources.requests.cpu: 300m -> 400m
-RenderedChecks:
-  - Deployment.spec.replicas is 3
-  - container image stayed ghcr.io/devpolaris/orders-api:2026.06.16.1
-  - Service selector stayed app.kubernetes.io/name=devpolaris-orders-api
-  - Ingress host stayed orders.devpolaris.example
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name | quote }}
+  labels:
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.service.port | default 80 }}
+      targetPort: http
+  {{- if .Values.service.enableMetrics }}
+    - name: metrics
+      port: 9090
+  {{- end }}
 ```
 
-This kind of note helps incident review too. If a rollout fails after a values change, the team can inspect the same path in reverse: input value, rendered manifest, live Kubernetes object, Pod event, and application log.
+Important points in this final example:
 
-Values work best when they read like a small production form. A reviewer should see which image, how many replicas, which host, which ConfigMap settings, which resource requests, and which Secret reference the release will use. They should also see the rendered Kubernetes result.
+- `{{ .Release.Name | quote }}` reads the release name and quotes it for YAML safety.
+- `.Chart.Name` and `.Chart.Version` come from `Chart.yaml`, so labels can show chart provenance.
+- `.Values.service.port | default 80` reads the Service port and falls back to `80` if the value is empty.
+- `if .Values.service.enableMetrics` renders the metrics port only for releases that opt in.
+- `{{-` trims whitespace so disabled metrics still produce tidy YAML.
+- The final rendered Service should be plain Kubernetes YAML with no template syntax.
+
+A production reviewer should be able to follow this path:
+
+- Which value changed?
+- Which template expression reads it?
+- Which rendered Kubernetes field changed?
+- Which validation command checked the result?
+- Which rollback value restores the previous release?
+
+That is the real skill behind Helm values. Values are release inputs connected to visible Kubernetes output.
 
 ## What's Next
 
-Values are only the input side of Helm. Once the team installs or upgrades the chart, Helm creates a release record in the cluster, stores revision history, and gives operators commands for status checks and rollback.
+You can now read values as release inputs and trace them through Helm template syntax. The next article follows Helm after rendering, where a chart, values, and rendered manifests create a cluster-side release record with history and rollback commands.
 
-The next article follows `devpolaris-orders-api` through install, upgrade, release history, rollout verification, and rollback. That is where the values file turns into a production release.
+## References
 
----
-
-**References**
-
-- [Helm Values Files](https://helm.sh/docs/chart_template_guide/values_files/) - Official guide to chart values, user-supplied values files, `--set`, and value precedence.
-- [Helm Charts: Schema Files](https://helm.sh/docs/topics/charts/#schema-files) - Official chart documentation for `values.schema.json` and when Helm validates values.
-- [Helm Template](https://helm.sh/docs/helm/helm_template/) - Current command reference for rendering chart templates locally.
-- [Helm Install](https://helm.sh/docs/helm/helm_install/) - Current command reference for install-time values files, `--set`, dry runs, and hidden Secret output.
-- [Helm Upgrade](https://helm.sh/docs/helm/helm_upgrade/) - Current command reference for upgrade-time values merging and release updates.
+- [Helm Values Files](https://helm.sh/docs/chart_template_guide/values_files/) - Official Helm guide to chart values, user-supplied values files, `--set`, and value precedence.
+- [Helm Template Functions and Pipelines](https://helm.sh/docs/chart_template_guide/functions_and_pipelines/) - Official Helm guide to functions, pipelines, `quote`, and `default`.
+- [Helm Flow Control](https://helm.sh/docs/chart_template_guide/control_structures/) - Official Helm guide to `if`, `with`, `range`, whitespace control, and scope.
+- [Helm Built-in Objects](https://helm.sh/docs/chart_template_guide/builtin_objects/) - Official Helm guide to `.Values`, `.Release`, `.Chart`, `.Capabilities`, and other built-in objects.
+- [Helm Charts: Schema Files](https://helm.sh/docs/topics/charts/#schema-files) - Official chart documentation for `values.schema.json` and schema validation.
+- [helm template](https://helm.sh/docs/helm/helm_template/) - Official command reference for rendering chart templates locally.
+- [helm lint](https://helm.sh/docs/helm/helm_lint/) - Official command reference for checking chart structure and values schema issues.
+- [Helm Install](https://helm.sh/docs/helm/helm_install/) - Official command reference for install-time values files, `--set`, dry runs, and generated manifests.
+- [Helm Upgrade](https://helm.sh/docs/helm/helm_upgrade/) - Official command reference for upgrade-time values merging and release updates.
 - [Kubernetes ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) - Official Kubernetes guide to plain configuration data consumed by Pods.
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official Kubernetes guide to secret data and why it needs separate handling.
+- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official Kubernetes guide to secret data and separate handling.
 - [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Kubernetes guide to stable network access for Pods.
 - [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Official Kubernetes guide to HTTP routing through Ingress resources.

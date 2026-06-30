@@ -1,15 +1,14 @@
 ---
 title: "Production Debugging Workflow"
 description: "Follow a repeatable Kubernetes production debugging workflow from symptom capture to rollback, mitigation, and evidence."
-overview: "Production debugging is a sequence of small proofs under time pressure. This article gives you a practical workflow for devpolaris-orders-api that separates user symptoms, Kubernetes state, application logs, dependencies, and safe mitigation."
+overview: "Production debugging uses a sequence of small proofs under time pressure. The workflow for devpolaris-orders-api separates user symptoms, Kubernetes state, application logs, dependencies, and safe mitigation."
 tags: ["debugging", "incidents", "kubectl", "runbooks"]
 order: 9
 id: article-containers-orchestration-kubernetes-operations-production-debugging-workflow
 ---
-
 ## Table of Contents
 
-1. [Turn the Alert Into a Symptom](#turn-the-alert-into-a-symptom)
+1. [From Alert To Concrete Symptom](#from-alert-to-concrete-symptom)
 2. [Build the Timeline](#build-the-timeline)
 3. [Inspect the Deployment Before Changing It](#inspect-the-deployment-before-changing-it)
 4. [Follow the Request Path Outside In](#follow-the-request-path-outside-in)
@@ -19,345 +18,218 @@ id: article-containers-orchestration-kubernetes-operations-production-debugging-
 8. [Roll Back Safely](#roll-back-safely)
 9. [Keep Debugging From Damaging Evidence](#keep-debugging-from-damaging-evidence)
 10. [Incident Review and Operational Checklist](#incident-review-and-operational-checklist)
+11. [References](#references)
 
-## Turn the Alert Into a Symptom
-<!-- section-summary: A useful debugging flow turns a noisy alert into one concrete user symptom, scope, and request example. -->
+## From Alert To Concrete Symptom
+<!-- section-summary: Production debugging starts by turning a noisy alert into a concrete user or system symptom with scope and time. -->
 
-Production debugging in Kubernetes starts with a noisy alert and a short clock. The alert says checkout 5xx rate is high, people join a call, and somebody wants to run the first command they remember. The first useful move is to turn that alert into a concrete **symptom** before changing the cluster.
+A Kubernetes **production debugging workflow** is an evidence order for incidents: define the symptom, build a timeline, inspect workload state, follow the request path, read logs and events, test dependencies, then choose mitigation.
 
-Use our same production service: `devpolaris-orders-api` in the `orders` namespace. A useful symptom is more specific than the alert: checkout requests to `POST /orders/checkout` return `503` for some users in the EU production cluster, starting around 10:05 UTC.
+For `devpolaris-orders-api`, an alert such as "5xx rate high" is only the starting point. Translate it into a symptom: checkout write requests in `orders` started returning `503` at `10:08 UTC`, while read requests stayed mostly healthy.
 
-A symptom names the user-visible failure, the affected route, the scope, and a start time. For this incident, the concrete symptom is: `POST /orders/checkout` returns `503` in the EU production cluster after 10:05 UTC. That is much easier to investigate than "Kubernetes is broken" or "the API is down."
-
-Capture one request if you can. Add a request ID so the same request can be found in ingress logs, application logs, and traces.
-
-```bash
-$ curl -i https://api.devpolaris.local/orders/checkout \
-  -H 'x-request-id: debug-20260616-1005'
-HTTP/2 503
-content-type: application/json
-
-{"error":"orders service unavailable","requestId":"debug-20260616-1005"}
-```
-
-That request does not explain the root cause yet. It gives the team a shared target. From here, every Kubernetes check should answer a small question about the same symptom: is traffic reaching the ingress, does the Service have ready endpoints, are Pods ready, are logs showing application errors, and did a recent change line up with the failure?
+That sentence gives the team scope, user impact, time, and a path to verify. It also prevents the first responder from editing manifests before understanding the failure.
 
 ## Build the Timeline
-<!-- section-summary: The timeline connects user impact, recent changes, Kubernetes signals, and mitigation decisions in timestamp order. -->
+<!-- section-summary: A timeline aligns alerts, recent changes, Kubernetes events, logs, metrics, and dependency signals before any fix is chosen. -->
 
-A **timeline** is a short list of timestamped facts. It keeps debugging honest because it separates what happened from what people think happened. During an incident, the timeline can be simple and still useful.
+Build a short timeline early. Include the first known bad time, recent releases, scaling changes, node events, policy changes, and dependency alerts.
 
-For the orders incident, write the timeline as soon as you have two or three facts. Add command output, dashboard observations, and human actions as they happen.
-
-| Time UTC | Fact | Evidence |
-|----------|------|----------|
-| 10:03 | CI deployed image `2026-06-16.2` | Deployment annotation and rollout history |
-| 10:05 | Checkout monitor reported 503 responses | Synthetic check dashboard |
-| 10:06 | Orders Deployment showed `1/3` available | `kubectl get deploy` |
-| 10:07 | New Pods failed readiness | Pod events |
-| 10:09 | Rollback decision made | Incident lead note |
-| 10:11 | Orders Deployment returned to `3/3` available | Rollout status and health check |
+| Time | Evidence | What it says |
+|---|---|---|
+| `10:03` | Deployment rollout | New orders API image shipped |
+| `10:08` | Alert | 5xx rate rose for checkout writes |
+| `10:09` | Deployment status | New ReplicaSet has unready Pods |
+| `10:10` | Pod events | Readiness probe failed with `503` |
+| `10:12` | App logs | Database migration lock timeout |
 
 ![Alert to timeline infographic showing alert, symptom, recent change, events, logs, metrics, and first known bad time](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/alert-to-timeline.png)
 
-*The timeline visual keeps the incident grounded in timestamped facts. Alert, symptom, recent change, events, logs, and metrics become one shared trail before the first production change.*
-
-Use Kubernetes rollout history when the team records change cause or deployment metadata. If this output is empty or vague, add better deployment annotations to the release process after the incident.
-
-```bash
-$ kubectl -n orders rollout history deployment/devpolaris-orders-api
-deployment.apps/devpolaris-orders-api
-REVISION  CHANGE-CAUSE
-18        image ghcr.io/devpolaris/orders-api:2026-06-15.4
-19        image ghcr.io/devpolaris/orders-api:2026-06-16.1
-20        image ghcr.io/devpolaris/orders-api:2026-06-16.2
-```
-
-The timeline does not need perfect root-cause detail in the first five minutes. It needs enough evidence to guide the next check and enough discipline to record any mutating action before it happens.
+*The timeline keeps the incident tied to observed facts and recent changes.*
 
 ## Inspect the Deployment Before Changing It
-<!-- section-summary: Read-only Deployment, ReplicaSet, Pod, and event checks show whether the incident is tied to rollout state before anyone mutates production. -->
+<!-- section-summary: Deployment, ReplicaSet, and Pod state show whether the failure is rollout, scheduling, readiness, crash, or capacity related. -->
 
-The first Kubernetes pass should be mostly read-only. **Read-only debugging** means using commands such as `get`, `describe`, `logs`, and dashboard queries before scaling, deleting, editing, or rolling back. This preserves evidence and avoids creating a second incident while the team is still learning.
-
-Set the namespace and app name once to reduce typing errors. In a shared incident note, print the values so everyone can see the target.
+Controller state is safer evidence than an immediate workload change. Deployment, ReplicaSet, and Pod output show whether the failure is rollout progress, scheduling, readiness, crash looping, or capacity.
 
 ```bash
-$ export NS=orders
-$ export APP=devpolaris-orders-api
+$ kubectl -n orders get deploy,rs,pod -l app.kubernetes.io/name=devpolaris-orders-api
+NAME                                      READY   UP-TO-DATE   AVAILABLE
+deployment.apps/devpolaris-orders-api     2/3     1            2
 
-$ echo "namespace=$NS app=$APP"
-namespace=orders app=devpolaris-orders-api
+NAME                                                 DESIRED   CURRENT   READY
+replicaset.apps/devpolaris-orders-api-78b6f596dc      1         1         0
+
+NAME                                           READY   STATUS    RESTARTS
+pod/devpolaris-orders-api-78b6f596dc-mk9z4     0/1     Running   0
 ```
 
-Start with the Deployment and ReplicaSets. The Deployment tells you desired and available state. ReplicaSets show whether a new rollout is involved.
+What this output tells you:
 
-```bash
-$ kubectl -n "$NS" get deploy "$APP"
-NAME                    READY   UP-TO-DATE   AVAILABLE
-devpolaris-orders-api   1/3     3            1
+- The rollout is in progress but the new Pod is unready.
+- The Pod is running, so inspect readiness and app logs.
+- The old Pods still provide two available replicas.
 
-$ kubectl -n "$NS" get rs -l app.kubernetes.io/name="$APP"
-NAME                                DESIRED   CURRENT   READY   AGE
-devpolaris-orders-api-6df87c7676    1         1         1       2d
-devpolaris-orders-api-78b6f596dc    3         3         0       7m
-```
-
-This output is already useful. The older ReplicaSet still has one ready Pod, while the new ReplicaSet has three Pods and zero ready. That strongly points toward a rollout or readiness problem rather than a full cluster outage.
-
-Now check the Pods and their nodes. `STATUS=Running` only means the container process is running. `READY=0/1` means the Pod is not serving through the Service.
-
-```bash
-$ kubectl -n "$NS" get pods -o wide -l app.kubernetes.io/name="$APP"
-NAME                                      READY   STATUS    RESTARTS   AGE   NODE
-devpolaris-orders-api-6df87c7676-9j4mt   1/1     Running   0          2d    worker-1
-devpolaris-orders-api-78b6f596dc-kzt9p   0/1     Running   0          7m    worker-3
-devpolaris-orders-api-78b6f596dc-wc6s2   0/1     Running   0          7m    worker-4
-```
-
-At this point, the team has a strong clue without changing the system. The new Pods are alive, yet readiness keeps them out of traffic. The next step is to follow the request path and confirm how that Pod state affects users.
+If the status were `ImagePullBackOff` or `Pending`, the next check would move toward image registry or scheduling evidence.
 
 ## Follow the Request Path Outside In
-<!-- section-summary: Outside-in checks follow the same route as user traffic: ingress, Service, EndpointSlice, ready Pods, logs, and dependencies. -->
+<!-- section-summary: Outside-in debugging checks the user path through DNS, ingress, Service, endpoints, Pods, and dependencies. -->
 
-**Outside-in debugging** follows the user request path from the edge toward the container. This keeps the team from fixating on the first suspicious Pod while the actual problem sits in routing or dependencies. For the orders API, the path is external route, ingress or gateway, Service, EndpointSlice, ready Pods, then application code and dependencies.
+For request failures, follow the path a user request takes. The exact ingress technology can vary, but the order is stable: DNS and TLS, ingress or gateway, Service, EndpointSlice, Pod, and dependency.
 
 ![Outside-in request path showing user, DNS and TLS, Ingress or Gateway, Service, EndpointSlice, Pod, and dependency checks](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/outside-in-request-path.png)
 
-*The outside-in map turns a vague 503 into layer-by-layer proof. Each hop has a check, so the team can separate edge routing, Service selection, Pod readiness, and dependency health.*
+*The request path keeps network checks ordered instead of jumping between unrelated objects.*
 
-Check whether the Service has ready endpoints. EndpointSlices are a better modern view than the older Endpoints object because they scale better and show endpoint conditions.
-
-```bash
-$ kubectl -n "$NS" get endpointslice -l kubernetes.io/service-name="$APP"
-NAME                          ADDRESSTYPE   PORTS   ENDPOINTS
-devpolaris-orders-api-rb6hb   IPv4          8080    10.244.1.42
-```
-
-Only one endpoint appears, which matches the one ready old Pod. If traffic is higher than one replica can handle, users can see 503s or latency even though the Service still has one backend.
-
-Run an internal health check from inside the namespace. This tests DNS, Service routing, and the application's readiness endpoint without the external ingress path.
+Check Service endpoints:
 
 ```bash
-$ kubectl -n "$NS" run curlcheck --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sS http://devpolaris-orders-api/health/ready
-{"status":"ready","database":"ok","queue":"ok","replica":"old"}
+$ kubectl -n orders get endpointslice -l kubernetes.io/service-name=devpolaris-orders-api
+NAME                         ADDRESSTYPE   PORTS   ENDPOINTS
+devpolaris-orders-api-h7v8m  IPv4          8080    10.42.3.18,10.42.4.21
 ```
 
-Then test the external route. If the internal check works and the external route fails, the investigation moves toward ingress, gateway, TLS, DNS, or external load balancing.
+What this output says:
 
-```bash
-$ curl -sS -o /dev/null -w '%{http_code} %{time_total}\n' \
-  https://api.devpolaris.local/orders/checkout/health
-503 0.142810
-```
-
-The path now says the cluster has reduced ready capacity and the external route is showing user-visible failure. That is enough to inspect why the new Pods are not ready.
+- The Service has two ready backend Pod IPs.
+- The unready new Pod is absent from endpoints, which matches readiness behavior.
+- If the endpoint list were empty, the incident would be a Service routing emergency.
 
 ## Use Events and Logs to Name the Failure Family
-<!-- section-summary: Events and logs help separate rollout failures, runtime crashes, readiness failures, dependency failures, routing failures, and capacity problems. -->
+<!-- section-summary: Events identify Kubernetes decisions, while logs identify application behavior, and together they name the failure family. -->
 
-A **failure family** is a practical bucket for the evidence you are seeing. It helps the team choose the next check. A rollout failure, runtime crash, readiness failure, dependency outage, routing failure, and capacity problem can all show up as user-facing errors, but they have different fixes.
-
-Use this table as a first pass:
-
-| Failure family | Signal | First useful command |
-|----------------|--------|----------------------|
-| Rollout failure | New ReplicaSet has few or no ready Pods | `kubectl rollout status deployment/$APP` |
-| Runtime crash | Pod restarts or `CrashLoopBackOff` | `kubectl logs --previous` |
-| Readiness failure | Pods are running but absent from endpoints | `kubectl describe pod <pod>` |
-| Dependency failure | Logs show timeouts or refused connections | App logs and dependency probes |
-| Routing failure | Internal health works, external route fails | Ingress or Gateway status |
-| Capacity problem | `FailedScheduling`, throttling, or HPA limits | Pod events, node capacity, HPA status |
-
-For the current incident, describe one of the new Pods. Events usually explain scheduler, image pull, mount, and probe problems better than the top-level Deployment output.
+Use events and logs to put the incident into a failure family: rollout, image, scheduling, readiness, crash, dependency, capacity, or policy.
 
 ```bash
-$ kubectl -n "$NS" describe pod devpolaris-orders-api-78b6f596dc-kzt9p
+$ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
 Events:
-  Type     Reason     Age   From     Message
-  Warning  Unhealthy  4m    kubelet  Readiness probe failed: HTTP probe failed with statuscode: 500
+  Type     Reason     Message
+  Warning  Unhealthy  Readiness probe failed: HTTP probe failed with statuscode: 503
+
+$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --tail=60
+2026-06-30T10:12:18Z ERROR readiness database migration lock timeout
 ```
 
-The kubelet can reach the readiness endpoint, and the endpoint returns 500. That points inside the application or its dependencies. Read the logs from the failing Pod.
+What this evidence says:
 
-```bash
-$ kubectl -n "$NS" logs pod/devpolaris-orders-api-78b6f596dc-kzt9p --tail=60
-2026-06-16T10:06:22Z info server started port=8080 image=2026-06-16.2
-2026-06-16T10:06:23Z error readiness failed component=database error="relation orders_outbox does not exist"
-2026-06-16T10:06:33Z error readiness failed component=database error="relation orders_outbox does not exist"
-```
-
-Now the failure family is clear enough for a decision. This is a rollout readiness failure caused by the new image expecting a database table that production does not have. The team can still investigate the release process later, but user impact needs mitigation now.
+- Kubernetes removed the Pod from endpoints because readiness failed.
+- The application named a database migration lock timeout.
+- The next check should focus on migration state and database connectivity before image pulls or scheduler placement.
 
 ## Check Dependencies From Inside the Cluster
-<!-- section-summary: Dependency checks from the same namespace verify DNS, network policy, service routing, and dependency reachability from the workload's point of view. -->
+<!-- section-summary: Dependency checks from inside the cluster prove DNS, network policy, credentials, and upstream behavior from the workload's point of view. -->
 
-Dependency evidence should come from the workload's point of view. A database may be healthy from the database dashboard while unreachable from the `orders` namespace because of DNS, NetworkPolicy, credentials, or a service mesh change. A quick in-cluster check narrows that gap.
-
-Use a temporary Pod when the namespace allows it. Keep the command read-only and remove the Pod after the check.
+When the application names a dependency, test from the same namespace or a controlled debug Pod. Keep the test narrow and safe.
 
 ```bash
-$ kubectl -n "$NS" run netcheck --rm -it --image=busybox:1.36 --restart=Never -- \
-  nslookup postgres.orders.svc.cluster.local
-Server:    10.96.0.10
-Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
-
-Name:      postgres.orders.svc.cluster.local
-Address 1: 10.96.18.44 postgres.orders.svc.cluster.local
+$ kubectl -n orders run db-check --rm -it --image=postgres:16 -- \
+  psql "$POSTGRES_URL" -c "select 1;"
+ ?column?
+----------
+        1
+(1 row)
 ```
 
-For HTTP dependencies, use a curl image and hit the same URL the app uses. For databases, prefer application logs, synthetic dependency checks, or a safe health endpoint over ad hoc queries from a shell. Production data systems deserve careful access control even during incidents.
+What this output proves:
 
-```bash
-$ kubectl -n "$NS" run queuecheck --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sS http://orders-queue-health.orders.svc.cluster.local/ready
-{"status":"ready","lagSeconds":2}
-```
+- The debug client can reach PostgreSQL.
+- Credentials in the test environment worked.
+- A basic query succeeded, so the migration lock may be workload-specific rather than total database outage.
 
-If dependencies look healthy and only the new image reports a missing table, the problem likely sits in release sequencing. Maybe the migration did not run, ran in the wrong environment, or the code reached production before the schema. That conclusion supports rollback more than live debugging inside Pods.
+If the command times out, check NetworkPolicy, DNS, database firewall rules, and credentials in that order.
 
 ## Choose Mitigation With Evidence
-<!-- section-summary: Mitigation should reduce user impact quickly while matching the evidence and preserving a clear path back. -->
+<!-- section-summary: Mitigation should reduce user impact using the smallest action supported by the evidence. -->
 
-**Mitigation** is a change that reduces user impact before the full root-cause fix is ready. In Kubernetes incidents, mitigation might be rollback, scaling, traffic shifting, disabling a feature flag, increasing capacity, or pausing a rollout. The right mitigation depends on the evidence, not on habit.
+Choose a mitigation based on the named failure family. The safest fix may be rollback, scaling, pausing rollout, disabling a feature flag, restoring a Secret, or moving traffic away from a bad revision.
 
-For this incident, the evidence says the new image is unready because it expects a missing database table. The older ReplicaSet still has one ready Pod. Rollback is a strong mitigation because it returns the Deployment to the last known working Pod template.
-
-Other incidents need different actions. Use a small decision table during the incident call.
+Examples:
 
 | Evidence | Safer mitigation |
-|----------|------------------|
-| New ReplicaSet unready, old ReplicaSet healthy | Roll back the Deployment |
-| All replicas healthy but CPU saturated | Scale replicas or reduce traffic |
-| External route failing, internal Service healthy | Shift traffic or fix ingress/gateway |
-| Dependency outage confirmed | Use feature flag, fallback mode, or dependency incident process |
-| PDB or scheduling blocks node maintenance | Pause maintenance and add capacity |
+|---|---|
+| New ReplicaSet unready, old Pods healthy | Pause or roll back rollout |
+| HPA at max and CPU saturated | Add temporary capacity or raise max with dependency review |
+| Missing Secret event | Restore the Secret or revert the manifest reference |
+| One node has many failing Pods | Cordon node and reschedule workloads |
+| Upstream rate limits | Reduce caller concurrency or disable optional feature |
 
-Avoid making the readiness probe lie. If the application returns readiness 500 because a required table is missing, changing the probe path can send checkout traffic to broken Pods. A mitigation should improve user experience and keep the evidence understandable.
-
-Record the chosen mitigation in the timeline before running the command. That small habit helps later reviewers understand why the system changed.
+The mitigation note should say why the action matches the evidence. That helps reviewers distinguish a real fix from a lucky restart.
 
 ## Roll Back Safely
-<!-- section-summary: Rollback is a controlled Deployment change that returns to a previous Pod template and then requires user-path validation. -->
+<!-- section-summary: A rollback should name the target revision, watch controller progress, and verify user symptoms after the change. -->
 
-A **Deployment rollback** returns a Deployment to an earlier Pod template revision. It is useful when a recent rollout is strongly connected to user impact and a previous revision is known to work. The Deployment must have rollout history available, which depends on ReplicaSet retention and the team's deployment practice.
-
-Check the history, choose the revision, and run the rollback. Use `--to-revision` when you know the exact target.
+For a Deployment rollback, first inspect rollout history:
 
 ```bash
-$ kubectl -n "$NS" rollout history deployment/"$APP"
-deployment.apps/devpolaris-orders-api
+$ kubectl -n orders rollout history deployment/devpolaris-orders-api
 REVISION  CHANGE-CAUSE
-19        image ghcr.io/devpolaris/orders-api:2026-06-16.1
-20        image ghcr.io/devpolaris/orders-api:2026-06-16.2
+41        image=registry.devpolaris.example/orders-api:2026.06.29
+42        image=registry.devpolaris.example/orders-api:2026.06.30
+```
 
-$ kubectl -n "$NS" rollout undo deployment/"$APP" --to-revision=19
+What this output gives you:
+
+- Revision `42` is the current bad candidate.
+- Revision `41` is the previous image.
+- The rollback target is explicit.
+
+Roll back and watch:
+
+```bash
+$ kubectl -n orders rollout undo deployment/devpolaris-orders-api --to-revision=41
 deployment.apps/devpolaris-orders-api rolled back
 
-$ kubectl -n "$NS" rollout status deployment/"$APP"
+$ kubectl -n orders rollout status deployment/devpolaris-orders-api
 deployment "devpolaris-orders-api" successfully rolled out
 ```
 
-After rollback, verify both Kubernetes state and user-facing behavior. Recovery is a claim until the service path proves it.
-
-```bash
-$ kubectl -n "$NS" get deploy "$APP"
-NAME                    READY   UP-TO-DATE   AVAILABLE
-devpolaris-orders-api   3/3     3            3
-
-$ kubectl -n "$NS" get endpointslice -l kubernetes.io/service-name="$APP"
-NAME                          ADDRESSTYPE   PORTS   ENDPOINTS
-devpolaris-orders-api-rb6hb   IPv4          8080    10.244.1.42,10.244.2.17,10.244.4.9
-
-$ curl -sS -o /dev/null -w '%{http_code} %{time_total}\n' \
-  https://api.devpolaris.local/orders/checkout/health
-200 0.081662
-```
-
-Rollback restores service; it does not finish the incident. The follow-up is to fix the release workflow so an image requiring a future schema cannot reach production early. That fix might live in CI, migration tooling, admission policy, or a deployment gate that compares required and current schema versions.
+The status line proves the Deployment controller completed the rollback. Follow it with app metrics, error rate, and one user-path check.
 
 ## Keep Debugging From Damaging Evidence
-<!-- section-summary: Mutating debug commands should be deliberate because they can remove evidence, restart bad Pods, or create a second production problem. -->
+<!-- section-summary: Debugging should preserve logs, events, manifests, and timeline data while avoiding broad live changes. -->
 
-A **mutating debug command** changes the cluster while the team is investigating. Examples include deleting Pods, scaling Deployments, editing live objects, disabling policies, or restarting controllers. These commands can be useful, but they need a reason and a record.
-
-Deleting Pods is the classic trap. If the Deployment still points to the bad image, Kubernetes recreates the same bad Pods and the team loses local evidence such as container state and recent logs.
+Incident debugging can destroy the evidence that explains the incident. Before deleting Pods or forcing drains, capture the important state.
 
 ```bash
-$ kubectl -n "$NS" delete pod -l app.kubernetes.io/name="$APP"
-pod "devpolaris-orders-api-78b6f596dc-kzt9p" deleted
-pod "devpolaris-orders-api-78b6f596dc-wc6s2" deleted
+$ kubectl -n orders get deploy devpolaris-orders-api -o yaml > orders-api-deploy-incident.yaml
+$ kubectl -n orders get events --sort-by=.lastTimestamp > orders-events-incident.txt
+$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --previous > orders-api-previous.log
 ```
 
-That command might help after a stuck runtime issue with a known safe Pod template. In the missing-table incident, it hides evidence and repeats the failure. Prefer controller-level actions such as rollback when the evidence points to a bad rollout.
+What these captures preserve:
 
-Use this risk table during first response:
+- The Deployment spec at incident time.
+- The event sequence while events still exist.
+- Logs from the prior crashed container instance.
 
-| Action | Risk | Good use |
-|--------|------|----------|
-| `kubectl get` and `describe` | Low | First state inspection |
-| `kubectl logs` | Low to medium because logs may contain sensitive data | Confirm application errors |
-| `kubectl debug` with an ephemeral container | Medium because it changes the Pod spec and access surface | Deep network or filesystem inspection with approval |
-| `kubectl rollout undo` | Medium because it changes production | Recent bad rollout with known good revision |
-| `kubectl scale` | Medium because it changes capacity and dependency load | Capacity incident with healthy Pods |
-| `kubectl delete pod` | Medium because it removes local evidence | Stuck Pod after evidence is captured |
-
-The goal is not to freeze during an incident. The goal is to make the first production change match the evidence and keep a path for later review.
+Use debug Pods and ephemeral containers carefully. They are useful, but they should be named in the incident record because they change the cluster while the team is investigating.
 
 ## Incident Review and Operational Checklist
-<!-- section-summary: The final incident review turns the debugging evidence into prevention work, clearer runbooks, and safer first-responder actions. -->
+<!-- section-summary: The review turns the incident path into a reusable debugging routine and concrete prevention work. -->
 
-The incident review should connect symptom, evidence, mitigation, recovery, and prevention. Keep commands and conclusions together. Commands without conclusions force future readers to redo the thinking, while conclusions without evidence are hard to trust.
+Use this checklist during and after a production debugging session:
 
-Use this evidence format in the incident note:
-
-| Command or source | Observation | Conclusion |
-|-------------------|-------------|------------|
-| `curl /orders/checkout` | Returned 503 with request ID | Users saw checkout failure |
-| `kubectl get deploy` | Deployment was `1/3` available | Service had reduced ready capacity |
-| `kubectl get rs` | New ReplicaSet had zero ready Pods | Incident likely tied to rollout |
-| `kubectl describe pod` | Readiness probe returned HTTP 500 | Pod process ran but stayed out of endpoints |
-| `kubectl logs` | Missing `orders_outbox` table | New image expected unapplied schema |
-| Rollback validation | Deployment `3/3`, external health 200 | User path recovered |
-
-Then turn the evidence into prevention work. For this incident, the release process needs a schema compatibility gate. The check could run before deployment and block an image if production has not reached the required migration version.
-
-| Prevention item | Owner | Success signal |
-|-----------------|-------|----------------|
-| Add required schema version to image metadata | Orders team | Build artifact records migration requirement |
-| Check production schema version before deploy | Delivery platform | CI blocks incompatible image |
-| Add rollout annotations with image and migration ID | Delivery platform | `rollout history` shows useful change cause |
-| Add readiness error dashboard panel | Observability owner | Readiness failures grouped by reason |
-| Add rollback command to runbook | Service owner | On-call can roll back with approval path |
-
-For daily operations, keep this checklist close to the on-call runbook:
-
-1. Capture the exact user symptom and request ID.
-2. Build a timestamped timeline with facts and actions.
-3. Run read-only Kubernetes checks before mutating production.
-4. Inspect Deployment, ReplicaSets, Pods, EndpointSlices, events, and logs.
-5. Follow the request path from external route to Service to Pod.
-6. Separate rollout, runtime, dependency, routing, capacity, and policy failures.
-7. Choose mitigation that matches the evidence.
-8. Record the mitigation decision before running the command.
-9. Validate recovery from Kubernetes state, internal health, and external health.
-10. Convert the incident evidence into one or more preventive checks.
+| Step | Evidence |
+|---|---|
+| Symptom | User impact, scope, and first known bad time |
+| Timeline | Recent deploys, events, metrics, logs, and dependency alerts |
+| Workload state | Deployment, ReplicaSet, Pod, HPA, PDB |
+| Request path | Ingress or gateway, Service, EndpointSlice, Pod |
+| Failure family | Named from events and logs |
+| Dependency proof | Checked from inside the cluster when relevant |
+| Mitigation | Smallest action tied to evidence |
+| Rollback | Target revision and rollout status captured |
+| Preservation | Important YAML, events, logs, and notes saved |
+| Prevention | Probe, policy, test, dashboard, or runbook change recorded |
 
 ![Incident fix loop showing evidence first, mitigation, proving the fix, safe rollback, preserved evidence, and prevention work](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/incident-fix-loop.png)
 
-*The fix loop shows that recovery and learning are connected. Evidence guides mitigation, validation proves recovery, and the incident note creates prevention work after service returns.*
+*The incident loop keeps debugging evidence-first: define, inspect, mitigate, verify, preserve, and improve.*
 
-That workflow gives junior responders a way to help without guessing. It also gives senior responders a shared structure for decisions under pressure. The real skill is moving from one small proof to the next until the team knows what changed, what failed, what restored service, and what will stop the same failure from returning.
+## References
 
----
-
-**References**
-
-- [Kubernetes: Debug Applications](https://kubernetes.io/docs/tasks/debug/debug-application/) - Official entry point for Kubernetes application debugging tasks.
-- [Kubernetes: Debug Running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/) - Shows how to inspect Pod state, logs, events, and running containers.
-- [Kubernetes: Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Explains how to inspect Service routing and endpoints.
-- [Kubernetes: Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official Deployment behavior, rollout, and rollback reference.
-- [Kubernetes: Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Explains Services, endpoint selection, and traffic routing to Pods.
-- [Kubernetes: EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Documents the modern endpoint API used behind Services.
-- [Kubernetes: Ephemeral Containers](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/) - Explains temporary debug containers for troubleshooting running Pods.
+- [Kubernetes: Debug Applications](https://kubernetes.io/docs/tasks/debug/debug-application/) - Official task hub for debugging Pods, Services, and workloads.
+- [Kubernetes: Debug Running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/) - Practical Pod inspection, logs, exec, and events guide.
+- [Kubernetes: Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Official guide for Service and endpoint debugging.
+- [Kubernetes: kubectl rollout](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/) - Command reference for rollout status, history, pause, resume, restart, and undo.
+- [Kubernetes Events API](https://kubernetes.io/docs/reference/kubernetes-api/cluster-resources/event-v1/) - API reference for event objects.
+- [Kubernetes: Ephemeral Containers](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/) - Explains temporary debug containers for Pod troubleshooting.

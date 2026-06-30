@@ -1,239 +1,150 @@
 ---
 title: "Logs and Events"
 description: "Use Kubernetes logs and events together to explain what happened to Pods, Deployments, and cluster objects."
-overview: "Logs tell you what the container process said. Events tell you what Kubernetes did around that process. This article teaches a practical path for combining both signals while debugging devpolaris-orders-api."
-tags: ["logs", "events", "kubectl", "debugging"]
+tags: ["Kubernetes", "Operations", "Debugging", "Logs"]
+area: "Containers & Orchestration"
 order: 2
 id: article-containers-orchestration-kubernetes-operations-logs-and-events
 ---
-
 ## Table of Contents
 
-1. [Two Stories in One Incident](#two-stories-in-one-incident)
-2. [Start With Object State](#start-with-object-state)
-3. [Current Logs: What the Container Said](#current-logs-what-the-container-said)
-4. [Previous Logs: Evidence From the Last Crash](#previous-logs-evidence-from-the-last-crash)
-5. [Events: What Kubernetes Decided](#events-what-kubernetes-decided)
-6. [Build a Timeline](#build-a-timeline)
-7. [When Logs Are Empty](#when-logs-are-empty)
-8. [Production Logging Habits](#production-logging-habits)
-9. [Operational Checklist](#operational-checklist)
+- [Two Stories in One Incident](#two-stories-in-one-incident)
+- [Scope the Failing Object](#scope-the-failing-object)
+- [Current Logs: What the Container Says Now](#current-logs-what-the-container-says-now)
+- [Previous Logs: What the Last Container Said](#previous-logs-what-the-last-container-said)
+- [Events: What Kubernetes Decided](#events-what-kubernetes-decided)
+- [Build the Timeline](#build-the-timeline)
+- [When Logs Are Empty](#when-logs-are-empty)
+- [Production Logging Habits](#production-logging-habits)
+- [Operational Checklist](#operational-checklist)
+- [References](#references)
 
 ## Two Stories in One Incident
-<!-- section-summary: Logs explain what the application process said, while events explain what Kubernetes did around that process. -->
+<!-- section-summary: Logs tell the application story, while Kubernetes events tell the platform story around scheduling, pulling images, probes, restarts, and object changes. -->
 
-A failed rollout often starts with one line that looks almost too small for the size of the incident: `POSTGRES_URL missing from environment`. That line came from the application. At the same time, Kubernetes may be writing events that say the container restarted, a Secret did not mount, or a readiness probe failed.
+Kubernetes **logs and events** answer different parts of the same production question: what happened to this workload? Logs come from the container process. Events come from Kubernetes components such as the scheduler, kubelet, and controllers.
 
-The running scenario stays with **devpolaris-orders-api** in the `orders` namespace. The team rolled out a new image after adding better health probes. A few minutes later, the Deployment shows only two available replicas out of three, and checkout traffic has started to produce intermittent errors.
+Use a real incident path for `devpolaris-orders-api`: a rollout created new Pods, users saw checkout errors, and the Deployment stayed below its desired ready count. The application log might say the process failed because `POSTGRES_URL` was missing. The Kubernetes event might say the Secret that should provide that value was absent.
 
-**Container logs** are the lines your process writes to stdout and stderr. For a web API, that might include startup messages, request errors, database connection errors, and shutdown messages. **Kubernetes events** are short records from platform components such as the scheduler, kubelet, controllers, and admission flow. Events include image pull failures, missing Secrets, probe failures, failed scheduling, and container restarts.
-
-The concrete workflow is simple. Use object state to find the exact failing Pod, read current logs for what the running container says, read previous logs if the container crashed, and read events for what Kubernetes did around the container. The first useful answer usually comes from matching the same timestamp across those signals.
-
-These two stories answer different questions. Keep them side by side until they point to the same fix:
-
-| Signal | Good question | Example answer |
-|---|---|---|
-| **Object state** | Which Kubernetes object is unhealthy right now? | One Pod is in `CrashLoopBackOff` |
-| **Current logs** | What is the running container saying now? | The API reports `POSTGRES_URL missing` |
-| **Previous logs** | What did the last crashed container say? | Startup failed before the HTTP server was ready |
-| **Events** | What did Kubernetes do or refuse to do? | Kubelet could not mount a missing Secret |
+Keep those two stories side by side. Logs explain what the process experienced. Events explain what Kubernetes attempted and why it changed object state.
 
 ![Incident evidence map connecting object state, current logs, previous logs, events, and a timeline for the next safe debugging check](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/incident-evidence-map.png)
 
-*The evidence map keeps Kubernetes state, application output, and event history side by side so the incident timeline comes from several matching signals, not one loud log line.*
+*The evidence map keeps the investigation ordered: object state points to the Pod, logs show process output, events show platform decisions, and the timeline keeps the fix honest.*
 
-The order matters. If you jump straight into random logs, you may read a healthy replica and miss the failing one. If you read only events, you may know Kubernetes restarted a container but miss the application error that caused the exit.
+## Scope the Failing Object
+<!-- section-summary: Scope the Deployment, ReplicaSet, and Pods so the investigation follows the controller chain instead of chasing a random Pod name. -->
 
-## Start With Object State
-<!-- section-summary: Object state narrows the search to the failing Deployment, ReplicaSet, Pod, and container before you open logs. -->
-
-**Object state** is the current status Kubernetes reports for resources such as Deployments, ReplicaSets, Pods, and containers. It gives you the map before you start reading the evidence. In a namespace with many Pods, this first step saves a lot of wandering.
-
-For the orders API rollout, the useful first view is Deployment, ReplicaSet, and Pod state filtered by the stable application label. That gives you the controller view and the failing Pod in one pass:
+Start by finding the exact workload objects involved in the incident. The Deployment describes desired state, the ReplicaSet connects the rollout revision, and the Pods show the current running attempts.
 
 ```bash
 $ kubectl -n orders get deploy,rs,pod -l app.kubernetes.io/name=devpolaris-orders-api
-NAME                                   READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/devpolaris-orders-api  2/3     3            2           18m
+NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/devpolaris-orders-api     2/3     1            2           18m
 
-NAME                                              DESIRED   CURRENT   READY   AGE
-replicaset.apps/devpolaris-orders-api-78b6f596dc  3         3         2       18m
+NAME                                                 DESIRED   CURRENT   READY   AGE
+replicaset.apps/devpolaris-orders-api-78b6f596dc      1         1         0       4m
 
-NAME                                            READY   STATUS             RESTARTS   AGE
-pod/devpolaris-orders-api-78b6f596dc-7x2tb      1/1     Running            0          18m
-pod/devpolaris-orders-api-78b6f596dc-mk9z4      0/1     CrashLoopBackOff   5          17m
-pod/devpolaris-orders-api-78b6f596dc-qk88c      1/1     Running            0          18m
+NAME                                           READY   STATUS             RESTARTS   AGE
+pod/devpolaris-orders-api-78b6f596dc-mk9z4     0/1     CrashLoopBackOff   4          4m
 ```
 
-That output tells a simple story. The Deployment wants three available replicas. The ReplicaSet created three Pods. One Pod is repeatedly crashing, so the next evidence should come from that Pod and its `api` container.
+What this output gives you:
 
-`CrashLoopBackOff` means Kubernetes has started the container, the container has exited, and kubelet is delaying the next restart because the failures are repeating. The delay protects the node from a tight restart loop. It also means current logs may belong to a new short-lived run, while the most useful error may be in previous logs.
+- The rollout has one new Pod that is failing.
+- The older Pods still serve traffic.
+- The right next target is the failing Pod and its owning ReplicaSet.
 
-For multi-container Pods, name the containers before reading logs. This avoids reading a healthy sidecar while the application container is failing:
+## Current Logs: What the Container Says Now
+<!-- section-summary: Current logs show the output from the container instance that is running at the moment you ask. -->
+
+Use current logs for a container that is running long enough to print useful messages. Target the container name when the Pod has a sidecar or init containers.
 
 ```bash
-$ kubectl -n orders get pod devpolaris-orders-api-78b6f596dc-mk9z4 \
-  -o jsonpath='{.spec.containers[*].name}'
-api envoy-metrics
+$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --tail=40
+2026-06-30T09:40:12Z INFO starting devpolaris-orders-api
+2026-06-30T09:40:13Z ERROR configuration POSTGRES_URL is required
+2026-06-30T09:40:13Z INFO shutting down
 ```
 
-This Pod has the application container and a metrics sidecar. If you forget `-c api`, you may read the sidecar and miss the application failure. Container names keep the investigation honest.
+What the log says:
 
-## Current Logs: What the Container Said
-<!-- section-summary: Current logs show stdout and stderr from the running container, which makes them useful after you know the exact Pod and container. -->
+- The image started and reached application code.
+- The failure points to application configuration; scheduling already succeeded.
+- The missing key has a name, so the next check should look at environment and Secret wiring.
 
-**Container logs** are the lines written by the process inside the container. Kubernetes stores recent logs on the node and `kubectl logs` reads them through the Kubernetes API. They are perfect for answering what the application knew and reported.
+Current logs can be empty if the process exits too quickly. That is where previous logs help.
 
-For the failing orders API Pod, current logs might look like this. The useful part is the component and the missing configuration name:
+## Previous Logs: What the Last Container Said
+<!-- section-summary: Previous logs preserve the output from the prior crashed container instance in a restarted Pod. -->
+
+When a Pod enters `CrashLoopBackOff`, the current container may be between restarts. The `--previous` flag shows the logs from the terminated container instance.
 
 ```bash
-$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --tail=80
-2026-05-07T10:22:18Z info config loaded environment=prod
-2026-05-07T10:22:19Z error POSTGRES_URL missing from environment
-2026-05-07T10:22:19Z fatal cannot start without database configuration
+$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --previous --tail=40
+2026-06-30T09:41:44Z INFO starting devpolaris-orders-api
+2026-06-30T09:41:44Z ERROR configuration POSTGRES_URL is required
 ```
 
-Those lines point toward configuration, not the database server itself. The app did not try and fail to connect to PostgreSQL. It never received the environment variable that tells it where PostgreSQL is.
+What this output proves:
 
-Logs from the Deployment can be handy for a quick comparison. Use that view to compare replicas, then return to the exact Pod when the failure is narrow:
-
-```bash
-$ kubectl -n orders logs deploy/devpolaris-orders-api -c api --tail=20 --prefix
-[pod/devpolaris-orders-api-78b6f596dc-7x2tb/api] info server ready port=8080
-[pod/devpolaris-orders-api-78b6f596dc-qk88c/api] info server ready port=8080
-```
-
-That view shows the healthy replicas, but it may skip the crashed one if it is between restarts. For precise debugging, the exact Pod name is still the better target.
-
-Application logs should include enough context for humans and machines. The orders team wants fields such as `request_id`, `route`, `component`, `error`, `pod`, `image`, and `revision` in its central log system. In local `kubectl logs`, even a few structured fields can make the difference between "database is broken" and "environment variable was never injected."
-
-## Previous Logs: Evidence From the Last Crash
-<!-- section-summary: Previous logs read the terminated container instance, which is often where the first useful CrashLoopBackOff error lives. -->
-
-When `RESTARTS` is greater than zero, **previous logs** are often the most important logs. The `--previous` flag asks Kubernetes for logs from the last terminated container instance with the same name. That is exactly what you need when a container crashes quickly and starts again.
-
-For the orders API Pod, previous logs might show the first failure cleanly. This is especially helpful when the current container has already restarted:
-
-```bash
-$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 \
-  -c api \
-  --previous \
-  --tail=80
-2026-05-07T10:19:54Z info server starting port=8080
-2026-05-07T10:19:55Z error POSTGRES_URL missing from environment
-2026-05-07T10:19:55Z fatal cannot start without database configuration
-```
-
-This is the same symptom, but now you know it happened in a terminated instance. Combine that with the restart count and the Pod status, and the shape is clear: Kubernetes starts the container, the process exits during startup, kubelet waits, and then kubelet tries again.
-
-Previous logs also matter for liveness failures. A container may restart because the liveness probe failed, and the current process may look healthy after restart. The previous logs help you find the app-side warning just before kubelet killed the old container.
-
-```bash
-$ kubectl -n orders logs pod/devpolaris-orders-api-7c96df7d7c-2vd6k -c api --previous --tail=40
-2026-05-07T11:04:10Z warn health_liveness_failed component=http_server reason="event loop stalled"
-2026-05-07T11:04:30Z warn health_liveness_failed component=http_server reason="event loop stalled"
-2026-05-07T11:04:50Z warn shutdown signal=SIGTERM source=kubelet
-```
-
-Those lines connect the application symptom to the platform action. The app reported liveness failure, and kubelet later restarted it. That is very different from an image pull failure or a missing Secret.
+- The failure repeats across restarts.
+- The restart loop comes from the same startup error.
+- The Pod is crashing after the app starts, so image pull and scheduling are probably past the critical path.
 
 ![CrashLoop evidence diagram comparing previous run logs, current run logs, restart count, events, and root cause clues](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/crashloop-evidence.png)
 
-*CrashLoopBackOff investigations often need both the current container and the previous terminated one. The image highlights why `--previous` can hold the first useful error.*
+*The CrashLoop evidence view keeps the current run, previous run, restart count, and events in one place.*
 
 ## Events: What Kubernetes Decided
-<!-- section-summary: Events explain Kubernetes decisions such as scheduling, image pulling, probe failure, Secret errors, and backoff behavior. -->
+<!-- section-summary: Events record Kubernetes actions such as scheduling, image pulls, probe failures, missing Secrets, and backoff decisions. -->
 
-**Events** are short records created by Kubernetes components when something important happens to an object. They are recent operational clues, not a long-term audit log. They are exactly the right tool when the application log cannot explain what Kubernetes did around the container.
-
-The fastest event view for one Pod is usually inside `describe pod`. It puts container state and recent events in the same output:
+Kubernetes events explain platform-side decisions. They are especially useful when the application log is empty or the failure happens before application code runs.
 
 ```bash
-$ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
-Events:
-  Type     Reason     Age                 From               Message
-  Normal   Scheduled  18m                 default-scheduler  Successfully assigned orders/devpolaris-orders-api-78b6f596dc-mk9z4 to worker-2
-  Normal   Pulled     17m                 kubelet            Successfully pulled image "ghcr.io/devpolaris/orders-api:2026-05-07.2"
-  Warning  Failed     17m                 kubelet            Error: secret "orders-prod-env" not found
-  Normal   BackOff    2m (x7 over 16m)    kubelet            Back-off restarting failed container api
+$ kubectl -n orders get events --field-selector involvedObject.name=devpolaris-orders-api-78b6f596dc-mk9z4 --sort-by=.lastTimestamp
+LAST SEEN   TYPE      REASON    OBJECT                                             MESSAGE
+4m          Normal    Pulled    pod/devpolaris-orders-api-78b6f596dc-mk9z4          Container image already present on machine
+3m          Warning   Failed    pod/devpolaris-orders-api-78b6f596dc-mk9z4          Error: secret "orders-prod-env" not found
+2m          Warning   BackOff   pod/devpolaris-orders-api-78b6f596dc-mk9z4          Back-off restarting failed container api
 ```
 
-Now the earlier log line makes sense. The app said `POSTGRES_URL missing`. The event says kubelet could not find the Secret named `orders-prod-env`, so the environment variables never reached the container. The likely fix is a Secret name, namespace, or deployment reference issue.
+What the events add:
 
-The namespace event list can show the rollout order. Sorting by timestamp makes the cause-and-effect chain easier to read:
+- Kubernetes could pull or find the image.
+- Kubelet failed when resolving the referenced Secret.
+- The backoff is a consequence of repeated container failures.
 
-```bash
-$ kubectl -n orders get events --sort-by=.lastTimestamp
-LAST SEEN   TYPE      REASON              OBJECT                                      MESSAGE
-18m         Normal    ScalingReplicaSet   deployment/devpolaris-orders-api             Scaled up replica set devpolaris-orders-api-78b6f596dc to 3
-17m         Warning   Failed              pod/devpolaris-orders-api-78b6f596dc-mk9z4   Error: secret "orders-prod-env" not found
-2m          Normal    BackOff             pod/devpolaris-orders-api-78b6f596dc-mk9z4   Back-off restarting failed container api
-```
+Events have retention limits, so copy the important lines into the incident note while they still exist.
 
-That is enough evidence to inspect the Deployment reference and the Secret. The next commands check whether the manifest points at something that exists:
+## Build the Timeline
+<!-- section-summary: A useful incident timeline combines object changes, events, logs, and recovery checks in timestamp order. -->
 
-```bash
-$ kubectl -n orders get secret orders-prod-env
-Error from server (NotFound): secrets "orders-prod-env" not found
+The incident path should read like a production handoff. Each row should say what was observed, where it came from, and what it proved.
 
-$ kubectl -n orders get deploy devpolaris-orders-api \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].envFrom}'
-[{"secretRef":{"name":"orders-prod-env"}}]
-```
+| Time | Evidence | What it proved |
+|---|---|---|
+| `09:38` | Deployment rollout started | New ReplicaSet created |
+| `09:39` | Pod event `Failed` | Secret `orders-prod-env` missing |
+| `09:40` | Previous logs | App required `POSTGRES_URL` |
+| `09:44` | Secret restored | Required environment source existed again |
+| `09:46` | Rollout status | Deployment reached `3/3` available |
 
-The Deployment expects a Secret that is absent from the `orders` namespace. Applying the Secret to another namespace would produce this exact shape: missing environment variable in logs, missing Secret event from kubelet, and a crash loop from the app.
-
-## Build a Timeline
-<!-- section-summary: A timeline combines rollout status, events, current logs, previous logs, and nearby changes into one evidence trail. -->
-
-Once you have the main clues, build a small timeline. This keeps the team from treating one log line as the whole incident. It also helps the next person understand why you changed a Secret reference instead of debugging database networking.
-
-A useful command sequence for the orders rollout is short. It gathers state, events, and logs before anyone edits the workload:
+Verify recovery with a controller-level command:
 
 ```bash
 $ kubectl -n orders rollout status deployment/devpolaris-orders-api
-$ kubectl -n orders get deploy,rs,pod -l app.kubernetes.io/name=devpolaris-orders-api
-$ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
-$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --previous --tail=80
-$ kubectl -n orders get events --sort-by=.lastTimestamp
+deployment "devpolaris-orders-api" successfully rolled out
 ```
 
-The written note can be even smaller than the commands. A compact table is often enough for a handoff or pull request comment:
-
-| Evidence | What it says |
-|---|---|
-| Deployment status | `2/3` replicas available after image `2026-05-07.2` rollout |
-| Failing Pod state | `CrashLoopBackOff`, restart count `5` |
-| Application previous log | `POSTGRES_URL missing from environment` |
-| Pod event | `secret "orders-prod-env" not found` |
-| Nearby change | Deployment `envFrom` changed from `orders-env` to `orders-prod-env` |
-
-That timeline points to one fix. Restore the correct Secret reference or create the intended Secret in the `orders` namespace, then watch the rollout. It also gives you a rollback path if the new image is tied to the new config shape.
-
-After the fix, the verification should use the same signals. That keeps diagnosis and recovery tied to the same evidence:
-
-```bash
-$ kubectl -n orders rollout status deployment/devpolaris-orders-api
-$ kubectl -n orders get pods -l app.kubernetes.io/name=devpolaris-orders-api
-$ kubectl -n orders get events --sort-by=.lastTimestamp | tail -20
-```
-
-You want three available replicas, no new `Failed` events for the Secret, and logs showing the app passed startup and readiness. The same evidence that diagnosed the failure should prove the recovery.
+The success line matters because it confirms the Deployment reached its target state after the fix.
 
 ## When Logs Are Empty
-<!-- section-summary: Empty logs usually mean the process never started, so events and container state deserve the first inspection. -->
+<!-- section-summary: Empty logs usually mean the failure happened before application code, in a different container, or outside the Pod. -->
 
-Sometimes `kubectl logs` returns nothing useful because the application process never started. That can happen with a missing ConfigMap, missing Secret, invalid command, denied image pull, or failed volume mount. In those cases, events are the main evidence.
+Empty logs are evidence too. They usually point to one of four places: wrong container, early process exit, image or command failure before logging, or a platform failure that kept the container from running.
 
-Here is the shape. The command fails because Kubernetes cannot give you logs from a process that never started:
-
-```bash
-$ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api
-Error from server (BadRequest): container "api" in pod "devpolaris-orders-api-78b6f596dc-mk9z4" is waiting to start: CreateContainerConfigError
-```
-
-The process has not started, so there are no application logs to read. The next useful output is container state and events because kubelet is the component that hit the error:
+Use this quick route:
 
 ```bash
 $ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
@@ -242,69 +153,37 @@ Containers:
     State:          Waiting
       Reason:       CreateContainerConfigError
 Events:
-  Type     Reason  Age   From     Message
-  Warning  Failed  4m    kubelet  Error: configmap "orders-runtime-config" not found
+  Warning  Failed  Error: secret "orders-prod-env" not found
 ```
 
-The fix direction is the ConfigMap reference, the namespace, or the manifest that should create `orders-runtime-config`. Reading application code will waste time here because the application binary never ran.
+What this output says:
 
-Image pull failures have the same event-first shape. The registry or image reference fails before application code gets a chance to run:
-
-```bash
-$ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
-Events:
-  Type     Reason   Age   From     Message
-  Normal   Pulling  2m    kubelet  Pulling image "ghcr.io/devpolaris/orders-api:2026-05-07.9"
-  Warning  Failed   2m    kubelet  Failed to pull image "ghcr.io/devpolaris/orders-api:2026-05-07.9": manifest unknown
-  Warning  Failed   2m    kubelet  Error: ErrImagePull
-  Normal   BackOff  1m    kubelet  Back-off pulling image
-```
-
-No application log can exist until the image starts. The likely causes are an unpublished tag, wrong image name, registry permissions, missing image pull secret, or a bad digest.
+- The container never reached a normal running state.
+- Application logs can be empty because kubelet failed during container setup.
+- Fix configuration or Secret creation before changing app logging.
 
 ## Production Logging Habits
-<!-- section-summary: kubectl is excellent for live debugging, but production teams also need centralized logs, event retention, labels, and trace context. -->
+<!-- section-summary: Production logs should name the operation, request context, failure reason, and safe correlation fields without leaking secrets. -->
 
-`kubectl logs` is a direct troubleshooting tool with a short retention window. Node-local container logs can disappear when Pods move, nodes rotate, or retention windows expire. Kubernetes events can also age out quickly, which means the best evidence may vanish before a later incident review.
+Good Kubernetes logging habits make later investigations faster. The application should write logs to stdout and stderr so the node runtime can collect them. Each important line should include service name, environment, operation, status, and a request or trace ID.
 
-Production teams usually ship logs to a central platform such as Loki, Elasticsearch, Cloud Logging, CloudWatch Logs, or another log backend. Many teams also standardize telemetry with **OpenTelemetry**, which can carry logs, metrics, and traces with shared attributes. The exact vendor matters less than the habit: logs should be searchable after the Pod name is gone.
+Example application log:
 
-Good labels make both `kubectl` and centralized search easier. They give humans and tools a stable way to group logs after Pod names change:
-
-```yaml
-metadata:
-  labels:
-    app.kubernetes.io/name: devpolaris-orders-api
-    app.kubernetes.io/component: api
-    app.kubernetes.io/part-of: devpolaris
-    devpolaris.io/team: orders
+```json
+{"time":"2026-06-30T09:40:13Z","service":"devpolaris-orders-api","level":"error","operation":"startup","error":"POSTGRES_URL is required","trace_id":"none"}
 ```
 
-Those labels let a responder search by application, component, and team instead of guessing Pod names. They also make terminal commands safer because selectors target the service you meant.
+What this log gives the team:
 
-Application logs should carry request context. A single line should help you jump from a user symptom to the service component that failed:
-
-```log
-2026-05-07T10:31:12Z error request_failed request_id=req-7f2a route=/orders method=POST status=500 component=postgres error="connection refused"
-```
-
-That line gives the incident responder a request ID, route, component, and error. If traces are enabled, the same request ID or trace ID can connect the Kubernetes log, API trace, database span, and frontend error.
-
-Events need a handoff habit too. If an event explains the failure, copy the important line into the incident note before it expires. The cluster may forget the event before the team finishes the review:
-
-| Event copied before expiry | Value |
-|---|---|
-| Type | `Warning` |
-| Reason | `Failed` |
-| Object | `pod/devpolaris-orders-api-78b6f596dc-mk9z4` |
-| Message | `Error: secret "orders-prod-env" not found` |
-
-That copied event helps future reviewers understand why the team changed a manifest after the original event is gone from the cluster. It also lets the next responder trust the investigation without needing the old event object to still exist.
+- It names the service and operation.
+- It gives the exact missing setting.
+- It avoids printing the Secret value.
+- It can connect with traces later if a trace ID exists.
 
 ## Operational Checklist
 <!-- section-summary: A reliable debugging routine keeps application evidence and Kubernetes evidence side by side until one fix is clear. -->
 
-For `devpolaris-orders-api`, a good logs-and-events routine starts narrow and gets wider only when needed. The point is to learn which object failed, what the process said, and what Kubernetes decided before editing YAML.
+Use this checklist during a `devpolaris-orders-api` incident:
 
 | Step | Command or check | Why it helps |
 |---|---|---|
@@ -319,13 +198,9 @@ For `devpolaris-orders-api`, a good logs-and-events routine starts narrow and ge
 
 *The checklist shows the smallest useful loop for incidents: scope the object, read both log streams, sort events, name the failure, and keep the timeline for review.*
 
-The main habit is to keep the stories separate until they agree. Logs tell you what the application saw. Events tell you what Kubernetes did. Object state tells you where to look. A clear incident note puts those pieces next to each other so the fix has evidence behind it.
+The final incident sentence should join both stories: the application failed startup because `POSTGRES_URL` was missing, and kubelet reported the Secret that should provide it was absent in the `orders` namespace.
 
-For the orders rollout, the final diagnosis might be only one sentence in the incident summary, but it should rest on both stories: the app failed startup because `POSTGRES_URL` was missing, and kubelet reported the Secret that should have provided it did not exist in the `orders` namespace. That is a much stronger conclusion than either the log line or the event line on its own.
-
----
-
-**References**
+## References
 
 - [Kubernetes: kubectl logs](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/) - Official command reference for current logs, previous logs, selectors, and container targeting.
 - [Kubernetes: Debug Running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/) - Official guide for inspecting Pods, logs, and events during application debugging.

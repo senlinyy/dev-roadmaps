@@ -3,7 +3,7 @@ title: "Local Values"
 description: "Name and reuse computed expressions inside a Terraform configuration, removing repetition and making complex logic readable."
 overview: "Local values are named expressions inside a module. This article shows how locals shape variable inputs into names, tags, policy fragments, and resource arguments that appear clearly in Terraform plans."
 tags: ["locals", "local values", "expressions", "terraform", "hcl"]
-order: 5
+order: 6
 id: article-iac-terraform-values-locals
 aliases:
   - infrastructure-as-code/terraform/values/local-values.md

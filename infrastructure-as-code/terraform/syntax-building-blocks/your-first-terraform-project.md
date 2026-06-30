@@ -3,7 +3,7 @@ title: "Your First Terraform Project"
 description: "Build a small real Terraform project by publishing a tiny S3 static website, then practice fmt, init, validate, plan, apply, verification, state inspection, destroy, and Git hygiene."
 overview: "This hands-on article walks through a real but small Terraform project: an Amazon S3 static website with two HTML files. You will use a sandbox AWS account, write Terraform files for an S3 bucket, website hosting, public read policy, and uploaded objects, review the plan before applying, test the website endpoint, clean everything up, and learn what belongs in Git."
 tags: ["terraform", "cli", "plan", "apply", "state"]
-order: 8
+order: 9
 id: article-iac-terraform-foundations-first-safe-project
 aliases:
   - infrastructure-as-code/terraform/foundations/your-first-safe-terraform-project.md

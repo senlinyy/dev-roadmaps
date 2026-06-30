@@ -1,15 +1,14 @@
 ---
 title: "How a Kubernetes Cluster Runs an App"
 description: "Follow one notification platform through Kubernetes objects, Pods, Services, labels, rollouts, and capacity."
-overview: "This article follows a Customer Notification Platform through a Kubernetes cluster so you can see how the API, nodes, Pods, Deployments, Services, labels, and resources work together."
+overview: "A Customer Notification Platform gives each cluster concept a concrete job: API objects store the request, nodes provide capacity, Pods run application copies, Deployments manage rollouts, Services route traffic, labels connect objects, and resources guide scheduling."
 tags: ["kubernetes", "cluster", "pods", "services"]
 order: 2
 id: article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model
 ---
-
 ## Table of Contents
 
-1. [From One Container to a Cluster](#from-one-container-to-a-cluster)
+1. [Follow One App Through The Cluster](#follow-one-app-through-the-cluster)
 2. [API Objects](#api-objects)
 3. [Nodes](#nodes)
 4. [Pods](#pods)
@@ -21,25 +20,21 @@ id: article-containers-orchestration-kubernetes-fundamentals-cluster-mental-mode
 10. [Operations Checks](#operations-checks)
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
+13. [References](#references)
 
-## From One Container to a Cluster
-<!-- section-summary: One container leads to one Pod, one node, and then a group of nodes managed as a cluster. -->
+## Follow One App Through The Cluster
+<!-- section-summary: A Kubernetes cluster runs an app by storing requested objects, placing Pods on nodes, routing traffic through Services, and checking capacity. -->
 
-A **container** is a packaged application process with the files it needs to run. For example, the `notification-api` container image can hold the API code, its dependencies, and the start command. One container on one laptop or one server is easy to point at: you know where it runs, how to read its logs, and which process to restart.
+A **Kubernetes cluster** runs an app by combining several machines behind one API. The API stores what the team asked for, worker nodes provide CPU and memory, Pods run the application containers, Deployments keep the requested copies alive, and Services give callers a stable route to healthy Pods.
 
-A **Pod** is the smallest runtime unit Kubernetes schedules. In the Customer Notification Platform, one `notification-api` Pod usually wraps one `notification-api` container. Kubernetes gives that Pod a cluster IP address, tracks its health, and treats it as one replaceable running copy of the API.
+The Customer Notification Platform makes those jobs concrete. The `notification-api` receives requests from product systems, and the `notification-worker` sends email or SMS messages in the background. The platform needs several running API copies, worker capacity, stable traffic, safe releases, and enough CPU and memory for each Pod.
 
-A **node** is a machine that can run Pods. A node might be a cloud virtual machine or a physical server. If the API needs six running copies, Kubernetes needs enough node CPU and memory to place those Pods without piling every important process onto one tired machine.
+The cluster pieces connect in a practical order. Kubernetes stores a request as API objects. Nodes supply machine capacity. Pods run application copies. Deployments keep the right number of Pods alive. Labels connect ownership and traffic. Services give callers a stable route. Resource settings tell Kubernetes how much capacity the Pods need.
 
-A **Kubernetes cluster** is a group of nodes managed under one shared API. The cluster has a **control plane**, which receives requests and stores cluster records, and **worker nodes**, which provide the CPU, memory, network, and disk where Pods actually run.
-
-We are going to use one application all the way through: a Customer Notification Platform. The platform has `notification-api`, which receives HTTP requests from the product, and `worker`, which sends email or SMS messages after the request has been accepted. Both workloads depend on a database that stores customer preferences, delivery attempts, and notification status.
-
-The concepts connect in this order. We will keep coming back to the same platform so the names stay familiar.
+The path has these pieces:
 
 | Concept | Simple definition | Question it answers for the platform |
 | --- | --- | --- |
-| **Container** | A packaged application process | What application package should run? |
 | **Pod** | One scheduled runtime unit | What is one running copy of the API or worker? |
 | **Node** | A machine in the cluster | Where can a Pod use real CPU and memory? |
 | **Cluster** | Nodes managed through one API | How do several machines act like one application platform? |
@@ -48,7 +43,7 @@ The concepts connect in this order. We will keep coming back to the same platfor
 | **Deployment** | A controller for replaceable Pods | How many copies should run, and how should rollouts happen? |
 | **Service** | A stable network endpoint for matching Pods | How does traffic reach Pods that keep changing? |
 
-This path gives us a practical way to read Kubernetes. We start with the running package, follow it into a Pod, place the Pod on a node, group nodes into a cluster, and then use API objects to describe the state the cluster should maintain.
+Together, these pieces give beginners a practical way to read Kubernetes: a request gets stored in the API, Pods land on nodes, traffic reaches ready Pods through a Service, and operations checks follow those same relationships.
 
 ![Kubernetes cluster object map showing the API object, Deployment, ReplicaSet, Pods, nodes, labels, Service, and resource settings for notification-api](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/cluster-object-map.png)
 *Each object has one job in the same application: store the request, create Pods, place them on nodes, route traffic, and reserve capacity.*
@@ -74,7 +69,7 @@ Most Kubernetes objects have a few fields you will see again and again. These fi
 
 The `spec` field is the part your team usually writes. It describes the desired state, such as three API replicas. The `status` field is the part Kubernetes updates after controllers, schedulers, and node agents have done work, such as how many Pods are available right now.
 
-A small object file for the API Deployment might start like this. The file describes the app by name, says it belongs in the `notifications-prod` namespace, and asks Kubernetes for three running copies.
+A small object file for the API Deployment might look like this. The file describes the app by name, says it belongs in the `notifications-prod` namespace, and asks Kubernetes for three running copies.
 
 ```yaml
 apiVersion: apps/v1
@@ -89,17 +84,16 @@ spec:
   replicas: 3
 ```
 
-A CI job or an engineer's terminal usually sends that file to the API with a command like this. The command is small, but behind it Kubernetes receives an HTTP request and updates the stored object.
+A CI job or an engineer's terminal usually sends that file to the API with `kubectl apply -f notification-api.yaml`, Helm, Kustomize, or a GitOps controller. The important part is the API request, not the tool name. Kubernetes accepts the object, stores the `spec`, and then other components work from that saved record.
 
-```bash
-kubectl apply -f notification-api.yaml
-```
+Inspection uses the same API path in the other direction. A command such as `kubectl get deployment notification-api -n notifications-prod -o yaml` asks for the current Deployment record, including `status` fields Kubernetes has added.
 
-Inspection uses the same API path in the other direction. This command asks the API server for the current Deployment record, including fields Kubernetes has added.
-
-```bash
-kubectl get deployment notification-api -n notifications-prod -o yaml
-```
+| What you read | What it tells you |
+| --- | --- |
+| `metadata.name` and `metadata.namespace` | Which object the API server stored |
+| `spec.replicas` | How many Pods the team asked Kubernetes to maintain |
+| `spec.selector` | Which labels the Deployment uses to own Pods |
+| `status.availableReplicas` | How many Pods Kubernetes currently counts as available |
 
 At this point, we have a saved record of what the team wants. The next question is where the Pods get actual compute capacity, because runtime work happens on nodes, inside containers wrapped by Pods.
 
@@ -112,32 +106,31 @@ Every worker node runs a **kubelet**, which is the node agent that receives Pod 
 
 For the Customer Notification Platform, a Pod cannot run until the scheduler chooses a node and the kubelet on that node starts the container. If all slow requests come from `notification-api` Pods on `worker-03`, the application code may be healthy while that node has a noisy neighbor, network trouble, or disk pressure. Kubernetes gives you useful objects, and operations still need the machine view when symptoms point to one host.
 
-A first look at the cluster capacity uses the node list. This shows which machines the cluster currently knows about and whether they are reporting a healthy condition.
+The first node check is usually `kubectl get nodes`. `Ready` means the node reports that it can run Pods. `NotReady` points toward node health, networking, kubelet, or cloud infrastructure before application code.
 
-```bash
-kubectl get nodes
-```
+Pod placement connects the app back to the machines. `kubectl get pods -n notifications-prod -o wide` adds the node name beside each Pod, which is enough for the first placement read.
 
-Pod placement connects the app back to the machines. The wide view is useful because it shows the node name beside each running Pod.
+| Signal | How to interpret it |
+| --- | --- |
+| API Pods spread across `worker-a`, `worker-b`, and `worker-c` | The workload has some failure separation across nodes |
+| Every failing Pod sits on one node | Investigate that node's pressure, network, or runtime condition |
+| New Pods stay `Pending` | The scheduler may lack enough CPU, memory, storage, or placement options |
+| A node shows `SchedulingDisabled` | Kubernetes can keep existing Pods there, while new Pods should land elsewhere |
 
-```bash
-kubectl get pods -n notifications-prod -o wide
-```
-
-In a healthy rollout, you might see `notification-api` spread across several nodes and `worker` Pods placed where enough CPU and memory remain. During an outage, the same command can show that every failing Pod landed on the same host or that replacements keep waiting for capacity.
+In a healthy rollout, `notification-api` usually spreads across several nodes and `worker` Pods land where enough CPU and memory remain. During an outage, placement data helps you decide whether the symptom belongs to the app, the node, or cluster capacity.
 
 Nodes give the cluster runtime capacity. Kubernetes schedules Pods onto that capacity, so the next concept is the Pod, the runtime wrapper for the containers.
 
 ## Pods
-<!-- section-summary: A Pod is one scheduled runtime unit, usually holding one application container plus any tightly coupled helper containers. -->
+<!-- section-summary: Pods are the scheduled runtime units that carry the application containers through the cluster. -->
 
-A **Pod** is the smallest deployable unit of computing that Kubernetes creates and manages. In normal application work, one Pod represents one running instance of a workload, such as one copy of `notification-api` or one copy of `worker`.
+In this cluster path, a **Pod** is the scheduled runtime unit that carries the application container. In normal application work, one Pod represents one running instance of a workload, such as one copy of `notification-api` or one copy of `worker`.
 
 A Pod wraps one or more containers that need to run together. Containers inside the same Pod share the same network address and can talk over `localhost`, so a helper container can sit next to the main app. For example, a production team might put a service-mesh proxy or log-forwarding helper beside `notification-api` while the main API container still owns the application code.
 
 Pods have short lives in Kubernetes. Rollouts create new Pods, node failures trigger replacement Pods, and scaling changes add or remove Pods. This is why teams normally manage production traffic through higher-level objects and leave individual Pod creation for short experiments.
 
-The Pod shape for `notification-api` lives inside the Deployment template. Start with the labels, image, and HTTP port. This says each Pod belongs to the API component and runs the `1.7.0` image.
+The Pod shape for `notification-api` lives inside the Deployment template. This compact slice shows the fields a beginner should read first: labels for ownership and traffic, the container image, the HTTP port, the database Secret reference, and readiness.
 
 ```yaml
 template:
@@ -153,41 +146,29 @@ template:
         ports:
           - name: http
             containerPort: 3000
-```
-
-A Secret can provide the database URL at runtime. This keeps the database password out of the container image and out of the first Pod-shape snippet.
-
-```yaml
-env:
-  - name: DATABASE_URL
-    valueFrom:
-      secretKeyRef:
-        name: notification-database
-        key: url
-```
-
-A readiness probe is another small part of the Pod template. It tells Kubernetes when the API can join Service traffic.
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: http
-  periodSeconds: 10
-  failureThreshold: 3
+        env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: notification-database
+                key: url
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
 ```
 
 A **Secret** is a Kubernetes object for sensitive values such as passwords, tokens, and database connection strings. Kubernetes can provide the value at runtime from the Secret, which keeps database passwords out of the container image.
 
 A **readiness probe** is a health check Kubernetes uses to decide whether a Pod should receive traffic. For `notification-api`, `/ready` might verify that the app has started, can parse configuration, and can reach the database. When the readiness check passes, the Pod can join Service traffic; while the Pod is still starting, Kubernetes keeps it out of the request path.
 
-Troubleshooting usually starts with Pod status because it tells you which layer is complaining. These commands show the current state, recent logs, and detailed scheduling or container events.
+Troubleshooting usually starts with Pod status because it tells you which layer is complaining.
 
-```bash
-kubectl get pods -n notifications-prod
-kubectl logs deployment/notification-api -n notifications-prod --since=10m
-kubectl describe pod notification-api-7f8c9d7b6c-r4m2p -n notifications-prod
-```
+| Evidence | What it usually answers |
+| --- | --- |
+| Pod list | Which Pods are Running, Pending, CrashLooping, or restarting |
+| Recent logs | What the application reported during startup or request handling |
+| Pod describe output | Scheduling events, image pull failures, probe failures, and container restart reasons |
 
 Pods tell us what one runtime instance looks like. Production needs a manager that keeps the right number of Pods running and replaces them during releases, so we move from Pods to Deployments.
 
@@ -198,7 +179,7 @@ A **Deployment** is a Kubernetes object that manages a set of Pods for an applic
 
 The Deployment owns the rollout rules. If the team releases `notification-api` version `1.8.0`, Kubernetes creates new Pods from the new template and reduces the old Pods at a controlled pace. The Service can keep one stable address while the Deployment changes the backing Pods.
 
-A Deployment starts with the target count and ownership rule. This first slice says the API should have three Pods, and those Pods must carry the same `app` and `component` labels the selector expects.
+A Deployment starts with the target count, ownership rule, rollout strategy, and Pod template. This skeleton keeps the main flow visible without listing every production setting.
 
 ```yaml
 apiVersion: apps/v1
@@ -215,62 +196,31 @@ spec:
     matchLabels:
       app: notification-api
       component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: notification-api
+        component: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/devpolaris/notification-api:1.7.0
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
 ```
-
-Rollout settings come next. `maxUnavailable: 1` allows one old Pod to be unavailable during the update, and `maxSurge: 1` allows one extra new Pod while the rollout is in progress.
-
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 1
-    maxSurge: 1
-```
-
-The Pod template is the part the Deployment uses whenever it creates new Pods. The labels in the template match the selector above, and the container points at the version the team wants to run.
-
-```yaml
-template:
-  metadata:
-    labels:
-      app: notification-api
-      component: api
-      tier: backend
-  spec:
-    containers:
-      - name: api
-        image: ghcr.io/devpolaris/notification-api:1.7.0
-        ports:
-          - name: http
-            containerPort: 3000
-```
-
-Readiness finishes the first production shape. The new Pod should join traffic only after `/ready` says the API can serve requests.
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: http
-```
-
-A full manifest combines those slices. We delay that full view until the recap, after labels, Services, and resources have been explained.
 
 The `replicas: 3` line asks for three Pods. The `RollingUpdate` strategy lets Kubernetes add one new Pod and remove one old Pod at a time in this example. The readiness probe protects the rollout by making each new Pod prove it can serve traffic before the Service relies on it.
 
-A production release often updates the image and waits for the rollout status. A CI system might run the same commands after building and pushing a new container image.
+A production release often updates the image and waits for rollout status. A CI system might run `kubectl set image deployment/notification-api api=ghcr.io/devpolaris/notification-api:1.8.0 -n notifications-prod`, then wait on `kubectl rollout status deployment/notification-api -n notifications-prod`. The first action changes the Deployment spec. The second action checks whether the controller created replacement Pods and reached the expected rollout condition.
 
-```bash
-kubectl set image deployment/notification-api api=ghcr.io/devpolaris/notification-api:1.8.0 -n notifications-prod
-kubectl rollout status deployment/notification-api -n notifications-prod
-```
-
-Rollback has a concrete command path as well. When error rates spike after the release, the team can inspect revisions and move back to a previous Pod template.
-
-```bash
-kubectl rollout history deployment/notification-api -n notifications-prod
-kubectl rollout undo deployment/notification-api -n notifications-prod --to-revision=12
-```
+Rollback uses the same Deployment history. When error rates spike after the release, the team can inspect revisions with `kubectl rollout history` and move back with `kubectl rollout undo`. The key beginner idea is that rollback changes the saved Pod template, then the controller rolls Pods again.
 
 Deployments know which Pods they manage through labels. That means labels deserve their own section, because the same label system also controls Service traffic and many day-to-day queries.
 
@@ -297,11 +247,7 @@ spec:
         tier: backend
 ```
 
-The same idea works in the terminal. This command shows only the API Pods in production, which is much cleaner than scanning every Pod in the namespace.
-
-```bash
-kubectl get pods -n notifications-prod -l app=notification-api,component=api
-```
+The same idea works in the terminal. A selector such as `app=notification-api,component=api` shows only the API Pods in production, which is much cleaner than scanning every Pod in the namespace.
 
 Labels also support operational habits. Dashboards can group metrics by `app` and `component`, alerts can point to the affected workload, and cost reports can group CPU and memory usage by team-owned labels. Real teams usually agree on a small label standard so automation, monitoring, and humans all speak the same naming language.
 
@@ -340,13 +286,14 @@ The Service depends on labels and readiness. A new `notification-api` Pod can re
 ![Labels and Service routing infographic showing notification-api Pods with app and component labels, a Service selector matching those labels, and ready Pods receiving traffic](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/labels-service-routing.png)
 *Labels connect ownership and traffic: the Deployment creates matching Pods, and the Service uses the same labels to find ready backends.*
 
-Traffic debugging usually checks the Service definition, selected Pods, and recent Pod readiness. These commands show the Service, the Pods that should match it, and the logs from the API workload.
+Traffic debugging usually checks the Service definition, selected Pods, and recent readiness behavior.
 
-```bash
-kubectl describe service notification-api -n notifications-prod
-kubectl get pods -n notifications-prod -l app=notification-api,component=api
-kubectl logs deployment/notification-api -n notifications-prod --since=10m
-```
+| Check | What it confirms |
+| --- | --- |
+| Service selector | The Service is looking for the intended labels |
+| Matching Pod labels | The Pods created by the Deployment can actually match the Service |
+| Pod readiness | Only Pods that pass readiness should receive traffic |
+| Recent API logs | The application can explain request failures after routing looks correct |
 
 Traffic now has a stable path. The next question is capacity, because Kubernetes still needs enough CPU and memory to place Pods and keep them healthy under real load.
 
@@ -359,7 +306,7 @@ For `notification-api`, a request of `250m` CPU means a quarter of one CPU core.
 
 Limits control the upper bound. A CPU limit can throttle a busy container, and a memory limit can cause the process to get killed if it uses too much memory. This matters for the `worker` because a large batch of notification jobs can use more memory than expected while rendering templates, calling providers, or loading customer preferences from the database.
 
-The API container might start with settings like these. The numbers should come from load tests, production metrics, and a safety margin. Copying one guessed value between services creates capacity surprises:
+The API container might use settings like these. The numbers should come from load tests, production metrics, and a safety margin. Copying one guessed value between services creates capacity surprises:
 
 ```yaml
 resources:
@@ -371,27 +318,11 @@ resources:
     memory: "512Mi"
 ```
 
-A worker usually has a different profile. If each worker sends notifications in batches, the team might give it more memory and scale replicas based on queue depth, while also watching database connection limits so the database can handle the extra concurrent work.
-
-```yaml
-resources:
-  requests:
-    cpu: "500m"
-    memory: "512Mi"
-  limits:
-    cpu: "2"
-    memory: "1Gi"
-```
+A worker usually has a different profile. If each worker sends notifications in batches, the team might give it more memory and scale replicas based on queue depth, while also watching database connection limits so the database can handle the extra concurrent work. The important habit is to size each workload from its own measurements instead of copying the API numbers everywhere.
 
 Capacity problems have recognizable signs. A Pod stuck in `Pending` may have a scheduling event that says every node is short on CPU or memory for the request. A worker that exits with `OOMKilled` probably crossed its memory limit. A busy API with high latency and low error logs may be CPU throttled.
 
-The usual checks connect Pod symptoms to resource settings. Metrics need the cluster metrics pipeline, but the describe output and events are available in ordinary clusters.
-
-```bash
-kubectl describe pod notification-api-7f8c9d7b6c-r4m2p -n notifications-prod
-kubectl top pods -n notifications-prod
-kubectl get events -n notifications-prod --sort-by=.lastTimestamp
-```
+The usual checks connect Pod symptoms to resource settings. Pod events can show scheduling failures. Metrics can show CPU throttling or memory pressure when the cluster metrics pipeline is installed. Recent namespace events can show repeated placement or eviction problems.
 
 Real platform teams often add guardrails at the namespace level. A **ResourceQuota** can cap the total CPU, memory, or object count used by a namespace, and a **LimitRange** can provide defaults or minimum and maximum values for Pods and containers. Those controls keep one workload from accidentally taking all shared cluster capacity.
 
@@ -415,6 +346,8 @@ This is the important production connection. The API object records intent, the 
 
 Operations work usually starts with a symptom from users, alerts, or dashboards. For this platform, common symptoms include API 5xx responses, delayed notifications, a stuck rollout, or Pods waiting for capacity. Each symptom maps back to one or more Kubernetes objects.
 
+The previous sections built those object relationships one at a time. This section turns them into an operating path. For the notification platform, the engineer should avoid jumping straight to one Pod log before checking whether the Deployment, Service, labels, resource settings, and rollout state already explain the symptom. A short ordered pass keeps the first investigation focused.
+
 Here is a practical first pass a production engineer might use. The table keeps the first checks tied to the object relationships we have already covered.
 
 ![Cluster operations summary infographic showing rollout status, Deployment replicas, Pods on nodes, Service selection, resource checks, events, and logs for notification-api and worker](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/cluster-operations-summary.png)
@@ -429,21 +362,9 @@ Here is a practical first pass a production engineer might use. The table keeps 
 | Are capacity events blocking scheduling? | `kubectl get events -n notifications-prod --sort-by=.lastTimestamp` | Recent events stay free of repeated scheduling failures |
 | Are containers hitting limits? | `kubectl top pods -n notifications-prod` | CPU and memory usage stay within expected ranges |
 
-A rollout incident has a clear path. If `notification-api:1.8.0` increases 5xx errors, the engineer checks rollout status, reads recent API logs, confirms Service selection, and then uses rollout undo to return to the previous revision while the team investigates.
+A rollout issue has a clear path. If `notification-api:1.8.0` increases 5xx errors, the engineer checks rollout status, reads recent API logs, confirms Service selection, and then uses rollout undo to return to the previous revision while the team investigates.
 
-```bash
-kubectl rollout status deployment/notification-api -n notifications-prod
-kubectl logs deployment/notification-api -n notifications-prod --since=10m
-kubectl rollout undo deployment/notification-api -n notifications-prod
-```
-
-A backlog incident uses a different path. If customers receive emails late, the engineer checks the `worker` Deployment, worker logs, resource usage, and database connection errors. Scaling the worker can help only when the database and provider can handle more concurrent work:
-
-```bash
-kubectl get deployment worker -n notifications-prod
-kubectl logs deployment/worker -n notifications-prod --since=15m
-kubectl scale deployment/worker -n notifications-prod --replicas=6
-```
+A backlog issue uses a different path. If customers receive emails late, the engineer checks the `worker` Deployment, worker logs, resource usage, database connection errors, and provider throttling. Before scaling the worker, the team should confirm that the database and provider can handle more concurrent work.
 
 Useful Kubernetes operations follow object relationships before individual commands. Deployment health leads to Pods, Pods lead to nodes and logs, Services lead to labels and readiness, and resource symptoms lead to requests, limits, and namespace guardrails.
 
@@ -466,7 +387,7 @@ Here is the whole picture in one operational table. It works as a quick review b
 | **Service** | Stable traffic endpoint | `notification-api` routes to ready API Pods | `kubectl describe service notification-api` |
 | **Resources** | CPU and memory scheduling rules | API gets `250m` CPU request, worker gets larger memory | `kubectl describe pod` and `kubectl top pods` |
 
-Here is the full Deployment after the article has introduced the smaller pieces. It combines identity, replica count, selector, rollout strategy, Pod labels, image, port, database Secret reference, and readiness in one file.
+Here is the late recap skeleton after the article has introduced the smaller pieces. It combines identity, replica count, selector, Pod labels, image, database Secret reference, readiness, and resources without turning the page into a giant manifest.
 
 ```yaml
 apiVersion: apps/v1
@@ -498,9 +419,6 @@ spec:
       containers:
         - name: api
           image: ghcr.io/devpolaris/notification-api:1.7.0
-          ports:
-            - name: http
-              containerPort: 3000
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -511,6 +429,10 @@ spec:
             httpGet:
               path: /ready
               port: http
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
 ```
 
 These relationships give you a reliable reading order for a cluster. The API records what the team wants, controllers compare that with the current cluster, nodes run the containers, and operations checks tell you where the current state has drifted from the desired one.
@@ -519,9 +441,7 @@ These relationships give you a reliable reading order for a cluster. The API rec
 
 You now have the main cluster pieces connected through one application. The next article zooms into **Control Plane and Worker Nodes**, where we look more closely at the API server, scheduler, controllers, kubelet, container runtime, and the handoff between them.
 
----
-
-**References**
+## References
 
 - [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official overview of control plane components, node components, kubelet, kube-proxy, and the container runtime.
 - [Objects In Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of Kubernetes objects, `spec`, `status`, and desired state.

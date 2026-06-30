@@ -6,6 +6,7 @@ tags: ["terraform", "data-sources", "querying", "state"]
 order: 4
 id: article-iac-terraform-config-data-sources
 aliases:
+  - infrastructure-as-code/terraform/data-sources.md
   - infrastructure-as-code/terraform/configuration/data-sources.md
   - infrastructure-as-code/terraform/existing-infrastructure-and-reuse/data-sources.md
 ---
@@ -23,7 +24,7 @@ aliases:
 ## The Existing Network Problem
 <!-- section-summary: Application stacks often need existing platform resources without taking ownership of those resources. -->
 
-After resources and state, Terraform has one big idea in place: a resource block means Terraform should manage the lifecycle of something and remember that object in state. That is the right tool for objects the current stack owns from create through delete.
+At this point, one important Terraform idea is in place: a resource block means Terraform should manage the lifecycle of something and remember that object in state. That is the right tool for objects the current stack owns from create through delete.
 
 The DevPolaris platform team already owns the production VPC. They manage subnets, route tables, NAT gateways, and shared security groups in a separate Terraform stack. The `devpolaris-orders-api` team only needs to deploy its service into that network.
 

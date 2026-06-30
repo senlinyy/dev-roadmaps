@@ -1,17 +1,16 @@
 ---
 title: "Jobs and CronJobs"
 description: "Run finite Kubernetes work with Jobs and scheduled recurring work with CronJobs."
-overview: "Jobs and CronJobs handle finite Kubernetes tasks that should finish. This article uses Customer Notification Platform maintenance tasks to show completions, retries, schedules, and failure diagnosis."
+overview: "Jobs and CronJobs handle finite Kubernetes tasks that should finish. Customer Notification Platform maintenance tasks show completions, retries, schedules, and failure diagnosis."
 tags: ["jobs", "cronjobs", "batch", "kubectl"]
 order: 3
 id: article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs
 ---
-
 ## Table of Contents
 
 1. [Work That Should Finish](#work-that-should-finish)
 2. [Jobs Versus Long-Running Services](#jobs-versus-long-running-services)
-3. [Start with a One-Time Job Skeleton](#start-with-a-one-time-job-skeleton)
+3. [A One-Time Job Skeleton](#a-one-time-job-skeleton)
 4. [Add Command, Configuration, and Runtime Limits](#add-command-configuration-and-runtime-limits)
 5. [Completions and Parallelism](#completions-and-parallelism)
 6. [Retries, Deadlines, and Idempotency](#retries-deadlines-and-idempotency)
@@ -21,17 +20,20 @@ id: article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs
 10. [Debugging Failed, Missed, and Duplicate Runs](#debugging-failed-missed-and-duplicate-runs)
 11. [Production Runbooks](#production-runbooks)
 12. [Choosing the Right Workload](#choosing-the-right-workload)
+13. [References](#references)
 
 ## Work That Should Finish
 <!-- section-summary: Jobs and CronJobs start from work with a clear end, then add Kubernetes status, retries, cleanup, and scheduling around that work. -->
 
-Start with one simple task: run a script, wait for it to finish, and keep proof of whether it succeeded. The Customer Notification Platform may need a release migration that adds `provider_status` to notification records. The same platform may also need a nightly cleanup that expires stale delivery attempts.
+Some Kubernetes work should finish. A database migration, a backfill, an export, or a nightly cleanup has a clear end, so Kubernetes should track completion instead of keeping the process alive forever.
 
-Those tasks should end. The migration should exit after the schema and data change finish. The cleanup should exit after it reviews the expected records. A Deployment would keep trying to maintain a running Pod, which fits `notification-api` and `notification-worker`, but batch work needs Kubernetes to treat a successful exit as the goal.
+A **Job** runs finite work until the required successful completions happen. A **CronJob** creates Jobs from a schedule. Both still create Pods underneath, but their success condition is different from a Deployment. A Deployment keeps `notification-api` or `notification-worker` running. A Job wants the migration script to exit successfully. A CronJob wants Kubernetes to create that finite work again at the next scheduled time.
 
-That is where **Jobs** and **CronJobs** fit. A **Job** runs finite work to completion. A **CronJob** creates Jobs from a schedule. Both still use Pods under the hood, but the controller watches for completion instead of long-running availability.
+The Customer Notification Platform has two concrete examples. During a release, a Job can run `node scripts/migrate-notifications.js` once and keep status and logs as evidence. Every night, a CronJob can create a cleanup Job that expires stale delivery attempts. Those two shapes need commands, retries, deadlines, parallelism, cleanup, schedules, and failure checks.
 
 ![Job runs to completion infographic showing a Job creating Pod attempts, retrying failed attempts, and reaching Complete after an exit zero result with status, events, and logs as evidence](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/job-runs-to-completion.png)
+
+*A Job is successful only after the required work finishes, so status, events, and logs all point at completion evidence.*
 
 _This infographic shows why a Job fits finite work: Kubernetes treats a successful exit as the goal and keeps status, events, and logs around for evidence._
 
@@ -53,12 +55,12 @@ The same image can support both shapes. The API image may include a script calle
 
 Choosing the object by process lifecycle prevents a common beginner mistake. A Deployment that runs a script which exits will keep restarting the script. A Job that runs a web server will never complete. The controller has to match the way the process should behave.
 
-## Start with a One-Time Job Skeleton
+## A One-Time Job Skeleton
 <!-- section-summary: A Job wraps a Pod template and records success after the required Pod completions finish. -->
 
-A **Job** is a Kubernetes controller for one-time or finite work. It owns a Pod template, creates Pods from that template, and watches those Pods until the required number of successful completions happens. In a simple release task, the required number is usually one successful Pod.
+A **Job** owns a Pod template, creates Pods from that template, and watches those Pods until the required number of successful completions happens. In a simple release task, the required number is usually one successful Pod.
 
-Start with the smallest useful Job shape:
+For the notification migration, the Job asks a different question from a Deployment. The team wants one script to run, exit cleanly, and leave status and logs behind. The skeleton below shows that completion-focused wrapper before the command and retry controls arrive:
 
 ```yaml
 apiVersion: batch/v1
@@ -77,12 +79,22 @@ spec:
 
 This skeleton says, "create a Pod from this template and treat a successful exit as the goal." `restartPolicy: Never` means a failed container attempt ends the Pod, and the Job controller may create a new Pod attempt depending on retry settings. For Jobs, `Never` and `OnFailure` are the valid restart policy choices.
 
+The field groups line up with the Job lifecycle:
+
+- `kind: Job` chooses a controller that cares about completion.
+- `metadata.name` should include a release or task identifier so finished Jobs are easy to find later.
+- `spec.template` holds the Pod that will run the task.
+- `restartPolicy: Never` makes each failed container attempt visible as a failed Pod attempt.
+- `containers.image` names the application build that contains the migration code.
+
 The skeleton is still missing the script command and safety controls. Add those next so the Job does real work in a controlled way.
 
 ## Add Command, Configuration, and Runtime Limits
 <!-- section-summary: A practical Job manifest names the exact command, passes configuration safely, and limits retry and runtime behavior. -->
 
 The migration already lives in the application image as `node scripts/migrate-notifications.js`. The release engineer wants Kubernetes to run that command once, keep logs available, and show a clear status in `kubectl`.
+
+The image needs an explicit Job command because the same image may also start the HTTP API by default. A Job should say the exact command it intends to run, pass the same configuration the script needs in production, and set limits around retry and total runtime. That makes the Job reviewable before it touches customer notification data.
 
 Add the command and arguments:
 
@@ -94,7 +106,11 @@ containers:
     args: ["scripts/migrate-notifications.js", "--operation=provider-status-20260614"]
 ```
 
-`command` replaces the image entrypoint, and `args` passes arguments to it. The operation name gives logs and database records a stable key. That key matters in batch work because a human may need to prove which migration attempt ran.
+The important parts are:
+
+- `command: ["node"]` makes the Job run Node directly instead of relying on the image default.
+- `args` names the exact migration script and operation key.
+- The operation key should appear in logs and database records so retries can be audited.
 
 Add configuration through ConfigMaps and Secrets:
 
@@ -130,7 +146,7 @@ NAME                                      COMPLETIONS   DURATION   AGE
 notification-add-provider-status-20260614 1/1           42s        1m
 ```
 
-Read the logs through the Job object:
+The Job object gives the operator a stable way to collect logs from the Pods it created:
 
 ```bash
 $ kubectl logs -n notifications job/notification-add-provider-status-20260614
@@ -144,6 +160,8 @@ The output gives two layers of evidence. Kubernetes says one required completion
 <!-- section-summary: Completions define how many successful Pods are needed, while parallelism controls how many Pods may work at once. -->
 
 **Completions** is the number of successful Pods the Job needs before it is complete. **Parallelism** is the number of Pods the Job may run at the same time. These fields are separate because a Job might need many total units of work but only a few active at once.
+
+The notification migration used one Pod because the work was small and order mattered. Backfills often have a larger shape. If the team needs to process millions of old notification records, one Pod may run for too long, while too many Pods can overload PostgreSQL or the provider audit tables. Completions and parallelism let the team describe total work and active pressure separately.
 
 For a simple migration, the Job usually needs one completion:
 
@@ -175,14 +193,18 @@ With `completions: 20`, the Job needs 20 successful indexes. With `parallelism: 
 
 ![Indexed Job shards infographic showing eight million notifications split into shards zero through nineteen, parallelism four, completion index, idempotent processing, and safe writes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/indexed-job-shards.png)
 
+*Indexed Jobs divide a large task into known shard numbers so each Pod can process one slice safely.*
+
 _This infographic shows the backfill pattern visually: each indexed Pod owns a predictable shard, while parallelism limits how much database pressure the Job creates at once._
 
-The database still needs protection. Parallelism should come from measured capacity, not hope. If each shard opens 20 connections, `parallelism: 4` may open 80 connections before the normal API and worker traffic are counted.
+The database still needs protection. Parallelism should come from measured capacity. If each shard opens 20 connections, `parallelism: 4` may open 80 connections before the normal API and worker traffic are counted.
 
 ## Retries, Deadlines, and Idempotency
 <!-- section-summary: Kubernetes retry settings control Pod attempts, while idempotent application logic controls business safety. -->
 
 **Retry controls** tell Kubernetes how many failed Pod attempts are acceptable. They help with transient failures such as a temporary node problem, short database outage, or image pull interruption.
+
+Retries need careful context because Kubernetes only sees Pod attempts and exit codes. The application still owns the meaning of the work. Retrying a read-only report is usually low risk. Retrying a script that writes database rows or calls an SMS provider needs idempotency, operation keys, and clear logs so the same business action runs once.
 
 `backoffLimit` controls failed attempts:
 
@@ -198,7 +220,7 @@ spec:
   activeDeadlineSeconds: 1800
 ```
 
-These fields do not prove the business operation is safe to repeat. That safety comes from **idempotency**. An idempotent operation can run more than once and still produce the same intended result. For example, setting `provider_status` for notification rows based on current delivery events can be idempotent if the script updates each row to a deterministic value. Sending an SMS is usually not idempotent unless the provider and application use a deduplication key.
+These fields only control Kubernetes retries. Business safety comes from **idempotency**. An idempotent operation can run more than once and still produce the same intended result. For example, setting `provider_status` for notification rows based on current delivery events can be idempotent if the script updates each row to a deterministic value. Sending an SMS is usually not idempotent unless the provider and application use a deduplication key.
 
 For notification batch work, include an operation key in the script and database:
 
@@ -214,6 +236,8 @@ That pattern lets a retry check whether the operation already started or complet
 <!-- section-summary: Finished Jobs keep useful evidence, and TTL cleanup removes old objects after the review window. -->
 
 A finished Job leaves behind status, Pods, and logs for a while. That is useful during release review. It can also clutter a namespace if every nightly run stays forever.
+
+Cleanup is a balance between evidence and noise. The notification team needs enough time to inspect a migration or nightly cleanup after it runs, especially if a release review happens the next morning. At the same time, old Job objects should not make every `kubectl get jobs` output hard to read. TTL cleanup gives the namespace a predictable review window.
 
 The **TTL controller for finished Jobs** can remove completed or failed Jobs after a delay:
 
@@ -233,14 +257,16 @@ notification-add-provider-status-20260614 1/1           42s        23h
 notification-delivery-summary-28662240    1/1           2m18s      8h
 ```
 
-The Job object is not your long-term audit system. Send application logs and operation records to durable systems, then let Kubernetes cleanup handle the workload objects.
+Use the Job object for short-term Kubernetes evidence. Send application logs and operation records to durable systems, then let Kubernetes cleanup handle the workload objects.
 
 ## A Nightly CronJob
 <!-- section-summary: A CronJob creates Jobs from a schedule, so the schedule, concurrency policy, deadline, and Job template all shape production behavior. -->
 
 A **CronJob** is a Kubernetes controller that creates Jobs on a schedule. It fits repeated finite work. For the Customer Notification Platform, a nightly cleanup can expire stale delivery attempts that have been waiting too long after a provider outage.
 
-Start with the outer CronJob shape:
+The important shift from Job to CronJob is who creates the next Job. A human or pipeline can create a one-time migration Job during a release. A CronJob lets Kubernetes create the cleanup Job each night using the same template. That makes the schedule, overlap policy, and missed-run behavior part of the production design.
+
+The outer CronJob shape names the schedule and the Job template:
 
 ```yaml
 apiVersion: batch/v1
@@ -253,7 +279,7 @@ spec:
   timeZone: "Etc/UTC"
 ```
 
-The schedule uses cron syntax. `"15 2 * * *"` means 02:15 every day. `timeZone: "Etc/UTC"` keeps the schedule aligned with most logs, metrics, and incident timelines.
+The schedule uses cron syntax. `"15 2 * * *"` means 02:15 every day. `timeZone: "Etc/UTC"` keeps the schedule aligned with most logs, metrics, and operational timelines.
 
 Add behavior controls:
 
@@ -289,9 +315,9 @@ The CronJob creates a Job from this template each time the schedule fires. The J
 ## CronJob Scheduling Rules
 <!-- section-summary: CronJob fields decide when Jobs are created, how overlapping runs behave, and how missed schedules are handled. -->
 
-The **schedule** decides the intended run times. Kubernetes checks the schedule and creates Jobs when they are due. A CronJob does not mean the script runs inside one long-lived Pod. It creates separate Job objects over time.
+The **schedule** decides the intended run times. Kubernetes checks the schedule and creates Jobs at the due times. A CronJob creates separate Job objects over time instead of keeping one long-lived script Pod running.
 
-The **timeZone** field makes the schedule explicit. UTC is usually the least surprising choice for platform operations because logs, metrics, and incident timelines often use UTC. A business report that must match a regional day may use a regional time zone, and the runbook should say why.
+The **timeZone** field makes the schedule explicit. UTC is usually the least surprising choice for platform operations because logs, metrics, and support timelines often use UTC. A business report that must match a regional day may use a regional time zone, and the runbook should say why.
 
 The **concurrency policy** handles overlap:
 
@@ -311,10 +337,12 @@ $ kubectl patch cronjob -n notifications notification-expire-stale-deliveries \
 cronjob.batch/notification-expire-stale-deliveries patched
 ```
 
-`suspend: true` stops new Jobs from being created. It does not stop Jobs that already exist, so check active Jobs separately during an incident.
+`suspend: true` stops new Jobs from being created. Existing Jobs keep running, so check active Jobs separately during a production issue.
 
 ## Debugging Failed, Missed, and Duplicate Runs
 <!-- section-summary: CronJob debugging follows the parent CronJob, child Jobs, Pod attempts, events, and application operation keys. -->
+
+Batch debugging should preserve evidence before cleanup or retry. A failed migration might have changed no rows, some rows, or all rows before exiting. A missed cleanup may be safe to run late, or it may conflict with a later scheduled window. The first pass should identify whether the problem is Kubernetes scheduling, container startup, script logic, or business safety.
 
 For a failed Job, check conditions and Pod exit codes. `kubectl describe job` shows events such as `BackoffLimitExceeded`, deadline failures, and Pod creation problems. `kubectl describe pod` shows scheduling events, image pull failures, mount failures, and container termination details.
 
@@ -342,7 +370,7 @@ For duplicate-looking runs, compare the scheduled timestamp, Job creation times,
 ## Production Runbooks
 <!-- section-summary: Runbooks turn the object fields into repeatable operating steps for failed Jobs, missed schedules, and unsafe retries. -->
 
-Production batch work needs simple runbooks because incidents usually happen during a release, a maintenance window, or an early morning scheduled task. The runbook should tell the operator what to inspect, what can be retried safely, and what evidence to collect before deleting anything.
+Production batch work needs simple runbooks because failures often happen during a release, a maintenance window, or a scheduled task. The runbook should tell the operator what to inspect, what can be retried safely, and what evidence to collect before deleting anything.
 
 For a **failed migration Job**, keep the failed Job until the team reads the logs. Check `kubectl describe job`, failed Pod logs, and the database migration table. If the script failed before it changed data, fix the image or configuration and apply a new Job with a new name. If the script changed some data, ask the application owner to confirm the retry path because Kubernetes retry controls cannot prove business safety.
 
@@ -388,13 +416,13 @@ The choice starts with the process lifecycle. If the process should keep running
 
 The production habits carry across all of them. Put manifests in version control, use stable labels, set resource requests, read events before guessing, ship logs to a central system, and make scripts safe to retry. Kubernetes gives you the controller behavior, and your application code gives the business safety.
 
-![Workload choice for notification work infographic comparing Deployment keeps serving, Job finishes once, CronJob runs on schedule, and the shared operation key, retry safety, and central logs practices](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/workload-choice-orders-work.png)
+![Workload choice for notification work infographic comparing Deployment keeps serving, Job finishes once, CronJob runs on schedule, and the shared operation key, retry safety, and central logs practices](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/workload-choice-notification-work.png)
+
+*Long-running services, one-time tasks, and scheduled tasks need different controllers even inside the same notification platform.*
 
 _This infographic summarizes the controller choice around the same application: keep services running with Deployments, finish one unit with Jobs, and schedule repeated finite work with CronJobs._
 
----
-
-**References**
+## References
 
 - [Kubernetes Workloads](https://kubernetes.io/docs/concepts/workloads/) - Overview of Kubernetes workload resources and the controllers that manage Pods.
 - [Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/) - Official Job behavior, completions, parallelism, retry controls, deadlines, indexed Jobs, and Job patterns.

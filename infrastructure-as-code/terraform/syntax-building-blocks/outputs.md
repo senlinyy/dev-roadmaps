@@ -3,7 +3,7 @@ title: "Output Values"
 description: "Expose important information from your Terraform configuration so operators and scripts can use it."
 overview: "Output values are the data a Terraform root module publishes after planning and applying. This article shows where outputs are declared, how they consume resource attributes, how humans and scripts read them, and how output changes appear in plans."
 tags: ["outputs", "output values", "terraform", "hcl"]
-order: 6
+order: 7
 id: article-iac-terraform-values-outputs
 aliases:
   - infrastructure-as-code/terraform/values/outputs.md

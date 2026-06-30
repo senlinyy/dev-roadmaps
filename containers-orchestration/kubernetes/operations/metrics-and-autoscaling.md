@@ -1,117 +1,85 @@
 ---
 title: "Metrics and Autoscaling"
 description: "Use Kubernetes metrics and autoscaling signals to scale applications without guessing replica counts."
-overview: "Metrics turn cluster behavior into numbers you can compare. Autoscaling uses selected metrics to change replicas, but the signal must match the real bottleneck for devpolaris-orders-api."
-tags: ["metrics", "hpa", "autoscaling", "resources"]
+tags: ["Kubernetes", "Operations", "Autoscaling", "Metrics"]
+area: "Containers & Orchestration"
 order: 3
 id: article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling
 ---
-
 ## Table of Contents
 
-1. [Scaling Starts With a Measured Signal](#scaling-starts-with-a-measured-signal)
-2. [Resource Requests Give HPA a Baseline](#resource-requests-give-hpa-a-baseline)
-3. [Reading Metrics From Pods and Nodes](#reading-metrics-from-pods-and-nodes)
-4. [Horizontal Pod Autoscaling](#horizontal-pod-autoscaling)
-5. [Choose Metrics That Match the Bottleneck](#choose-metrics-that-match-the-bottleneck)
-6. [Custom and External Metrics](#custom-and-external-metrics)
-7. [Guardrails: Min, Max, Behavior, and Dependencies](#guardrails-min-max-behavior-and-dependencies)
-8. [Debugging Autoscaling Surprises](#debugging-autoscaling-surprises)
-9. [Operational Checklist](#operational-checklist)
+- [Scaling Needs a Measured Signal](#scaling-needs-a-measured-signal)
+- [Requests Give the Signal a Baseline](#requests-give-the-signal-a-baseline)
+- [Read Live Resource Metrics](#read-live-resource-metrics)
+- [Horizontal Pod Autoscaling](#horizontal-pod-autoscaling)
+- [Choose Metrics That Match the Bottleneck](#choose-metrics-that-match-the-bottleneck)
+- [Custom and External Metrics](#custom-and-external-metrics)
+- [Guardrails: Floor, Ceiling, and Behavior](#guardrails-floor-ceiling-and-behavior)
+- [Debugging Autoscaling Surprises](#debugging-autoscaling-surprises)
+- [Operational Checklist](#operational-checklist)
+- [References](#references)
 
-## Scaling Starts With a Measured Signal
-<!-- section-summary: Autoscaling works only when the metric represents the real capacity limit that users are hitting. -->
+## Scaling Needs a Measured Signal
+<!-- section-summary: Autoscaling works only when the metric represents real pressure on the workload and the team knows what action that metric should drive. -->
 
-The first sign is a graph spike. Checkout p95 latency jumps from 180ms to 900ms during lunch traffic, while the Pods are still `Running` and the Deployment still shows all replicas available. The team needs to know whether adding Pods will help users or whether the bottleneck sits somewhere else.
+Kubernetes **metrics and autoscaling** let the cluster adjust replica counts from measured pressure instead of guesses. The operational path is signal first, baseline second, HPA third, and guardrails around the whole loop.
 
-The running service is still **devpolaris-orders-api** in the `orders` namespace. It receives checkout requests, writes to PostgreSQL, and publishes order events to a queue. The team needs to know whether more API Pods will reduce the latency or add pressure to the database and queue.
+For `devpolaris-orders-api`, the team wants more Pods during checkout traffic spikes and fewer Pods after traffic settles. Kubernetes can only do that safely when the scaling signal matches the bottleneck. CPU can work for CPU-bound request handling. Queue depth can work for background workers. Request latency alone can be noisy unless it points to a clear capacity limit.
 
-A **metric** is a measured number about the system. CPU usage, memory usage, request rate, error count, queue depth, database wait time, and p95 latency are all metrics. An **autoscaler** is a controller that changes capacity based on selected metrics. In Kubernetes, the most common application autoscaler is the **HorizontalPodAutoscaler**, usually called HPA.
+The practical question is: **what measurement proves this workload needs more capacity right now?**
 
-Here is the concrete example. If each orders API Pod requests `500m` CPU and the Pods are using around `450m` while latency rises, HPA may add replicas and spread the CPU work. If the graph shows PostgreSQL lock waits and queue publishing delays, adding API Pods can push more work into an already slow dependency. The metric has to match the actual limit.
+## Requests Give the Signal a Baseline
+<!-- section-summary: CPU utilization in HPA is measured against container requests, so missing or unrealistic requests make scaling decisions unreliable. -->
 
-**Horizontal scaling** means adding or removing Pods. **Vertical scaling** means changing CPU or memory for a Pod. **Cluster scaling** means adding or removing nodes. These tools can work together, but they answer different questions. HPA can ask for more orders API Pods, but it cannot create node capacity by itself unless a cluster autoscaler is also running.
+Before an HPA can use CPU utilization well, each container needs a realistic CPU request. Kubernetes compares live CPU usage to the requested CPU amount. A Pod using `350m` CPU against a `500m` request is at `70%` utilization.
 
-For the orders API, the first operational question is not "what HPA YAML should we write?" The first question is **what is the bottleneck?** If each Pod is CPU-bound while parsing JSON and calculating totals, more Pods can help. If requests wait on PostgreSQL locks, more API Pods may increase the lock pressure and make latency worse.
-
-## Resource Requests Give HPA a Baseline
-<!-- section-summary: CPU-based HPA needs CPU requests because utilization is calculated as a percentage of requested CPU. -->
-
-A **resource request** is the amount of CPU or memory Kubernetes uses as the scheduling baseline for a container. Requests tell the scheduler how much node capacity to reserve. CPU requests also give HPA the denominator it needs for CPU utilization.
-
-For example, if the orders API requests `500m` CPU and currently uses `350m`, it is using 70 percent of its requested CPU. If the same container has no CPU request, HPA cannot calculate a CPU utilization percentage for that container.
-
-Here is a practical starting point for the Deployment. Treat these values as an example to test, not a universal setting:
+A small resource skeleton looks like this:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-  namespace: orders
-spec:
-  replicas: 3
-  template:
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:2026-05-07.1
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "512Mi"
-            limits:
-              cpu: "1"
-              memory: "1Gi"
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
 ```
 
-`500m` means half of one CPU core. The memory values use binary units, so `512Mi` is 512 mebibytes. These are not magic numbers; they should come from observation in staging, load tests, and production dashboards.
+What this baseline means:
 
-Memory deserves a careful note. Memory requests help scheduling, and memory limits protect nodes from one process consuming too much memory. Memory is usually a weaker HPA signal for web APIs because adding replicas does not fix a memory leak. If every Pod slowly grows until it hits the limit, the answer is code, caching behavior, or workload shape, not endless replicas.
-
-Resource requests also affect cost and scheduling. If the CPU request is too high, the scheduler may leave node space unused because it reserves more CPU than the container normally needs. If the request is too low, HPA percentages can look high too early and node pressure can surprise you during spikes.
+- `cpu: 500m` gives the scheduler and HPA a CPU reference point.
+- `memory: 512Mi` helps scheduling and capacity planning.
+- The memory limit protects the node from one process consuming unlimited memory.
+- A CPU limit may be useful for some workloads, but it can also throttle request handling, so review it deliberately.
 
 ![Requests set the baseline infographic showing CPU request, Pod usage, HPA target, utilization, scheduler fit, and the scale decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/requests-set-baseline.png)
 
-*The baseline visual shows why CPU-based autoscaling starts with a request value. HPA needs a denominator before it can turn live usage into a scale decision.*
+*The baseline view shows why requests matter: HPA reads usage as a percentage of the request, while the scheduler uses requests to place Pods.*
 
-## Reading Metrics From Pods and Nodes
-<!-- section-summary: kubectl top gives a quick live view, while dashboards and Prometheus provide history and application context. -->
+## Read Live Resource Metrics
+<!-- section-summary: Live Pod and node metrics show whether the cluster can see the resource pressure that HPA will use. -->
 
-Kubernetes resource metrics usually come from **Metrics Server**, which exposes recent CPU and memory usage through the resource metrics API. The `kubectl top` command reads that API. It gives a quick live check with a short history window, so dashboards and Prometheus-style storage still matter for trend analysis.
-
-For the orders API, a first terminal check might look like this. The output gives a live snapshot of resource pressure on each replica:
+The Metrics Server feeds the Kubernetes resource metrics API. `kubectl top` is the quick operator view into that data.
 
 ```bash
 $ kubectl -n orders top pods -l app.kubernetes.io/name=devpolaris-orders-api
 NAME                                      CPU(cores)   MEMORY(bytes)
-devpolaris-orders-api-7c96df7d7c-2vd6k   420m         382Mi
-devpolaris-orders-api-7c96df7d7c-dh8xq   465m         401Mi
-devpolaris-orders-api-7c96df7d7c-q94r7   438m         390Mi
+devpolaris-orders-api-6d4f9b7d6f-b7m2p    340m         410Mi
+devpolaris-orders-api-6d4f9b7d6f-k9v5r    365m         436Mi
+devpolaris-orders-api-6d4f9b7d6f-q2lm8    322m         398Mi
 ```
 
-If those Pods request `500m` CPU each, they are using roughly 84 to 93 percent of requested CPU. That is useful pressure evidence, especially if request latency rises at the same time and the database looks healthy.
+What this output tells you:
 
-Node metrics answer a different question: can the cluster place more Pods if HPA asks for them? A replica recommendation still needs available node capacity:
+- Metrics are flowing for the selected Pods.
+- CPU usage is near `70%` of a `500m` request.
+- Memory usage is below the example `1Gi` limit.
 
-```bash
-$ kubectl top nodes
-NAME       CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
-worker-1   1820m        45%    6110Mi          52%
-worker-2   2190m        54%    6880Mi          58%
-worker-3   2010m        50%    6405Mi          54%
-```
-
-This cluster has room for more orders API Pods. If node CPU were already near saturation, HPA could increase the desired replica count while new Pods remain `Pending`. That would move the discussion to cluster autoscaling, node size, requests, or workload placement.
-
-In a dashboard, the orders team should look at more than CPU and memory. The minimum useful panel set is request rate, p50/p95/p99 latency, error rate, CPU per Pod, memory per Pod, HPA desired replicas, HPA current replicas, ready Pods, pending Pods, PostgreSQL connection count, and queue depth. That set lets the team see whether scaling changed the user symptom or only changed the number of Pods.
+If `kubectl top` fails, debug Metrics Server or permissions before blaming the HPA.
 
 ## Horizontal Pod Autoscaling
-<!-- section-summary: HPA watches selected metrics and updates the target Deployment replica count within configured boundaries. -->
+<!-- section-summary: HPA watches a metric, compares it with a target, and updates the replica count on the target workload. -->
 
-A **HorizontalPodAutoscaler** is a Kubernetes controller that updates the replica count for a scalable workload such as a Deployment. It does not send traffic itself. It changes the desired number of Pods, and the Deployment plus ReplicaSet create or remove Pods to match that desired count.
-
-Here is a CPU-based HPA for the orders API. It scales the Deployment, and the Deployment still owns the Pods:
+A **HorizontalPodAutoscaler** watches a workload such as a Deployment and changes the replica count based on metrics. For the orders API, the first useful HPA can scale from three to ten replicas when average CPU utilization rises above `70%`.
 
 ```yaml
 apiVersion: autoscaling/v2
@@ -125,7 +93,7 @@ spec:
     kind: Deployment
     name: devpolaris-orders-api
   minReplicas: 3
-  maxReplicas: 12
+  maxReplicas: 10
   metrics:
     - type: Resource
       resource:
@@ -135,130 +103,87 @@ spec:
           averageUtilization: 70
 ```
 
-This tells HPA to keep average CPU utilization near 70 percent of requested CPU across the Pods. It can move the Deployment between three and twelve replicas. The floor protects availability, and the ceiling protects cost and downstream systems.
+What each part does:
 
-After applying it, status is the first thing to read. The short table tells you whether the current metric is above or below the target:
+- `scaleTargetRef` points to the Deployment HPA can resize.
+- `minReplicas: 3` keeps baseline availability.
+- `maxReplicas: 10` protects cost and dependencies.
+- `averageUtilization: 70` means average CPU should stay near `70%` of requested CPU.
+
+Check the controller result:
 
 ```bash
 $ kubectl -n orders get hpa devpolaris-orders-api
-NAME                   REFERENCE                         TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
-devpolaris-orders-api  Deployment/devpolaris-orders-api   88%/70%   3         12        5          6m
+NAME                    REFERENCE                          TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+devpolaris-orders-api   Deployment/devpolaris-orders-api   78%/70%   3         10        5          12m
 ```
 
-The short table says current CPU is above the target and the Deployment currently has five replicas. `describe hpa` gives the conditions that explain whether scaling is active, limited, or blocked.
+How to read this:
 
-```bash
-$ kubectl -n orders describe hpa devpolaris-orders-api
-Metrics:                                               (current / target)
-  resource cpu on pods  (as a percentage of request):  68% (340m) / 70%
-Min replicas:                                          3
-Max replicas:                                          12
-Deployment pods:                                       7 current / 7 desired
-Conditions:
-  Type            Status  Reason              Message
-  AbleToScale     True    ReadyForNewScale     recommended size matches current size
-  ScalingActive   True    ValidMetricFound     the HPA was able to calculate a replica count
-  ScalingLimited  False   DesiredWithinRange   the desired count is within the acceptable range
-```
-
-Those condition names are worth reading during incidents. `ScalingActive=False` often means HPA cannot calculate from the metric. `ScalingLimited=True` often means the recommended replica count hit `minReplicas` or `maxReplicas`.
+- `78%/70%` means current average CPU is above the target.
+- `REPLICAS 5` shows HPA has already changed the Deployment replica count.
+- If replicas stay fixed while the target is high, describe the HPA for conditions.
 
 ![Autoscaling control loop showing metrics source, Metrics API, HPA controller, Deployment replicas, Pods, and stabilization window](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/autoscaling-control-loop.png)
 
-*HPA is a loop, not a one-time command. The image connects metrics collection, controller decisions, Deployment replica changes, and the stabilization window that reduces churn.*
+*The control loop ties the metric source, Metrics API, HPA controller, Deployment, and Pods into one scaling path.*
 
 ## Choose Metrics That Match the Bottleneck
-<!-- section-summary: The scaling metric should measure the part of the request path that runs out of capacity first. -->
+<!-- section-summary: The best scaling metric is the measurement closest to the workload pressure that more replicas can relieve. -->
 
-A **bottleneck** is the part of the system that reaches its limit before the rest. Autoscaling helps when the metric points at that limit and the scaling action relieves it. CPU is a good first metric for some APIs, and other workloads need queue, database, latency, or upstream metrics.
+CPU works when each extra Pod can take work away from busy Pods. It is a weak signal when the bottleneck is a database connection pool, a slow upstream API, or a queue that needs workers rather than HTTP replicas.
 
-For the orders API, compare the user symptom with several possible constraints. The right row depends on what the request path is actually waiting for:
+Use this selection table during design:
 
-| Symptom | Metric to check | Likely action |
+| Workload pressure | Better signal | Scaling action |
 |---|---|---|
-| CPU rises with request latency | CPU utilization per Pod | Scale API Pods if nodes and dependencies have room |
-| API queue grows inside the process | In-flight requests or request queue depth | Scale API Pods and inspect downstream limits |
-| Checkout waits on database locks | PostgreSQL lock wait and slow query metrics | Fix query, index, or transaction design |
-| Events pile up after checkout | Queue depth per worker replica | Scale `devpolaris-orders-worker` or improve worker throughput |
-| Memory grows until OOM kills happen | Memory growth, restarts, OOM events | Fix leak, cache, or limit behavior |
-| External payment API slows down | Upstream latency and error rate | Add backpressure, retries with limits, or circuit breaking |
+| CPU-bound API requests | CPU utilization | Add API replicas |
+| Queue backlog | Queue length per worker | Add worker replicas |
+| Slow database | DB saturation metrics | Fix DB capacity or queries before scaling API |
+| Rate-limited upstream | Error and throttle rate | Add protection and reduce caller pressure |
+| Memory growth | Memory usage and OOM events | Fix leak or set safer limits before HPA |
 
-This is where a senior review can save a lot of pain. If CPU is high and the app is stateless, HPA on CPU is often a reasonable first pass. If CPU is low and latency is high, the bottleneck probably lives somewhere else in the request path.
-
-The orders team should connect each HPA change to a user-facing hypothesis. That keeps the autoscaling change tied to an outcome rather than a habit:
-
-| Hypothesis | Evidence needed |
-|---|---|
-| More API Pods will lower checkout p95 latency | CPU rises with traffic, database waits stay low, new replicas reduce p95 |
-| More API Pods will overload PostgreSQL | Database connections or waits climb faster than request throughput |
-| Worker scaling will drain the queue | Queue depth per worker falls after worker replicas increase |
-
-That language keeps autoscaling out of "just add more Pods" mode. The metric, the bottleneck, and the scaling action have to line up.
+Check whether more Pods improve the user symptom. If five extra API Pods only create more database connections while latency stays high, the metric points away from the real bottleneck.
 
 ## Custom and External Metrics
-<!-- section-summary: CPU metrics are built in, but production autoscaling often needs application or external metrics such as latency and queue depth. -->
+<!-- section-summary: Custom and external metrics let HPA scale on application or platform signals outside basic Pod CPU and memory. -->
 
-**Custom metrics** are metrics about Kubernetes objects that are not built-in CPU or memory resource metrics. **External metrics** are metrics from outside the cluster or not tied directly to one Kubernetes object, such as a managed queue depth. HPA can use both through the Kubernetes metrics APIs when an adapter provides them.
+Resource metrics are the starting point. Production systems often need a signal closer to the work queue or request flow. Kubernetes HPA can use custom and external metrics when an adapter exposes them through the Kubernetes metrics APIs.
 
-Many teams use **Prometheus** to collect application metrics and a Prometheus adapter to expose selected metrics to HPA. Another common option for event-driven scaling is **KEDA**, which can scale workloads from queue, stream, database, and cloud service signals. OpenTelemetry can standardize how the application emits metrics before Prometheus or another backend stores them.
-
-For `devpolaris-orders-api`, latency can be a useful dashboard metric, but it is often tricky as a direct HPA signal. Latency can rise because of CPU pressure, database locks, network problems, or a slow upstream provider. Scaling on latency without guardrails can add more callers to a struggling dependency.
-
-Queue depth is usually a clearer scaling signal for workers. The worker is the component that drains the queue, so it should own this scaling action:
+Example HPA shape for queue-backed workers:
 
 ```yaml
-apiVersion: keda.sh/v1alpha1
-kind: ScaledObject
-metadata:
-  name: devpolaris-orders-worker
-  namespace: orders
-spec:
-  scaleTargetRef:
-    name: devpolaris-orders-worker
-  minReplicaCount: 2
-  maxReplicaCount: 20
-  triggers:
-    - type: prometheus
-      metadata:
-        serverAddress: http://prometheus.monitoring.svc:9090
-        metricName: order_events_ready
-        query: sum(order_events_ready{namespace="orders"})
-        threshold: "200"
+metrics:
+  - type: External
+    external:
+      metric:
+        name: orders_queue_depth
+      target:
+        type: AverageValue
+        averageValue: "25"
 ```
 
-This example scales the worker rather than the API. That distinction matters. If checkout requests are fast while background order events are delayed, the worker owns the slow step. Scaling the API would add more events to the queue without increasing drain speed.
+What this means:
 
-For application metrics, write the target in plain English next to the configuration. This gives future reviewers the reason behind the threshold:
+- The metric comes from an external metrics adapter.
+- HPA aims for about `25` queued orders per worker Pod.
+- The adapter must provide fresh values, or HPA will report missing metrics.
 
-| Metric | Target meaning |
-|---|---|
-| `order_events_ready` | Keep fewer than about 100 ready events per worker replica during normal database latency |
-| `http_server_requests_in_flight` | Add API replicas when each Pod has sustained request concurrency near its tested limit |
-| `checkout_latency_p95_seconds` | Use for alerting and review, then confirm the bottleneck before scaling directly |
+KEDA is a common production option for event-driven autoscaling. It adds ScaledObjects that connect queue systems, Prometheus queries, cloud services, and other event sources to Kubernetes scaling.
 
-That note prevents mystery thresholds. A future reviewer can see why `200` was chosen and when it should be revisited.
+## Guardrails: Floor, Ceiling, and Behavior
+<!-- section-summary: Autoscaling needs replica limits, stabilization, dependency capacity checks, and alerts for ceiling pressure. -->
 
-## Guardrails: Min, Max, Behavior, and Dependencies
-<!-- section-summary: Autoscaling needs safety limits so the controller does not overload dependencies, churn replicas, or hide capacity problems. -->
-
-Autoscaling is a feedback loop. More traffic raises a metric, HPA changes replicas, new Pods change the metric, and the loop continues. Guardrails keep that loop from creating a new incident.
-
-The first guardrails are `minReplicas` and `maxReplicas`. `minReplicas` keeps enough warm capacity for normal availability and sudden bursts. `maxReplicas` protects databases, queues, external APIs, and cost. For the orders API, `maxReplicas: 12` might come from a database connection budget rather than a Kubernetes preference.
-
-HPA behavior can also shape how quickly scaling happens. These settings are useful when traffic rises quickly but falls in short waves:
+Autoscaling should have boundaries. The minimum protects availability. The maximum protects dependencies, nodes, and cost. Behavior policies slow unsafe scale-down and make scale-up predictable.
 
 ```yaml
 behavior:
   scaleUp:
-    stabilizationWindowSeconds: 60
+    stabilizationWindowSeconds: 0
     policies:
       - type: Percent
         value: 100
         periodSeconds: 60
-      - type: Pods
-        value: 4
-        periodSeconds: 60
-    selectPolicy: Max
   scaleDown:
     stabilizationWindowSeconds: 300
     policies:
@@ -267,123 +192,72 @@ behavior:
         periodSeconds: 60
 ```
 
-This allows faster scale-up and slower scale-down. Fast scale-up helps during demand spikes. Slower scale-down keeps warm Pods around long enough to avoid dropping capacity between traffic bursts.
+What this behavior does:
 
-Dependencies need their own review. If each API Pod opens up to 20 PostgreSQL connections and HPA can scale to 12 replicas, the API layer can open 240 connections before workers, admin jobs, and migrations are counted. The database budget may force a lower `maxReplicas`, a smaller per-Pod connection pool, or a connection proxy.
-
-Manual scaling needs cleanup too. It is an incident action, and the steady-state controller may later move the replica count again:
-
-```bash
-$ kubectl -n orders scale deployment devpolaris-orders-api --replicas=8
-deployment.apps/devpolaris-orders-api scaled
-
-$ kubectl -n orders get hpa devpolaris-orders-api
-NAME                   TARGETS   MINPODS   MAXPODS   REPLICAS
-devpolaris-orders-api  32%/70%   3         12        8
-```
-
-If HPA owns the Deployment, it may later move replicas back toward the metric target. If GitOps owns the manifest, it may revert a manual change. A manual scale during an incident should leave a note that explains whether the steady-state HPA or resource requests need an update afterward.
-
-## Debugging Autoscaling Surprises
-<!-- section-summary: HPA surprises usually come from missing metrics, missing requests, max/min limits, pending Pods, or a metric that points at the wrong bottleneck. -->
-
-When autoscaling behaves strangely, `describe hpa` is usually the best first command. It tells you whether HPA can read the metric, calculate a recommendation, and apply the recommendation within the boundaries.
-
-A common failure is missing CPU requests. The HPA status usually tells you this directly:
-
-```bash
-$ kubectl -n orders get hpa devpolaris-orders-api
-NAME                   REFERENCE                         TARGETS         MINPODS   MAXPODS   REPLICAS
-devpolaris-orders-api  Deployment/devpolaris-orders-api   <unknown>/70%   3         12        3
-
-$ kubectl -n orders describe hpa devpolaris-orders-api
-Conditions:
-  Type           Status  Reason                   Message
-  AbleToScale    True    ReadyForNewScale          recommended size matches current size
-  ScalingActive  False   FailedGetResourceMetric   missing request for cpu in container api of Pod devpolaris-orders-api-7c96df7d7c-2vd6k
-```
-
-The fix is to add realistic CPU requests, roll out the Deployment, and watch HPA status again. The target `70%` has no meaning until the container has a requested CPU value.
-
-Another common surprise is pending Pods after HPA scales up. In that case, HPA made a recommendation but scheduling could not complete it:
-
-```bash
-$ kubectl -n orders get pods -l app.kubernetes.io/name=devpolaris-orders-api
-NAME                                      READY   STATUS    RESTARTS
-devpolaris-orders-api-7c96df7d7c-2vd6k   1/1     Running   0
-devpolaris-orders-api-7c96df7d7c-dh8xq   1/1     Running   0
-devpolaris-orders-api-7c96df7d7c-q94r7   1/1     Running   0
-devpolaris-orders-api-7c96df7d7c-tb8mc   0/1     Pending   0
-
-$ kubectl -n orders describe pod devpolaris-orders-api-7c96df7d7c-tb8mc
-Events:
-  Type     Reason            Age   From               Message
-  Warning  FailedScheduling  42s   default-scheduler  0/3 nodes are available: 3 Insufficient cpu.
-```
-
-HPA asked for capacity, but the scheduler could not place the new Pod. Raising `maxReplicas` would not help this case because the cluster has no room. The next decision is cluster autoscaling, node size, workload placement, or resource request tuning based on real usage.
-
-The quietest surprise is scaling the wrong workload. Imagine these dashboard values during the checkout spike, then ask which component is actually behind:
-
-| Metric | Value |
-|---|---|
-| `checkout_latency_p95_seconds` | `4.8` |
-| `orders_api_cpu_utilization` | `0.25` |
-| `order_events_queue_depth` | `18420` |
-| `order_worker_replicas` | `2` |
-| `postgres_lock_wait_seconds` | `0.03` |
-
-CPU is low, database locks are low, and queue depth is high. The API is not the slow part of this path. The worker fleet is probably behind. The next test should focus on `devpolaris-orders-worker`, worker throughput, queue drain rate, and database writes from the workers.
-
-## Operational Checklist
-<!-- section-summary: A good autoscaling review proves the metric, target, limits, dependencies, and recovery behavior before relying on the controller. -->
-
-Autoscaling review is capacity design in YAML form. A reviewer should know which user symptom should improve, which metric represents the limit, and which dependency receives more load when replicas increase.
-
-| Review question | Good answer |
-|---|---|
-| What user symptom should improve? | Checkout p95 latency during CPU-bound traffic spikes |
-| Which metric drives scaling? | CPU utilization, queue depth, or another signal tied to the bottleneck |
-| Are requests set and realistic? | CPU and memory requests came from observed usage and load tests |
-| Can the cluster place more Pods? | Node capacity or cluster autoscaler can satisfy the HPA range |
-| Can dependencies absorb the added work? | Database connections, queue throughput, and upstream rate limits were reviewed |
-| Are min and max replicas intentional? | The floor protects availability and the ceiling protects dependencies and cost |
-| Does scale-down fit traffic shape? | Warm capacity stays long enough for normal bursts |
+- Scale-up can move quickly during rising demand.
+- Scale-down waits five minutes before removing capacity.
+- Scale-down removes at most half the replicas per minute.
 
 ![Autoscaling guardrails checklist with min replicas, max replicas, scale up policy, scale down policy, dependency capacity, and saturation alerts](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/autoscaling-guardrails.png)
 
-*The guardrails board shows the safety rails around the scaling loop: replica floors and ceilings, behavior policies, dependency budgets, and alerts when demand reaches the ceiling.*
+*The guardrails board shows replica floors and ceilings, behavior policies, dependency budgets, and alerts when demand reaches the ceiling.*
 
-A useful HPA evidence note for `devpolaris-orders-api` might look like this. It proves the metric, the user symptom, and the dependency budget together:
+Also alert when HPA sits at `maxReplicas` while latency or queue depth remains high. That state says the workload needs a capacity decision before more HPA tuning.
 
-| Observation | Value |
-|---|---|
-| Load test | Checkout read/write mix for 20 minutes |
-| Starting replicas | `3` |
-| Peak replicas | `7` |
-| CPU target | `70%` of request |
-| p95 latency before spike | `180ms` |
-| p95 latency during spike | `260ms` after scale-up |
-| PostgreSQL connections | Rose from `18` to `41`, below budget |
-| Scale-down | Returned to `3` replicas after traffic settled |
+## Debugging Autoscaling Surprises
+<!-- section-summary: Autoscaling debugging follows the metric path from Pod requests to live metrics, HPA conditions, Deployment replicas, and dependency capacity. -->
 
-That evidence says CPU tracked the added work, added replicas helped the user symptom, and PostgreSQL stayed inside the budget. If latency stayed high while CPU dropped, the same evidence would tell the team to look beyond API replicas.
-
-Keep the daily debugging commands close. They cover HPA status, live metrics, Pod placement, and recent events:
+When HPA behavior surprises the team, the loop has a clear order:
 
 ```bash
-$ kubectl -n orders get hpa devpolaris-orders-api
 $ kubectl -n orders describe hpa devpolaris-orders-api
-$ kubectl -n orders top pods -l app.kubernetes.io/name=devpolaris-orders-api
-$ kubectl -n orders get pods -l app.kubernetes.io/name=devpolaris-orders-api
-$ kubectl -n orders get events --sort-by=.lastTimestamp
+Metrics:                                               ( current / target )
+  resource cpu on pods  (as a percentage of request):   82% (410m) / 70%
+Conditions:
+  AbleToScale    True
+  ScalingActive  True
+  ScalingLimited True   the desired replica count is more than the maximum replica count
 ```
 
-The controller can change replicas for you, but it cannot decide whether the metric represents the real bottleneck. That judgment still belongs to the team. Good autoscaling needs a measured signal, safe boundaries, and proof that more Pods actually improve the user experience.
+What this output says:
 
----
+- HPA can consume the metric.
+- CPU is above target.
+- The maximum replica count is limiting the scale-up.
 
-**References**
+Continue with Pod placement and dependency checks:
+
+```bash
+$ kubectl -n orders get deploy devpolaris-orders-api
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-orders-api   10/10   10           10          3h
+
+$ kubectl -n orders top pods -l app.kubernetes.io/name=devpolaris-orders-api
+NAME                                      CPU(cores)   MEMORY(bytes)
+devpolaris-orders-api-6d4f9b7d6f-b7m2p    480m         460Mi
+```
+
+This confirms the Deployment reached the HPA ceiling and Pods are still busy. The next decision may involve raising the ceiling, adding nodes, protecting dependencies, or reducing per-request cost.
+
+## Operational Checklist
+<!-- section-summary: A production HPA review proves the signal, the request baseline, the replica boundaries, and the user-facing effect. -->
+
+Use this checklist for `devpolaris-orders-api` autoscaling:
+
+| Check | Good answer |
+|---|---|
+| Metric | The selected metric matches the real bottleneck |
+| Requests | CPU and memory requests reflect observed production usage |
+| HPA target | The target leaves headroom before user-visible saturation |
+| Min replicas | The floor keeps availability during normal operations |
+| Max replicas | The ceiling fits node, database, queue, and cost budgets |
+| Behavior | Scale-down keeps warm capacity long enough for normal bursts |
+| Evidence | A load test shows replicas, latency, errors, and dependency usage together |
+| Alerts | The team gets paged when HPA hits the ceiling with bad user symptoms |
+
+A useful evidence note might say: a 20-minute checkout load test moved from three to seven replicas, CPU settled near the target, p95 latency stayed below `300ms`, and PostgreSQL connections stayed under the approved budget. That note proves scaling helped users without overrunning the next system.
+
+## References
 
 - [Kubernetes: Horizontal Pod Autoscaling](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) - Official guide to HPA concepts, algorithm behavior, metrics, and configuration.
 - [Kubernetes: HorizontalPodAutoscaler API](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/horizontal-pod-autoscaler-v2/) - API reference for `autoscaling/v2`, including metrics and behavior fields.

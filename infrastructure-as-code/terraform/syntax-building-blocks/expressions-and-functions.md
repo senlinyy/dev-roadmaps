@@ -3,7 +3,7 @@ title: "Expressions and Functions"
 description: "Learn how Terraform's built-in expressions and functions compute, transform, and query values inside your configurations."
 overview: "Expressions are the calculations inside Terraform arguments. This article shows how variables, locals, functions, for expressions, conditionals, and resource references combine into values that show up in plan output."
 tags: ["expressions", "functions", "hcl", "for", "terraform"]
-order: 9
+order: 10
 id: article-iac-terraform-values-expressions
 aliases:
   - infrastructure-as-code/terraform/values/expressions-and-functions.md

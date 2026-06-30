@@ -9,14 +9,13 @@ aliases:
   - containers-orchestration/orchestration-k8s/k8s-resources.md
   - article-containers-orchestration-orchestration-k8s-k8s-resources
 ---
-
 ## Table of Contents
 
 1. [From One Pod to a Managed Service](#from-one-pod-to-a-managed-service)
 2. [What a Deployment Adds](#what-a-deployment-adds)
 3. [ReplicaSets and Desired Replicas](#replicasets-and-desired-replicas)
 4. [Labels and Selectors](#labels-and-selectors)
-5. [Start with a Deployment Skeleton](#start-with-a-deployment-skeleton)
+5. [A Deployment Skeleton](#a-deployment-skeleton)
 6. [Add Replicas and a Pod Template](#add-replicas-and-a-pod-template)
 7. [Add Production Runtime Details](#add-production-runtime-details)
 8. [Applying and Inspecting the Deployment](#applying-and-inspecting-the-deployment)
@@ -25,17 +24,18 @@ aliases:
 11. [Debugging a Deployment](#debugging-a-deployment)
 12. [Common Selector Mistakes](#common-selector-mistakes)
 13. [Production Review Checklist](#production-review-checklist)
+14. [References](#references)
 
 ## From One Pod to a Managed Service
 <!-- section-summary: One Pod can run a container, and a Deployment adds the controller layer that keeps stateless service Pods replicated, replaced, and updated. -->
 
-Start with the Pod from the previous article. One `notification-api` Pod can run the API container, get an internal IP, pass readiness checks, and serve traffic through a Service. That proves Kubernetes can run the application.
+A direct Pod proves that Kubernetes can run the `notification-api` container. A service needs stronger promises than that: keep several replicas ready, replace a failed Pod, scale during traffic, and introduce a new image without deleting every old Pod at once.
 
-A real service needs more than one Pod. If that single Pod is deleted, the API should come back. If traffic grows, the team may want three replicas. If a new image ships, Kubernetes should bring up new Pods and remove old Pods in a controlled order. Those are controller jobs, and the normal controller for a stateless application is a **Deployment**.
+A **Deployment** is the Kubernetes controller for that stateless service shape. It owns the desired replica count and Pod template, and it manages **ReplicaSets** underneath it. Each ReplicaSet maintains Pods for one template revision, while the Deployment decides how to move from an old template to a new one.
 
-For the Customer Notification Platform, the Deployment describes the desired service: keep three healthy `notification-api` Pods available, replace failed Pods, and roll out a new Pod template when the team publishes image `2026.06.14-2`.
+For the Customer Notification Platform, the Deployment describes a simple operating goal: keep three healthy `notification-api` Pods available, replace failed Pods, and roll out image `2026.06.14-2` through a controlled update. The worker service can use the same pattern in a separate Deployment because API replicas and worker replicas scale for different reasons.
 
-Here is the article map before we write the full YAML:
+A practical review sequence is: define the controller, make labels and selectors line up, add a Pod template, apply it, verify the controller chain, then debug rollout and ownership problems.
 
 | Concept | Plain meaning | Notification example |
 |---|---|---|
@@ -50,6 +50,8 @@ Pods run containers. ReplicaSets maintain a count of Pods. Deployments manage Re
 
 ![Deployment ownership chain infographic showing a Deployment with replicas, a ReplicaSet with desired count, ready and unready Pods, and a Service routing only to ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-ownership-chain.png)
 
+*A Deployment owns ReplicaSets, ReplicaSets own Pods, and the Service sends traffic only to ready matching Pods.*
+
 _This infographic shows the ownership chain from Deployment to ReplicaSet to Pod, while the Service only sends traffic to Pods that are ready._
 
 ## What a Deployment Adds
@@ -61,7 +63,7 @@ For `notification-api`, stateless means any healthy replica can receive a reques
 
 The Deployment controller watches desired state and actual state. If the desired state says three replicas and the actual state has two ready Pods, the controller path creates another Pod through a ReplicaSet. If the Pod template changes because the image tag changed, the Deployment creates a new ReplicaSet for that new template and scales it in while scaling the old one out.
 
-That gives the team an operating interface that a direct Pod cannot provide. The team can review a manifest, apply it, watch rollout progress, inspect old ReplicaSets, and roll back to an earlier revision when a new version fails.
+The team gets an operating interface that a direct Pod cannot provide. They can review a manifest, apply it, watch rollout progress, inspect old ReplicaSets, and roll back to an earlier revision when a new version fails.
 
 `notification-worker` is also a good Deployment candidate. It reads from a queue, processes messages, and sends emails or SMS messages. If one worker Pod disappears, another worker can pick up the next message. The API and worker should usually be separate Deployments because they scale and fail in different ways.
 
@@ -94,6 +96,8 @@ The Deployment is the object you edit. The ReplicaSet is the object maintaining 
 
 A **label** is a key-value tag on a Kubernetes object. A **selector** is a query that matches labels. Deployments use selectors to decide which Pods belong to them. Services use selectors to decide which Pods receive traffic.
 
+The selector deserves attention first because it is the ownership contract. For the notification API, the Deployment, ReplicaSet, Pod template, and Service all need to agree on the stable identity of the API Pods. If those labels drift, Kubernetes may run Pods successfully while the controller or Service points at the wrong set.
+
 For `notification-api`, the stable app identity can be:
 
 ```yaml
@@ -117,14 +121,16 @@ spec:
         app.kubernetes.io/component: api
 ```
 
-Those two blocks form the ownership contract. If the selector and template labels do not match, Kubernetes rejects the Deployment. If a Service selector drifts away from those labels, the Deployment can be healthy while traffic goes nowhere.
+Those two blocks form the ownership contract. If the selector and template labels mismatch, Kubernetes rejects the Deployment. If a Service selector drifts away from those labels, the Deployment can be healthy while traffic goes nowhere.
 
 Selectors also create a long-term constraint. In an existing Deployment, `.spec.selector` is effectively something you plan carefully up front. Changing it later is limited, and the safer migration often creates a new Deployment with a new name and selector.
 
-## Start with a Deployment Skeleton
+## A Deployment Skeleton
 <!-- section-summary: The Deployment skeleton shows the controller shape before adding every runtime detail. -->
 
-The smallest useful Deployment shape has identity, a selector, and an empty Pod template area that we can fill in:
+The first Deployment shape has identity, a selector, and the label half of a Pod template. It is intentionally small so the controller relationship stays visible before the manifest fills with ports, probes, resources, and configuration.
+
+For the notification API, the Deployment needs a stable name, a namespace, and a selector that matches the labels copied onto new Pods. Once that relationship is correct, the Pod template can grow safely without hiding the ownership contract reviewers need to check first.
 
 ```yaml
 apiVersion: apps/v1
@@ -144,7 +150,14 @@ spec:
         app.kubernetes.io/component: api
 ```
 
-This snippet is not enough to run yet because the Pod template has no `spec.containers`. It gives you the main shape without hiding the important relationship: the selector and template labels must agree.
+This snippet is only the controller shell because the Pod template has no `spec.containers` yet. It gives you the main shape while keeping the important relationship visible: the selector and template labels must agree.
+
+The field groups have different jobs:
+
+- `apiVersion` and `kind` tell Kubernetes this object uses the Deployment controller.
+- `metadata.name` and `metadata.namespace` give the Deployment its address inside the cluster.
+- `spec.selector.matchLabels` defines which Pods this Deployment owns.
+- `spec.template.metadata.labels` defines the labels copied onto new Pods, and those labels must satisfy the selector.
 
 Add the desired replica count next:
 
@@ -153,12 +166,14 @@ spec:
   replicas: 3
 ```
 
-`replicas: 3` means Kubernetes should keep three matching Pods alive. It does not mean three nodes. The scheduler may place multiple replicas on one node unless other rules, topology settings, or capacity limits spread them out.
+`replicas: 3` means Kubernetes should keep three matching Pods alive. Those three replicas may land on one node unless other rules, topology settings, or capacity limits distribute them across nodes.
 
 ## Add Replicas and a Pod Template
 <!-- section-summary: The Pod template is the blueprint each ReplicaSet uses when it needs to create another matching Pod. -->
 
 A **Pod template** is the `spec.template` section inside a Deployment. It describes the Pods the Deployment should create. Any meaningful change inside the template, such as a new image, environment variable, label, resource setting, or probe, creates a new template revision.
+
+The template is the piece the ReplicaSet uses whenever it needs another API Pod. For the notification platform, that means every replacement Pod should receive the same image, port name, labels, configuration pattern, probes, and resource shape. A template change is a release event because new Pods come from the changed blueprint.
 
 Here is the first runnable container part of the template:
 
@@ -190,12 +205,14 @@ spec:
       app.kubernetes.io/name: notification-worker
 ```
 
-That small split helps operations. Scaling the API does not accidentally scale the worker. Rolling back the worker does not roll back the public API.
+That small split helps operations. Scaling the API leaves the worker scale alone. Rolling back the worker leaves the public API on its current version.
 
 ## Add Production Runtime Details
 <!-- section-summary: Production templates add resource settings, probes, configuration references, and rollout limits so the Deployment can update safely. -->
 
 After the skeleton and container shape are clear, add runtime fields that affect production behavior.
+
+These fields are the difference between "Kubernetes can start the process" and "Kubernetes can operate the service under traffic." The notification API needs capacity planning so the scheduler can place it, readiness so the Service only routes to useful Pods, and rollout limits so a release can replace replicas without dropping the whole API at once.
 
 **Resource requests and limits** describe the capacity shape. The scheduler uses requests for placement, and the kubelet/runtime enforce limits after the container starts.
 
@@ -237,7 +254,9 @@ revisionHistoryLimit: 5
 ## Applying and Inspecting the Deployment
 <!-- section-summary: Applying a Deployment should be followed by checks on the Deployment, ReplicaSet, Pods, rollout status, and traffic readiness. -->
 
-Apply the manifest through your normal delivery path. In a local learning cluster, that may be a direct command:
+Applying a Deployment is only the first half of the operation. The API server can accept the object while Pods are still scheduling, pulling images, starting, or waiting for readiness. For the notification API, the useful workflow is to apply the desired state, watch the rollout, inspect the controller chain, and then run an application-level smoke test that proves the user-facing path works.
+
+In a local learning cluster, the first step may be a direct command:
 
 ```bash
 $ kubectl apply -f notification-api-deployment.yaml
@@ -278,9 +297,11 @@ Kubernetes can tell you the Pods are ready. The smoke test tells you the applica
 ## Template Changes and Rollouts
 <!-- section-summary: Changing the Pod template creates a new ReplicaSet, and the Deployment shifts traffic capacity from old Pods to new Pods. -->
 
-A **rollout** starts when the Deployment Pod template changes. Updating only `metadata.annotations` on the Deployment object does not create new Pods. Updating the image, environment variables, template labels, probes, or resources does.
+A **rollout** starts after a Deployment Pod template change. Updating only `metadata.annotations` on the Deployment object leaves existing Pods alone. Updating the image, environment variables, template labels, probes, or resources creates a new ReplicaSet.
 
-The notification team ships version `2026.06.14-2` with better provider retry handling:
+For the notification API, a rollout is the moment the new release meets live capacity. Kubernetes keeps the old ReplicaSet around while the new template proves it can start and pass readiness. Watching both ReplicaSets helps the team see whether the release is progressing, waiting for readiness, or stuck on the new Pods.
+
+The notification team ships version `2026.06.14-2` with improved provider retry handling:
 
 ```bash
 $ kubectl set image deployment/notification-api -n notifications \
@@ -297,16 +318,20 @@ notification-api-85d6ccf8d8  2         2         2       20m
 notification-api-6f8f7b9d88  2         2         1       45s
 ```
 
-The new ReplicaSet grows as new Pods become ready. The old ReplicaSet shrinks only when the strategy permits removal. With `maxUnavailable: 0`, Kubernetes avoids reducing available capacity below the desired replica count during the update.
+The new ReplicaSet grows as new Pods report ready. The old ReplicaSet shrinks only when the strategy permits removal. With `maxUnavailable: 0`, Kubernetes avoids reducing available capacity below the desired replica count during the update.
 
 ![Rolling update with two ReplicaSets infographic showing an old ReplicaSet serving v1 Pods while a new ReplicaSet brings up v2 Pods through readiness and maxSurge one](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/rolling-update-two-replicasets.png)
 
-_This infographic makes the rollout handoff visible: the new ReplicaSet grows only as new Pods become ready, while the old ReplicaSet shrinks after capacity is safe._
+*During a rolling update, old and new ReplicaSets can exist together while readiness controls traffic safety.*
+
+_This infographic makes the rollout handoff visible: the new ReplicaSet grows only as new Pods report ready, while the old ReplicaSet shrinks after capacity is safe._
 
 ## Scaling and Self-Healing
 <!-- section-summary: Deployments keep the requested replica count by creating replacement Pods and by scaling the active ReplicaSet. -->
 
 **Scaling** changes the desired replica count. If notification traffic increases during a marketing campaign, the team may scale the API from three replicas to five:
+
+Scaling changes desired state through the Deployment. The team asks for a new count, and the active ReplicaSet creates or removes Pods to match. For the notification platform, this matters because API replicas, worker replicas, database capacity, and provider limits all need to stay in balance during a campaign.
 
 ```bash
 $ kubectl scale deployment/notification-api -n notifications --replicas=5
@@ -332,12 +357,14 @@ notification-api-85d6ccf8d8-c      1/1     Running             31m
 notification-api-85d6ccf8d8-r9k2m  0/1     ContainerCreating   3s
 ```
 
-The replacement Pod gets a new name. That is normal for stateless services. Clients should use a Service, not individual Pod names.
+The replacement Pod gets a new name. That is normal for stateless services. Clients should use a Service for stable routing instead of individual Pod names.
 
 ## Debugging a Deployment
 <!-- section-summary: Deployment debugging starts at rollout status, then moves through Deployment conditions, ReplicaSets, Pod events, and application logs. -->
 
-When a Deployment looks stuck, start with rollout status:
+Deployment debugging should follow the controller chain. The Deployment condition says whether progress stopped, ReplicaSets show which template revision is active, Pods show the runtime symptom, and logs or events explain the local cause. For `notification-api`, this path separates a template bug from a capacity problem before the team chooses a forward patch or rollback during a live release.
+
+When a Deployment looks stuck, rollout status gives the first high-level signal:
 
 ```bash
 $ kubectl rollout status deployment/notification-api -n notifications --timeout=60s
@@ -375,14 +402,14 @@ $ kubectl logs -n notifications notification-api-7c9d4c685b-m8vnn --previous --t
 Error: NOTIFICATION_EVENT_TOPIC is required
 ```
 
-This is a template bug, not a cluster capacity problem. The repair may be a forward patch that adds the missing environment variable or a rollback to the previous revision.
+The evidence points to a template bug rather than a cluster capacity problem. The repair may be a forward patch that adds the missing environment variable or a rollback to the previous revision.
 
 ## Common Selector Mistakes
 <!-- section-summary: Selector mistakes cause ownership and routing bugs, so teams should keep app identity labels stable and avoid broad Service selectors. -->
 
-The first mistake is a mismatch between `spec.selector.matchLabels` and `spec.template.metadata.labels`. Kubernetes rejects that Deployment because it would create Pods the Deployment does not own.
+The first mistake is a mismatch between `spec.selector.matchLabels` and `spec.template.metadata.labels`. Kubernetes rejects that Deployment because the selector would fail to claim the Pods in the template.
 
-The second mistake is trying to change the selector on an existing Deployment as part of a rename. If `notification-api` needs to become `message-api`, create a planned migration. A new Deployment with a new name and selector lets the team adjust the Service selector deliberately, verify traffic, and then remove the old Deployment.
+The second mistake is trying to change the selector on an existing Deployment as part of a rename. If `notification-api` needs a new name such as `message-api`, create a planned migration. A new Deployment with a new name and selector lets the team adjust the Service selector deliberately, verify traffic, and then remove the old Deployment.
 
 The third mistake is a Service selector that is too broad. A Service selector such as `app.kubernetes.io/component: api` may match several APIs in the same namespace. The notification API Service should include the stable app identity as well as the component.
 
@@ -469,9 +496,11 @@ Those commands prove that the Deployment finished and the available count matche
 
 ![Deployment production review infographic showing selectors, image, probes, resources, rollout, verify, rollout status, ReplicaSets, and ready Pods around a Deployment manifest](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-production-review.png)
 
+*A production Deployment review should connect selectors, images, probes, resources, rollout status, and ready Pods.*
+
 _This infographic summarizes the Deployment review habit: check ownership, artifact identity, readiness, capacity, rollout behavior, and verification evidence together._
 
-**References**
+## References
 
 - [Kubernetes Workloads](https://kubernetes.io/docs/concepts/workloads/) - Official overview of workload resources and workload management.
 - [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official Deployment concept guide, including use cases, rollouts, rollbacks, scaling, and Deployment spec details.

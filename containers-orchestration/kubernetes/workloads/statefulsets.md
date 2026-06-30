@@ -1,36 +1,38 @@
 ---
 title: "StatefulSets"
 description: "Run Kubernetes workloads that need stable identity, ordered rollout, and persistent storage."
-overview: "StatefulSets are for Pods that carry durable identity. This article shows when `notification-api` should stay on a Deployment and when supporting services need stable names and volumes."
+overview: "StatefulSets are for Pods that carry durable identity. `notification-api` can stay replaceable, while supporting services may need stable names and volumes."
 tags: ["statefulsets", "storage", "pods", "identity"]
 order: 4
 id: article-containers-orchestration-kubernetes-workloads-statefulsets
 ---
-
 ## Table of Contents
 
 1. [Data Needs Stable Identity](#data-needs-stable-identity)
 2. [Stable Pod Identity](#stable-pod-identity)
 3. [Headless Services and Pod DNS](#headless-services-and-pod-dns)
 4. [Persistent Storage with PVC Templates](#persistent-storage-with-pvc-templates)
-5. [Start with a StatefulSet Skeleton](#start-with-a-statefulset-skeleton)
+5. [A StatefulSet Skeleton](#a-statefulset-skeleton)
 6. [Add the Database Container and Storage Mount](#add-the-database-container-and-storage-mount)
 7. [Startup, Scaling, and Updates](#startup-scaling-and-updates)
 8. [Debugging StatefulSets in the Terminal](#debugging-statefulsets-in-the-terminal)
 9. [Production Guidance for Stateful Services](#production-guidance-for-stateful-services)
 10. [When a Deployment Fits Better](#when-a-deployment-fits-better)
 11. [Operational Runbook](#operational-runbook)
+12. [References](#references)
 
 ## Data Needs Stable Identity
 <!-- section-summary: StatefulSets exist for Pods where data, membership, or peer identity must stay tied to a predictable Pod name and storage claim. -->
 
-Start with one Pod that holds data. In a learning or staging cluster for the Customer Notification Platform, the team might run a small PostgreSQL service called `notification-postgres` so they can test schema migrations and application connection behavior inside Kubernetes.
+Most Kubernetes service Pods can be replaced freely because the important data lives somewhere else. Stateful workloads are different. They need a stable name, a stable storage claim, or a stable member identity that survives restarts and rescheduling.
 
-The data changes the operating rule. `notification-api` Pods can come and go because durable records live in PostgreSQL. A database Pod has a closer relationship with its disk and member identity. After a restart or reschedule, operators need to know which Pod owns which data directory, which DNS name clients should use for that member, and which storage claim must mount back to it.
+A **StatefulSet** is the Kubernetes controller for workloads where identity and storage must stay tied to a predictable replica. It still uses a Pod template and a desired replica count, but each replica receives an ordinal name such as `notification-postgres-0`, `notification-postgres-1`, and `notification-postgres-2`. Storage claims can line up with those same ordinals.
 
-A **StatefulSet** is the Kubernetes controller for that shape. It still uses a Pod template, and it still reconciles the desired number of replicas. It also gives each replica a stable ordinal name such as `notification-postgres-0`, `notification-postgres-1`, and `notification-postgres-2`, plus storage patterns that line up with those names.
+For the Customer Notification Platform, `notification-api` should usually stay on a Deployment because any ready API Pod can serve the next request. A supporting PostgreSQL member in a learning or staging cluster has a stronger connection to its disk and identity. After a restart or reschedule, operators need to know which Pod owns which data directory, which DNS name clients should use for that member, and which storage claim must mount back to it.
 
 A **stateful workload** keeps important data, membership, or identity inside a specific replica. A database member may own a local data directory. A Redis cluster member may own a hash slot range. A search node may own a shard copy. A message broker may keep a log segment on disk. Those systems need stronger identity than a random Deployment Pod name.
+
+Stable identity shows up through ordinal Pod names, headless Services, DNS, volume claim templates, startup order, updates, debugging, production guidance, and the cases where a Deployment remains the better controller.
 
 For `notification-api`, the API layer should stay replaceable. If one API Pod disappears, another API Pod can read and write the same notification records in PostgreSQL. For `notification-postgres`, the Pod itself has a stronger connection to local data. The Pod name, DNS name, and disk all need to stay aligned through restarts.
 
@@ -52,9 +54,11 @@ That stable identity shows up in several places. The Pod name includes the ordin
 
 ![StatefulSet identity map infographic showing the notification-postgres StatefulSet connecting notification-postgres-0 and notification-postgres-1 to matching DNS identities and PVC data volumes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-identity-map.png)
 
+*StatefulSets give each replica a stable ordinal identity that can connect to matching DNS and storage.*
+
 _This infographic shows the StatefulSet contract: each ordinal Pod keeps a matching DNS identity and PVC identity._
 
-Think about a database incident page in the middle of the night. A runbook that says "check `notification-postgres-0` first" works because that name keeps meaning the same member identity. A graph that shows disk pressure on `data-notification-postgres-0` also points back to the matching Pod. The name gives operators a stable handle during a stressful repair.
+Think about a database support page during business hours. A runbook that says "check `notification-postgres-0` first" works because that name keeps meaning the same member identity. A graph that shows disk pressure on `data-notification-postgres-0` also points back to the matching Pod. The name gives operators a stable handle during a careful repair.
 
 The identity also helps applications that keep peer lists. A clustered service can say "member 0 is reachable at this DNS name, member 1 is reachable at that DNS name." Kubernetes still may move the Pod to another node and give it a different IP address. The Pod identity remains the same.
 
@@ -65,7 +69,7 @@ A **Service** gives a stable network entry point for a group of Pods. A normal C
 
 A **headless Service** is a Service with `clusterIP: None`. Kubernetes still creates DNS records for it, and those records point clients toward the individual Pods behind the Service. StatefulSets use this pattern because some clients need to reach a specific member, such as `notification-postgres-0.notification-postgres.notifications.svc.cluster.local`.
 
-Start with the headless Service:
+The headless Service provides the DNS side of the StatefulSet contract:
 
 ```yaml
 apiVersion: v1
@@ -82,24 +86,21 @@ spec:
       port: 5432
 ```
 
-The selector connects the Service to Pods with the same label. `clusterIP: None` tells Kubernetes to create a headless Service, so cluster DNS can return records for the selected Pods instead of one virtual Service IP. The StatefulSet will later set `serviceName: notification-postgres`, and that field ties Pod DNS names to this Service.
+The important parts are:
 
-A DNS check from the API namespace might look like this:
+- `clusterIP: None` tells Kubernetes to create a headless Service.
+- `selector` connects the Service to Pods with the same label.
+- `ports.name: postgres` gives the database port a stable name.
+- The StatefulSet will later set `serviceName: notification-postgres`, which ties Pod DNS names to this Service.
 
-```bash
-$ kubectl exec -n notifications deploy/notification-api -- \
-  getent hosts notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-10.42.2.18  notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-```
+A DNS check from the API namespace should resolve the member name, such as `notification-postgres-0.notification-postgres.notifications.svc.cluster.local`, to the current Pod IP. If the Service selector is wrong, the database may run perfectly while clients fail because discovery has no matching endpoint. EndpointSlices are the first Kubernetes object to inspect when DNS or Service routing looks suspicious.
 
-If the Service selector is wrong, the database may run perfectly while clients fail because discovery has no matching endpoint. Check EndpointSlices when DNS or Service routing looks suspicious:
-
-```bash
-$ kubectl get endpointslices -n notifications \
-  -l kubernetes.io/service-name=notification-postgres
-NAME                         ADDRESSTYPE   PORTS   ENDPOINTS
-notification-postgres-7xk2p   IPv4          5432    10.42.2.18
-```
+| Object to inspect | Healthy signal |
+|---|---|
+| Headless Service | `clusterIP: None` and a selector that matches the StatefulSet labels |
+| Pod labels | The member Pod carries the labels the Service selector expects |
+| EndpointSlices | Endpoints exist for the selected Pods and expose the expected port |
+| DNS lookup from caller namespace | The ordinal Pod name resolves to the current Pod IP |
 
 ## Persistent Storage with PVC Templates
 <!-- section-summary: A volumeClaimTemplate creates one PersistentVolumeClaim per StatefulSet Pod identity, keeping storage tied to ordinals. -->
@@ -122,26 +123,24 @@ volumeClaimTemplates:
           storage: 20Gi
 ```
 
-`ReadWriteOncePod` means the volume should be mounted read-write by a single Pod. `storageClassName: fast-ssd` asks for a class defined by the cluster. `20Gi` is the requested capacity.
+The storage request has three key parts:
 
-Inspect the created claim:
+- `ReadWriteOncePod` means the volume should be mounted read-write by a single Pod.
+- `storageClassName: fast-ssd` asks for a class defined by the cluster.
+- `20Gi` is the requested capacity.
 
-```bash
-$ kubectl get pvc -n notifications -l app.kubernetes.io/name=notification-postgres
-NAME                           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
-data-notification-postgres-0   Bound    pvc-28cc0f84-1d33-4e12-8f58-4f1e66d10a20   20Gi       RWOP           fast-ssd
-```
-
-Now we have the three core pieces: Pod identity, DNS identity, and storage identity. The next section puts them together without dropping a full production manifest all at once.
+Inspecting PVCs should show a claim named from the template, StatefulSet, and ordinal, such as `data-notification-postgres-0`. A healthy claim is `Bound`, uses the expected StorageClass, and has the requested capacity. Now we have the three core pieces: Pod identity, DNS identity, and storage identity. The next section puts them together without dropping a full production manifest all at once.
 
 ![Stable DNS and storage contract infographic showing a headless Service with clusterIP None, Pod DNS, volumeClaimTemplate, PVC, StorageClass, and PV binding](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/stable-dns-storage-contract.png)
 
+*The headless Service and volume claim template work together to give each StatefulSet Pod stable network and storage contracts.*
+
 _This infographic connects the network and storage halves of the StatefulSet design, so the headless Service answers where a member lives and the PVC path answers where its data lives._
 
-## Start with a StatefulSet Skeleton
+## A StatefulSet Skeleton
 <!-- section-summary: The StatefulSet skeleton connects selector labels, the headless Service name, and the Pod template before container details are added. -->
 
-The StatefulSet controller shape starts like this:
+The skeleton combines the three promises introduced earlier: a stable controller identity, a headless Service name for DNS, and matching labels for Pod ownership. The database container comes later because the first StatefulSet question is whether Kubernetes can connect the ordinal Pod identity to the Service and the Pod template before storage and process details are added. That contract anchors the later volume claim and mount for the database Pod and its data directory.
 
 ```yaml
 apiVersion: apps/v1
@@ -183,22 +182,11 @@ At this point the controller knows the identity, DNS contract, and storage reque
 ## Add the Database Container and Storage Mount
 <!-- section-summary: The container uses normal Pod fields, while the volume mount must match the volumeClaimTemplate name. -->
 
-The database container needs an image, port, environment values, probes, and a mount. In a real platform, a database operator or managed database service is often a better production choice. This example keeps PostgreSQL small so the StatefulSet mechanics are visible.
+The database container needs an image, port, environment values, probes, and a mount. In a real platform, a database operator or managed database service is often the production choice. This example keeps PostgreSQL small so the StatefulSet mechanics are visible.
 
-Start with a Secret for credentials:
+The storage mount is the key detail in this container section. The `data` mount in the container must match the `volumeClaimTemplates` name, because that shared name is how Kubernetes connects `notification-postgres-0` to `data-notification-postgres-0`. If the mount and claim template drift, the Pod may start without the storage contract the database needs.
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: notification-postgres-auth
-  namespace: notifications
-stringData:
-  username: notification_app
-  password: replace-in-real-secret-store
-```
-
-The container reads the Secret and mounts the `data` claim:
+Credentials belong in a Secret before the container reads them. The container can then read `POSTGRES_USER` and `POSTGRES_PASSWORD` from that Secret and mount the `data` claim:
 
 ```yaml
 containers:
@@ -225,123 +213,140 @@ containers:
 
 The `volumeMounts` entry named `data` must match the `volumeClaimTemplates` entry named `data`. Kubernetes creates the PVC and mounts it into the container from that shared name.
 
-Add a readiness probe so clients only connect after PostgreSQL is ready:
-
-```yaml
-readinessProbe:
-  exec:
-    command: ["pg_isready", "-U", "notification_app"]
-  periodSeconds: 10
-  failureThreshold: 6
-```
-
-Apply the pieces through your delivery path and inspect the result:
-
-```bash
-$ kubectl apply -f notification-postgres.yaml
-secret/notification-postgres-auth created
-service/notification-postgres created
-statefulset.apps/notification-postgres created
-
-$ kubectl rollout status statefulset/notification-postgres -n notifications
-statefulset rolling update complete 1 pods at revision notification-postgres-6f4f957f7b...
-```
-
-Then check the contract:
-
-```bash
-$ kubectl get statefulset,pod,svc,pvc -n notifications \
-  -l app.kubernetes.io/name=notification-postgres
-NAME                                      READY   AGE
-statefulset.apps/notification-postgres   1/1     2m
-
-NAME                          READY   STATUS    AGE
-pod/notification-postgres-0   1/1     Running   2m
-
-NAME                           STATUS   CAPACITY   STORAGECLASS
-persistentvolumeclaim/data-notification-postgres-0   Bound    20Gi       fast-ssd
-```
-
-That view shows one named controller, one named Pod, one headless Service, and one matching claim. If the Pod moves to another node tomorrow, the Pod name remains `notification-postgres-0`, the DNS name remains tied to that identity, and the data claim remains `data-notification-postgres-0`.
+Add a readiness probe with `pg_isready` so clients only connect after PostgreSQL is ready. After applying the Service, Secret, and StatefulSet through the team's delivery path, inspect one named controller, one named Pod, one headless Service, and one matching claim. If the Pod moves to another node tomorrow, the Pod name remains `notification-postgres-0`, the DNS name remains tied to that identity, and the data claim remains `data-notification-postgres-0`.
 
 ## Startup, Scaling, and Updates
 <!-- section-summary: StatefulSet startup, scale-down, and rolling updates preserve ordinal order by default, which protects identity-sensitive systems. -->
 
 The default StatefulSet Pod management policy is **OrderedReady**. For a StatefulSet with three replicas, Kubernetes creates `notification-postgres-0`, waits until it is Running and Ready, then creates `notification-postgres-1`, and then creates `notification-postgres-2`. During scale-down, Kubernetes removes the highest ordinal first.
 
-That ordering protects systems that need a predictable startup sequence. It can also surprise teams that expect all replicas to appear at once. If `notification-postgres-0` cannot become ready, Kubernetes does not move on to `notification-postgres-1` under the default policy.
+That ordering protects systems that need a predictable startup sequence. It can also surprise teams that expect all replicas to appear at once. Under the default policy, Kubernetes waits for `notification-postgres-0` to report ready before creating `notification-postgres-1`.
 
 Updates also use ordered behavior by default. The rolling update works from the highest ordinal down toward zero. If `notification-postgres-2` fails readiness after an image change, Kubernetes pauses there and leaves lower ordinals alone. That pause gives operators time to inspect the newest member before the rollout reaches earlier identities.
 
-Watch a StatefulSet update:
-
-```bash
-$ kubectl rollout status statefulset/notification-postgres -n notifications
-$ kubectl rollout history statefulset/notification-postgres -n notifications
-$ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-postgres --watch
-```
+During an update, watch rollout status, revision history, and the Pods sorted by ordinal. The healthy signal needs more than "new image running." The expected ordinal should update, report ready, and keep its storage identity.
 
 StatefulSets also support partitioned rolling updates. A partition lets you update only Pods with ordinals greater than or equal to a chosen number. Teams use this to test a new database image on a higher ordinal before touching lower ordinals.
 
-```bash
-$ kubectl patch statefulset notification-postgres -n notifications --type merge \
-  -p '{"spec":{"updateStrategy":{"type":"RollingUpdate","rollingUpdate":{"partition":2}}}}'
-statefulset.apps/notification-postgres patched
-```
+For example, a partition of `2` on a three-member StatefulSet updates only ordinal `2`. Ordinals `0` and `1` stay on the old template until the team lowers or removes the partition.
 
 The risky part of StatefulSet updates is data compatibility. An image can change on-disk format, migrate files, or start writing metadata that an older version cannot read. For `notification-postgres`, an image change should sit next to a database upgrade plan, backup checkpoint, restore test, and rollback decision.
 
 ## Debugging StatefulSets in the Terminal
 <!-- section-summary: StatefulSet debugging separates controller state, Pod readiness, DNS discovery, PVC binding, volume attachment, and application logs. -->
 
-Start with the controller, Pods, and PVCs:
+The controller, Pods, and PVCs show whether identity and storage lined up. A Pending Pod with a Pending PVC points toward storage events before PostgreSQL logs. A running Pod with failing readiness points toward the database process, configuration, or probe command. DNS problems usually trace back to the headless Service selector, Pod labels, and EndpointSlices.
+
+StatefulSet debugging needs a slower first pass because the data path is part of the workload. The notification database may have a healthy controller with a Pending claim, a running Pod with broken DNS, or a ready Pod with a storage volume close to full. The table below maps each symptom to the first evidence source before the command sequence.
+
+| Symptom | First evidence | Likely direction |
+|---|---|---|
+| Pod is `Pending` and PVC is `Pending` | PVC events and StorageClass | Provisioning, quota, missing StorageClass, or volume binding |
+| Pod is running but not ready | Pod events and database logs | PostgreSQL startup, credentials, probe command, or data directory |
+| Disk is almost full | Container filesystem check and PVC metrics | Capacity expansion, cleanup, backup retention, or storage class limits |
+| DNS name has no answer | Service selector, Pod labels, EndpointSlices | Discovery wiring rather than database process health |
+
+The right evidence source depends on the symptom. Storage binding problems show up in PVC events. Process failures show up in Pod events and logs. Discovery problems show up in Service selectors and EndpointSlices.
+
+The controller is the first evidence source. The StatefulSet row tells you how many replicas Kubernetes wants, how many are ready, and which update revision is current.
 
 ```bash
 $ kubectl get statefulset notification-postgres -n notifications
+NAME                    READY   AGE
+notification-postgres   1/1     14d
+```
+
+For a wider view, include labels and revisions:
+
+```bash
+$ kubectl describe statefulset notification-postgres -n notifications
+Name:               notification-postgres
+Namespace:          notifications
+Replicas:           1 desired | 1 total
+Pods Status:        1 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Update Strategy:    RollingUpdate
+Pod Template:
+  Labels:           app.kubernetes.io/name=notification-postgres
+Volume Claims:
+  Name:             data
+```
+
+The useful fields are:
+
+- `Replicas` shows whether the controller has the requested count.
+- `Pods Status` separates running Pods from waiting or failed Pods.
+- `Update Strategy` tells you whether updates should roll through ordinals.
+- `Volume Claims` confirms the template name that should appear inside PVC names.
+
+Next, check the Pods with their node placement and readiness. StatefulSet Pod names should include the ordinal.
+
+```bash
 $ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-postgres -o wide
-$ kubectl get pvc -n notifications -l app.kubernetes.io/name=notification-postgres
+NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
+notification-postgres-0   1/1     Running   0          14d   10.244.2.41   worker-b
 ```
 
-A Pending Pod with a Pending PVC points toward storage:
+`notification-postgres-0` is the identity to follow through DNS, logs, events, and storage. If the Pod moves to another node, the `NODE` and `IP` values may change, while the Pod identity and matching claim name stay stable.
+
+PVCs prove whether storage binding worked. The claim name should combine the volume claim template name, StatefulSet name, and ordinal.
 
 ```bash
-$ kubectl get pvc -n notifications data-notification-postgres-0
-NAME                           STATUS    STORAGECLASS
-data-notification-postgres-0   Pending   fast-ssd
+$ kubectl get pvc -n notifications
+NAME                           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+data-notification-postgres-0   Bound    pvc-9c4f7a2c-2d61-4a7b-84f5-9e2a9c0a1111   20Gi       RWO            fast-ssd       14d
+```
 
-$ kubectl describe pvc -n notifications data-notification-postgres-0
+`STATUS Bound` means Kubernetes matched the claim to backing storage. `STORAGECLASS fast-ssd` should match the design. `CAPACITY 20Gi` should match the request unless the storage system expanded it later through a reviewed change.
+
+DNS checks prove whether the headless Service exposes the ordinal identity. Run the lookup from a temporary Pod in the same namespace or from the application namespace that will call the database.
+
+```bash
+$ kubectl run dns-check -n notifications --rm -it --restart=Never \
+  --image=registry.k8s.io/e2e-test-images/agnhost:2.45 -- \
+  nslookup notification-postgres-0.notification-postgres.notifications.svc.cluster.local
+Server:    10.96.0.10
+Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
+
+Name:      notification-postgres-0.notification-postgres.notifications.svc.cluster.local
+Address 1: 10.244.2.41 notification-postgres-0.notification-postgres.notifications.svc.cluster.local
+```
+
+The DNS answer should point to the current Pod IP. If the lookup has no answer, inspect the headless Service selector, Pod labels, and EndpointSlices before changing the database container.
+
+Rollout checks should follow ordinal order. For a one-member learning database, the status command is short. For larger StatefulSets, watch which ordinal updates and which one pauses.
+
+```bash
+$ kubectl rollout status statefulset/notification-postgres -n notifications
+partitioned roll out complete: 1 new pods have been updated...
+```
+
+The controller history adds the revision record:
+
+```bash
+$ kubectl rollout history statefulset/notification-postgres -n notifications
+statefulset.apps/notification-postgres
+REVISION  CHANGE-CAUSE
+1         <none>
+2         postgres image 16.4
+```
+
+The rollout status tells you whether Kubernetes finished updating the StatefulSet. The history tells you which controller revisions exist, but a database upgrade plan is still required. A database image change still needs backup, restore confidence, and data compatibility review.
+
+PVC Pending events usually explain storage problems before application logs exist. A Pending claim can block the Pod before the database process starts.
+
+```bash
+$ kubectl describe pvc data-notification-postgres-0 -n notifications
+Name:          data-notification-postgres-0
+Namespace:     notifications
+StorageClass:  fast-ssd
+Status:        Pending
 Events:
-  Warning  ProvisioningFailed  storageclass.storage.k8s.io "fast-ssd" not found
+  Type     Reason                Age   From                         Message
+  ----     ------                ----  ----                         -------
+  Warning  ProvisioningFailed    2m    persistentvolume-controller  storageclass.storage.k8s.io "fast-ssd" not found
 ```
 
-That failure is not a PostgreSQL log problem. Kubernetes cannot provision or bind the volume yet.
-
-A running Pod with failing readiness points toward the database process:
-
-```bash
-$ kubectl describe pod -n notifications notification-postgres-0
-$ kubectl logs -n notifications notification-postgres-0 -c postgres --tail=100
-$ kubectl logs -n notifications notification-postgres-0 -c postgres --previous --tail=100
-```
-
-Disk pressure should be checked from inside the container and from Kubernetes storage objects:
-
-```bash
-$ kubectl exec -n notifications notification-postgres-0 -- df -h /var/lib/postgresql/data
-Filesystem      Size  Used Avail Use% Mounted on
-/dev/nvme1n1     20G   18G  2.0G  90% /var/lib/postgresql/data
-```
-
-DNS problems start with the headless Service and EndpointSlices:
-
-```bash
-$ kubectl get service -n notifications notification-postgres -o yaml
-$ kubectl get pod -n notifications notification-postgres-0 --show-labels
-$ kubectl get endpointslices -n notifications \
-  -l kubernetes.io/service-name=notification-postgres
-```
-
-The right evidence source depends on the symptom. Storage binding problems show up in PVC events. Process failures show up in Pod events and logs. Discovery problems show up in Service selectors and EndpointSlices.
+That event says the StorageClass name in the PVC request has no matching cluster StorageClass. The next action is to fix storage configuration before investigating PostgreSQL. Other Pending events might point to quota, unavailable zones, volume binding mode, or a storage provisioner problem.
 
 ## Production Guidance for Stateful Services
 <!-- section-summary: Production StatefulSets need backup, restore, storage, disruption, security, and upgrade plans around the Kubernetes object. -->
@@ -371,7 +376,7 @@ StorageClass choice should show up in design review too. A production class may 
 
 The StatefulSet's PVC retention policy adds another cleanup control. By default, PVCs created from `volumeClaimTemplates` remain after scale-down or StatefulSet deletion. Kubernetes also supports `.spec.persistentVolumeClaimRetentionPolicy`, where teams can choose `Retain` or `Delete` behavior for scale-down and deletion. For production data, `Retain` keeps destructive cleanup deliberate. For short-lived preview environments, `Delete` may fit if the data has no long-term value.
 
-Monitoring should connect Kubernetes and application signals. Kubernetes metrics can show Pod restarts, PVC usage, scheduling problems, and volume attachment issues. Database metrics can show replication lag, connection saturation, slow queries, checkpoint behavior, and backup age. The best incident dashboard for `notification-postgres` should show both layers because a green Pod can still contain an unhealthy database.
+Monitoring should connect Kubernetes and application signals. Kubernetes metrics can show Pod restarts, PVC usage, scheduling problems, and volume attachment issues. Database metrics can show replication lag, connection saturation, slow queries, checkpoint behavior, and backup age. The support dashboard for `notification-postgres` should show both layers because a green Pod can still contain an unhealthy database.
 
 ## When a Deployment Fits Better
 <!-- section-summary: Stateless APIs and workers should usually stay on Deployments while they depend on a database or cache. -->
@@ -380,7 +385,7 @@ A **stateless Pod** can disappear without losing unique local state. It may stil
 
 That is the normal shape for `notification-api`. The API connects to `notification-postgres`, handles HTTP requests, writes rows, and returns responses. If an API Pod restarts, Kubernetes can create a new Pod with a new name because the API has no need for a stable ordinal or a private disk. A Deployment gives faster rolling updates, simpler scaling, and load-balanced Services that match this shape.
 
-`notification-worker` also fits a Deployment when it reads from a queue and acknowledges messages after processing. Queue semantics, deduplication keys, and retry handling give the worker its business safety. The Pod name does not need to stay stable.
+`notification-worker` also fits a Deployment when it reads from a queue and acknowledges messages after processing. Queue semantics, deduplication keys, and retry handling give the worker its business safety. The worker can use replaceable Pod names.
 
 Use this table during design review:
 
@@ -397,66 +402,27 @@ This distinction keeps Kubernetes designs clean. The notification API and worker
 ## Operational Runbook
 <!-- section-summary: StatefulSet operations should check backups, storage, DNS, Pod health, and rollout order before making destructive changes. -->
 
-Before a StatefulSet change, the team should know the current controller revision, current Pods, current PVCs, recent backup status, and restore confidence. A small pre-change snapshot gives everyone the same starting point. It also gives incident responders a quick comparison if the rollout pauses.
-
-```bash
-$ kubectl rollout history statefulset/notification-postgres -n notifications
-$ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-postgres -o wide
-$ kubectl get pvc -n notifications -l app.kubernetes.io/name=notification-postgres
-$ kubectl get pdb -n notifications notification-postgres
-```
+Before a StatefulSet change, the team should know the current controller revision, current Pods, current PVCs, recent backup status, and restore confidence. A small pre-change snapshot gives everyone the same starting point. It also gives production responders a quick comparison if the rollout pauses.
 
 During a manifest change, the watch should focus on ordinals and readiness. The highest ordinal usually updates first during a rolling update. A lower ordinal may wait because the controller wants ordered progress.
 
-```bash
-$ kubectl apply -f notification-postgres.yaml
-$ kubectl rollout status statefulset/notification-postgres -n notifications
-$ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-postgres --watch
-```
-
 For a pending Pod, storage comes first. The PVC status, claim events, StorageClass, namespace quota, and cluster provisioner logs usually explain the problem faster than container logs. Container logs help after Kubernetes mounts the volume and starts the process.
-
-```bash
-$ kubectl get pvc -n notifications -l app.kubernetes.io/name=notification-postgres
-$ kubectl describe pvc -n notifications data-notification-postgres-0
-$ kubectl get storageclass
-$ kubectl describe quota -n notifications
-```
 
 For a DNS problem, the Service selector and EndpointSlices come first. The Pod may run and the database may accept local connections, while clients still fail because the headless Service has no matching endpoints. A DNS test from the caller's namespace confirms the path the application really uses.
 
-```bash
-$ kubectl get service -n notifications notification-postgres -o yaml
-$ kubectl get endpointslices -n notifications \
-  -l kubernetes.io/service-name=notification-postgres
-$ kubectl exec -n notifications deploy/notification-api -- \
-  getent hosts notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-```
-
 For a data-bearing Pod, forced deletion should sit at the end of the decision tree. A force delete can help after a node failure leaves a Pod stuck, and it can also create split-brain risk for stateful systems that still have a process running somewhere. Confirm node state, volume attachment state, database membership, and backup position before using force.
 
-```bash
-$ kubectl get pod -n notifications notification-postgres-0 -o wide
-$ kubectl describe pod -n notifications notification-postgres-0
-$ kubectl get volumeattachment
-```
-
 For cleanup, PVC deletion should require an explicit data decision. Deleting a StatefulSet normally leaves the PVCs behind by default. Deleting the PVCs may release or delete the backing storage depending on the PV reclaim policy and storage provider.
-
-```bash
-$ kubectl delete statefulset -n notifications notification-postgres
-$ kubectl get pvc -n notifications -l app.kubernetes.io/name=notification-postgres
-$ kubectl get pv pvc-28cc0f84-1d33-4e12-8f58-4f1e66d10a20 \
-  -o jsonpath='{.spec.persistentVolumeReclaimPolicy}{"\n"}'
-```
 
 Treat the StatefulSet, the headless Service, the PVCs, the StorageClass, and the application data plan as one system. Kubernetes gives you stable building blocks. Production safety comes from the runbooks and recovery tests around those blocks.
 
 ![StatefulSet operations runbook infographic showing backups, PVCs, DNS, Pod health, rollout order, and force delete last as the safe operations sequence](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-operations-runbook.png)
 
+*StatefulSet operations should protect backups, PVCs, DNS identity, Pod health, and rollout order before disruptive actions.*
+
 _This infographic summarizes the StatefulSet operating order: verify recovery first, inspect identity and storage, then handle rollout or deletion only after the data path is clear._
 
-**References**
+## References
 
 - [Kubernetes StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/) - Official StatefulSet concepts, including stable identity, ordered deployment, update strategies, Pod management policy, and PVC retention policy.
 - [StatefulSet Basics](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/) - Official tutorial that demonstrates ordered Pod creation, stable DNS, stable storage, scaling, and StatefulSet deletion behavior.

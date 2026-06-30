@@ -3,7 +3,7 @@ title: "Input Variables"
 description: "Parameterize your Terraform configurations with input variables so the same code works across different environments and teams."
 overview: "Input variables are the public inputs to a Terraform root module. This article shows how variables are declared, how values are supplied, where they are consumed in resources and locals, and how the evaluated values appear in plan output."
 tags: ["variables", "input", "parameterization", "terraform", "hcl"]
-order: 4
+order: 5
 id: article-iac-terraform-values-input-variables
 aliases:
   - infrastructure-as-code/terraform/values/input-variables.md

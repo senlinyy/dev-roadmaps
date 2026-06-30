@@ -3,7 +3,7 @@ title: "Resource Dependencies"
 description: "Understand how Terraform discovers resource order from references, where depends_on is useful, and how dependency choices appear in plan output."
 overview: "Terraform follows references between resources and outputs to decide what runs first. This article uses a small application stack to show implicit dependencies, explicit dependencies, cycles, and plan output."
 tags: ["terraform", "dependencies", "graph", "depends_on"]
-order: 7
+order: 8
 id: article-iac-terraform-config-dependencies
 aliases:
   - infrastructure-as-code/terraform/configuration/dependencies.md
