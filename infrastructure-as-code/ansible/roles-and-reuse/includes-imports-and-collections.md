@@ -26,6 +26,11 @@ id: article-infrastructure-as-code-ansible-includes-imports-collections
 
 Roles give service automation a home. The next question is timing: should Ansible load the reused content while it parses the playbook, or should it decide during the run after it knows facts, variables, loop items, and earlier task results?
 
+
+![Static Dynamic Reuse Timing](/content-assets/articles/article-infrastructure-as-code-ansible-includes-imports-collections/static-dynamic-reuse-timing.png)
+
+*The timing view shows why static imports expand before the run, while dynamic includes make choices during the run.*
+
 Ansible has two reuse families for that choice. **Imports** are static. Ansible preprocesses imported tasks, roles, or playbooks before normal task execution. **Includes** are dynamic. Ansible reaches an include as a task during execution and then loads the selected tasks, variables, or role.
 
 Here is the timing in plain order:
@@ -163,6 +168,11 @@ The practical question is: **should this role be part of the fixed play structur
 
 A **collection** is Ansible's package format for roles, modules, plugins, playbooks, documentation, and tests. Collections live under a namespace and name, such as `community.general` or an internal collection like `devpolaris.platform`. They let teams share automation with versions instead of copying role directories between repositories.
 
+
+![Collection Package Map](/content-assets/articles/article-infrastructure-as-code-ansible-includes-imports-collections/collection-package-map.png)
+
+*The collection map shows namespace.collection packages, roles, modules, version pins, requirements.yml, and CI install as one dependency path.*
+
 The orders platform might use community modules for system helpers and an internal collection for company service roles:
 
 ```yaml
@@ -230,6 +240,11 @@ ansible-playbook -i inventories/production orders-web.yml --limit orders-web-pro
 <!-- section-summary: Reusable Ansible content uses imports for fixed structure, includes for runtime choices, roles for service boundaries, and collections for sharing. -->
 
 The orders automation now has several reuse layers. The `orders_api` role packages service setup. Static imports bring fixed baseline tasks into the playbook early so operators can list them. Dynamic includes choose OS-specific task files from host facts. Collections provide versioned shared modules and roles for the team.
+
+
+![Reuse Summary](/content-assets/articles/article-infrastructure-as-code-ansible-includes-imports-collections/reuse-summary.png)
+
+*The summary links static reuse, dynamic reuse, tags, collections, and CI into one reviewable reuse workflow.*
 
 The operator workflow matches those choices. CI installs pinned collections, runs syntax checks, lists tasks and tags, and tests staging. Production runs use limits and serial batches. If a reused dependency causes trouble, Git rollback and dependency reinstall bring the playbook back to the previous reviewed state.
 

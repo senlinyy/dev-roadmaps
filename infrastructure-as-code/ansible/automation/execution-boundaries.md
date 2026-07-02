@@ -29,6 +29,11 @@ aliases:
 
 Ansible playbooks read as one flow. Each task still has a location, and that location controls which files, network routes, Python packages, command-line tools, and credentials are available. A package task may run on a web host. A release artifact check may run on the CI runner. A load balancer API call may run from a bastion host.
 
+
+![Execution Location Map](/content-assets/articles/article-infrastructure-as-code-ansible-execution-boundaries/execution-location-map.png)
+
+*The location map shows the difference between remote host work, control-node work, delegated work, run_once, and delegate_facts.*
+
 Let's use the orders platform again. A deployment updates `orders-web-01`, drains it from the load balancer, copies a new config file, restarts the app, checks local health, and then adds the host back to the pool. The file and service tasks belong on `orders-web-01`. The load balancer command may belong on `lb-admin-01`, because that host has the `lbctl` tool and the right network path.
 
 An **execution boundary** names where one task runs and which inventory host receives the result. Many confusing Ansible failures come from this choice, especially "file not found", "command not found", and "permission denied" errors that appear even when the YAML syntax is fine.
@@ -101,6 +106,11 @@ Production teams reduce that drift with pinned dependencies, execution environme
 <!-- section-summary: delegate_to runs the task somewhere else while keeping the result attached to the current host in the rollout. -->
 
 `delegate_to` points a task at another execution host. The current inventory host remains the host being processed, but the module runs on the delegated host. This is perfect for orchestration around a target host.
+
+
+![Delegate Run Once Flow](/content-assets/articles/article-infrastructure-as-code-ansible-execution-boundaries/delegate-run-once-flow.png)
+
+*The delegate flow shows per-host work, one shared task, a delegated load balancer update, and fact storage as separate execution choices.*
 
 For the orders platform, the load balancer admin tool exists on `lb-admin-01`. The rollout still needs a per-web-host story: disable this web host, update this web host, check this web host, enable this web host. Delegation gives you that story.
 
@@ -241,6 +251,11 @@ Rollback follows the same boundary. If a load balancer disable succeeded on `lb-
 <!-- section-summary: A clear deployment separates local preflight, delegated load balancer control, remote host changes, and delegated recovery. -->
 
 Here is a full orders rollout shape with clear boundaries:
+
+
+![Execution Boundaries Summary](/content-assets/articles/article-infrastructure-as-code-ansible-execution-boundaries/execution-boundaries-summary.png)
+
+*The summary keeps boundary decisions concrete: where the task runs, who it runs as, whether it runs once, whether it delegates, and how to verify.*
 
 ```yaml
 - name: Validate orders release on control node

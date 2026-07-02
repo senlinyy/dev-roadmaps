@@ -98,6 +98,10 @@ A Declarative Jenkinsfile has a few important top-level sections. These sections
 | `stages` | What named work should happen? | Build, Test, Package, Deploy |
 | `post` | What should happen after success, failure, or every run? | test reports, cleanup, notifications |
 
+![Declarative Jenkinsfile anatomy showing pipeline, agent, options, environment, stages, steps, post, and readable release contract](/content-assets/articles/article-cicd-jenkins-pipelines-and-jenkinsfile/declarative-jenkinsfile-anatomy.png)
+
+*A Declarative Jenkinsfile becomes easier to review when the major blocks have clear jobs: choose runtime, set rules, name stages, run steps, and handle cleanup.*
+
 Here is a small but production-shaped Jenkinsfile for `checkout-api`:
 
 ```groovy
@@ -266,6 +270,10 @@ post {
 
 The pipeline now has visible stages, bounded runtime, parallel checks, test reporting, artifacts, and cleanup. The next step is controlling which parts run for which branch, environment, and release intent.
 
+![Parallel branches and post cleanup showing build stage, parallel unit tests, integration tests, security scan, joined results, post always, archived reports, and clean workspace](/content-assets/articles/article-cicd-jenkins-pipelines-and-jenkinsfile/parallel-branches-post-cleanup.png)
+
+*Parallel branches speed up independent checks, while the `post` block keeps reports, notifications, and cleanup on a reliable path after every result.*
+
 ## Parameters, Environment, and When Gating
 <!-- section-summary: Parameters, environment variables, and when conditions let one Jenkinsfile serve different branches and release paths safely. -->
 
@@ -360,6 +368,10 @@ Summit Retail's `checkout-api` Jenkinsfile now has a clear shape. It uses Declar
 The file also gives the team daily operating benefits. A failed stage names the failing part of the process. A linter can catch syntax errors before merge. A review can catch risky credential use before a pull request reaches Jenkins. A controller rebuild can recover jobs from Git instead of from somebody's memory of a web form.
 
 Here is the important thread from the first two articles. The architecture article created the runtime boundary: controller for coordination, agents for execution. This article created the workflow boundary: Jenkinsfile for reviewed delivery logic, stages for readable execution, and branch rules for safe automation. Together they turn Jenkins from a manually adjusted server into an automation system that a team can reason about.
+
+![Operational Jenkinsfile checklist showing versioned Jenkinsfile, clear stages, parameters, when gates, multibranch pull requests, post cleanup, and readable failures](/content-assets/articles/article-cicd-jenkins-pipelines-and-jenkinsfile/operational-jenkinsfile-checklist.png)
+
+*A production Jenkinsfile gives the team one reviewed delivery contract with readable stages, bounded inputs, branch gates, cleanup, and failure signals.*
 
 ## What's Next
 <!-- section-summary: The next article moves repeated Jenkinsfile logic into shared libraries so many repositories can reuse one tested delivery path. -->

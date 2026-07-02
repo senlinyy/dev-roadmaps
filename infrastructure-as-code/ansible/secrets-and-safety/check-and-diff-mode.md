@@ -28,6 +28,11 @@ aliases:
 
 After Vault and output boundaries, the next safety question is simple: what will this playbook change? Ansible gives you two preview tools for that question. **Check mode** asks supported tasks to predict changes without applying them. **Diff mode** asks supported tasks to show before-and-after details.
 
+
+![Check Diff Preview Map](/content-assets/articles/article-infrastructure-as-code-ansible-check-diff-mode/check-diff-preview-map.png)
+
+*The preview map separates check mode predictions, diff output, unsupported-module limits, and review evidence.*
+
 Let's keep using the production orders platform. A pull request changes the Nginx timeout for `/checkout`, updates `/etc/orders/orders.env`, and adds a systemd drop-in for worker memory limits. Before the team touches production, reviewers want to see the target host, the tasks that would change, and the file diffs that are safe to show.
 
 The first preview command might run against one canary host:
@@ -168,6 +173,11 @@ Package modules, cloud modules, and external API modules can also have preview g
 
 A playbook previews well when tasks describe desired state. Modules like `template`, `copy`, `file`, `service`, `package`, `lineinfile`, and `blockinfile` give Ansible structured intent. That structure helps Ansible decide whether a change is needed and whether a diff can be shown.
 
+
+![Preview Friendly Task Flow](/content-assets/articles/article-infrastructure-as-code-ansible-check-diff-mode/preview-friendly-task-flow.png)
+
+*The task flow shows how state modules, truthful changed_when, validation, safe diffs, and CI artifacts make previews more useful.*
+
 For command and shell tasks, define success and change carefully. A command that returns `0` and prints "already configured" should report unchanged when the system already matches the target state. A command that returns a special code for "needs change" should use `changed_when` and `failed_when` so the preview and the real run tell a clear story.
 
 ```yaml
@@ -247,6 +257,11 @@ Separate validation from change so common failures have clear causes. If `nginx 
 <!-- section-summary: A good preview workflow combines check mode, diff mode, secret boundaries, safe validations, and a canary that proves the prediction. -->
 
 Here is a compact orders deployment flow that uses preview as evidence and then applies safely:
+
+
+![Check Diff Summary](/content-assets/articles/article-infrastructure-as-code-ansible-check-diff-mode/check-diff-summary.png)
+
+*The summary keeps preview work grounded: preview, read limits, review diffs, and apply carefully.*
 
 ```bash
 ansible-playbook \

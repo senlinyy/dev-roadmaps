@@ -29,6 +29,11 @@ aliases:
 
 A lot of Linux operations come down to files. Nginx reads a site config, systemd reads a unit file, an application reads an environment file, and a monitoring agent reads a YAML file. When a team says "deploy the new service configuration," the actual work often means putting the right bytes in the right path with the right owner, group, and mode.
 
+
+![File Template Choice Map](/content-assets/articles/article-infrastructure-as-code-ansible-templates-files-service-config/file-template-choice-map.png)
+
+*The choice map separates file, copy, template, and validation so each file-management task has the right level of ownership.*
+
 Ansible gives us a clean way to describe that state. The playbook says which directory should exist, which static files should land on the host, which templates should render from variables, and which validation command should approve the candidate file before it replaces the live one. That matters in production because a tiny permission or syntax drift can turn one host in a fleet into the odd server that fails during the next incident.
 
 The key beginner idea is **ownership boundary**. When Ansible owns the whole file, the repository should contain the whole desired file through `copy` or `template`. When Ansible owns only one line or one section inside a shared file, the next article's smaller edit modules are the right tool. This article stays with full-file ownership because it gives beginners the clearest starting point.
@@ -140,6 +145,11 @@ Static files can still be sensitive. If the content includes private keys, token
 
 The `ansible.builtin.template` module renders a Jinja2 template on the control node and writes the rendered file to the managed host. It fits files that share one structure across environments and need different values per host, group, or environment. For the orders platform, staging and production use the same environment file shape with different ports, endpoints, and feature flags.
 
+
+![Rendered Template Flow](/content-assets/articles/article-infrastructure-as-code-ansible-templates-files-service-config/rendered-template-flow.png)
+
+*The template flow shows variables and template.j2 becoming a temporary file, passing validation, landing as final config, and notifying a handler.*
+
 The template might live at `templates/orders-api.env.j2`:
 
 ```jinja2
@@ -250,6 +260,11 @@ Treat that manual restore as a temporary incident step. After the service is sta
 <!-- section-summary: Full-file ownership combines file, copy, template, validation, verification, and careful rollout. -->
 
 The orders web fleet now has a repeatable file path. The `file` module creates directories with the right ownership and modes. The `copy` module installs fixed files such as the internal CA certificate. The `template` module renders environment, application, and web server config from inventory variables. Validation checks candidate files before they replace live files.
+
+
+![Files Templates Summary](/content-assets/articles/article-infrastructure-as-code-ansible-templates-files-service-config/files-templates-summary.png)
+
+*The summary follows the file workflow from ownership to render, validate, notify, and verify.*
 
 The operator workflow also has a clear shape. Review with `--check --diff`, run in staging, verify file metadata and service parsers, then roll through production with `serial`. If a change fails validation, Ansible leaves the old file alone. If a change reaches production and causes trouble, Git revert plus a controlled playbook run returns the fleet to the previous desired state.
 

@@ -34,6 +34,11 @@ The orders platform now has a mixed fleet. Older web servers run Ubuntu. Newer w
 
 Most plays gather facts at the beginning of the play unless `gather_facts: false` is set. Ansible runs fact-gathering logic, commonly through the `ansible.builtin.setup` module, and stores the data under `ansible_facts` plus several commonly used variables.
 
+
+![Fact Gathering Map](/content-assets/articles/article-infrastructure-as-code-ansible-facts-conditionals/fact-gathering-map.png)
+
+*The fact map shows Ansible collecting host evidence such as OS family, IP address, memory, and distribution before choosing work.*
+
 ```yaml
 - name: Configure orders web hosts
   hosts: orders_web
@@ -78,6 +83,11 @@ When `gather_facts: false` is used for speed, the playbook should avoid fact-bas
 <!-- section-summary: The when keyword lets a task run only when an expression is true for the current host. -->
 
 The `when` keyword uses a raw Jinja2 expression, so the condition appears without `{{ }}` wrappers. Ansible evaluates the expression for each host before it decides whether the task applies.
+
+
+![When Condition Flow](/content-assets/articles/article-infrastructure-as-code-ansible-facts-conditionals/when-condition-flow.png)
+
+*The condition flow shows facts and intent variables feeding a when decision so only the matching task runs.*
 
 ```yaml
 - name: Install orders API on Debian family hosts
@@ -242,6 +252,11 @@ Fact caching, if enabled in an environment, adds one more thing to check. Cached
 <!-- section-summary: Facts and conditions let one playbook adapt to real host differences while keeping environment intent in reviewed variables. -->
 
 The orders platform now uses facts for host reality and variables for team intent. Facts choose the package manager and operating-system-specific tasks. Variables provide public names, database hosts, health paths, release values, and feature flags. Conditions connect those values to tasks in a way each host can evaluate for itself.
+
+
+![Facts Summary](/content-assets/articles/article-infrastructure-as-code-ansible-facts-conditionals/facts-summary.png)
+
+*The summary follows the conditional path: observe, decide, skip safely, verify, and roll back.*
 
 The playbook is safer because unsupported systems fail early, optional features use defaults, numeric comparisons use type conversion, and mixed fleet behavior is tested on representative hosts. The output should show the branch each host took, which gives operators a clean way to verify the run.
 

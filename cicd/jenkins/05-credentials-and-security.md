@@ -39,6 +39,10 @@ There are four boundaries to think about:
 
 The rest of the article follows those boundaries. First the team binds credentials into a build safely. Then they look at masking, because masking is useful but limited. After that they cover Groovy sandboxing, untrusted pull requests, and the move from static cloud keys to OIDC federation.
 
+![Jenkins credential boundaries showing storage boundary, credentials store, runtime boundary, withCredentials, author boundary, script approval, branch boundary, and trusted branch only](/content-assets/articles/article-cicd-jenkins-credentials-and-security/jenkins-credential-boundaries.png)
+
+*Jenkins credential safety comes from several boundaries lining up: where the secret lives, when a step receives it, who can write that step, and which branch can reach it.*
+
 ## Binding Credentials Into Builds
 <!-- section-summary: Credentials binding gives one pipeline block temporary environment variables or files that reference stored Jenkins credentials. -->
 
@@ -124,6 +128,10 @@ withCredentials([string(credentialsId: 'payments-api-token', variable: 'API_TOKE
 Masking also struggles with tools that transform output. A command can print a URL-encoded token, a JSON-escaped token, a wrapped line, or a debug dump with partial values. The team should still set `set +x`, avoid debug logs around secrets, keep credentials out of command-line arguments where possible, and run secret-using steps on agents that untrusted jobs cannot share.
 
 The simple review question is this: who can change the code inside the `withCredentials` block? If that answer includes fork contributors, broad repository write access, or any pipeline author outside the trusted deployment group, the credential scope is too wide for production deploy power.
+
+![Runtime secret scope showing withCredentials block, secret enters here, docker login, docker push, secret removed after block, masked logs, and do not echo secrets](/content-assets/articles/article-cicd-jenkins-credentials-and-security/runtime-secret-scope.png)
+
+*`withCredentials` narrows where the secret appears, but the real safety check is still who can edit that block and which agent runs it.*
 
 ## The Groovy Sandbox and Script Approval
 <!-- section-summary: The Groovy sandbox limits which Jenkins and Java APIs untrusted pipeline code can call. -->
@@ -248,6 +256,10 @@ The team also controls who can write secret-using code. Application Jenkinsfiles
 For cloud deployments, the team starts moving from static keys to OIDC federation. Jenkins issues a build identity token, AWS exchanges it for temporary role credentials, and role trust conditions tie that access to a specific job path and audience. The pipeline still uses Jenkins credentials binding, but the credential now represents a short-lived identity flow instead of a long-lived secret.
 
 That completes the Jenkins module. The architecture gives the controller and agents a clean boundary. Jenkinsfiles make delivery reviewable. Shared libraries reduce repeated pipeline code. Plugins and Configuration as Code make the controller rebuildable. Credentials and security keep the deploy power inside Jenkins scoped to the people, branches, jobs, and runtimes that should have it.
+
+![Federated deploys showing static key long-lived risk compared with identity token, trust check, short-lived role, deploy, audit record, and scoped access](/content-assets/articles/article-cicd-jenkins-credentials-and-security/federated-deploys-summary.png)
+
+*The final security direction is to reduce long-lived deploy secrets and use scoped, auditable, short-lived identity flows wherever the Jenkins installation can support them.*
 
 ---
 

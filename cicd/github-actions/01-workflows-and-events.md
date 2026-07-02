@@ -74,15 +74,11 @@ An **event** is something that happens in GitHub, such as a push, a pull request
 
 For `checkout-api`, a pull request event carries useful information. It includes the source branch, the target branch, the commit SHA, the pull request number, the actor who triggered the run, and many other fields. GitHub exposes that information through contexts, which we will use later.
 
-The event flow looks like this. The diagram is simple, but it shows the handoff from a GitHub event to work on a runner.
+The event flow looks like this. The handoff starts with something happening in the repository and ends with a runner sending a result back to the pull request.
 
-```mermaid
-flowchart LR
-    Event["Repository event"] --> Match["Workflow trigger match"]
-    Match --> Run["Workflow run"]
-    Run --> Jobs["Jobs are queued"]
-    Jobs --> Steps["Steps run on runners"]
-```
+![GitHub Actions event flow showing repository event, trigger match, workflow run, jobs queued, runner steps, and status check](/content-assets/articles/article-cicd-github-actions-workflows-and-events/github-actions-event-flow.png)
+
+*The event flow connects one repository event to a workflow run, queued jobs, runner execution, and the status check developers see during review.*
 
 This matters because GitHub Actions is event-driven. The workflow usually starts because something changed in the repository or because a person intentionally requested a run. The event decides whether the workflow starts, and the workflow file decides what happens after that.
 
@@ -411,6 +407,10 @@ Here, `cancel-in-progress: false` makes later production deployments wait instea
 
 The trigger decides whether a run starts. The matrix can multiply the work. Concurrency keeps that work from piling up in ways that waste time or create deployment races.
 
+![Matrix jobs and concurrency showing one workflow expanding across Node and operating system versions while stale pull request runs are canceled](/content-assets/articles/article-cicd-github-actions-workflows-and-events/matrix-concurrency-control.png)
+
+*Matrix jobs expand one job definition into supported runtime checks, while concurrency keeps old pull request runs from wasting runner time after a newer commit arrives.*
+
 ## Putting It All Together
 <!-- section-summary: A practical workflow combines clear triggers, scoped filters, job structure, matrix testing, and concurrency into one readable automation path. -->
 
@@ -459,6 +459,10 @@ jobs:
 The workflow starts from one idea: a repository event should create useful feedback. The `pull_request` trigger starts the run when review work changes. Branch and path filters reduce noise. Jobs separate test work from image build work. Steps keep the command order clear inside each job. The matrix verifies supported Node versions. Concurrency keeps only the newest pull request checks running.
 
 This is the foundation for GitHub Actions. Once this structure feels normal, most workflow changes become a question of where the change belongs: trigger, job, step, context, matrix, or concurrency.
+
+![Workflow design checklist showing file location, event trigger, jobs and steps, filters, contexts, and concurrency](/content-assets/articles/article-cicd-github-actions-workflows-and-events/workflow-design-checklist.png)
+
+*A useful workflow keeps the automation contract visible: where the file lives, what starts it, how jobs run, which data enters, and how stale work is controlled.*
 
 ## What's Next
 <!-- section-summary: The next article follows the machines that execute these jobs, because workflow YAML still has to run on real compute. -->

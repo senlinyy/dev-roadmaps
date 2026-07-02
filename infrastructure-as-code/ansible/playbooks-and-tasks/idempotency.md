@@ -27,6 +27,11 @@ aliases:
 
 **Idempotency** means an operation can run more than once and still leave the system in the intended final state. In Ansible work, the first run may install packages, write files, and start services. A later run against the same host should usually report `ok` for those tasks because the host already matches the playbook.
 
+
+![Idempotent Second Run](/content-assets/articles/article-infrastructure-as-code-ansible-playbooks-tasks-idempotency/idempotent-second-run.png)
+
+*The second-run view shows the goal of idempotency: the first run may change a host, while the next run reports ok because the desired state already holds.*
+
 Use the orders platform from the previous article. The team manages `orders-web-01` and `orders-web-02`, and both hosts need Nginx, an `orders-api` package, a config directory, a rendered config file, and a running service. The first production rollout may change both hosts. A health-repair run the next morning should confirm the same state instead of rewriting files and restarting services for no reason.
 
 That settled second run is more than a neat Ansible feature. It is the reason operators trust playbook output during incidents. If a playbook reports `changed` on a host, the team should be able to ask what moved: a package version, a config file, a service state, or a deliberate release value.
@@ -68,6 +73,11 @@ That last detail matters in production. A config template that reports `changed`
 <!-- section-summary: Raw commands need guards or custom status rules because arbitrary commands hide their lasting state. -->
 
 The `ansible.builtin.command` and `ansible.builtin.shell` modules are useful for tools without a dedicated Ansible module. They also need extra care because Ansible has no built-in understanding of an arbitrary command's lasting state. A command may read a value, install software, generate a file, restart a service, or perform a mix of all four.
+
+
+![Command Evidence Gate](/content-assets/articles/article-infrastructure-as-code-ansible-playbooks-tasks-idempotency/command-evidence-gate.png)
+
+*The command gate shows how creates, removes, changed_when, and failed_when turn shell-shaped work into honest status.*
 
 This task runs an installer every time, so it reports `changed` every time. The recap will stay noisy until the task has a guard.
 
@@ -184,6 +194,11 @@ Destructive work needs even more care. Removing directories, rotating credential
 <!-- section-summary: Idempotent automation gives the team a reliable signal because changed, ok, and failed each mean something specific. -->
 
 The orders platform playbook now uses state-aware modules for packages, directories, templates, and services. Command tasks have evidence through `creates`, `removes`, `changed_when`, or `failed_when`. Validation tasks register output and report `ok` when they only read state. Handlers restart services only after a task reports a real change.
+
+
+![Idempotency Summary](/content-assets/articles/article-infrastructure-as-code-ansible-playbooks-tasks-idempotency/idempotency-summary.png)
+
+*The summary connects desired state, evidence, truthful changed status, second-run proof, and rollback safety.*
 
 The team can prove the behavior with a canary. The first run may change the host. The second run should settle. If tomorrow's scheduled run reports a new change, the recap now means something: the desired state changed, the host drifted, or a task needs a better status rule.
 

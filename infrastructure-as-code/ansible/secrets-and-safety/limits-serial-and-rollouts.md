@@ -28,6 +28,11 @@ aliases:
 
 Preview tells you what a playbook is likely to change. The next question is how much production you want to expose to the first real run. A playbook that updates every host at once can turn a small template mistake into a full service incident.
 
+
+![Limit Serial Blast Radius](/content-assets/articles/article-infrastructure-as-code-ansible-safe-rollouts-check-mode-limits/limit-serial-blast-radius.png)
+
+*The blast-radius map shows how --limit, serial batches, failure thresholds, and health checks keep a rollout contained.*
+
 Let's keep the orders platform. The service runs behind a load balancer on six web hosts: `orders-web-01` through `orders-web-06`. A change updates the Nginx timeout, renders a new environment file, and restarts the app. The team wants one canary first, then two hosts at a time, with a health check before each batch finishes.
 
 That rollout boundary has four parts. `--limit` chooses the first slice of inventory. `serial` controls how many hosts the play processes together. Health checks decide whether the current batch is safe. Failure thresholds decide when Ansible should stop instead of pushing onward.
@@ -113,6 +118,11 @@ One detail matters with `run_once`. When `run_once` appears inside a play using 
 <!-- section-summary: Batch safety depends on checks that prove the current hosts are healthy before Ansible continues to the next hosts. -->
 
 A batch boundary only helps when the playbook validates the batch before continuing. A service restart followed by no health check is just slower risk. The play should prove that the app is running and ready before the next batch starts.
+
+
+![Batch Health Gate Flow](/content-assets/articles/article-infrastructure-as-code-ansible-safe-rollouts-check-mode-limits/batch-health-gate-flow.png)
+
+*The batch gate shows a change, handler, health check, and continue-or-stop decision between rollout batches.*
 
 For local service health, call the host's own endpoint:
 
@@ -280,6 +290,11 @@ The rescue path should match your service design. Some teams prefer leaving a fa
 <!-- section-summary: A production rollout combines a canary limit, serial batches, handler flushes, service checks, load balancer checks, and stop conditions. -->
 
 Here is a complete rollout shape for the orders web fleet:
+
+
+![Rollouts Summary](/content-assets/articles/article-infrastructure-as-code-ansible-safe-rollouts-check-mode-limits/rollouts-summary.png)
+
+*The summary turns rollout safety into five moves: limit, batch, verify, stop, and recover.*
 
 ```yaml
 - name: Roll orders web safely

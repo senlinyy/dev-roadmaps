@@ -60,6 +60,11 @@ That split keeps the role reusable. Staging and production call the same role, w
 
 Ansible roles use conventional directory names. You can create them manually, or you can scaffold a role with Ansible Galaxy tooling and then trim unused directories.
 
+
+![Role Directory Map](/content-assets/articles/article-infrastructure-as-code-ansible-roles-and-reuse/role-directory-map.png)
+
+*The role map shows the familiar role folders and how they create a boundary around reusable automation.*
+
 ```bash
 ansible-galaxy role init orders_api --init-path roles
 ```
@@ -98,6 +103,11 @@ This convention matters because Ansible knows how to find role content. A templa
 <!-- section-summary: Role defaults document the safe values that inventories and playbooks can override. -->
 
 Role defaults are usually the best place to show the role's public interface. They have low precedence, so inventory, play variables, and extra variables can override them. A reader can open `defaults/main.yml` and see which knobs the role expects callers to use.
+
+
+![Role Interface Flow](/content-assets/articles/article-infrastructure-as-code-ansible-roles-and-reuse/role-interface-flow.png)
+
+*The interface flow shows defaults, required inputs, assertions, and playbook calls as the contract around a reusable role.*
 
 ```yaml
 orders_api_service_name: orders-api
@@ -294,6 +304,11 @@ When roles are shared across repositories or teams, version them deliberately. A
 <!-- section-summary: A useful role has one purpose, clear defaults, early validation, related assets, and handlers that match its changes. -->
 
 The orders API automation now has a reusable boundary. Defaults describe the role interface. Argument specs and asserts catch bad inputs early. Tasks manage packages, users, directories, templates, files, and health checks. Handlers reload systemd, restart the app, and reload Nginx after the right changed tasks.
+
+
+![Roles Summary](/content-assets/articles/article-infrastructure-as-code-ansible-roles-and-reuse/roles-summary.png)
+
+*The summary turns role structure into five design decisions: boundary, interface, tasks, handlers, and version.*
 
 The playbook stays much smaller. It selects the `orders_web` hosts, sets `serial`, and calls `orders_api`. Inventory provides staging or production values. Reviews stay more focused because service-specific changes land inside one role directory.
 

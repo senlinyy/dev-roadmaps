@@ -38,6 +38,11 @@ Back to the orders platform. A deployment can update `/etc/orders-api/orders-api
 
 A normal task uses `notify` to name a handler. If the task reports `ok`, Ansible queues nothing. If the task reports `changed`, Ansible queues that handler for that host. The handler itself lives under the play's `handlers` section or inside a role's `handlers/main.yml`.
 
+
+![Notify Handler Flow](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/notify-handler-flow.png)
+
+*The handler flow shows several changed tasks notifying one handler queue so a service reload happens once, not after every task.*
+
 ```yaml
 - name: Render orders API environment file
   ansible.builtin.template:
@@ -117,6 +122,11 @@ This also makes `changed` output meaningful. A handler runs because one or more 
 <!-- section-summary: Reload rereads supported config, restart replaces the process, and daemon_reload refreshes systemd unit metadata. -->
 
 A **reload** asks a service to reread configuration while keeping the process running, if the service supports that action. A **restart** stops and starts the process. A **systemd daemon reload** tells systemd to reread unit files and drop-ins, which is separate from restarting the service process.
+
+
+![Reload Restart Decision](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/reload-restart-decision.png)
+
+*The decision board separates reload, restart, daemon_reload, flush_handlers, and health checks so service actions stay deliberate.*
 
 Nginx usually supports reloads for site configuration changes:
 
@@ -279,6 +289,11 @@ The safety habit is simple in practice. Validate before replacement, notify hand
 <!-- section-summary: Handlers turn changed task results into controlled, verified service actions. -->
 
 The orders fleet now has a complete file-to-service path. Template and partial-edit tasks write files. Changed tasks notify handlers. Handler notifications collapse into one reload or restart per host. `flush_handlers` gives the playbook a clear point where the service should react before health checks run.
+
+
+![Handlers Summary](/content-assets/articles/article-infrastructure-as-code-ansible-handlers-service-restarts/handlers-summary.png)
+
+*The summary connects change signals, one queued handler action, the chosen service operation, verification, and rollout.*
 
 The production rollout has a shape too. Validation protects the live file, handlers apply process changes, health checks confirm the new process, and `serial` keeps the fleet available while each host updates. If the service fails, logs and backups point to a practical rollback path.
 

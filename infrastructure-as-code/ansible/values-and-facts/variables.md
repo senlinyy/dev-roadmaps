@@ -33,6 +33,11 @@ Without variables, the team would copy the playbook for staging and production. 
 
 Variables have several homes. The right home depends on who owns the value and how often it changes. Inventory usually owns environment and host values. Roles usually own defaults and reusable service behavior. A play can define values that belong only to that play. Runtime inputs can carry release-specific values, such as the application version being deployed.
 
+
+![Variable Source Map](/content-assets/articles/article-infrastructure-as-code-ansible-variables/variable-source-map.png)
+
+*The source map shows the common homes for values before they reach tasks and templates.*
+
 For the orders platform, production inventory might include group variables for every web host. These values describe the production environment rather than the role's reusable defaults.
 
 ```yaml
@@ -100,6 +105,11 @@ Specific task variables describe meaning. `orders_api_listen_port` tells the rea
 <!-- section-summary: Templates turn variables into host-specific files while the source template stays in the repository. -->
 
 A **template** is a source file processed by Jinja2 before Ansible writes it to a managed host. Templates are one of the most common places where variables become visible. The source template stays in Git, and each host receives a rendered file with its own values.
+
+
+![Variable Use Flow](/content-assets/articles/article-infrastructure-as-code-ansible-variables/variable-use-flow.png)
+
+*The use flow follows one value from name, to task argument, to rendered template, to service config, to verification.*
 
 Here is a small orders API config template. Notice how the file structure is stable while the values come from variables.
 
@@ -224,6 +234,11 @@ The operator can call that tag during troubleshooting and leave it out during no
 <!-- section-summary: Variables create a clean boundary between reusable task logic and the values each host or environment needs. -->
 
 The orders platform now has one playbook and one role shape. Inventory provides production hostnames, ports, log levels, and database addresses. Role defaults provide stable service paths and users. The deployment job provides the release version for one run. Templates combine those values into files on each host.
+
+
+![Variables Summary](/content-assets/articles/article-infrastructure-as-code-ansible-variables/variables-summary.png)
+
+*The summary turns variable design into practical habits: clear names, small inputs, secret boundaries, override review, and verification.*
 
 This is the clean boundary that makes Ansible maintainable. The playbook says what work happens. Variables say which values apply to this host in this environment during this run. Verification commands show what Ansible resolved before the team widens a production change.
 

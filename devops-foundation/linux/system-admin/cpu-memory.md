@@ -1,7 +1,7 @@
 ---
 title: "CPU & Memory"
 description: "Diagnose CPU saturation, memory pressure, and swap thrashing using load average, vmstat, mpstat, free, and /proc."
-overview: "Diagnose a slow Linux API VM by reading CPU, load average, memory, swap, and per-process signals with practical command-line checks."
+overview: "Diagnose CPU saturation, memory pressure, swap activity, and per-process resource use on a Linux system with practical command-line checks."
 tags: ["cpu", "memory", "load", "vmstat"]
 order: 3
 id: article-devops-foundation-linux-system-admin-cpu-memory
@@ -9,7 +9,7 @@ id: article-devops-foundation-linux-system-admin-cpu-memory
 
 ## Table of Contents
 
-1. [The Slow API Problem](#the-slow-api-problem)
+1. [CPU and Memory Triage](#cpu-and-memory-triage)
 2. [How Linux Accounts for CPU Time](#how-linux-accounts-for-cpu-time)
 3. [Load Average and Runnable Work](#load-average-and-runnable-work)
 4. [Memory: Used, Free, and Available](#memory-used-free-and-available)
@@ -20,108 +20,189 @@ id: article-devops-foundation-linux-system-admin-cpu-memory
 9. [A Practical CPU and Memory Runbook](#a-practical-cpu-and-memory-runbook)
 10. [References](#references)
 
-## The Slow API Problem
-<!-- section-summary: CPU and memory checks start with a user symptom, then separate busy CPU from memory pressure and waiting on I/O. -->
+## CPU and Memory Triage
+<!-- section-summary: CPU and memory checks separate busy CPU, memory pressure, swap activity, and waiting on I/O. -->
 
-The alert says `https://api.example.com/health` is slow. Nginx is still answering, but requests to the `inventory-api` take several seconds. At this point, "the server is slow" is too vague. The VM may be out of CPU, short on memory, swapping, waiting on disk, or blocked on another dependency.
+A user says the server feels slow, a dashboard shows high latency, or a deployment starts timing out. Before changing anything, you need to learn which resource is under pressure. CPU and memory triage gives that first split for many Linux investigations.
 
-CPU and memory triage gives you the first split. If CPU is saturated, you look for a hot process or expensive request path. If memory is under pressure, you look for growth, leaks, cache behavior, and OOM kills. If both look calm, the next article's disk and I/O checks may be the better path.
+The two resources are related, but they tell different stories. CPU pressure means there is more work ready to run than the CPU can comfortably handle. Memory pressure means applications and the kernel are competing for RAM, and Linux may start reclaiming cache, using swap, or killing a process to recover.
 
-The tools here are intentionally basic: `uptime`, `top`, `free`, `vmstat`, `ps`, `journalctl`, and `/proc`. They work over SSH on a small VM and give enough signal to decide what to do next.
+These commands are small and common on real servers: `uptime`, `top`, `nproc`, `free`, `vmstat`, `ps`, `journalctl`, and `/proc`. The goal is not to memorize every column. The goal is to learn a simple order: confirm load, compare it with CPU count, check memory availability, look for swap activity, then connect the pressure to a process or a kernel event.
 
 ## How Linux Accounts for CPU Time
 <!-- section-summary: CPU time is split into categories such as user, system, idle, wait, steal, and interrupt handling. -->
 
-CPU usage is time accounting. Linux tracks how CPU time is spent across categories. The labels vary by tool, but the core categories are consistent.
+A familiar CPU incident starts with a vague report: the server is slow and the dashboard says CPU is high. That number tells you the CPUs were busy during the sample, yet it does not tell you what kind of work used the time. Before blaming the application, check how Linux split that CPU time.
 
-| Category | Meaning | Operational hint |
-|---|---|---|
-| `us` | User-space application code | API code, Node runtime, compression, JSON work |
-| `sy` | Kernel work | Networking, filesystem, process management |
-| `id` | Idle time | CPU has room |
-| `wa` | I/O wait | Tasks are waiting on disk or network-backed storage |
-| `st` | Steal time | Hypervisor time taken away on a virtual machine |
-| `hi` / `si` | Hardware and software interrupts | Network or device interrupt handling |
+The first bucket is **user time**. This is time spent running application code, language runtimes, compression, encryption, query processing, and other work outside the kernel. High user time often points to the program itself or to a background job doing real CPU-heavy work.
 
-`top` shows these categories in the CPU line:
+The next bucket is **system time**. This is time spent inside the kernel on behalf of processes. Networking, filesystem work, process creation, and heavy syscall activity can raise system time. A server with high system time needs a different investigation from one where only application code is busy.
+
+Other buckets explain why the CPU number can look high or low while users still feel pain. **I/O wait** means a CPU had no runnable work because tasks were waiting on storage. **Steal time** appears on virtual machines when the hypervisor did not give this guest all the CPU time it wanted. **Idle time** is the spare room left in the sample.
+
+The scheduler is the piece that turns all of this into runtime. It gives runnable tasks small turns on each CPU. The CPU line in `top` shows where those turns went during the sample window.
+
+`top` gives a live view of both the whole machine and individual processes:
 
 ```bash
-$ top
+top
+```
+
+Example output:
+
+```console
+top - 10:42:15 up 14 days,  3:22,  1 user,  load average: 1.84, 1.62, 1.20
+Tasks: 128 total,   2 running, 126 sleeping,   0 stopped,   0 zombie
 %Cpu(s): 82.0 us,  6.0 sy,  0.0 ni,  9.0 id,  2.0 wa,  0.0 hi,  1.0 si,  0.0 st
+MiB Mem :   3901.0 total,    260.0 free,   2140.0 used,   1501.0 buff/cache
+MiB Swap:   2048.0 total,   1928.0 free,    120.0 used.   1320.0 avail Mem
 ```
 
-This example mostly points at user-space work. The API process may be doing expensive application work. If `wa` were high, disk or storage latency would deserve attention. If `st` were high on a cloud VM, the host may be overcommitted or the instance class may be noisy.
+Notice these parts first:
 
-Per-process CPU shows who is spending time:
+- `us` is user-space CPU time. High `us` usually points to application code, runtime work, compression, encryption, or data processing.
+- `sy` is kernel CPU time. High `sy` can appear with heavy networking, filesystem work, or process churn.
+- `id` is idle CPU. Low `id` means the CPUs have little free room.
+- `wa` is I/O wait. High `wa` points toward storage or network-backed disk waits.
+- `st` is steal time. High `st` on a cloud VM means the hypervisor is taking CPU time away from this guest.
+
+The process list tells you who is using the time:
 
 ```bash
-$ ps -eo pid,user,%cpu,%mem,etime,cmd --sort=-%cpu | head
+ps -eo pid,user,%cpu,%mem,etime,cmd --sort=-%cpu | head
 ```
 
-If `inventory-api` sits at 190% CPU on a two-vCPU VM, it is using almost two full cores. If Nginx workers dominate, the problem may be TLS, buffering, request volume, or bot traffic. If a backup process dominates, lower its priority or move it out of the peak window.
+Example output:
+
+```console
+    PID USER     %CPU %MEM     ELAPSED CMD
+   1842 app     187.4 18.6    03:14:22 /usr/bin/node /srv/app/current/server.js
+    913 www-data 12.3  1.1    14-03:12 nginx: worker process
+   2409 root      6.8  0.4       12:01 /usr/bin/tar -czf /var/backups/app.tgz /srv/app
+```
+
+Here `app` is using almost two full CPU cores because `%CPU` can add work across multiple cores. `ETIME` helps you separate a long-running service from a short maintenance command. If a backup or report process sits near the top during user traffic, the fix may be scheduling or throttling that job rather than changing the application.
+
+The next decision comes from the largest CPU bucket. High `us` with one application at the top points to code, queries, compression, encryption, or a traffic spike. High `sy` points toward kernel-heavy work such as networking, filesystem churn, or too many short-lived processes. High `wa` moves the investigation toward disk or network storage. High `st` on a VM is a cloud capacity signal, so compare it with provider metrics or move the workload to a less contested host class.
 
 ## Load Average and Runnable Work
 <!-- section-summary: Load average counts tasks running or waiting to run, and on Linux it also includes uninterruptible I/O waits. -->
 
-**Load average** is a rolling measure of work waiting for CPU or stuck in certain uninterruptible waits. `uptime` shows one-minute, five-minute, and fifteen-minute averages:
+A server can feel stuck even though the CPU graph does not look fully pinned. SSH accepts your login slowly, health checks time out, and every command seems to wait its turn. That symptom often means the machine has more runnable or blocked work than it can clear quickly.
+
+Load average gives you a queue signal for that situation. It counts tasks that are running or waiting to run. On Linux it also includes tasks stuck in uninterruptible waits, which often means disk or storage I/O. This is why load needs context from CPU count and I/O checks.
+
+The reason load average exists is that CPU usage alone does not show waiting work. A two-vCPU machine can show `100%` CPU while ten more tasks are waiting. Load average gives you a small queue history, so you can tell whether the server has a short burst or a sustained backlog.
+
+Think about the runnable queue as the line of tasks ready for CPU. If the queue is usually near the CPU count, the machine is busy. If it stays above the CPU count, work waits. Linux load also includes tasks in uninterruptible sleep, so a storage stall can raise load even when CPU is not fully used.
+
+Check the load average:
 
 ```bash
-$ uptime
-09:30:12 up 14 days,  3:21,  2 users,  load average: 3.80, 2.40, 1.10
+uptime
 ```
 
-The number needs CPU context. On a one-vCPU VM, load `3.80` means a queue is forming. On an eight-vCPU VM, load `3.80` may be comfortable. Check CPU count:
+Example output:
+
+```console
+ 10:42:15 up 14 days,  3:22,  1 user,  load average: 3.80, 2.40, 1.10
+```
+
+The three numbers are rolling averages over one, five, and fifteen minutes. A rising one-minute number means pressure is happening now. Rising five-minute and fifteen-minute numbers mean the pressure has lasted longer.
+
+Now compare that load with the number of CPU slots:
 
 ```bash
-$ nproc
+nproc
+```
+
+Example output:
+
+```console
 2
 ```
 
-For a two-vCPU VM, a sustained load above `2` means more runnable or waiting work exists than CPU slots. A short spike may be fine. A rising one-minute number followed by rising five-minute and fifteen-minute numbers means the condition is lasting.
+On a two-vCPU VM, sustained load above `2` means more work exists than there are CPU slots. The sample load of `3.80` is high for this VM. On an eight-vCPU VM, the same load would usually be less urgent.
 
-Load can rise because CPU is busy, but Linux load also includes tasks in uninterruptible sleep, often shown as `D` state in `ps`. That means high load with low CPU can point toward disk or network storage waits:
+High load with low CPU usage can point to blocked work. Look for processes in `D` state:
 
 ```bash
-$ ps -eo state,pid,user,cmd | awk '$1 ~ /D/ {print}'
+ps -eo state,pid,user,cmd | awk '$1 ~ /D/ {print}'
 ```
 
-This is the transition to careful diagnosis. High load plus high `us` CPU points toward application work. High load plus high `wa` or `D` state points toward I/O. High load plus memory pressure and swap activity points toward RAM pressure.
+Example output:
+
+```console
+D  2518 app      /usr/bin/python3 /srv/app/jobs/export_report.py
+D  2520 app      /usr/bin/python3 /srv/app/jobs/export_report.py
+```
+
+`D` means uninterruptible sleep. In practice, the process is often waiting on disk or network storage. High load plus high `us` CPU points toward CPU work. High load plus `D` state or high `wa` points toward I/O. High load plus swap activity points toward memory pressure.
+
+The next decision is to split the queue. If `r` in `vmstat` is high and CPU idle is low, reduce CPU work, throttle a job, or add CPU capacity. If `D`, `b`, or `wa` is high, switch to disk and storage checks. If swap is moving at the same time, treat the load as a memory-pressure symptom.
 
 ## Memory: Used, Free, and Available
 <!-- section-summary: `free` shows total memory, used memory, reclaimable cache, and the more useful available estimate. -->
 
-Memory output can confuse beginners because Linux uses spare RAM for cache. That is healthy behavior. Unused RAM does not help performance, so Linux keeps recently read file data in memory and releases it when applications need space.
+Memory output confuses many beginners because Linux tries to use spare RAM for cache. That is normal. Recently read files can stay in memory so later reads are faster. Linux can reclaim much of that cache when applications need space.
 
-`free -h` shows the main view:
+The reason Linux uses RAM this way is performance. Empty RAM does not help a running service. File cache can make repeated reads much faster, so Linux keeps useful data in memory until another use needs that space.
+
+Use `free -h` for the first memory view:
 
 ```bash
-$ free -h
+free -h
+```
+
+Example output:
+
+```console
                total        used        free      shared  buff/cache   available
 Mem:           3.8Gi       2.1Gi       260Mi       110Mi       1.4Gi       1.3Gi
 Swap:          2.0Gi       120Mi       1.9Gi
 ```
 
-The `free` column may be small while the system is still healthy. The `available` column estimates how much memory can be given to applications without heavy swapping. In this example, `1.3Gi` available memory means the VM has room even though only `260Mi` is completely unused.
+The important beginner detail is `available`. The `free` column is only memory that is completely unused. The `available` column estimates how much memory Linux can give to applications without heavy swapping. In this example, `260Mi` free may look scary, but `1.3Gi` available means the VM still has usable room.
 
-The process view connects memory to services:
+Next, connect memory use to processes:
 
 ```bash
-$ ps -eo pid,user,%mem,rss,vsz,cmd --sort=-rss | head
+ps -eo pid,user,%mem,rss,vsz,cmd --sort=-rss | head
 ```
 
-`RSS` is resident set size, the memory physically in RAM for that process. `VSZ` is virtual memory size, which includes address space the process may not be actively using. For day-to-day triage, RSS is usually the more useful first number.
+Example output:
 
-If `inventory-api` grows from `250MiB` RSS to `1.8GiB` over several hours with similar traffic, suspect a memory leak or unbounded cache. If memory is stable but `available` shrinks during a batch job, the job may be the immediate pressure source.
+```console
+    PID USER     %MEM     RSS      VSZ CMD
+   1842 app      18.6  742312  1840420 /usr/bin/node /srv/app/current/server.js
+    913 www-data  1.1   45224   151248 nginx: worker process
+   2409 root       0.4   17296    65044 /usr/bin/tar -czf /var/backups/app.tgz /srv/app
+```
+
+`RSS` is resident set size, the memory currently held in RAM for the process. `VSZ` is virtual memory size, which includes address space the process may not actively use. For first-pass triage, RSS is usually the better number.
+
+If the same service grows from `250MiB` RSS to `1.8GiB` RSS over a few hours with similar traffic, investigate memory growth in the application. If the largest process is a maintenance job, the service may be affected by host pressure caused by that job.
 
 ## Page Cache, Buffers, and Slab
 <!-- section-summary: Linux uses memory for filesystem cache and kernel data structures, and much of it can be reclaimed under pressure. -->
 
-The **page cache** stores file contents in memory after they are read from disk. If Nginx serves static files, or the API reads local templates or data files, repeated reads can come from RAM instead of storage. This improves performance and explains why memory appears "used" after normal activity.
+A common memory scare happens after `free -h` shows only a few hundred MiB in the `free` column, while the application is still healthy. That usually means Linux is using spare RAM for useful kernel work. The question is whether that memory can return to applications when they need it.
 
-Buffers hold block device metadata. Slab memory holds kernel objects such as dentries, inodes, and network structures. You can see more detail in `/proc/meminfo`:
+The first piece is the **page cache**. When a process reads files from disk, Linux can keep those file pages in RAM. Later reads of the same files can come from memory instead of waiting on storage again. This is why a server can show low free memory and still have healthy available memory.
+
+The next piece is **buffers**. Buffers help with block-device bookkeeping while Linux works with storage. They are usually much smaller than page cache on many application servers, yet they still show up in memory reports.
+
+The last piece here is **slab memory**. The kernel keeps frequently used objects in slab caches, such as dentries, inodes, and networking structures. Some slab memory is reclaimable under pressure, while some has to stay until the kernel no longer needs those objects.
+
+For more detail than `free`, inspect `/proc/meminfo`:
 
 ```bash
-$ grep -E 'MemTotal|MemAvailable|Buffers|Cached|Slab|SReclaimable|SUnreclaim' /proc/meminfo
+grep -E 'MemTotal|MemAvailable|Buffers|Cached|Slab|SReclaimable|SUnreclaim' /proc/meminfo
+```
+
+Example output:
+
+```console
 MemTotal:        3995488 kB
 MemAvailable:   1374280 kB
 Buffers:           84212 kB
@@ -131,114 +212,199 @@ SReclaimable:     151304 kB
 SUnreclaim:        87236 kB
 ```
 
-`SReclaimable` is slab memory the kernel can reclaim when needed. `SUnreclaim` is slab memory with a more constrained reclaim path. Large unreclaimable slab growth can point to kernel or driver pressure. Most API VM issues still come from application RSS, page cache behavior, or swap.
+The fields to notice:
 
-Avoid clearing caches as a routine fix. Commands that drop caches can make graphs look better for a moment while hurting performance by forcing the system to reread data from disk. The better question is whether applications have enough available memory under normal traffic.
+- `MemAvailable` should match the general idea from `free -h`.
+- `Cached` is file data Linux can often reclaim.
+- `SReclaimable` is kernel slab memory that can be reclaimed under pressure.
+- `SUnreclaim` is slab memory with a more constrained reclaim path.
+
+Avoid clearing caches as a routine fix. Dropping caches can make a graph look better for a moment while forcing the server to reread useful data from disk. The better question is whether applications have enough available memory during normal traffic.
+
+In production, high cache with healthy `MemAvailable` is usually good. High `SUnreclaim` that keeps growing, low `MemAvailable`, and rising latency deserve a deeper look because kernel memory can squeeze applications too. The next decision is to compare memory over time: stable cache is normal, falling availability with growing application RSS or unreclaimable slab needs investigation.
 
 ## Swap and Memory Pressure
 <!-- section-summary: Swap can absorb temporary pressure, but active swapping during requests usually means the VM lacks enough RAM for the workload. -->
 
-**Swap** is disk-backed space Linux can use when RAM is under pressure. It can help the system survive short spikes, but active swapping is much slower than RAM. On a latency-sensitive API, heavy swap activity can turn normal requests into slow requests.
+A request that normally finishes quickly can suddenly take seconds while CPU still has idle time. The server feels heavy, disk I/O rises, and nothing obvious has crashed. One common mistake is checking only `free -h`, seeing some swap used, and assuming the machine is doomed or healthy from that single number.
 
-The `free` output shows how much swap is used, but used swap alone is not enough. A VM can have old pages in swap and still run fine. The important signal is current swap activity.
+Swap uses disk-backed space when RAM is tight. It can help the machine survive a short spike, but active swapping is much slower than RAM. A service can appear slow because Linux is moving memory pages between RAM and disk.
 
-`vmstat` shows swap-in and swap-out rates:
+The `free` output shows how much swap is used, but used swap alone is not enough. A machine may have old pages in swap and still run fine. Current swap activity is the signal to watch.
+
+Under the hood, Linux moves memory in pages. A page that has not been used recently may move from RAM to swap so RAM can serve hotter work. Later, if the process touches that page again, Linux has to read it back from swap. That back-and-forth is why active swapping can turn a memory shortage into slow disk I/O.
+
+Use `vmstat` to sample every five seconds:
 
 ```bash
-$ vmstat 5
+vmstat 5 3
+```
+
+Example output:
+
+```console
 procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
  r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
  3  0 122880 260000  84000 1092000  0    0    12    40 1200 2100 78  7 15  0  0
  4  1 180224 120000  74000  810000 64  128  420  900 1800 2800 65 10 18  7  0
+ 5  1 196608  90000  73000  760000 80  160  510 1100 1900 3100 61 11 16 12  0
 ```
 
-`si` means swap in, and `so` means swap out. Sustained nonzero values during API traffic point to memory pressure. The `b` column shows blocked processes, and `wa` shows I/O wait. Together they can explain slow requests caused by memory pressure turning into disk pressure.
+Focus on the later sample lines, not only the first line. Important beginner signals:
 
-When swap activity appears, check the top RSS processes, recent deployments, traffic changes, and OOM events. Adding RAM may be the right infrastructure fix, but application memory growth should still be understood.
+- `si` means swap in. Linux is reading pages back from swap into RAM.
+- `so` means swap out. Linux is writing pages from RAM to swap.
+- Sustained nonzero `si` and `so` during live traffic point to memory pressure.
+- `b` shows blocked tasks, and `wa` shows I/O wait. These can rise because swapping turns memory pressure into disk pressure.
+
+When swap activity appears, check top RSS processes, recent deployments, scheduled jobs, traffic changes, and OOM messages. Adding RAM may be the infrastructure fix, but a growing process still needs investigation.
+
+The practical next decision is about current movement as well as allocation. A nonzero `swpd` value with zero `si` and `so` usually means old swapped pages are sitting quietly. Nonzero `si` and `so` during slow requests point to active swapping. At that point, reduce memory use, stop the competing job, restart a leaking service after collecting evidence, or add RAM. Swap can buy time, and normal request traffic should stay mostly in RAM.
 
 ## `vmstat` as the First Triage Tool
 <!-- section-summary: `vmstat 5` gives a compact five-second view of runnable tasks, memory, swap, I/O, interrupts, context switches, and CPU categories. -->
 
-`vmstat 5` prints one line every five seconds. The first line is an average since boot, so focus on the later lines.
+A slow server often gives overlapping clues. The load average is high, memory looks tight, and users report timeouts. If you check one command at a time, it is easy to chase the wrong branch for ten minutes.
+
+`vmstat` helps because one sampled table puts the main clues beside each other. It shows runnable CPU work, blocked work, memory, swap movement, disk reads and writes, interrupts, context switches, and CPU time categories in the same five-second window. That shared window matters because CPU pressure, swap activity, and disk waits can all appear during the same incident.
+
+Run it with a repeat interval and a count:
 
 ```bash
-$ vmstat 5
-procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
- r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
- 1  0  122880 340000 88000 1200000  0    0     8    35 1100 1900 22  5 72  1  0
- 6  0  122880 310000 87000 1190000  0    0    10    50 2400 4200 91  6  3  0  0
+vmstat 5 3
 ```
 
-Important columns:
+Example output:
+
+```console
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 122880 340000  88000 1200000  0    0     8    35 1100 1900 22  5 72  1  0
+ 6  0 122880 310000  87000 1190000  0    0    10    50 2400 4200 91  6  3  0  0
+ 7  0 122880 300000  87000 1185000  0    0    12    55 2500 4300 92  5  3  0  0
+```
+
+The most useful columns are:
 
 | Column | Meaning |
 |---|---|
 | `r` | Runnable tasks waiting for CPU |
 | `b` | Tasks blocked, often on I/O |
+| `swpd` | Memory currently placed in swap |
+| `free` | Completely unused memory |
+| `buff` / `cache` | Buffer and page-cache memory |
 | `si` / `so` | Swap in and swap out |
 | `bi` / `bo` | Blocks read from and written to disk |
+| `in` / `cs` | Interrupts and context switches |
 | `us` / `sy` | User and kernel CPU time |
 | `id` | Idle CPU |
 | `wa` | I/O wait |
 | `st` | Steal time on a VM |
 
-In the second sample line, `r` is `6` on a small VM, `us` is `91`, and idle is `3`. That points toward CPU saturation in user-space code. A different line with high `b` and high `wa` would point toward disk or storage waits. A line with nonzero `si` and `so` points toward active swapping.
+The first data line can include averages since boot, so the later lines are usually more useful for a live issue. In the sample, the second and third lines show `r` at `6` and `7`, `us` above `90`, and `id` at `3`. On a small VM, that points to CPU saturation from user-space work. A different sample with high `b` and high `wa` would point toward storage waits. A sample with nonzero `si` and `so` would point toward active swapping.
 
-This is why `vmstat` is a good first command. It separates the main paths quickly so the next check has a direction.
+The next decision is the branch: high `r` plus low `id` means CPU, high `b` plus high `wa` means I/O, nonzero `si` and `so` means memory pressure, and high `st` means the VM lost CPU time to the host. Then pick the article or runbook that matches that branch.
 
 ## Per-Process Memory and the OOM Killer
 <!-- section-summary: Per-process RSS and kernel OOM logs reveal which process consumed memory and whether Linux killed one to recover. -->
 
-When memory runs out, Linux may invoke the **OOM killer**. OOM means out of memory. The kernel chooses a process to kill so the system can keep running. From the service view, it may look like the API simply crashed.
+A service can vanish in the middle of traffic with no application stack trace. The restart counter increments, users see a short outage, and the app log ends without a graceful shutdown message. That pattern often sends operators to the kernel logs, because Linux may have killed the process to recover memory.
 
-Check kernel logs:
+OOM means out of memory. When the system cannot reclaim enough memory, the Linux kernel may kill a process so the machine can keep running. From the service side, this may look like a sudden crash or an unexpected service restart, with no clean application shutdown.
 
-```bash
-$ journalctl -k --since "1 hour ago" | grep -i "out of memory"
-$ journalctl -k --since "1 hour ago" | grep -i "killed process"
-```
+The OOM killer exists as a last-resort safety valve. If the kernel cannot free enough memory through cache reclaim, compaction, or swap, the whole machine can stall. Killing one process can free memory so PID `1`, SSH, and other services have a chance to keep running.
 
-If systemd recorded the signal, service logs may also help:
+Under the hood, the kernel scores processes and chooses a victim based on memory use and OOM adjustment settings. A large process often has a higher score, while protected services can set lower scores. The selection is not a root-cause explanation by itself. It tells you which process freed memory at that moment.
 
-```bash
-$ journalctl -u inventory-api --since "1 hour ago" --no-pager
-```
-
-Per-process memory gives the current state:
+Check the kernel journal for OOM evidence:
 
 ```bash
-$ ps -eo pid,user,rss,%mem,cmd --sort=-rss | head
+journalctl -k --since "1 hour ago" --no-pager | grep -Ei "out of memory|killed process|oom"
 ```
 
-For deeper process detail:
+Example output:
+
+```console
+Jun 24 10:18:31 web-01 kernel: Out of memory: Killed process 1842 (node) total-vm:1840420kB, anon-rss:742312kB, file-rss:0kB, shmem-rss:0kB
+Jun 24 10:18:31 web-01 kernel: oom_reaper: reaped process 1842 (node), now anon-rss:0kB
+```
+
+The useful pieces are the PID, command name, and resident memory. This tells you which process the kernel killed and roughly how much RAM it held.
+
+Now check the service journal around the same time:
 
 ```bash
-$ pid=$(systemctl show -p MainPID --value inventory-api)
-$ grep -E 'VmRSS|VmSize|Threads|State' "/proc/${pid}/status"
+journalctl -u app.service --since "1 hour ago" --no-pager | tail -20
 ```
 
-If the API gets OOM-killed after every deployment, compare the release version, request pattern, and memory limit in the systemd unit. If another process causes memory pressure, such as a backup, report export, or build step, move that work off the production VM or run it with clear limits.
+Example output:
+
+```console
+Jun 24 10:18:31 web-01 systemd[1]: app.service: Main process exited, code=killed, status=9/KILL
+Jun 24 10:18:31 web-01 systemd[1]: app.service: Failed with result 'signal'.
+Jun 24 10:18:36 web-01 systemd[1]: app.service: Scheduled restart job, restart counter is at 1.
+Jun 24 10:18:36 web-01 systemd[1]: Started app.service - Application service.
+```
+
+This connects the kernel event to the service lifecycle. The kernel killed PID `1842`, and systemd restarted the service because the unit policy allowed it.
+
+For the current process, ask systemd for the main PID and inspect `/proc`:
+
+```bash
+pid=$(systemctl show -p MainPID --value app.service)
+grep -E 'Name|State|VmRSS|VmSize|Threads' "/proc/${pid}/status"
+```
+
+Example output:
+
+```console
+Name:   node
+State:  S (sleeping)
+VmSize:  1218400 kB
+VmRSS:    286420 kB
+Threads:      18
+```
+
+`VmRSS` should roughly match the RSS value from `ps`. `Threads` helps spot thread growth. `State` confirms whether the process is running, sleeping, or stuck. If the process keeps growing after each restart, investigate the application path that allocates memory. If another job caused the pressure, move that job away from peak traffic or run it with clear resource limits.
+
+The next decision is evidence before action. If the killed process is the main service and RSS had been climbing, capture logs and memory graphs before restarting repeatedly. If the killed process is a backup, export, or build job, move it out of peak traffic, add a systemd memory guardrail, or run it on a separate worker host.
 
 ## A Practical CPU and Memory Runbook
-<!-- section-summary: A repeatable runbook starts with symptom confirmation, then checks load, CPU categories, memory availability, swap activity, and process ownership. -->
+<!-- section-summary: A repeatable runbook confirms the symptom, then checks load, CPU categories, memory availability, swap activity, and process ownership. -->
 
-A beginner-friendly triage flow for the slow API can be short:
+A realistic CPU and memory incident might arrive as a page that says the checkout endpoint has been slow for fifteen minutes. The service is still up, so the first job is to collect enough evidence before restarting anything. The runbook has a simple rhythm: confirm the user-facing symptom, check whether the host is overloaded, then connect the pressure to a process or kernel event.
+
+The first decision is whether users are seeing real latency right now. The `curl` line measures one request and prints total time. After that, `uptime` and `nproc` tell you whether the load is high for this machine's CPU count.
+
+The second decision is which resource branch owns the pressure. `vmstat 5 3` samples CPU, blocked tasks, swap, and I/O together. Then `free -h` explains whether memory is truly available after Linux cache is accounted for.
+
+The third decision is ownership. The two `ps` commands show top CPU consumers and top resident-memory consumers. The service and kernel journals tell you whether the process restarted, hit an application error, or was killed by the kernel.
 
 ```bash
-$ curl -w '\n%{time_total}s\n' -o /dev/null -s https://api.example.com/health
-$ uptime
-$ nproc
-$ vmstat 5
-$ free -h
-$ ps -eo pid,user,%cpu,%mem,rss,etime,cmd --sort=-%cpu | head
-$ ps -eo pid,user,%cpu,%mem,rss,etime,cmd --sort=-rss | head
-$ journalctl -u inventory-api --since "30 minutes ago" --no-pager | tail -100
-$ journalctl -k --since "30 minutes ago" --no-pager | grep -Ei "oom|killed process|out of memory"
+curl -w '\n%{time_total}s\n' -o /dev/null -s https://example.com/health
+uptime
+nproc
+vmstat 5 3
+free -h
+ps -eo pid,user,%cpu,%mem,rss,etime,cmd --sort=-%cpu | head
+ps -eo pid,user,%cpu,%mem,rss,etime,cmd --sort=-rss | head
+journalctl -u app.service --since "30 minutes ago" --no-pager | tail -100
+journalctl -k --since "30 minutes ago" --no-pager | grep -Ei "oom|killed process|out of memory"
 ```
 
-Read the results as a story. High CPU with the API at the top points to application work. High load with high I/O wait points to storage. Low available memory plus active swap points to memory pressure. OOM messages explain sudden restarts. A non-API process at the top may be a maintenance job competing with production traffic.
+Each command narrows the story:
 
-The immediate action depends on that story. You might roll back a release, restart a leaking service, stop a runaway report job, increase VM size, add swap as a temporary safety net, or move background work elsewhere. The important habit is measuring first so the fix matches the pressure.
+- `curl -w` confirms the user-facing symptom and prints total request time.
+- `uptime` and `nproc` compare load average with CPU count.
+- `vmstat 5 3` separates runnable CPU work, blocked work, swap activity, I/O wait, and steal time.
+- `free -h` shows memory availability after Linux cache is accounted for.
+- The first `ps` command finds top CPU consumers, while the second finds top resident-memory consumers.
+- The service journal shows application errors and restarts near the slowdown.
+- The kernel journal confirms OOM kills and memory-pressure events.
+
+Treat the output as one timeline. High CPU with the service at the top points to application work. High load with high I/O wait points to storage. Low available memory plus active swap points to memory pressure. OOM messages explain sudden restarts. A maintenance job near the top may be competing with production traffic.
+
+The immediate action should match the evidence. You might roll back a release, restart a leaking service, stop a runaway report job, increase VM size, add swap as a temporary safety net, or move background work elsewhere. The habit to keep is simple: measure first, then choose the fix that matches the pressure.
 
 ## References
 

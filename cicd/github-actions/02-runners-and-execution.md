@@ -44,14 +44,9 @@ A **runner** is both a machine and the runner application installed on that mach
 
 In a simple job, the flow looks like this. GitHub handles the orchestration, while the runner handles the actual command execution.
 
-```mermaid
-flowchart LR
-    Event["Workflow run"] --> Queue["Job queued"]
-    Queue --> Runner["Runner accepts job"]
-    Runner --> Workspace["Workspace prepared"]
-    Workspace --> Steps["Steps execute in order"]
-    Steps --> Result["Logs and result return to GitHub"]
-```
+![Runner job execution flow showing job queued, runner accepts, workspace prepared, checkout code, run commands, upload logs, and return result](/content-assets/articles/article-cicd-github-actions-runners-and-execution/runner-job-execution-flow.png)
+
+*A runner turns a queued job into a prepared workspace, ordered command execution, uploaded logs, and a result that GitHub can show beside the commit.*
 
 Each job gets its own runner assignment. If a workflow has two independent jobs, GitHub can place them on two different machines. This explains why files created in one job are unavailable in another job unless you pass them through artifacts, caches, packages, or another shared system.
 
@@ -103,6 +98,10 @@ jobs:
 That `runs-on` array targets a self-hosted runner with matching labels. The workflow is saying that this job needs Linux and private network access, not just any available machine.
 
 Self-hosting changes the responsibility line. Your team now patches the operating system, controls who can use the runner, rotates secrets available on the machine, clears workspaces safely, monitors disk usage, and decides how jobs are isolated from each other. Those tasks are normal infrastructure work, so self-hosted runners should solve a real problem before they become the default.
+
+![Hosted runner versus self-hosted runner comparison showing fresh managed machines for pull requests and private-network custom machines for controlled jobs](/content-assets/articles/article-cicd-github-actions-runners-and-execution/hosted-vs-self-hosted-runners.png)
+
+*Hosted runners are usually the clean starting point for pull request checks, while self-hosted runners make sense when a job truly needs private network access, custom tools, or special capacity.*
 
 Runner selection is controlled through labels, so we should slow down on that part. Labels are where a workflow turns a vague machine need into a concrete scheduling request.
 
@@ -346,6 +345,10 @@ jobs:
 The workflow names the machine shape through `runs-on`. It checks out the repository before reading project files. It installs the system package needed for native builds. It uses a setup action to select Node.js. It keeps private network access inside the one job that needs it.
 
 This is the execution layer behind the workflow structure from the first article. Events and YAML decide what should happen. Runners decide where it happens and what the job can reach while it runs.
+
+![Reliable runner checklist showing labels, checkout workspace, installing tools, cache care, secret isolation, and artifact upload](/content-assets/articles/article-cicd-github-actions-runners-and-execution/reliable-runner-checklist.png)
+
+*A reliable runner setup declares the machine, prepares the workspace, installs tools, handles caches carefully, isolates secrets, and preserves useful artifacts.*
 
 ## What's Next
 <!-- section-summary: The next article turns repeated workflow steps into shared actions and reusable workflows so multiple repositories can use the same automation without copy-paste. -->

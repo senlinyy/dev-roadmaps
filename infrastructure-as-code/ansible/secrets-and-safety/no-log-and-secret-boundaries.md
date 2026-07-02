@@ -39,6 +39,11 @@ Think about a failed production run. A template task fails because the destinati
 
 `no_log: true` tells Ansible to hide sensitive task details from normal output. It is usually applied to tasks that pass passwords, tokens, private keys, certificates, secret-bearing environment files, or API credentials. The task still runs, and Ansible still records success or failure, but the detailed result is censored.
 
+
+![No Log Redaction Map](/content-assets/articles/article-infrastructure-as-code-ansible-no-log-secret-boundaries/no-log-redaction-map.png)
+
+*The redaction map shows no_log shielding task output before it reaches CI logs, while audit notes still explain the action.*
+
 A **task result** is the structured data Ansible gets back from a module. **Module arguments** are the values passed into that module. **Diff output** is the before-and-after content a file module may print. Secret handling needs all three in view because a password can leak through the input, the returned result, or the diff.
 
 Here is the orders service environment file task:
@@ -82,6 +87,11 @@ Now the deployment log can still show useful non-secret context. It can show tha
 <!-- section-summary: Safe secret boundaries keep secrets out of command strings, process lists, debug output, world-readable files, and broad registered data. -->
 
 A secret boundary is larger than one `no_log` line. You also decide how the secret reaches the remote host, which module receives it, which file stores it, and which later tasks might copy it into another result.
+
+
+![Secret Boundary Design](/content-assets/articles/article-infrastructure-as-code-ansible-no-log-secret-boundaries/secret-boundary-design.png)
+
+*The boundary design shows secrets decrypted late, used in a small scope, kept out of registered results, and verified safely.*
 
 Prefer purpose-built modules and structured parameters over shell strings. A shell command that includes a token may expose that token through process listings while the command runs, through shell tracing, or through a failed command result. A module parameter with `no_log` is usually a cleaner boundary because Ansible can handle the value without building a visible command line.
 
@@ -292,6 +302,11 @@ When a secret appears in logs, rotate the exposed secret and clean up the log ac
 <!-- section-summary: A safe secret-bearing playbook keeps secret work quiet and leaves the deployment log full of non-secret evidence. -->
 
 Here is the complete pattern for the orders platform. The secret values come from Vault, the rendered files stay restricted, the task output stays quiet, and verification uses metadata plus health checks.
+
+
+![Secret Boundary Summary](/content-assets/articles/article-infrastructure-as-code-ansible-no-log-secret-boundaries/secret-boundary-summary.png)
+
+*The summary keeps secret handling practical: mask, minimize, separate, verify, and debug safely.*
 
 ```yaml
 - name: Configure orders secrets safely

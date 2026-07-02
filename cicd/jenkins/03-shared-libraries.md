@@ -31,6 +31,10 @@ That is the point where Shared Libraries become useful. Each application reposit
 
 This gives the team leverage, and it also creates responsibility. A shared library can break many pipelines at once. It can also run trusted Groovy code depending on how Jenkins configures it. The rest of this article builds the library carefully: first how Jenkins loads it, then how `vars/`, `src/`, and `resources/` split responsibility, then how versioning prevents a helpful refactor from becoming a production outage.
 
+![Jenkins Shared Library structure showing Jenkinsfile using at Library, shared library repo, vars global step, src helper classes, and resources templates](/content-assets/articles/article-cicd-jenkins-shared-libraries/shared-library-structure.png)
+
+*A shared library lets each application Jenkinsfile stay small while reusable steps, helper classes, and templates live in a versioned platform repository.*
+
 ## Configuring and Loading Libraries
 <!-- section-summary: Jenkins loads shared libraries from configured source-control locations, and Jenkinsfiles request them by name and version. -->
 
@@ -179,6 +183,10 @@ writeFile file: 'generated-values.yaml', text: values
 
 This folder split keeps the library understandable. `vars/` exposes the friendly pipeline interface. `src/` holds real helper code. `resources/` holds templates and static files. Once a library has that shape, versioning is the next big design choice.
 
+![What the Jenkins Shared Library provides showing vars callable step, src helpers, resources templates, and a standard service pipeline](/content-assets/articles/article-cicd-jenkins-shared-libraries/library-provides-pipeline.png)
+
+*The library interface stays friendly through `vars/`, while helper code and templates support the standard pipeline behind that small call.*
+
 ## Versioning by Git Ref
 <!-- section-summary: Pinning a library by branch, tag, or commit controls how quickly shared pipeline changes reach application repositories. -->
 
@@ -252,6 +260,10 @@ Summit Retail ends with a clean pattern. Application repositories keep small Jen
 The team also treats the shared library like a product. Changes land through review, test Jenkinsfiles run before merge, release tags get notes, and production services consume tags instead of a moving branch. Sandbox jobs can still follow `main`, because fast feedback belongs in low-risk places.
 
 This is the natural next step after good Jenkinsfiles. Pipeline as Code gives each repository a reviewed delivery contract. Shared Libraries keep that contract small while giving the platform team one maintained implementation for the repeated parts.
+
+![Safe shared library rollout showing library change, pin Git ref, test one service, stage rollout, watch failures, rollback tag, and many pipelines protected](/content-assets/articles/article-cicd-jenkins-shared-libraries/safe-shared-library-rollout.png)
+
+*A safe library rollout treats the shared pipeline code like a product: version it, test it with representative services, expand slowly, and keep a rollback tag ready.*
 
 ## What's Next
 <!-- section-summary: The next article moves from pipeline code to the controller itself: plugins, Configuration as Code, and repeatable Jenkins installations. -->

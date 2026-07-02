@@ -35,6 +35,11 @@ That separation is what lets one playbook configure both staging and production.
 
 Most teams start with a simple layout and grow into a directory per environment. Each environment directory contains a host map and two optional variable directories. `group_vars` stores values for groups, and `host_vars` stores values for individual hosts.
 
+
+![Variables Directory Shape](/content-assets/articles/article-infrastructure-as-code-ansible-groups-host-variables/variables-directory-shape.png)
+
+*The directory view shows how group_vars, host_vars, and Vault files sit beside inventory so values stay close to the machines they describe.*
+
 ```yaml
 inventories/
   staging/
@@ -134,6 +139,11 @@ Host variables should be easy to explain. If five web hosts need the same value,
 
 Ansible has **variable precedence**, which means some variable sources override others when the same name appears more than once. The full table can wait until you need it, and the practical habit starts right away: keep each important value in one narrow, explainable place.
 
+
+![Group Host Variable Resolution](/content-assets/articles/article-infrastructure-as-code-ansible-groups-host-variables/group-host-variable-resolution.png)
+
+*The resolution flow makes the winning value visible when defaults, group settings, host exceptions, and release inputs all mention the same setting.*
+
 For inventory variables, host-specific values override broader group values. A value in `host_vars/orders-web-02.yml` can override a value from `group_vars/prod_web.yml` for that one host. More explicit runtime values, such as extra variables passed with `-e`, can override many other sources, so they deserve careful handling.
 
 Here is a common production shape:
@@ -225,6 +235,11 @@ Runtime overrides need extra care. Extra variables passed with `-e` are powerful
 <!-- section-summary: Clean variable placement lets one playbook adapt to environments while keeping exceptions and secrets visible. -->
 
 The orders platform now has a host map and a value map. Environment-wide values live in `group_vars/all.yml`, production web values live in `group_vars/prod_web.yml`, and the temporary storage exception for `orders-web-02` lives in one host file with a ticket number beside it.
+
+
+![Groups Host Vars Summary](/content-assets/articles/article-infrastructure-as-code-ansible-groups-host-variables/groups-host-vars-summary.png)
+
+*The summary connects shared settings, host exceptions, secrets, verification, and rollback into one variable-placement checklist.*
 
 The playbook stays readable because it uses stable variable names. Templates refer to `orders_app_port`, `orders_data_dir`, and `orders_nginx_server_name`, while inventory supplies the right values for each selected host. Secrets use Vault, and non-secret values stay visible for review.
 

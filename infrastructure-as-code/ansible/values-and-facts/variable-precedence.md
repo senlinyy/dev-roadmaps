@@ -37,6 +37,11 @@ This happens constantly in real playbooks. A value can come from role defaults, 
 
 Ansible has a large official precedence list. Beginners can start with the practical shape before memorizing every row. From lower to higher, Ansible considers configuration settings, command-line options, playbook keywords, variables, and direct assignment inside some module or plugin calls.
 
+
+![Precedence Stack](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/precedence-stack.png)
+
+*The precedence stack shows how role defaults, inventory values, play values, set_fact, and extra vars compete for one final value.*
+
 That shape explains a common surprise. A command-line option such as `-u deploy` sets the remote user as an option. A variable such as `ansible_user` can still override it because variables sit higher than ordinary command-line options. Passing `-e ansible_user=breakglass` is even stronger because extra variables are high-precedence variables.
 
 Inside the variable category, the official list is long. A useful daily pattern is this: role defaults are weak, inventory and play variables are stronger, host-specific values can beat broader group values, values created during the run can affect later tasks, and extra variables are among the strongest variable inputs.
@@ -134,6 +139,11 @@ Extra variables can still override many values created elsewhere. That is one re
 
 When a rendered file contains the wrong value, start by asking what Ansible selected for one host. The `ansible-inventory --host` command shows compiled inventory values for a host before the playbook runs. It is a good first check for group and host variable problems.
 
+
+![Audit Winning Value](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/audit-winning-value.png)
+
+*The audit flow shows how to check safe debug output, inventory data, and release inputs before changing the source that actually won.*
+
 ```bash
 ansible-inventory -i inventories/prod/hosts.yml --host orders-web-01.example.com
 ```
@@ -186,6 +196,11 @@ Those two checks prove the selected value and preview the file change before the
 <!-- section-summary: Precedence works well when the team can explain why each stronger value exists and when it should be removed. -->
 
 The orders platform now has a predictable value flow. Role defaults provide weak starting values. Production inventory supplies stable environment settings. Host variables carry rare, documented exceptions. Extra variables carry release inputs. Facts, registered results, and `set_fact` values help the playbook react during a run.
+
+
+![Precedence Summary](/content-assets/articles/article-infrastructure-as-code-ansible-variables-facts-precedence/precedence-summary.png)
+
+*The summary keeps precedence practical: choose a home, document overrides, audit the winner, and protect extra vars.*
 
 When `orders-web-02` renders `debug` for `orders_api_log_level`, the team should be able to explain the source quickly. If the answer is a temporary host variable, it should have an owner and a cleanup path. If the answer is an extra variable, it should appear in the deployment record.
 

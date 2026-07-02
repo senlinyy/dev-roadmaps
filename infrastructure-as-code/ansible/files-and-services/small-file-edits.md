@@ -29,6 +29,11 @@ aliases:
 
 The previous article covered files where Ansible owns the whole content. That is the cleanest case because the repository can show the full desired file. Real servers also have shared files, and shared files need a smaller boundary.
 
+
+![Partial Ownership Boundary](/content-assets/articles/article-infrastructure-as-code-ansible-small-file-edits/partial-ownership-boundary.png)
+
+*The ownership boundary shows how Ansible can manage one setting or one marked block without taking over a whole shared file.*
+
 A shared file is a file where another tool, package, role, or team also owns part of the content. The operating system may ship `/etc/ssh/sshd_config`, a security baseline may manage login policy, and the application team may need one setting for production access. Replacing that whole file with a template can erase context that another owner expects to keep.
 
 For the orders platform, the web servers need a few small changes outside the app's own files. The platform team wants to set one SSH keepalive value, add one resource-limit block for the `orders` service user, and migrate an old metrics endpoint inside a vendor-managed agent file. Those are three different ownership shapes, so Ansible gives us three different tools.
@@ -37,6 +42,11 @@ For the orders platform, the web servers need a few small changes outside the ap
 <!-- section-summary: The module choice follows the ownership boundary before it follows personal preference. -->
 
 The practical question is: **how much of this file does the playbook own?** If the playbook owns one line, use `lineinfile`. If it owns a marked multi-line section, use `blockinfile`. If it needs to replace every occurrence of a known pattern, use `replace`. If the team owns the whole file, go back to `template` or `copy`.
+
+
+![Edit Tool Choice Map](/content-assets/articles/article-infrastructure-as-code-ansible-small-file-edits/edit-tool-choice-map.png)
+
+*The tool map shows when a single line, managed block, regex replacement, or full template is the right edit boundary.*
 
 That choice keeps playbooks readable. A reviewer can see that a task edits exactly one setting in SSH, exactly one marked block in a limits file, or exactly one old endpoint pattern in a vendor config. The task name should say the same thing in plain language.
 
@@ -189,6 +199,11 @@ The manual restore is the emergency step. The durable rollback is a commit that 
 <!-- section-summary: lineinfile, blockinfile, and replace keep automation precise when files have multiple owners. -->
 
 The orders web fleet now has a clear partial-edit approach. `lineinfile` owns one SSH keepalive line. `blockinfile` owns one marked limits section for the service user. `replace` moves one old metrics endpoint across the vendor agent file. Each task has a tight ownership boundary, and risky files use validation or backups.
+
+
+![Small Edits Summary](/content-assets/articles/article-infrastructure-as-code-ansible-small-file-edits/small-edits-summary.png)
+
+*The summary turns small-file edits into a safe sequence: choose the smallest tool, guard the regex, validate, read the diff, and roll back.*
 
 The operator workflow mirrors full-file management. Preview with `--check --diff`, run in staging, verify the parser and resulting content, then roll through production in small batches. A task that reports `ok` on the second run gives you confidence that the edit is repeatable.
 

@@ -52,6 +52,10 @@ jenkins:
 
 `numExecutors: 0` removes build slots from the controller. `mode: EXCLUSIVE` makes Jenkins send jobs to agents that match labels instead of treating the controller as a general fallback. This small setting prevents the most common beginner mistake: letting a pipeline accidentally run `npm install`, `docker build`, or `terraform apply` on the machine that also stores Jenkins secrets and serves the UI.
 
+![Jenkins controller and agents showing controller state, build queue, executor slots, Linux agent, Docker agent, Maven agent, and jobs assigned by label](/content-assets/articles/article-cicd-jenkins-architecture-and-agents/controller-agent-architecture.png)
+
+*A healthy Jenkins installation keeps durable state on the controller while agents provide the executor capacity and toolchains that run build commands.*
+
 Agents also create **workspaces**. A workspace is the directory where Jenkins checks out the repository and runs commands for a job, usually under an agent root path like `/var/jenkins_agent/workspace/checkout-api-main`. Persistent workspaces can speed up builds because Maven caches, npm caches, and Gradle caches remain between runs. They also create dirty-state risk, because a file from yesterday's build can change today's result.
 
 Real teams handle that tradeoff explicitly. For normal agents, they clean the workspace at the start or end of sensitive jobs and keep dependency caches in known cache directories rather than random project folders. For high-risk or highly variable builds, they use ephemeral container agents so the whole filesystem disappears after the build. The right choice depends on build speed, security boundaries, and how much the team trusts the code that enters the agent.
@@ -77,6 +81,10 @@ After the team separates controller and agent responsibilities, the next questio
 | Kubernetes pod agent | Plugin creates pod, pod connects back | Elastic containerized builds | Pod template, service account, image, and namespace policy |
 
 Here is the practical way to choose. If the controller can reach a controlled VM fleet and SSH operations already work well, SSH agents keep things simple. If agents live in a private subnet where only outbound HTTPS works, WebSocket inbound agents usually fit. If every build should start with a clean filesystem and your team already trusts Kubernetes as the runtime, dynamic pod agents give Jenkins a fresh worker for each run.
+
+![Jenkins agent connection modes showing SSH agents, inbound WebSocket agents, restricted networks, labels, and jobs running on matching agents](/content-assets/articles/article-cicd-jenkins-architecture-and-agents/agent-connection-modes.png)
+
+*Agent connection style follows the network path: the controller can open SSH to reachable machines, while private agents can call back through an inbound WebSocket connection.*
 
 ## Labels and Agent Selection
 <!-- section-summary: Labels let a Jenkinsfile ask for a capability instead of naming a specific machine. -->
@@ -183,6 +191,10 @@ Summit Retail's improved Jenkins setup now has one controller and several agent 
 The Jenkinsfiles ask for capabilities by label instead of naming machines. The network design uses SSH agents for the reachable VM fleet and WebSocket inbound agents for private subnets. The Kubernetes plugin creates temporary pods for builds that need a fresh filesystem. Each choice follows a real boundary rather than a preference.
 
 When a build queue grows, the team can see which label needs capacity. When an agent disconnects, they can inspect that connection style and its network path. When the UI slows down, they can separate controller JVM evidence from agent workload evidence. This is what operating Jenkins means in production: keep responsibilities separate, keep evidence close, and make each failure point small enough to reason about.
+
+![Healthy Jenkins architecture showing controller staying light, agents doing builds, labels routing work, executor capacity, queue monitoring, and failure recovery](/content-assets/articles/article-cicd-jenkins-architecture-and-agents/healthy-jenkins-architecture.png)
+
+*The architecture summary keeps the main operating loop visible: light controller, capable agents, label-aware capacity, queue evidence, and a clear recovery plan.*
 
 ## What's Next
 <!-- section-summary: The next article turns this architecture into version-controlled pipelines that run on the right agents. -->

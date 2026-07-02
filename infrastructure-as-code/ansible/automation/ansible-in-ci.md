@@ -28,6 +28,11 @@ aliases:
 
 Running Ansible in CI means the pipeline runner acts as the control node. It checks out the repository, installs Ansible and collections, reads inventory, decrypts Vault content when allowed, connects to managed hosts, and stores the job output. That is powerful because deployments run as repeatable jobs instead of private terminal sessions.
 
+
+![CI Runner Control Node](/content-assets/articles/article-infrastructure-as-code-ansible-in-ci/ci-runner-control-node.png)
+
+*The CI runner map shows the pipeline acting as the Ansible control node, with a pinned image, bounded inventory, credentials, and managed hosts.*
+
 The orders platform is a good example. A pull request changes an Nginx template and a systemd override. CI should run linting and syntax checks before merge. After approval, a deployment job should preview one production host, apply the canary, and then roll through the rest of `orders_web` in controlled batches.
 
 The runner has to be treated like production infrastructure. Its Ansible version, Python version, collection versions, SSH configuration, Vault password source, network access, and host key data all affect the result. A job that works only because one runner image has an old collection cached is a deployment risk.
@@ -154,6 +159,11 @@ When a host key mismatch appears, stop and investigate. It can mean a rebuilt ho
 <!-- section-summary: A strong pipeline separates static checks, preview, approval, canary apply, and full rollout instead of hiding everything in one deploy button. -->
 
 A reliable CI deployment pipeline is staged. Each stage answers a different question. Static checks ask whether the content is well-formed. Preview asks what one target would change. Approval asks whether a human accepts the evidence. Apply asks Ansible to make the change. Verification asks whether the service is healthy after the change.
+
+
+![Pipeline Gate Map](/content-assets/articles/article-infrastructure-as-code-ansible-in-ci/pipeline-gate-map.png)
+
+*The gate map shows lint, syntax-check, check plus diff, approval, limited apply, and log scrubbing before production changes widen.*
 
 Here is a generic CI shape for the orders platform:
 
@@ -321,6 +331,11 @@ For host key mismatches, avoid automatically deleting known-host entries. Check 
 <!-- section-summary: A production-ready Ansible CI pipeline uses a pinned control node, scoped secrets, host key verification, preview, approval, canary apply, and serial rollout. -->
 
 The complete orders CI story is straightforward when each part has a job. The runtime is pinned through requirements or an execution environment. Secrets come from the CI secret store and live only in temporary files during the job. SSH host keys are verified through a managed `known_hosts` file. Validation and preview run before approval. Apply starts with one host, then the playbook rolls the rest in batches.
+
+
+![CI Summary](/content-assets/articles/article-infrastructure-as-code-ansible-in-ci/ci-summary.png)
+
+*The summary turns Ansible in CI into five guardrails: pin runtime, bound inventory, use a secret store, gate apply, and roll out.*
 
 ```bash
 set +x

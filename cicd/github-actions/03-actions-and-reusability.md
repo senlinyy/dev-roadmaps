@@ -38,6 +38,10 @@ The real problem is **configuration drift**. Configuration drift means copies th
 
 GitHub Actions gives you two main ways to reduce this drift: **custom actions** and **reusable workflows**. They solve different problems, so we will build up the difference carefully.
 
+![From copy-paste to shared automation showing copied YAML drifting across repositories and a shared action restoring consistent checks](/content-assets/articles/article-cicd-github-actions-reusability/shared-automation-drift.png)
+
+*Shared automation gives the platform team one place to fix repeated setup, scanners, and cache behavior instead of chasing drift across many copied workflow files.*
+
 ## What an Action Is
 <!-- section-summary: An action is a reusable step package that a workflow calls with `uses`, and it can be maintained separately from the workflow that calls it. -->
 
@@ -307,6 +311,10 @@ For the service team, a good pattern is to keep product-specific choices in the 
 
 The boundary should make responsibility clearer. Composite actions help developers avoid repeated commands. Reusable workflows help platform teams enforce shared delivery standards.
 
+![Composite action versus reusable workflow decision map showing shared steps inside a caller job and shared jobs with permissions and secrets](/content-assets/articles/article-cicd-github-actions-reusability/composite-action-vs-reusable-workflow.png)
+
+*Composite actions are a step-level reuse tool, while reusable workflows are the better boundary for shared jobs, permissions, environments, and deployment policy.*
+
 Shared automation now exists. The last practical question is how callers should reference it over time.
 
 ## Versioning Shared Automation
@@ -368,6 +376,10 @@ jobs:
 The `test` job uses composite actions because it is still one job owned by the service repository. The `security` and `staging-deploy` jobs call reusable workflows because they represent shared organization stages with their own permissions, reporting, and environment behavior.
 
 This keeps the service repository readable. It also gives the platform team one place to improve repeated logic. When the scanner changes, the shared workflow changes. When the Node.js setup improves, the shared composite action changes. Service teams consume those improvements through versioned references.
+
+![Reusable automation release path showing build shared step, define inputs, return outputs, pin version, test in one repo, roll out gradually, and audit consumers](/content-assets/articles/article-cicd-github-actions-reusability/reusable-automation-release-path.png)
+
+*A safe shared-automation rollout starts with a clear interface, pins versions, tests one service first, and expands gradually so many repositories do not all break at once.*
 
 ## What's Next
 <!-- section-summary: The next article focuses on secrets, environments, approvals, token permissions, and keyless cloud authentication. -->

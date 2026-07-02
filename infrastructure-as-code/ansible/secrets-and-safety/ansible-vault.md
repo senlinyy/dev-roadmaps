@@ -39,6 +39,11 @@ That solves one important storage problem. The secret can be versioned with the 
 
 Vault protects **content at rest**. That means the committed file, copied file, or stored variable appears as encrypted Vault payload until Ansible receives a matching password. If someone opens the repository without the password, they see ciphertext instead of `orders_database_password: real-value-here`.
 
+
+![Vault File Boundary](/content-assets/articles/article-infrastructure-as-code-ansible-secrets-with-ansible-vault/vault-file-boundary.png)
+
+*The boundary map shows Vault protecting files at rest, while the run still needs a password source and careful in-memory secret use.*
+
 Here is the important boundary. Vault encryption covers the stored Ansible content, and Ansible decrypts the value when the run needs it. After that, the value may appear in a rendered file, module argument, task result, diff, process environment, remote host, CI log, or failed task output unless the playbook creates more boundaries.
 
 For the orders platform, Vault can protect this file in Git:
@@ -187,6 +192,11 @@ One rule deserves special attention: Vault password files belong outside Git. Th
 
 Once Ansible decrypts a vaulted value, the value behaves like any other variable. That is convenient because templates and modules can use it normally. Vault covers the stored encrypted content, and every downstream place where the value travels needs its own boundary.
 
+
+![Vaulted Vars Run Flow](/content-assets/articles/article-infrastructure-as-code-ansible-secrets-with-ansible-vault/vaulted-vars-run-flow.png)
+
+*The run flow shows a vaulted file, password source, ansible-playbook, task or template use, and masked logs without exposing secret values.*
+
 The orders service might render a secret-bearing environment file like this:
 
 ```yaml
@@ -289,6 +299,11 @@ If a plaintext secret was accidentally committed, treat that as a real secret le
 <!-- section-summary: A good Vault setup combines encrypted files, separate password storage, careful run commands, and non-secret verification evidence. -->
 
 For the orders platform, the production setup now has a simple shape. Plain operational variables live in `main.yml`, secret variables live in `vault.yml`, and the playbook uses both to render the app environment file. The repository stores the encrypted file, while the Vault password comes from a prompt for humans or a temporary CI file sourced from the CI secret store.
+
+
+![Vault Summary](/content-assets/articles/article-infrastructure-as-code-ansible-secrets-with-ansible-vault/vault-summary.png)
+
+*The summary turns Vault use into a lifecycle: encrypt, store the password source, use, rotate, and recover.*
 
 ```yaml
 - name: Configure orders web hosts

@@ -46,6 +46,11 @@ The important shift is **repeatability**. The team can review a pull request, ru
 
 Every Ansible run has two sides. The **control node** is the machine that runs Ansible. It can be an engineer's laptop, a bastion host, a CI runner, or Red Hat Ansible Automation Platform. The **managed nodes** are the machines, network devices, cloud endpoints, or other targets that Ansible manages.
 
+
+![Ansible Change Loop](/content-assets/articles/article-cloud-iac-infrastructure-as-code-config-mgmt-ansible/ansible-change-loop.png)
+
+*The run map separates the control node, inventory, playbook, SSH connection, managed servers, and returned evidence so the basic Ansible workflow is visible at a glance.*
+
 For the orders platform, a GitHub Actions runner or an automation controller execution node might be the control node during a release. The managed nodes are `web-01`, `web-02`, and `worker-01`. The control node reads the automation repository, opens connections to those hosts, sends module work, collects results, and closes or reuses the connection.
 
 This architecture explains the word **agentless** as people use it with Ansible. In the common Linux path, Ansible reaches servers over SSH and runs work there for the duration of the task. The server needs a reachable connection path, a usable remote user, enough privilege for the requested change, and usually a Python interpreter for many Linux modules.
@@ -87,6 +92,11 @@ Production inventories often grow beyond one file. Teams split `inventories/stag
 <!-- section-summary: Playbooks describe ordered work, plays choose host groups, and tasks call modules. -->
 
 A **playbook** is the YAML file that describes the automation run. It contains one or more **plays**. A play chooses hosts from inventory and then runs a list of **tasks** for those hosts. Each task usually calls one Ansible module with arguments.
+
+
+![Ansible Building Blocks](/content-assets/articles/article-cloud-iac-infrastructure-as-code-config-mgmt-ansible/ansible-building-blocks.png)
+
+*The building-block view shows how inventory, playbooks, modules, variables, and handlers combine into one repeatable run.*
 
 Here is a small playbook for the orders web servers. It installs Nginx, renders the site config, and keeps the service running. The `become: true` line tells Ansible to use privilege escalation because package, config, and service changes usually need root-level permissions on Linux.
 
@@ -256,6 +266,11 @@ The small team version can still be simple. A repository with `site.yml`, `roles
 <!-- section-summary: Ansible combines inventory, playbooks, modules, variables, handlers, and run evidence into repeatable operations. -->
 
 Here is the whole picture for the orders platform. Inventory names `web-01`, `web-02`, and `worker-01`, groups them by role, and stores connection details. A playbook selects `web`, uses modules to install Nginx, renders a template from environment variables, and notifies a handler to reload Nginx only when the config changed.
+
+
+![Ansible Production Safety Summary](/content-assets/articles/article-cloud-iac-infrastructure-as-code-config-mgmt-ansible/ansible-production-safety-summary.png)
+
+*The production summary turns the article into a safe run sequence: review, limit, preview, apply to one host, verify, widen, and keep evidence.*
 
 During the run, the control node loads the repository, connects to each managed node, sends module work, and receives structured results. The output tells the team whether each host was already correct, changed, failed, or unreachable. A second run should settle, which gives the team confidence that the playbook describes state rather than a pile of one-time shell steps.
 

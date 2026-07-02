@@ -25,6 +25,11 @@ id: article-infrastructure-as-code-ansible-patterns-limits-canaries
 
 Inventory answers which machines exist. A **host pattern** answers which of those machines a playbook normally manages. A **runtime limit** narrows that normal set for one run, so an operator or pipeline can start with a canary, a region, or a single broken host.
 
+
+![Targeting Two Layer Map](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/targeting-two-layer-map.png)
+
+*The targeting map shows the difference between the playbook host pattern and the runtime limit that narrows a real run.*
+
 For the orders platform, the web deploy playbook should normally manage `prod_web`. That is the real service group. During a first production rollout, the team should narrow the run to `orders-web-01`, watch the service, and then continue to the rest of `prod_web`.
 
 This two-layer habit keeps the playbook honest. The playbook says the broad operational intent, while the command line or job template says the rollout slice for today. A targeting mistake can hurt even when every task is correct, so the target set deserves its own review before any production change starts.
@@ -121,6 +126,11 @@ The best canary is a normal member of the group. A host with a known special `ho
 <!-- section-summary: serial and failure controls let a playbook widen gradually after the first host succeeds. -->
 
 `--limit` controls which hosts are eligible for a run. **Serial** controls how many of those hosts Ansible processes at a time inside the play. This is useful after the canary, because the team may want to update the remaining web servers in small batches instead of all at once.
+
+
+![Canary Batch Rollout Flow](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/canary-batch-rollout-flow.png)
+
+*The rollout flow shows one canary, a small batch, a health gate, and the decision to continue or stop before the full fleet changes.*
 
 ```yaml
 - name: Deploy orders web application
@@ -232,6 +242,11 @@ That preview matters because emergency commands are still production commands. T
 <!-- section-summary: Safe Ansible targeting uses a stable playbook pattern, visible runtime limit, canary, batches, and explicit rollback boundary. -->
 
 The orders team now has a full targeting workflow. The playbook targets `prod_web` because that is the normal service boundary. The first production run uses `--limit orders-web-01` as a canary, and `--list-hosts` makes the selected host visible before any task runs.
+
+
+![Targeting Summary](/content-assets/articles/article-infrastructure-as-code-ansible-patterns-limits-canaries/targeting-summary.png)
+
+*The summary links patterns, limits, serial batches, tags, verification, and rollback into one targeting checklist.*
 
 After the canary passes, the team runs the remaining web hosts with an exclusion pattern or with serial batches. Tags can narrow the task list, and the host boundary still comes from `hosts` and `--limit`. Rollback uses the same targeting checks as rollout.
 

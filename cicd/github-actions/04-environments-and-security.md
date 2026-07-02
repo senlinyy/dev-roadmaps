@@ -62,6 +62,10 @@ Secrets can live at different scopes. The scope controls which workflows can eve
 
 For `checkout-api`, a repository secret might be enough for a staging-only demo token. A production database password or deploy token belongs behind an environment because the environment can add approval and branch rules before the secret is available.
 
+![Secrets need smaller scopes showing repository secret, environment secret, production gate, reviewer approval, deploy job, and secret released only inside the protected job](/content-assets/articles/article-cicd-github-actions-environments-and-security/secrets-environment-scope.png)
+
+*Secret scope decides which workflow can ask for a value, while environment protection decides when a sensitive deployment job can actually receive it.*
+
 Secrets are one part of the answer. The deployment target itself needs a name and rules, and that is what environments provide.
 
 ## Environments
@@ -171,13 +175,9 @@ Long-lived external secrets can still remain a problem. For cloud deployments, O
 
 The flow has three parts. First, the workflow asks GitHub for an OIDC token. Second, the cloud provider verifies the token issuer, audience, repository, branch, environment, and other claims. Third, the cloud provider returns temporary credentials if the claims match a trusted role.
 
-```mermaid
-flowchart LR
-    Job["GitHub Actions job"] --> Token["GitHub OIDC token"]
-    Token --> Cloud["Cloud identity provider"]
-    Cloud --> Role["Temporary cloud role credentials"]
-    Role --> Deploy["Deploy command"]
-```
+![OIDC deployment session showing workflow job, id-token permission, OIDC token, trust policy, claims match, short-lived role, and production deploy](/content-assets/articles/article-cicd-github-actions-environments-and-security/oidc-deployment-session.png)
+
+*OIDC moves cloud access from a stored static key to a short-lived role session that exists only after the workflow identity matches the cloud trust policy.*
 
 This changes the credential problem. A leaked static cloud key can work until someone rotates or deletes it. A temporary credential from OIDC expires. The cloud role can also require that the token came from a specific repository, branch, pull request, tag, or environment.
 
@@ -352,6 +352,10 @@ The full security picture connects the whole GitHub Actions module. Each earlier
 For `checkout-api`, the secure path is now clear. Pull requests run with read access. Shared workflows keep policy consistent. Staging and production use separate environments. Production waits for approval. AWS trusts only the expected repository and environment. The workflow receives temporary credentials only during the deployment job.
 
 That is the practical goal of GitHub Actions security: small access, clear approval points, temporary credentials, and workflow files that a teammate can review without guessing where the dangerous parts are hidden. A secure pipeline should feel understandable in code review, not magical.
+
+![Safer GitHub Actions deployment shape showing pull request checks, minimal token, protected environment, human approval, OIDC role, deploy, and audit trail](/content-assets/articles/article-cicd-github-actions-environments-and-security/safer-deployment-shape.png)
+
+*The safer deployment shape keeps ordinary checks low privilege, puts production behind an environment approval, and uses OIDC so cloud credentials stay temporary and auditable.*
 
 ---
 

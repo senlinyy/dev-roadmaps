@@ -37,6 +37,11 @@ Readable output depends on practical playbook habits. Clear task names make the 
 
 Ansible prints a status word for each task and host. These words are short and they carry a lot of operational meaning.
 
+
+![Status Word Map](/content-assets/articles/article-infrastructure-as-code-ansible-reading-run-results/status-word-map.png)
+
+*The status map makes Ansible output easier to scan by separating ok, changed, failed, unreachable, skipped, and rescued signals.*
+
 | Status | Meaning during an orders deploy |
 |---|---|
 | `ok` | The task completed with no reported change for that host. |
@@ -74,6 +79,11 @@ The validation command may have executed on both hosts. `changed_when: false` ke
 <!-- section-summary: A failed task reached the host, while an unreachable host failed before useful task execution could happen. -->
 
 The most important output split is `failed` versus `unreachable`. A **failed** task reached the managed host and then the module or command returned a failure. An **unreachable** host failed before Ansible had a usable connection to the host.
+
+
+![Failure Repair Split](/content-assets/articles/article-infrastructure-as-code-ansible-reading-run-results/failure-repair-split.png)
+
+*The repair split shows why failed usually points at task logic, while unreachable points first at network, SSH, DNS, or credentials.*
 
 For example, this is a task failure. The host was reachable, so the failed task is the evidence.
 
@@ -208,6 +218,11 @@ Rollback should follow the same audited path as rollout. If the bad change was a
 <!-- section-summary: Reading output well turns playbook runs into a practical record of host state, change, failure, and follow-up work. -->
 
 The orders platform deploy now has readable output. Task names explain the work. `ok` means the host already matched or the read-only check passed. `changed` means the host moved. `failed` means a task reached the host and failed there. `unreachable` means the connection layer needs attention before playbook logic can matter.
+
+
+![Run Results Summary](/content-assets/articles/article-infrastructure-as-code-ansible-reading-run-results/run-results-summary.png)
+
+*The summary turns playbook output into evidence: output, recap, diff, registered data, and audit trail.*
 
 Registered results and verbosity give deeper evidence during debugging. Diff mode helps review file changes, with care around secrets. The recap gives the final per-host story and helps CI or controller workflows make a pass-or-fail decision.
 

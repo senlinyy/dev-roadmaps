@@ -26,6 +26,11 @@ id: article-infrastructure-as-code-ansible-connection-targets-privilege
 
 Before Ansible can change a protected file on a Linux host, it has to make three decisions. It chooses **where to connect**, **which remote user logs in**, and **which user runs the task after privilege escalation**. These decisions often get mixed together, and that is why a simple failure can feel like several different problems at once.
 
+
+![Connection Decision Stack](/content-assets/articles/article-infrastructure-as-code-ansible-connection-targets-privilege/connection-decision-stack.png)
+
+*The decision stack separates the target host, connection address, login user, SSH key, elevated user, and final task.*
+
 For the orders platform, Ansible connects to `orders-web-01` over SSH using a private address. It logs in as the `deploy` user because that account is managed by the image build and deployment process. When a task needs to write `/etc/orders/orders.yml` or restart `orders-web.service`, Ansible escalates with `become` so the task can run with root privileges.
 
 Keeping those layers separate gives you a practical debugging path. A private IP or DNS problem belongs to the connection target. A rejected SSH key belongs to the login user and credentials. A sudo prompt or permission denied error after the task starts belongs to privilege escalation.
@@ -121,6 +126,11 @@ For production, a reviewed `known_hosts` file is safer than turning off host key
 <!-- section-summary: become runs selected tasks as another user after the SSH login succeeds. -->
 
 **Privilege escalation** means Ansible logs in as one user and runs a task as another user. Ansible calls this `become`. On Linux, `become` usually uses sudo, although Ansible supports other escalation tools on different platforms.
+
+
+![Privilege Escalation Boundary](/content-assets/articles/article-infrastructure-as-code-ansible-connection-targets-privilege/privilege-escalation-boundary.png)
+
+*The privilege boundary shows the difference between logging in normally and crossing a controlled sudo boundary for root-level work.*
 
 ```yaml
 - name: Configure orders web servers
@@ -221,6 +231,11 @@ Rollback depends on which layer changed. A bad `ansible_host` value rolls back t
 <!-- section-summary: A clean connection setup names the host, logs in with one account, and escalates only where tasks need it. -->
 
 The orders platform now has a clean connection path. Inventory names `orders-web-01`, `ansible_host` points to its private address, Ansible logs in as `deploy`, and privileged tasks use `become` only where they write protected files or manage services.
+
+
+![Connection Privilege Summary](/content-assets/articles/article-infrastructure-as-code-ansible-connection-targets-privilege/connection-privilege-summary.png)
+
+*The summary keeps the connection path concrete: target, login, key, privilege, test, and rollback.*
 
 The team can test each layer before a deploy. `ping` proves connection and module execution, `whoami` proves the login user, `-b whoami` proves escalation, and a one-host check-mode run previews the playbook with the same inventory and credential choices.
 

@@ -37,6 +37,11 @@ The key idea is that registered data belongs to the host that produced it. If a 
 
 The `register` keyword gives a name to the result from a task. A command task usually returns fields such as `rc`, `stdout`, `stderr`, `changed`, `failed`, `cmd`, `start`, and `end`. A URI task may return `status`, `content`, `json`, and headers. A template task may return file paths, checksums, and change status.
 
+
+![Registered Result Shape](/content-assets/articles/article-infrastructure-as-code-ansible-registered-results/registered-result-shape.png)
+
+*The result shape shows the fields a registered task result can carry into later decisions.*
+
 ```yaml
 - name: Check orders API version
   ansible.builtin.command: orders-api --version
@@ -116,6 +121,11 @@ That fact gives later tasks a readable condition. It also keeps the implementati
 <!-- section-summary: Health check results let a playbook wait, retry, fail, or continue based on service evidence. -->
 
 A registered HTTP result is useful after a service restart. The playbook can call a local health endpoint and wait until the service reports ready. The `uri` module returns fields such as `status` and optionally `content`.
+
+
+![Result Branching Flow](/content-assets/articles/article-infrastructure-as-code-ansible-registered-results/result-branching-flow.png)
+
+*The branching flow shows a health-check result driving failed_when, changed_when, handler notification, or rollout stop decisions.*
 
 ```yaml
 - name: Check orders API health after config change
@@ -251,6 +261,11 @@ For sensitive tasks, avoid dumping whole registered results in production logs. 
 <!-- section-summary: Registered results let Ansible make host-by-host decisions from evidence collected during the current run. -->
 
 The orders platform playbook now uses registered results as live evidence. Template output tells the playbook whether config changed. Validation results decide whether the host can continue. Health check results prove that the service came back. Custom status rules keep read-only checks from polluting the change count.
+
+
+![Registered Results Summary](/content-assets/articles/article-infrastructure-as-code-ansible-registered-results/registered-results-summary.png)
+
+*The summary turns registered output into a loop: capture, inspect, branch, report, and recover.*
 
 This makes the playbook safer and easier to read. It pauses after commands that report bad evidence, restarts services for clear reasons, and keeps command status truthful. It uses structured output to make a clear decision for each host.
 

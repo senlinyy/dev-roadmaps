@@ -43,6 +43,11 @@ The pieces connect like this. Inventory chooses `orders_web`. The play selects t
 
 Ansible starts from **inventory**, which is the list of managed hosts and groups. A play can target a group such as `orders_web`, and inventory decides which hosts belong to that group for staging or production. That keeps host membership in one reviewed place instead of scattering server names through every playbook.
 
+
+![Playbook Hierarchy Map](/content-assets/articles/article-infrastructure-as-code-ansible-playbook-structure/playbook-hierarchy-map.png)
+
+*The hierarchy map shows how a playbook contains plays, plays target hosts, tasks call modules, and handlers wait for change signals.*
+
 ```yaml
 all:
   children:
@@ -155,6 +160,11 @@ That gives the team one `site.yml` entry point with separate plays for separate 
 
 The first safety step happens before Ansible touches a production host. A syntax check catches YAML and playbook parsing mistakes. It proves the playbook can be parsed and catches broken indentation, missing colons, and invalid playbook shape early.
 
+
+![Safe Run Command Loop](/content-assets/articles/article-infrastructure-as-code-ansible-playbook-structure/safe-run-command-loop.png)
+
+*The run loop turns syntax checks, check mode, limits, apply, recap reading, and reruns into one safe operating path.*
+
 ```bash
 ansible-playbook -i inventories/prod/hosts.yml site.yml --syntax-check
 ```
@@ -241,6 +251,11 @@ Some changes need extra care. Database migrations, destructive file removal, and
 <!-- section-summary: A healthy playbook keeps host selection, task intent, module behavior, and operational safety visible in one reviewed file. -->
 
 The orders platform now has a clear Ansible shape. Inventory names the web and worker hosts. Plays select those groups. Tasks call modules with structured arguments. Templates turn variables into service configuration. Handlers restart services only after meaningful changes. Roles can package the repeated service setup when the playbook grows.
+
+
+![Playbooks Summary](/content-assets/articles/article-infrastructure-as-code-ansible-playbook-structure/playbooks-summary.png)
+
+*The summary follows the practical playbook sequence: read, target, change, notify, verify, and roll back.*
 
 This structure gives operators a practical workflow. They can check syntax, list target hosts, rehearse with check and diff mode, run a canary, review output, and then widen the run. If something fails, the task name and host status point to the right layer of the problem.
 

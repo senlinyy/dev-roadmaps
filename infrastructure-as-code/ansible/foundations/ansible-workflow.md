@@ -30,6 +30,11 @@ id: article-infrastructure-as-code-ansible-workflow
 
 An **Ansible workflow** is the operating order around a playbook run. The playbook says what should happen to the systems. The workflow decides how the team proves the target, previews the change, limits the first real apply, verifies the service, and handles a bad result.
 
+
+![Workflow Run Order](/content-assets/articles/article-infrastructure-as-code-ansible-workflow/workflow-run-order.png)
+
+*The run-order map shows why a safe Ansible workflow starts with repo and inventory checks before previewing, applying to one host, and widening.*
+
 Let's keep using the orders platform from the first article. The production web fleet has `web-01` and `web-02` behind a load balancer. The team needs to change the Nginx proxy timeout from `30s` to `45s` because checkout requests sometimes wait on a slow payment provider. The YAML change is small, but the production blast radius depends on the workflow.
 
 A first production workflow has a steady rhythm. The team checks the repo state, confirms the inventory group, proves Ansible can connect, proves privilege escalation, validates the playbook, previews supported changes, applies one host, verifies the service, reads the recap, runs again to confirm the state settles, and then widens the rollout. Each layer answers a different question before the next layer adds more risk.
@@ -165,6 +170,11 @@ This stage also catches repo hygiene problems. Missing roles, missing collection
 <!-- section-summary: Check mode and diff mode show planned changes where modules can predict safely, and their limits should be read honestly. -->
 
 **Check mode** asks Ansible to predict changes without applying them. **Diff mode** asks supported modules to show before-and-after details. Together, they provide review evidence before the real run, especially for file and template changes.
+
+
+![Preview Apply Feedback Loop](/content-assets/articles/article-infrastructure-as-code-ansible-workflow/preview-apply-feedback-loop.png)
+
+*The feedback loop connects check mode, diff review, one-host apply, recap reading, fixes, and reruns into one practical rhythm.*
 
 For the orders timeout change, the preview can target one host. The command keeps the evidence small enough for a human to review. The output should explain exactly which supported tasks expect change.
 
@@ -331,6 +341,11 @@ Automation should keep the same guardrails as the manual version. The pipeline s
 <!-- section-summary: The full workflow moves from repo proof to inventory proof, access proof, preview evidence, canary apply, verification, rollout, and rollback. -->
 
 The orders team can now run the Nginx timeout change in a clean order. They confirm the Git commit and dependencies, inspect `inventories/prod`, list the selected web hosts, inspect `web-01` variables, prove module execution, prove `become`, run syntax and task-list checks, preview `web-01` with check and diff mode, and then apply `web-01`.
+
+
+![Workflow Safety Runbook](/content-assets/articles/article-infrastructure-as-code-ansible-workflow/workflow-safety-runbook.png)
+
+*The workflow runbook condenses the article into the repeated safety steps a team can use before moving Ansible into automation.*
 
 After the canary, they verify Nginx, verify the orders API, read the recap, and run the same playbook again against `web-01` to confirm idempotency. If the service is healthy, they widen the rollout with `--limit "web:!web-01"` or let `serial` move through batches. If the service is unhealthy, they revert the Git change, run the same playbook narrowly, and verify again.
 

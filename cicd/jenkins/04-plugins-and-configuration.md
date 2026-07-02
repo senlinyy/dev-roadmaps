@@ -82,6 +82,10 @@ docker rm -f summit-jenkins-smoke
 
 The exact smoke job depends on the installation, but the result should answer three questions: did Jenkins boot, did JCasC apply, and can one representative pipeline reach the agent and tools it expects?
 
+![Pinned Jenkins controller build showing plugins.txt exact plugin versions, jenkins.yaml controller config, build image, staging smoke test, and production controller](/content-assets/articles/article-cicd-jenkins-plugins-and-configuration/pinned-controller-build.png)
+
+*A repeatable controller build turns plugin versions and controller configuration into reviewed inputs, then proves the image in staging before production uses it.*
+
 ## Anatomy of jenkins.yaml
 <!-- section-summary: jenkins.yaml describes controller settings in YAML, including system settings, tools, plugins, credentials references, and access control. -->
 
@@ -126,6 +130,10 @@ This file defines the controller's identity. It sets the system message, removes
 The YAML still needs care. Indentation changes meaning. Plugin configuration keys depend on the installed plugin versions. Some values, such as `false`, `yes`, and numbers, can become YAML booleans or numeric types. The JCasC UI can export current configuration, and many teams use that export as a starting point before trimming noisy or environment-specific values.
 
 The file should also separate **configuration** from **secret value**. A credentials entry can reference `${VARIABLE_NAME}`, and the actual value can come from the runtime environment, Kubernetes secret, Docker secret, Vault integration, or another secret manager. The article on credentials explains the secret side in detail. For this article, the key idea is simple: Git should hold the shape of the controller, while secret stores hold secret values.
+
+![Inside jenkins.yaml showing jenkins, securityRealm, authorizationStrategy, tool, unclassified, credentials references, and configuration as code](/content-assets/articles/article-cicd-jenkins-plugins-and-configuration/jcasc-anatomy.png)
+
+*JCasC keeps the controller shape in Git, while secret values stay in runtime secret stores or external providers instead of being committed beside the configuration.*
 
 ## Dependency Hell
 <!-- section-summary: Plugin dependency failures come from version constraints, removed APIs, mixed plugin trees, and controller-core compatibility. -->
@@ -205,6 +213,10 @@ Summit Retail now treats the Jenkins controller like a product. The controller i
 The team also knows how to investigate plugin failures. A missing dependency points to the resolved plugin set. A runtime method error points to version compatibility. A JCasC failure points to plugin configuration shape. A production upgrade plan includes rollback notes and a backup strategy instead of a vague hope that the old container image will work with new state.
 
 This gives the shared-library work from the previous article a stable home. Pipeline code can be clean, but the controller must also be reproducible. Pinned plugins and Configuration as Code turn Jenkins administration into something the same engineering review process can understand.
+
+![Safe Jenkins upgrade loop showing review advisories, resolve dependencies, build staging image, smoke test, reload or restart, production rollout, and rollback version](/content-assets/articles/article-cicd-jenkins-plugins-and-configuration/safe-jenkins-upgrade-loop.png)
+
+*A sustainable Jenkins upgrade loop keeps advisory review, dependency resolution, staging, smoke tests, rollout, and rollback in the same repeatable process.*
 
 ## What's Next
 <!-- section-summary: The next article focuses on the credentials and security boundaries that protect Jenkins from leaking deploy power. -->
