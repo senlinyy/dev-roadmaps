@@ -1,7 +1,6 @@
 ---
-title: "Read The Service Update"
-sectionSlug: ecs-service
+title: "Verification, Rollback, and Runtime Operations"
 order: 1
 ---
 
-Use the release trail to decide what an ECS service update has actually changed. The image, task definition revision, service deployment, health, and rollback target all need to line up.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

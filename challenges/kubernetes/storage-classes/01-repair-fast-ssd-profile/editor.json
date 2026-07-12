@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "filename": "fast-ssd-storageclass.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: fast-ssd\nprovisioner: csi.example.com\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "storage.k8s.io/v1", "label": "StorageClass API version" },
+      { "path": ["kind"], "equals": "StorageClass", "label": "StorageClass kind" },
+      { "path": ["metadata", "name"], "equals": "fast-ssd", "label": "profile name" },
+      { "path": ["metadata", "annotations", "storageclass.kubernetes.io/is-default-class"], "equals": "false", "label": "non-default annotation" },
+      { "path": ["provisioner"], "equals": "csi.example.com", "label": "CSI provisioner" },
+      { "path": ["parameters", "type"], "equals": "ssd", "label": "SSD parameter" },
+      { "path": ["parameters", "encrypted"], "equals": "true", "label": "encryption parameter" },
+      { "path": ["reclaimPolicy"], "equals": "Delete", "label": "reclaim policy" },
+      { "path": ["allowVolumeExpansion"], "equals": true, "label": "volume expansion" },
+      { "path": ["volumeBindingMode"], "equals": "WaitForFirstConsumer", "label": "delayed binding mode" }
+    ]
+  }
+}

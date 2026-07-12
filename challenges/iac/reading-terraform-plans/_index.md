@@ -1,5 +1,5 @@
 ---
-title: "Reading Terraform Plans"
+title: "What Is Terraform State?"
 description: "Review Terraform plan summaries, replacement markers, redacted values, and drift evidence before an apply."
 articleId: article-iac-terraform-state-what-is-state
 difficulty: medium

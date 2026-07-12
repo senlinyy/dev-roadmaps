@@ -1,7 +1,6 @@
 ---
-title: "Vault Boundary"
-sectionSlug: "what-ansible-vault-protects"
+title: "Ansible Vault"
 order: 3
 ---
 
-Choose what Ansible Vault protects and what still needs care during a run.
+Use storage, runtime, rotation, and recovery evidence to decide whether a Vault workflow protects the full secret lifecycle.

@@ -1,7 +1,6 @@
 ---
-title: "Avoid a Too-Thin Module"
-sectionSlug: reuse-judgment
+title: "Module Basics"
 order: 4
 ---
 
-Knowledge check for deciding whether a Terraform module names a useful architecture pattern or only hides a provider resource.
+Use input, output, resource, state, and root-module evidence to decide whether a Terraform module encodes a useful reusable pattern.

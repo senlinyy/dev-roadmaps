@@ -1,57 +1,195 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "`dp-orders-invoices-prod` stores production invoice PDFs. The orders team owns the bucket and wants future changes reviewed in the production Terraform root module. What is the best first path?",
+      "scenario": "DevPolaris is moving a manually created bucket into its reviewed infrastructure workflow. `dp-orders-invoices-prod` contains customer invoice PDFs, the orders team is the confirmed lifecycle owner, and deleting or renaming the bucket is outside the migration window. Future retention and access changes must come from the production Terraform root. Which adoption path best satisfies those constraints?",
       "options": [
-        { "id": "a", "text": "Import the bucket into the orders production root module, then review the first plan carefully." },
-        { "id": "b", "text": "Delete and recreate the bucket because Terraform should only manage resources it created." },
-        { "id": "c", "text": "Reference it as data forever even though the orders team is the owner." },
-        { "id": "d", "text": "Rename it outside Terraform so the import ID is easier to type." }
+        {
+          "id": "a",
+          "text": "Import the bucket into the orders production root module, then review the first plan carefully."
+        },
+        {
+          "id": "b",
+          "text": "Delete and recreate the bucket because Terraform should only manage resources it created."
+        },
+        {
+          "id": "c",
+          "text": "Reference it as data forever even though the orders team is the owner."
+        },
+        {
+          "id": "d",
+          "text": "Rename it outside Terraform so the import ID is easier to type."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A long-lived production bucket with important data should not be recreated casually. If the orders team owns it, import is the path that preserves the object while bringing future changes under review."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A developer created `dp-devpolaris-orders-scratch` in a sandbox account for a one-day experiment. It has no objects, no application depends on it, and the team wants a clean development bucket pattern. What is usually the better choice?",
-      "options": [
-        { "id": "a", "text": "Recreate the disposable resource through Terraform and delete the old manual bucket after checking there are no dependencies." },
-        { "id": "b", "text": "Import the bucket because every manual object must be adopted." },
-        { "id": "c", "text": "Reference it as data from production so both environments share the bucket." },
-        { "id": "d", "text": "Leave it unmanaged and start using it for staging exports." }
+      "correct": [
+        "a"
       ],
-      "correct": ["a"],
-      "explanation": "Disposable test resources often do not need the ceremony of import. A clean Terraform-managed replacement is simpler when there is no data or dependency to preserve."
+      "explanation": "A long-lived production bucket with important data should not be recreated casually. If the orders team owns it, import is the path that preserves the object while bringing future changes under review. See [Terraform import blocks](https://developer.hashicorp.com/terraform/language/import)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "The orders service needs a DNS record inside `devpolaris.internal`, but the platform team owns the hosted zone and its lifecycle. What should the orders repository usually do?",
+      "scenario": "The orders service is moving into Terraform and needs one DNS record inside `devpolaris.internal`. The platform team already manages the shared hosted zone, and the migration agreement gives the orders team ownership only of its service record. How should the orders root obtain the zone context without taking over the shared lifecycle?",
       "options": [
-        { "id": "a", "text": "Reference the hosted zone as data and manage only the orders-owned record." },
-        { "id": "b", "text": "Import the whole hosted zone into the orders repository." },
-        { "id": "c", "text": "Delete and recreate the hosted zone inside the orders account." },
-        { "id": "d", "text": "Copy the hosted zone ID into comments and avoid Terraform." }
+        {
+          "id": "b",
+          "text": "Import the whole hosted zone into the orders repository."
+        },
+        {
+          "id": "a",
+          "text": "Reference the hosted zone as data and manage only the orders-owned record."
+        },
+        {
+          "id": "d",
+          "text": "Copy the hosted zone ID into comments and avoid Terraform."
+        },
+        {
+          "id": "c",
+          "text": "Delete and recreate the hosted zone inside the orders account."
+        }
       ],
-      "correct": ["a"],
+      "correct": [
+        "a"
+      ],
       "explanation": "Import should follow ownership. If the platform team owns the shared zone, the orders repository should read that shared resource and manage only its own record."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A production log bucket exists, but nobody can say which services write to it, who owns retention policy, or whether legal hold applies. Which review comments are sound before import?",
+      "scenario": "A production log bucket exists, but nobody can say which services write to it, who owns retention policy, or whether legal hold applies. Which two actions are required before one Terraform root claims lifecycle ownership?",
       "options": [
-        { "id": "a", "text": "Investigate dependencies and ownership before claiming the bucket in Terraform state." },
-        { "id": "b", "text": "Record the intended future owner and verification steps before changing state." },
-        { "id": "c", "text": "Import immediately because state will reveal every business dependency." },
-        { "id": "d", "text": "Treat unknown dependencies as a reason to slow down, not as a reason to guess." }
+        {
+          "id": "d",
+          "text": "Add a data source in the proposed root and treat successful lookup as proof that import is safe."
+        },
+        {
+          "id": "c",
+          "text": "Capture the current provider attributes, then assume those attributes reveal every writer and legal obligation."
+        },
+        {
+          "id": "b",
+          "text": "Record the intended future owner and verification steps before changing state."
+        },
+        {
+          "id": "a",
+          "text": "Investigate dependencies and ownership before claiming the bucket in Terraform state."
+        }
       ],
-      "correct": ["a", "b", "d"],
-      "explanation": "Import changes responsibility. Unknown dependencies, retention rules, and ownership are signals to investigate before Terraform can safely become the source of intended behavior."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Import changes responsibility, so the team must investigate dependencies and agree on the future owner and verification plan. A successful lookup proves only that the object is readable. Provider attributes can help inventory current settings but cannot establish every application dependency or legal obligation."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During a Terraform adoption project, engineers discover `dp-orders-audit-prod` in the production account. No team can prove lifecycle ownership, and security believes an out-of-band retention rule may protect audit evidence. The migration must not overwrite policy or create competing ownership. What should happen before an import block is approved?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Recreate it with a new bucket name so the old bucket can be ignored."
+        },
+        {
+          "id": "a",
+          "text": "Import it immediately because any existing bucket is safer once it is in Terraform state."
+        },
+        {
+          "id": "d",
+          "text": "Declare a data source and assume that means no one needs to own the bucket lifecycle."
+        },
+        {
+          "id": "b",
+          "text": "Pause and identify the owner, current settings, and intended Terraform root before choosing import or handoff."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Import creates an ownership binding, so unclear ownership is a reason to investigate first. Recreating a possibly important bucket risks data and policy loss, and a data source only reads facts without assigning lifecycle responsibility. See [Terraform state purpose](https://developer.hashicorp.com/terraform/language/state)."
+    },
+    {
+      "id": "read-first-import-plan-q1",
+      "type": "single",
+      "scenario": "A pull request includes the bucket resource block and import block. The Terraform plan reports:\n\n```console\nPlan: 1 to import, 0 to add, 0 to change, 0 to destroy.\n```\n\nWhat does this plan most strongly suggest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Terraform is connecting the existing bucket to state instead of creating or deleting infrastructure."
+        },
+        {
+          "id": "b",
+          "text": "Terraform has already applied the import and no review is needed."
+        },
+        {
+          "id": "d",
+          "text": "The resource block can be deleted because the import block is enough."
+        },
+        {
+          "id": "c",
+          "text": "The bucket will be replaced after import."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A clean import-only plan is the desired adoption shape. It still needs review, but the summary says Terraform is connecting an existing object rather than proposing a create, update, or destroy."
+    },
+    {
+      "id": "read-first-import-plan-q3",
+      "type": "single",
+      "scenario": "The first plan after importing the production invoice bucket says:\n\n```text\n-/+ resource \"aws_s3_bucket\" \"orders_invoices\" {\n  ~ bucket = \"dp-orders-invoices-prod\" -> \"dp-orders-invoices-production\"\n}\n\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nWhat should happen next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Apply quickly because replacement proves the import worked."
+        },
+        {
+          "id": "a",
+          "text": "Stop before apply and decide whether the code name is wrong or a deliberate migration is needed."
+        },
+        {
+          "id": "c",
+          "text": "Delete the import block and retry until the plan is quiet."
+        },
+        {
+          "id": "d",
+          "text": "Ignore the replacement because S3 bucket names are not real identities."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A replacement on a production data-bearing bucket is a stop sign because it conflicts with the preservation requirement. The team must determine whether configuration is wrong or a separately planned migration is intended. Applying quickly, deleting the import block, or dismissing the bucket name would not remove the destructive action shown in the plan."
+    },
+    {
+      "id": "read-first-import-plan-q5",
+      "type": "single",
+      "scenario": "After the import apply, the follow-up plan says:\n\n```text\n  # aws_s3_bucket.orders_invoices will be updated in-place\n  ~ tags = {\n      + \"owner\" = \"platform\"\n      - \"retention\" = \"legal-hold\" -> null\n    }\n\nPlan: 0 to add, 1 to change, 0 to destroy.\n```\n\nWhat should the reviewer conclude?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The bucket was not imported because imported resources can never show updates."
+        },
+        {
+          "id": "b",
+          "text": "The plan is clean because there are no creates or destroys."
+        },
+        {
+          "id": "a",
+          "text": "The import succeeded, but the written configuration may omit an important existing tag, so the update needs explicit review before apply."
+        },
+        {
+          "id": "d",
+          "text": "The update must be applied immediately so Terraform can finish the import."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A follow-up plan after import is where configuration drift or missing settings become visible. Zero creates and destroys is not enough if the update removes a retention tag that may matter operationally."
     }
   ]
 }

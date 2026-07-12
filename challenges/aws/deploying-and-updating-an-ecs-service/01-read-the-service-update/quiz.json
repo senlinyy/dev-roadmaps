@@ -1,142 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The pipeline log says:\n\npushed image: devpolaris-orders-api:2026-05-02.5\nregistered task definition: devpolaris-orders-api:44\n\nECS service still shows:\ntaskDefinition: devpolaris-orders-api:43\ndeployments: PRIMARY revision 43 rollout COMPLETED\n\nWhat has not happened yet?",
+      "scenario": "The DevPolaris release pipeline has pushed an image and registered a task definition, but the service has not completed the same release path.\n\nPushed image is devpolaris-orders-api:2026-05-02.5. Registered task definition is devpolaris-orders-api:44.\n\nECS service still shows: TaskDefinition is devpolaris-orders-api:43. Deployments is PRIMARY revision 43 rollout COMPLETED.\n\nWhat has not happened yet?",
       "options": [
+        {
+          "id": "b",
+          "text": "Register another task definition revision with the same image and retry the update before checking why the service still references revision 41."
+        },
+        {
+          "id": "c",
+          "text": "Update the service to revision 42 because it is the newest revision named in the deployment runbook, even though the pipeline registered revision 44."
+        },
         {
           "id": "a",
           "text": "The ECS service has not been updated to run task definition revision 44."
         },
         {
-          "id": "b",
-          "text": "The image was not pushed because completed revision 43 deletes all newer tags."
-        },
-        {
-          "id": "c",
-          "text": "The ALB health check has accepted revision 44 and hidden it from the service view."
-        },
-        {
           "id": "d",
-          "text": "Rollback has already occurred because any new task definition triggers automatic rollback."
+          "text": "Force a new deployment of revision 41 because ECS can resolve the newer image tag without changing the task definition."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A service update is the moment ECS is told which recipe to run. Pushing an image and registering a task definition are necessary steps, but they do not move customer traffic by themselves. The service still points at revision 43."
+      "explanation": "A service update is the moment ECS is told which recipe to run. Pushing an image and registering a task definition are necessary steps, but they do not move customer traffic by themselves. The service still points at revision 43.\n\nLearn more in [Amazon ECS rolling deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)."
     },
     {
-      "id": "q2",
+      "id": "q-watch-tasks-earn-traffic-2",
       "type": "single",
-      "scenario": "Task definition 45 changes only:\n\nenvironment ORDER_TIMEOUT_MS: 2500 to 1000\nimage digest: unchanged sha256:8f3d2b9a\nportMappings: unchanged 3000\n\nShould this still be treated as a deployment?",
+      "scenario": "A replacement ECS task reaches RUNNING during an orders API deployment, but its readiness check depends on a successful database startup check. The release captain sees:\n\n```text\ntarget=10.0.43.27:3000 state=unhealthy\nreason=Target.ResponseCodeMismatch response_code=500\nrelease=2026-05-02.5 database=startup_check_failed health=not_ready\n```\n\nWhat must happen before the task is allowed to serve production traffic?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Mark the target healthy manually because RUNNING is stronger evidence than health checks."
+        },
+        {
+          "id": "c",
+          "text": "Stop the old healthy tasks so users are forced onto the new version."
+        },
+        {
+          "id": "d",
+          "text": "Increase the ALB success-code range to accept 500 for production health."
+        },
+        {
+          "id": "a",
+          "text": "Keep traffic away from the task and fix the readiness or config failure in a new revision or rollback."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "RUNNING means the container process exists, but target health decides whether the ALB should trust it. The log explains why readiness failed. Sending traffic anyway would turn a protected failure into a user-facing failure.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
+    },
+    {
+      "id": "q-choose-rollback-target-1",
+      "type": "single",
+      "scenario": "The DevPolaris release captain is reviewing a production change and its recorded rollback evidence.\n\nCurrent deployment is devpolaris-orders-api:42. Current image digest is sha256:bf91. Rollback_target is devpolaris-orders-api:41. Revision 41 evidence is target_health 2 healthy, smoke test passed at 09:55.\n\nCurrent failure: revision 42 listened on 8080 while target group checks 3000\n\nWhat is the likely rollback action?",
       "options": [
         {
           "id": "a",
-          "text": "Yes, because the task definition revision is the runtime recipe and config changes can affect production behavior."
+          "text": "Update the ECS service back to task definition revision 41, while recording why revision 42 failed."
         },
         {
           "id": "b",
-          "text": "No, because deployments only exist when the image digest changes."
+          "text": "Force another deployment of revision 43 with a longer health-check grace period because revision 42 may recover during replacement."
         },
         {
           "id": "c",
-          "text": "No, because environment variables are read from the ALB, not from the task definition."
+          "text": "Update back to revision 42 because it is the current revision and preserve revision 41 only as documentation."
         },
         {
           "id": "d",
-          "text": "Yes, but only if the value is a secret and printed in logs."
+          "text": "Create revision 44 from the current definition and point it at the previous image tag rather than using the recorded healthy revision."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "An ECS service update changes the recipe the service should run. Config-only changes can be safer than code changes, but they still change behavior. They need release evidence and rollback thinking."
+      "explanation": "The record names a previous known-good runtime recipe. Rolling back means telling the service to run that recipe again. The team should also keep the failure reason so revision 43 fixes the port contract instead of repeating it.\n\nLearn more in [Amazon ECS rolling deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)."
     },
     {
-      "id": "q3",
-      "type": "single",
-      "scenario": "A release record before update says:\n\nnew taskDefinition: devpolaris-orders-api:45\nnew image digest: sha256:bf91\nrollback target: devpolaris-orders-api:44\nexpected health path: /health on port 3000\nsmoke test: GET /v1/orders/health-check-order\n\nWhy is this record useful?",
-      "options": [
-        {
-          "id": "a",
-          "text": "It names what should run, how to verify it, and what known-good revision to return to if the update fails."
-        },
-        {
-          "id": "b",
-          "text": "It lets the team skip target health because the record already says health is expected."
-        },
-        {
-          "id": "c",
-          "text": "It replaces CloudWatch Logs because records should contain all runtime evidence."
-        },
-        {
-          "id": "d",
-          "text": "It makes old task definitions unnecessary and safe to delete before the deploy."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "A release record prepares the team for verification and recovery. It does not replace live evidence, but it tells engineers what evidence to look for. The rollback target is especially useful when the new revision is unsafe."
-    },
-    {
-      "id": "q4",
+      "id": "q-watch-tasks-earn-traffic-4",
       "type": "multiple",
-      "scenario": "A reviewer checks an ECS service update plan:\n\nnew image digest: sha256:bf91\ntask definition: devpolaris-orders-api:45\ndesired count: 2\ndeployment config: minimum healthy percent 100, maximum percent 200\ntarget group health path: /health\nrollback target: devpolaris-orders-api:44\n\nWhich items belong in the review?",
+      "scenario": "The DevPolaris release captain must decide whether replacement ECS tasks have earned production traffic. The captain collects evidence from the service, target group, and application.\n\nService event is registered targets in orders-api-tg. Target health is 10.0.42.18:3000 healthy, 10.0.43.27:3000 healthy. Startup log is release=2026-05-02.5 port=3000 health=ready. Smoke test is GET /v1/orders/health-check-order 200.\n\nWhich evidence belongs in the release note?",
       "options": [
         {
-          "id": "a",
-          "text": "The task definition revision and the image it points to."
-        },
-        {
           "id": "b",
-          "text": "Deployment settings that control old and new task overlap."
-        },
-        {
-          "id": "c",
-          "text": "Target health and rollback target evidence."
+          "text": "Startup logs from the expected release showing config and readiness."
         },
         {
           "id": "d",
-          "text": "The local Docker image ID on one developer machine after the image was pushed."
+          "text": "The image digest exists in ECR and the service deployment reports `COMPLETED`, without checking target health."
+        },
+        {
+          "id": "a",
+          "text": "Target health for the new task IPs on the expected port."
+        },
+        {
+          "id": "c",
+          "text": "A smoke test or request metric after traffic moved."
+        },
+        {
+          "id": "e",
+          "text": "The new tasks have reached RUNNING, but the target group still reports `initial` during health evaluation."
         }
       ],
       "correct": [
-        "a",
         "b",
+        "a",
         "c"
       ],
-      "explanation": "A service update review should follow the production path. Artifact, recipe, deployment rules, health, logs, and rollback target all matter. A local Docker image ID is not enough once the release artifact has moved through ECR and ECS."
+      "explanation": "New tasks earn traffic through several checks: service registration, target health, app logs, and a small user-path proof. The image tag is necessary earlier, but it does not prove the service accepted or served the revision.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
     },
     {
-      "id": "q5",
+      "id": "q-scale-capacity-carefully-1",
       "type": "single",
-      "scenario": "During a rolling update:\n\ndesiredCount: 2\nold revision 44: running=2\nnew revision 45: running=1 pending=1\nminimum healthy percent: 100\nmaximum percent: 200\n\nWhy does ECS temporarily run old and new tasks together?",
+      "scenario": "Checkout errors rose after a DevPolaris release, and the release captain is considering an ECS capacity increase. Before scaling, the captain reviews the same 15-minute window across the serving and database layers.\n\nALB requests is 118 per minute, normal. Target 5xx is rising after 10:42. ECS is desired 4, running 4, CPU 31 percent, memory 48 percent. RDS connections is 96 percent of the pool. Checkout write latency is high.\n\nWhat is the safest first scaling decision?",
       "options": [
         {
-          "id": "a",
-          "text": "To keep enough healthy capacity while new tasks start, register, and pass health checks before old tasks stop."
+          "id": "b",
+          "text": "Increase desired count from 3 to 6 because request volume rose, then check whether database latency falls."
         },
         {
-          "id": "b",
-          "text": "To let the ALB shift traffic to new tasks before their target health is known."
+          "id": "a",
+          "text": "Do not add more API tasks yet; reduce pressure and inspect database connections or the change that increased database work."
         },
         {
           "id": "c",
-          "text": "To make rollback impossible by mixing revisions permanently."
+          "text": "Increase task CPU because aggregate utilization is low but target response time is high."
         },
         {
           "id": "d",
-          "text": "To avoid using target health because overlap proves the app is safe."
+          "text": "Pause scaling changes and investigate the RDS connection and latency movement that aligns with the 5xx window."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Rolling deployment settings protect availability while the service changes recipes. New tasks need time to start and earn traffic. Old tasks should leave only when the deployment rules and health checks allow it."
+      "explanation": "The API has spare CPU while the database is under pressure. More API tasks may create more connections and make the bottleneck worse. Scaling should follow the saturated layer, not the first service name in the incident.\n\nLearn more in [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)."
+    },
+    {
+      "id": "q-move-slow-work-to-workers-1",
+      "type": "single",
+      "scenario": "Checkout logs during a provider slowdown:\n\n```text\nPOST /v1/orders orderId=ord_1042 database=create_ok latency_ms=84\nreceipt provider call latency_ms=6100\ncheckout response latency_ms=6420\ncustomer retries: rising\n```\n\nWhat design change best fits the article?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase the checkout timeout so the receipt call can finish synchronously during normal dependency latency."
+        },
+        {
+          "id": "c",
+          "text": "Publish receipt work to SQS before the order transaction commits so checkout can return even if the order write later fails."
+        },
+        {
+          "id": "d",
+          "text": "Invoke Lambda asynchronously without durable queueing because failed receipt sends can be reconstructed from API logs."
+        },
+        {
+          "id": "a",
+          "text": "Move receipt email to a queue-backed worker so checkout can return after the order is safely created and the message is sent."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Receipt email is slow side work that does not need to block order creation. A queue gives the system a buffer and a clearer failure boundary. The API should log that it created the order and enqueued the receipt job.\n\nLearn more in [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)."
+    },
+    {
+      "id": "q-use-controls-that-buy-time-1",
+      "type": "single",
+      "scenario": "The DevPolaris receipt worker is sending duplicate emails while its downstream provider is timing out. The team needs an incident control that protects customers and preserves recoverable work.\n\nWorker release is 2026-05-02.9. Idempotency log is missing key for orderId ord_1042. Queue visible messages is 3,200. Checkout API is healthy. Customer impact is duplicate receipts, orders still created correctly.\n\nWhich control best buys time?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Pause or reduce the receipt worker desired count while preserving queued messages and preparing a fix or rollback."
+        },
+        {
+          "id": "b",
+          "text": "Reduce worker concurrency and retain the queue while the downstream dependency recovers."
+        },
+        {
+          "id": "c",
+          "text": "Set a short message retention period so backlog cannot grow beyond the incident window."
+        },
+        {
+          "id": "d",
+          "text": "Purge only messages that have exceeded the business retry window after capturing identifiers and approving the data-loss decision."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The damage is in the worker side effect, not the checkout API. Pausing or reducing consumers can stop more duplicate emails while keeping the queue as the work record. It is smaller and easier to reverse than disabling all checkout.\n\nLearn more in [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)."
     }
   ]
 }

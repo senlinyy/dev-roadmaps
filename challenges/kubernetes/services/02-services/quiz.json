@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "stable-contract-q1",
+      "type": "single",
+      "scenario": "During an orders API rollout, three old Pods with addresses in `10.244.1.0/24` are replaced by four new Pods in `10.244.3.0/24`. The checkout application currently stores one Pod IP in its configuration and begins timing out as replacements occur. Which change gives checkout the intended stable contract?",
+      "options": [
+        { "id": "a", "text": "Store all current Pod IPs in checkout configuration and update the list during every rollout." },
+        { "id": "b", "text": "Call a ClusterIP Service by its stable name and port, allowing Kubernetes to update the backend list as Pods change." },
+        { "id": "c", "text": "Pin every orders Pod to one node so its Pod IP remains tied to that worker during releases." },
+        { "id": "d", "text": "Call the newest Pod IP directly and rely on readiness to preserve that address after replacement." }
+      ],
+      "correct": ["b"],
+      "explanation": "A Service provides the stable name and port while its selected backend addresses change. A copied Pod list is still rollout-sensitive, node pinning does not create a stable Pod identity, and readiness controls traffic eligibility rather than preserving an IP."
+    },
+    {
+      "id": "selector-q2",
+      "type": "single",
+      "scenario": "The `orders-api` Service exists and DNS resolves, but its EndpointSlice has no addresses. The Service is in namespace `orders` and selects `app.kubernetes.io/name=orders-api` plus `app.kubernetes.io/component=api`. Running Pods in `orders` have the name label but use `app.kubernetes.io/component=backend`. What is the most direct repair?",
+      "options": [
+        { "id": "a", "text": "Use the Service cluster IP in checkout because DNS resolution prevents selectors from choosing Pods." },
+        { "id": "b", "text": "Change the Service port from 80 to 8080 because an empty EndpointSlice indicates a caller-facing port mismatch." },
+        { "id": "c", "text": "Change the Pod template component label to `api`, or deliberately change the Service selector so both sides use the same approved identity." },
+        { "id": "d", "text": "Add more orders replicas because selectors begin matching only after multiple Pods are running." }
+      ],
+      "correct": ["c"],
+      "explanation": "A Service selector is a label query, and every selector entry must match a Pod in the same namespace. Port changes do not fix label selection, bypassing DNS does not create endpoints, and replica count does not repair mismatched labels."
+    },
+    {
+      "id": "ports-q3",
+      "type": "single",
+      "scenario": "Checkout calls `orders-api.orders:80`. The Service uses `targetPort: http`. During a rollout, old Pods expose named port `http` on 8080 and new Pods expose named port `http` on 9090. Which explanation best describes why this contract can continue working?",
+      "options": [
+        { "id": "a", "text": "The Service rewrites every new container manifest so its application listens on port 80." },
+        { "id": "b", "text": "The Service sends traffic to both 8080 and 9090 because every numeric port on a selected Pod is automatically included." },
+        { "id": "c", "text": "The Service DNS record changes between old and new Pod IPs and includes the backend port in each answer." },
+        { "id": "d", "text": "The Service keeps port 80 for callers and resolves the named target port against each selected Pod's container port." }
+      ],
+      "correct": ["d"],
+      "explanation": "The Service port is the caller contract, while a named `targetPort` maps to the matching named container port on each backend. Kubernetes does not rewrite the application, include every container port, or encode backend ports in the Service DNS answer."
+    },
+    {
+      "id": "dns-q4",
+      "type": "single",
+      "scenario": "A Pod in namespace `checkout` calls `http://orders-api/healthz` and receives `Name or service not known`. The healthy `orders-api` Service lives in namespace `orders`, with three ready endpoints. Which address should the caller use first to correct the namespace lookup?",
+      "options": [
+        { "id": "a", "text": "`http://orders-api.orders/healthz`, using a namespace-qualified Service name." },
+        { "id": "b", "text": "`http://orders-api.checkout/healthz`, because DNS searches from the caller namespace." },
+        { "id": "c", "text": "`http://orders-api:8080/healthz`, because adding the backend port crosses namespace boundaries." },
+        { "id": "d", "text": "`http://orders-api.orders.pod/healthz`, because cross-namespace calls use a Pod DNS suffix." }
+      ],
+      "correct": ["a"],
+      "explanation": "A caller in another namespace should qualify the Service with its namespace, or use the full `orders-api.orders.svc.cluster.local` name. The caller namespace names a different lookup scope, a port does not change DNS scope, and the Service name does not use a Pod suffix."
+    },
+    {
+      "id": "debugging-q5",
+      "type": "multiple",
+      "scenario": "Checkout receives timeouts from `orders-api.orders`. DNS resolves to the expected ClusterIP. A direct port-forward to the orders Deployment returns HTTP 200, but the Service EndpointSlices contain no ready addresses. Which two findings could directly explain the empty usable backend list?",
+      "options": [
+        { "id": "a", "text": "Checkout uses the namespace-qualified Service name instead of the full cluster domain." },
+        { "id": "b", "text": "The Service selector does not match the labels on the orders Pod template." },
+        { "id": "c", "text": "The Service uses ClusterIP rather than NodePort for an in-cluster caller." },
+        { "id": "d", "text": "Every selected orders Pod currently fails its readiness probe." }
+      ],
+      "correct": ["b", "d"],
+      "explanation": "A selector mismatch produces no selected backends, and failed readiness excludes selected Pods from ready Service traffic. A namespace-qualified name is valid for this cross-namespace call, and ClusterIP is the normal type for an internal backend."
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 ---
 title: "BigQuery"
-description: "Use BigQuery for checkout analytics, event pipelines, reporting, and data warehouse design without confusing it with the request-time application database."
-overview: "BigQuery gives a team a managed SQL warehouse for business questions over many checkout and product events. This article follows one event stream from ingestion to tables, cost controls, schemas, views, IAM, and recovery."
+description: "Use BigQuery for analytical questions over many events with datasets, tables, rows, schemas, partitions, clustering, cost controls, slots, views, IAM, and recovery."
+overview: "BigQuery is Google Cloud's serverless analytics warehouse for historical questions over many rows. The guide follows ticket-sale and product events through datasets, tables, schemas, partitions, clustering, query cost, slots, views, IAM, and recovery."
 tags: ["gcp", "bigquery", "analytics", "warehouse"]
 order: 5
 id: article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing
@@ -13,426 +13,488 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Checkout Events Need BigQuery](#why-checkout-events-need-bigquery)
-2. [Projects, Datasets, and Tables](#projects-datasets-and-tables)
-3. [From Events to Rows](#from-events-to-rows)
-4. [Partitioning and Clustering](#partitioning-and-clustering)
-5. [Query Cost, Slots, and Guardrails](#query-cost-slots-and-guardrails)
-6. [Schemas, Quality, and Late Data](#schemas-quality-and-late-data)
-7. [Views, IAM, and Shared Analytics](#views-iam-and-shared-analytics)
-8. [Time Travel and Recovery](#time-travel-and-recovery)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [Why Analytics Belongs Outside the Live App Database](#why-analytics-belongs-outside-the-live-app-database)
+2. [Datasets](#datasets)
+3. [Tables, Rows, and Schemas](#tables-rows-and-schemas)
+4. [Partitions](#partitions)
+5. [Clustering](#clustering)
+6. [Query Cost](#query-cost)
+7. [Slots](#slots)
+8. [Views and IAM](#views-and-iam)
+9. [Recovery and Operating Checks](#recovery-and-operating-checks)
+10. [Putting It Together](#putting-it-together)
+11. [References](#references)
 
-## Why Checkout Events Need BigQuery
-<!-- section-summary: BigQuery answers analytical questions over many records, while the checkout database stays focused on live customer requests. -->
+## Why Analytics Belongs Outside the Live App Database
+<!-- section-summary: BigQuery answers analytical questions over many historical rows, separate from the database serving one live request. -->
 
-**BigQuery** is Google Cloud's managed analytics warehouse. A warehouse stores historical records and runs analytical SQL over many rows, often millions or billions of them. A checkout database has a different job: it must answer small live requests quickly, such as "create this order," "read this cart," or "mark this payment attempt as failed."
+A live app database answers questions for one workflow right now. Can this customer reserve seat A-10? Which appointment slots are free? Has this invoice already been paid? Those answers need low latency, transactions, and careful request-time behavior.
 
-Imagine a store called Northstar Shop. Its checkout service writes the current order state to Cloud SQL because the website needs fast, transactional behavior. The same service also emits a checkout event for analytics. That event might say that user `u_4921` attempted order `o_7818`, used card brand `visa`, saw payment provider `stripe-eu`, and ended with status `payment_failed`.
+Analytics asks a different kind of question. Which campaign sold the most tickets last week? Did mobile users abandon checkout after the seat map changed? Which product feature is used most often by trial accounts? Those questions scan many events and often compare days, releases, regions, or customer segments.
 
-The finance team asks a broader question than one order row: "Which payment provider had the highest failure rate by region during the last 30 days?" The product team asks, "Did free shipping increase average order value for mobile users?" The operations team asks, "Did payment failures spike during the launch window?" Each question scans many events, groups them, and calculates totals. The live checkout database should keep serving customers while BigQuery handles those wider reads.
+**BigQuery** is Google Cloud's serverless analytics warehouse. It stores analytical data in datasets and tables and lets teams query it with SQL. It fits event history, reporting, dashboards, ad hoc analysis, data engineering, and exploration over many rows.
 
-BigQuery fits this work because it separates storage and compute. BigQuery stores table data in a column-oriented layout, then the query engine distributes SQL work across many workers. If a query only needs `event_timestamp`, `region`, `payment_provider`, and `status`, BigQuery can avoid reading the rest of the columns. That one detail matters because on-demand query cost depends heavily on bytes read, and analytical tables often grow quickly.
+The important distinction is live workflow versus historical question. The live database protects one current action, such as reserving two seats. BigQuery helps people ask about many actions later, such as failed payments across a week or sales by venue after a release. Keeping those jobs separate protects the user request path and gives analysts a system built for large scans.
 
-Here is the flow we will follow through the article:
+For a beginner, the simplest event is one row that says something happened: a seat was reserved, a payment failed, a ticket was issued, or a checkout page was viewed. BigQuery is useful after many of those rows collect over time and the business wants totals, trends, comparisons, and investigations.
 
 ![BigQuery event pipeline](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-event-pipeline.png)
-*Checkout events usually move through an ingestion path before analysts see them. Raw tables preserve arrival details, clean tables make the data trustworthy, and views publish the business-facing shape.*
+*Events can flow from the app into BigQuery, where analysts query history without adding warehouse work to the live request path.*
 
-The picture starts with one checkout event. Before the team can ingest it, they need a place to put it and a table contract that says what each row contains.
+For AWS readers, BigQuery overlaps with Redshift, Athena, Glue, and S3 data lake patterns. The key GCP distinction is that BigQuery is a serverless warehouse: Google manages the warehouse infrastructure while you design data, access, cost controls, and query habits.
 
-## Projects, Datasets, and Tables
-<!-- section-summary: A practical BigQuery layout starts with datasets for location and access, then tables for raw events, cleaned facts, and reporting views. -->
+## Datasets
+<!-- section-summary: A dataset is the BigQuery container for related tables, location, default settings, and access boundaries. -->
 
-A **project** is the Google Cloud billing and ownership boundary. A **dataset** is the top-level BigQuery container inside a project. Datasets hold tables, views, routines, and access rules, and they also carry a location such as `US`, `EU`, or a specific region. A **table** is where BigQuery stores structured rows under a schema.
+A **dataset** is a container for related BigQuery tables and views. The closest everyday picture is a labeled folder inside one project. The folder does not hold documents for humans; it holds tables, views, routines, access settings, labels, and defaults that BigQuery uses to organize analytical data.
 
-For Northstar Shop, the team creates two datasets. `analytics_raw` stores events close to the shape emitted by the application. `analytics_marts` stores cleaned, modeled, and analyst-friendly data. This separation helps because raw data usually needs tighter service-account write access, while business users usually need read access to curated tables and views.
+The dataset choice matters because it is one of the first boundaries reviewers can see. It has a **location**, so data in a US dataset stays in the US multi-region and data in a regional dataset stays in that region. It has **access controls**, so the team can grant analysts access to reporting views without handing them raw event tables. It can also have defaults such as table expiration, which helps prevent temporary exploration tables from living forever.
 
-The first setup step looks like this:
+Think about a ticket company with raw app events, cleaned finance tables, and dashboard views. Those are all related to ticket analytics, yet they do not have the same audience or stability level. Raw data is noisy and mainly for pipeline owners. Curated data is cleaned and stable enough for analysts. Reporting views are the safest surface for dashboards and support teams. Three datasets make those boundaries visible before anyone runs a query.
+
+For event-ticket analytics, a team might create:
+
+| Dataset | Purpose |
+|---|---|
+| `ticket_raw` | Raw event rows landed from the app or pipeline |
+| `ticket_curated` | Cleaned tables with stable schemas for analysis |
+| `ticket_reporting` | Views and summary tables used by dashboards |
+
+Create a dataset after the team agrees on location and ownership:
 
 ```bash
 bq --location=US mk \
   --dataset \
-  --description="Raw checkout and business events" \
-  northstar-prod:analytics_raw
-
-bq --location=US mk \
-  --dataset \
-  --description="Curated analytics tables and views" \
-  northstar-prod:analytics_marts
+  --description="Curated ticket sales analytics tables" \
+  ticket-prod:ticket_curated
 ```
 
-The location choice deserves real attention. A dataset's location affects where BigQuery stores and runs work for that data. Real teams choose locations for latency, data residency, and governance. A European customer-events dataset often belongs in `EU` or a European region, while a United States analytics dataset might live in `US`. Mixing locations casually leads to awkward query and transfer work later.
+Important details in this command:
 
-The `bq mk` output confirms the dataset path. The follow-up `bq show` proves the location and description, which matters because a dataset location cannot be changed in place after production data lands there.
+- `--location=US` fixes the dataset location; tables inside the dataset follow it.
+- `ticket-prod:ticket_curated` names the project and dataset.
+- A description helps analysts understand whether the dataset holds raw, curated, or reporting data.
 
-```console
-Dataset 'northstar-prod:analytics_raw' successfully created.
+## Tables, Rows, and Schemas
+<!-- section-summary: A table stores rows, and a schema defines the fields each row carries for analysis. -->
 
-bq show --format=prettyjson northstar-prod:analytics_raw
-```
+A **table** is where BigQuery stores rows. A **row** is one record in the table. A **schema** defines the table fields and their types. Good schemas make analytics easier because analysts can trust field names, time columns, IDs, and business definitions.
 
-```json
-{
-  "datasetReference": {
-    "datasetId": "analytics_raw",
-    "projectId": "northstar-prod"
-  },
-  "description": "Raw checkout and business events",
-  "location": "US"
-}
-```
+A schema is the contract between the data producer and the people who query the data. If the app sends `gross_amount_cents` as an integer and `event_timestamp` as a timestamp, analysts know how to total revenue and filter dates. If the app sends unclear strings such as `amount` or `time`, every dashboard has to guess what the field means.
 
-Now the team needs a table. A good event table stores business fields plus pipeline fields that help with debugging and deduplication. `event_id` gives every event a stable identity. `event_timestamp` records when the checkout action happened. `ingested_at` records when the row arrived in BigQuery. Those two times differ when mobile clients reconnect late or a backfill runs after an incident.
+That contract is also an operations tool. Stable event IDs help deduplication. Release fields help incident review. Time fields help partitioning. Business IDs help grouping by event, venue, or customer after the privacy model is approved. A table is therefore more than a place to dump events; it is the shape that makes future questions answerable.
 
-```sql
-CREATE TABLE `northstar-prod.analytics_raw.checkout_events` (
-  event_id STRING NOT NULL,
-  event_timestamp TIMESTAMP NOT NULL,
-  ingested_at TIMESTAMP NOT NULL,
-  order_id STRING,
-  user_id STRING,
-  session_id STRING,
-  platform STRING,
-  region STRING,
-  payment_provider STRING,
-  card_brand STRING,
-  status STRING,
-  order_total NUMERIC,
-  currency STRING,
-  attributes JSON
-)
-PARTITION BY DATE(event_timestamp)
-CLUSTER BY payment_provider, region, status;
-```
+A `ticket_sales_events` table might store one row per important product event:
 
-The table already includes two layout decisions: partitioning and clustering. We will come back to those after ingestion, because table layout matters most after rows start piling up. For now, the important point is that the table gives every incoming event a predictable shape.
+| Field | Type | Example | Why it exists |
+|---|---|---|---|
+| `event_timestamp` | `TIMESTAMP` | `2026-07-04 18:02:11 UTC` | Time windows and release comparisons |
+| `event_name` | `STRING` | `seat_reserved` | Funnel and behavior analysis |
+| `event_id` | `STRING` | `evt_938122` | Deduplication and traceability |
+| `customer_id` | `STRING` | `cust_8842` | Customer-level analysis after privacy review |
+| `event_id_for_show` | `STRING` | `show_20260704` | Grouping by event or venue |
+| `ticket_count` | `INT64` | `2` | Sales volume calculations |
+| `gross_amount_cents` | `INT64` | `12800` | Revenue calculations without floating point surprises |
+| `release_sha` | `STRING` | `8c7ab21` | Deployment impact analysis |
 
-## From Events to Rows
-<!-- section-summary: BigQuery can receive data from batch files, direct Pub/Sub exports, Dataflow pipelines, or custom Storage Write API clients. -->
-
-**Ingestion** means moving data from the place where it happens into the warehouse. Northstar Shop has two paths. The checkout service publishes live events through Pub/Sub, and the data team also receives nightly export files in Cloud Storage from payment providers, marketing tools, and older systems.
-
-Batch loading works well for files. A batch load job can load Avro, Parquet, ORC, CSV, or newline-delimited JSON into BigQuery. Teams often prefer Parquet or Avro for production pipelines because those formats carry schema information and compress efficiently. A nightly payment-provider export might land at `gs://northstar-analytics-drop/payment_provider_events/dt=2026-06-14/`.
+Create the table with a schema file:
 
 ```bash
-bq load \
-  --source_format=PARQUET \
-  --schema_update_option=ALLOW_FIELD_ADDITION \
-  northstar-prod:analytics_raw.payment_provider_events \
-  "gs://northstar-analytics-drop/payment_provider_events/dt=2026-06-14/*.parquet"
+bq mk \
+  --table \
+  ticket-prod:ticket_curated.ticket_sales_events \
+  ticket_sales_events_schema.json
 ```
 
-Batch loading also gives the team a clean backfill path. If the application missed events during a deploy, the team can replay files into a specific date partition and compare counts against the source system. That matters in production because analytics bugs often show up as quiet number drift during a business review.
+Important details in this command:
 
-The load job output should say `DONE`, and the details should show input files, output rows, and bad records. Beginners should learn to check that row count before trusting a dashboard.
+- The table lives inside the `ticket_curated` dataset.
+- The schema file should be reviewed like code because dashboards and queries depend on it.
+- Use integer cents for money in event facts for source systems that record currency that way.
 
-```console
-Upload complete.
-Waiting on bqjob_r34b6c2f0d9a7_00000190e0... (3s) Current status: DONE
+## Partitions
+<!-- section-summary: A partition divides a BigQuery table into manageable slices, most often by date or ingestion time. -->
 
-bq show -j --format=prettyjson bqjob_r34b6c2f0d9a7_00000190e0
-```
+A **partition** divides a table into slices. For event data, the common choice is a date or timestamp field such as `event_timestamp`. Partitions help BigQuery scan less data for queries filtered to a date range.
 
-```json
-{
-  "status": {
-    "state": "DONE"
-  },
-  "statistics": {
-    "load": {
-      "inputFiles": "24",
-      "outputRows": "1843921",
-      "badRecords": "0"
-    }
-  }
-}
-```
-
-For live events, Pub/Sub gives the checkout service a durable event stream. BigQuery can receive Pub/Sub messages through a **BigQuery subscription** when the messages already match the destination table and need little transformation. This removes the need to run a separate subscriber application for simple export cases.
+For ticket sales events, most queries ask about a day, week, month, or release window. Partitioning by event date matches that habit. Create a partitioned table like this:
 
 ```bash
-gcloud pubsub subscriptions create checkout-events-to-bigquery \
-  --topic=checkout-events \
-  --bigquery-table=northstar-prod:analytics_raw.checkout_events \
-  --use-topic-schema \
-  --write-metadata
+bq mk \
+  --table \
+  --time_partitioning_field=event_timestamp \
+  --time_partitioning_type=DAY \
+  ticket-prod:ticket_curated.ticket_sales_events \
+  ticket_sales_events_schema.json
 ```
 
-The important flags are `--bigquery-table`, which names the table that consumes messages; `--use-topic-schema`, which asks Pub/Sub to use the topic schema as the table contract; and `--write-metadata`, which adds Pub/Sub metadata fields for debugging delivery. A read-back should show the table, topic, and state.
+Important details in this command:
 
-```bash
-gcloud pubsub subscriptions describe checkout-events-to-bigquery \
-  --format='yaml(topic,bigqueryConfig.table,bigqueryConfig.useTopicSchema,bigqueryConfig.writeMetadata,state)'
-```
+- `--time_partitioning_field=event_timestamp` uses the event time, not the load time.
+- `--time_partitioning_type=DAY` creates daily partitions.
+- Queries should filter `event_timestamp` so BigQuery can prune partitions.
 
-```yaml
-topic: projects/northstar-prod/topics/checkout-events
-bigqueryConfig:
-  table: projects/northstar-prod/datasets/analytics_raw/tables/checkout_events
-  useTopicSchema: true
-  writeMetadata: true
-state: ACTIVE
-```
+Think of partitioning as putting the table into dated drawers. If the dashboard asks for the last seven days, BigQuery can open the seven relevant drawers instead of reading the whole warehouse history. If a query forgets the date filter, BigQuery may scan far more data than the question needs.
 
-When the data needs richer processing, Dataflow usually enters the story. Dataflow can read from Pub/Sub, validate payloads, add lookup data, window events by event time, route bad records to a dead-letter topic, and write clean rows to BigQuery. This helps when the checkout event needs enrichment from a merchant table or when the team wants an hourly aggregate table for dashboards.
-
-Custom services can use the BigQuery Storage Write API for high-throughput streaming. The default stream makes rows available quickly and has at-least-once behavior, so the warehouse design still needs `event_id` and deduplication. Application-created committed streams can use offsets for exactly-once writes within a stream, but they also require more careful client code. A senior engineer usually tells a junior engineer this part plainly: strong write semantics help, and stable event IDs still save the day during retries, migrations, and backfills.
-
-By this point, rows have arrived. The next question is how BigQuery reads those rows without scanning years of history for every dashboard refresh.
-
-## Partitioning and Clustering
-<!-- section-summary: Partitioning skips whole time slices, and clustering skips storage blocks inside those slices when queries filter on common columns. -->
-
-**Partitioning** divides a large BigQuery table into smaller segments. For event data, the most common choice is a date or timestamp column. Northstar Shop partitions checkout events by `DATE(event_timestamp)` because analysts usually ask questions by day, week, launch window, or incident period.
-
-When a query filters the partition column, BigQuery can scan matching partitions and skip the rest. That process controls both performance and cost because BigQuery reads fewer bytes. A dashboard query for yesterday's payment failures should read yesterday's partition instead of four years of checkout history.
+A useful review query should make the partition filter visible:
 
 ```sql
 SELECT
-  payment_provider,
-  region,
-  COUNT(*) AS attempts,
-  COUNTIF(status = 'payment_failed') AS failures,
-  SAFE_DIVIDE(COUNTIF(status = 'payment_failed'), COUNT(*)) AS failure_rate
-FROM `northstar-prod.analytics_raw.checkout_events`
-WHERE event_timestamp >= TIMESTAMP('2026-06-14 00:00:00+00')
-  AND event_timestamp < TIMESTAMP('2026-06-15 00:00:00+00')
-GROUP BY payment_provider, region
-ORDER BY failure_rate DESC;
+  COUNT(*) AS failed_payments
+FROM `ticket-prod.ticket_curated.ticket_sales_events`
+WHERE event_timestamp >= TIMESTAMP '2026-07-01 00:00:00 UTC'
+  AND event_timestamp < TIMESTAMP '2026-07-08 00:00:00 UTC'
+  AND event_name = 'payment_failed';
 ```
 
-The `WHERE` clause does real work here. It gives the query planner a partition range. A query that wraps the partition column in awkward expressions or forgets the date filter can scan far more data than the analyst expected. Many teams protect large event tables by requiring partition filters, especially for raw tables.
+The important line is the time window on `event_timestamp`. That line is not just business logic; it also tells BigQuery which partitions matter. Dashboards, scheduled queries, and ad hoc incident queries should make the partition window obvious in review.
 
-**Clustering** sorts storage blocks by selected columns. BigQuery supports up to four clustering columns. The order matters because BigQuery sorts and groups blocks using the first clustered column before the next ones. For Northstar Shop, `payment_provider`, `region`, and `status` match the most common incident and business questions, so the table uses those columns.
+## Clustering
+<!-- section-summary: Clustering organizes data inside partitions by selected columns that common queries filter or group by. -->
 
-Partitioning and clustering solve different parts of the same problem. Partitioning narrows the time slice. Clustering narrows the useful blocks inside that slice. If an analyst filters yesterday's events to `payment_provider = 'stripe-eu'`, BigQuery can combine the date partition filter with clustered block pruning.
+**Clustering** is BigQuery's way of organizing rows near related rows according to selected columns. A beginner-friendly way to picture it is a warehouse full of boxes. Partitioning chooses the right room, such as the room for July 4. Clustering arranges the boxes inside that room so rows for the same event, release, or customer segment sit closer together.
 
-A healthy event table design usually follows this pattern:
+BigQuery stores table data in storage blocks. For clustered tables, BigQuery keeps metadata about the values in those blocks. A query with a filter such as `event_name = 'payment_failed'` can use that metadata to skip blocks that do not contain the values it needs. This skipping is often called **block pruning**. The practical result is simple: the query may read fewer bytes and return faster because BigQuery avoids scanning parts of the table that cannot answer the question.
 
-| Design choice | Northstar example | Why the team chooses it |
-|---|---|---|
-| Partition column | `event_timestamp` | Most reports and incidents use time windows |
-| Clustering columns | `payment_provider`, `region`, `status` | Payment operations filter and group by these fields |
-| Raw table retention | 180 days in raw, longer in curated tables | Raw payloads help debugging, while curated tables support long-term trends |
-| Partition filter habit | Every large query includes a bounded time range | Cost and latency stay predictable |
+For ticket analytics, the table is already partitioned by `event_timestamp`. That answers the first question: which dates should BigQuery scan? Clustering answers the next question inside those dates: which rows are likely relevant? If support asks for checkout failures for release `8c7ab21` in the last seven days, the date filter narrows the partitions and clustering by `event_name` plus `release_sha` helps BigQuery focus inside those partitions.
 
-Good layout helps, but a warehouse still needs budget guardrails. The next section follows the same query into BigQuery's cost and compute controls.
+Good clustering columns usually have three traits:
+
+- Analysts filter or group by them often.
+- The column has enough different values to separate data into useful blocks.
+- The column appears early in common queries, not only in rare one-off investigations.
+
+For the ticket table, useful candidates are `event_name`, `event_id_for_show`, and `release_sha`. `event_name` helps funnel questions such as checkout failures or seat reservations. `event_id_for_show` helps sales and venue analysis. `release_sha` helps incident review after a deploy. A column such as `ticket_count` is less useful because most rows may have small repeated values such as `1` or `2`, so it does not separate the data as clearly.
+
+Create a partitioned and clustered table like this:
+
+```bash
+bq mk \
+  --table \
+  --time_partitioning_field=event_timestamp \
+  --time_partitioning_type=DAY \
+  --clustering_fields=event_name,event_id_for_show,release_sha \
+  ticket-prod:ticket_curated.ticket_sales_events \
+  ticket_sales_events_schema.json
+```
+
+Important details in this command:
+
+- `--time_partitioning_field=event_timestamp` still does the first layer of pruning by date.
+- `--clustering_fields=event_name,event_id_for_show,release_sha` asks BigQuery to organize rows inside those date partitions by common analytical paths.
+- The order matters. Put the most common and most selective filters earlier, based on real query history rather than guesswork.
+- Clustering is not a replacement for schema design. A messy table with unclear event names and unstable release fields stays hard to query even with clustering.
+
+Here is a query that can benefit from both partitioning and clustering:
+
+```sql
+SELECT
+  release_sha,
+  COUNT(*) AS failed_payments
+FROM `ticket-prod.ticket_curated.ticket_sales_events`
+WHERE event_timestamp >= TIMESTAMP '2026-07-01 00:00:00 UTC'
+  AND event_timestamp < TIMESTAMP '2026-07-08 00:00:00 UTC'
+  AND event_name = 'payment_failed'
+GROUP BY release_sha
+ORDER BY failed_payments DESC;
+```
+
+The time window points BigQuery at the relevant date partitions. The `event_name` filter and `release_sha` grouping line up with the clustering fields. That does not guarantee a tiny scan for every data distribution, yet it gives BigQuery the table layout it needs to skip more irrelevant blocks.
+
+Use clustering after the table has a clear query pattern. A brand-new event table can use partitioning by event time as the first layout choice. After dashboards and incident queries show repeated filters, add clustering columns that match those repeated paths. The review question is practical: which columns do people actually use to narrow this table?
 
 ![BigQuery table design](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-table-design.png)
-*Partitioning narrows the dates BigQuery reads, and clustering helps it skip blocks inside those dates. The dry run estimate gives the analyst a cost signal before the query runs.*
+*A BigQuery table design defines rows and schema first, then adds partitioning and clustering based on query behavior.*
 
-## Query Cost, Slots, and Guardrails
-<!-- section-summary: BigQuery costs and speed depend on bytes read, query shape, and available slots, so production teams add limits before analysts make mistakes. -->
+## Query Cost
+<!-- section-summary: BigQuery query cost is tied to data scanned in on-demand pricing, so filters and table design matter. -->
 
-BigQuery queries use **slots**, which are virtual compute units for SQL and other jobs. With on-demand pricing, BigQuery charges for the amount of data processed by each query. With capacity-based pricing, teams allocate slot capacity through reservations and pay for that capacity over time. Either way, the query still runs faster and cheaper when it reads less data.
+BigQuery has more than one pricing model. In on-demand pricing, query cost is based on bytes processed. That is why BigQuery cost control starts before the bill arrives. The table design, the selected columns, the date filter, and the query review habit all affect how much data BigQuery must read.
 
-The first guardrail is a dry run. A dry run validates the SQL and estimates bytes before BigQuery executes the query. This is a small habit that prevents expensive accidents during exploration.
+Imagine asking a warehouse worker for the total sales from last week. A careful request says "open these seven dated boxes, look only at the sales slips, and total the amount column." A wasteful request says "walk through the entire warehouse and bring me every field from every record." BigQuery is much faster than a person in a warehouse, yet the habit is the same: make the query describe the smallest useful slice.
+
+The main beginner controls are:
+
+- Filter partitioned tables by the partitioning field.
+- Select only the columns needed for the answer.
+- Query curated tables instead of huge raw tables if the curated table already contains the cleaned fields.
+- Use dry runs for ad hoc queries so the estimated bytes are visible before execution.
+- Add budgets, alerts, and reviewed dashboards for recurring workloads.
+
+A weekly ticket-sales query should filter by time and select only the fields it needs:
+
+```sql
+SELECT
+  event_id_for_show,
+  COUNTIF(event_name = 'seat_reserved') AS reservations,
+  SUM(gross_amount_cents) / 100 AS gross_sales_usd
+FROM `ticket-prod.ticket_curated.ticket_sales_events`
+WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+GROUP BY event_id_for_show
+ORDER BY gross_sales_usd DESC
+LIMIT 20;
+```
+
+Important details in this query:
+
+- The `WHERE` clause filters the partitioning field.
+- The query selects only the columns needed for the answer.
+- The table is curated, so analysts avoid repeatedly cleaning raw fields in every dashboard.
+
+Use a dry run before expensive ad hoc queries:
 
 ```bash
 bq query \
   --use_legacy_sql=false \
   --dry_run \
-  'SELECT COUNT(*)
-   FROM `northstar-prod.analytics_raw.checkout_events`
-   WHERE event_timestamp >= TIMESTAMP("2026-06-14 00:00:00+00")
-     AND event_timestamp < TIMESTAMP("2026-06-15 00:00:00+00")'
+  'SELECT COUNT(*) FROM `ticket-prod.ticket_curated.ticket_sales_events`
+   WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)'
 ```
 
-A dry run does not return rows. It returns an estimate, and that estimate is the beginner-friendly signal. A small query over one day might scan megabytes or a few gigabytes; a missing partition filter can jump to terabytes.
+Example output:
 
 ```console
-Query successfully validated. Assuming the tables are not modified,
-running this query will process 314572800 bytes of data.
+Query successfully validated. Assuming the tables are not modified, running this query will process 184233984 bytes of data.
 ```
 
-The second guardrail is a maximum bytes billed limit. This tells BigQuery to fail the job if it would exceed the configured limit. Analysts can still explore, and one missing filter fails before it quietly scans a huge table.
+The useful evidence is the estimated bytes processed. It tells the analyst whether the query is scanning a focused slice or an accidental full history.
+
+## Slots
+<!-- section-summary: Slots are BigQuery compute capacity, and teams can use editions or reservations for predictable capacity needs. -->
+
+A **slot** is a unit of BigQuery compute capacity. On-demand pricing hides most capacity management from you. Capacity-based pricing and reservations let organizations reserve or assign BigQuery compute for more predictable workloads.
+
+Slots matter for data teams with steady production pipelines, important dashboards, or many analysts running heavy queries at the same time. Picture a ticket company at 9:00 Monday morning. The executive dashboard refreshes hourly sales, the finance pipeline rebuilds weekend revenue tables, and three analysts explore a release regression. All of those jobs need BigQuery compute. If they share one pool with no plan, a heavy ad hoc query can slow the dashboard or delay the pipeline.
+
+Use this decision rule. Stay with on-demand pricing for workloads that are spiky, small, and easy to control with dry runs, partition filters, and budgets. Consider reservations and slots for important daily workloads, predictable performance needs, or workload isolation. Slots are capacity planning; table design and query review still come first.
+
+A simple reservation shape might look like this:
+
+| Reservation | Assigned work | Why it exists |
+|---|---|---|
+| `ticket_pipeline_prod` | Scheduled transforms in the `ticket-pipelines-prod` project | Keeps daily curated tables away from analyst experiments |
+| `ticket_bi_prod` | Dashboard queries in the `ticket-bi-prod` project | Protects executive and support dashboards during business hours |
+| `ticket_adhoc` | Analyst sandbox project or folder | Gives exploration a limit without blocking production reporting |
+
+The assignment is the part many beginners miss. A reservation only helps a job after a project, folder, or organization is assigned to it for the right job type. A query job in `ticket-bi-prod` should run under the dashboard reservation. A scheduled transform in `ticket-pipelines-prod` should run under the pipeline reservation.
+
+Conceptually, the configuration has two layers:
+
+```yaml
+reservations:
+  - name: projects/ticket-capacity/locations/US/reservations/ticket_pipeline_prod
+    edition: ENTERPRISE
+    baselineSlots: 500
+    autoscaleMaxSlots: 1000
+  - name: projects/ticket-capacity/locations/US/reservations/ticket_bi_prod
+    edition: ENTERPRISE
+    baselineSlots: 200
+    autoscaleMaxSlots: 500
+assignments:
+  - assignee: projects/ticket-pipelines-prod
+    reservation: ticket_pipeline_prod
+    jobType: QUERY
+  - assignee: projects/ticket-bi-prod
+    reservation: ticket_bi_prod
+    jobType: QUERY
+```
+
+This YAML is a review sketch, not a direct `bq` command. It helps beginners see the relationship: reservations define capacity pools, and assignments send jobs from projects, folders, or organizations to those pools.
+
+A real command path creates the reservation first and then creates the assignment:
+
+```bash
+bq mk \
+  --project_id=ticket-capacity \
+  --location=US \
+  --reservation \
+  --slots=500 \
+  --ignore_idle_slots=false \
+  --edition=ENTERPRISE \
+  --autoscale_max_slots=1000 \
+  ticket_pipeline_prod
+
+bq mk \
+  --project_id=ticket-capacity \
+  --location=US \
+  --reservation_assignment \
+  --reservation_id=ticket_pipeline_prod \
+  --job_type=QUERY \
+  --assignee_type=PROJECT \
+  --assignee_id=ticket-pipelines-prod
+```
+
+Important details in these commands:
+
+- The reservation lives in the capacity-management project and location.
+- `--slots=500` sets the baseline reservation size in this example.
+- `--autoscale_max_slots=1000` allows autoscaling up to the reviewed ceiling for this reservation.
+- The assignment connects query jobs from `ticket-pipelines-prod` to the reservation.
+- A dashboard project would need its own assignment to use the dashboard reservation.
+
+Example verification output should show the assignment:
+
+```bash
+bq show \
+  --project_id=ticket-capacity \
+  --location=US \
+  --reservation_assignment \
+  --job_type=QUERY \
+  --assignee_type=PROJECT \
+  --assignee_id=ticket-pipelines-prod
+```
+
+```console
+assignee: projects/ticket-pipelines-prod
+jobType: QUERY
+name: projects/ticket-capacity/locations/US/reservations/ticket_pipeline_prod/assignments/abc123
+```
+
+This is workload isolation. The dashboard project can still query approved datasets, but its query jobs use the dashboard reservation. The pipeline project can still write curated tables, but its jobs use the pipeline reservation. During a heavy finance transform, the dashboard has its own capacity path and a clearer alert surface.
+
+## Views and IAM
+<!-- section-summary: Views shape how people query data, while IAM controls who can access datasets, tables, views, and jobs. -->
+
+A **view** is a saved SQL query that acts like a table for readers. Views help teams publish clean, approved shapes without exposing every raw field. A reporting view might hide internal IDs, apply standard filters, or calculate approved metrics.
+
+Example view:
+
+```sql
+CREATE OR REPLACE VIEW `ticket-prod.ticket_reporting.daily_sales` AS
+SELECT
+  DATE(event_timestamp) AS sale_date,
+  event_id_for_show,
+  SUM(ticket_count) AS tickets_sold,
+  SUM(gross_amount_cents) / 100 AS gross_sales_usd
+FROM `ticket-prod.ticket_curated.ticket_sales_events`
+WHERE event_name = 'seat_reserved'
+GROUP BY sale_date, event_id_for_show;
+```
+
+Important details in this view:
+
+- The view exposes a stable daily sales shape to dashboard users.
+- The source table remains in the curated dataset.
+- The metric calculation lives in one reviewed query instead of many dashboard copies.
+
+**IAM** controls access to BigQuery resources and jobs. Analysts may receive access to reporting views, while data engineers receive broader access to raw and curated datasets. Sensitive fields should also be handled with column-level security, row-level security, or separate datasets for stricter data requirements.
+
+A practical reporting layout separates source data from approved analysis:
+
+| Dataset | Who can read it | What it contains |
+|---|---|---|
+| `ticket_raw` | Data engineers and pipeline service accounts | Raw event tables, ingestion fields, internal trace IDs |
+| `ticket_curated` | Data engineers and trusted analytics maintainers | Cleaned fact tables and dimensions |
+| `ticket_reporting` | Analysts, dashboard service accounts, support leads | Approved views such as `daily_sales` and `support_queue_health` |
+
+Analysts query `ticket_reporting.daily_sales`. Their access can stop at the reporting dataset, while `ticket_raw.checkout_events` and `ticket_curated.ticket_sales_events` stay behind a tighter boundary. The view is the approved contract: it exposes sale date, event ID, ticket count, and gross sales, while the source tables keep raw customer IDs, ingestion metadata, and operational fields restricted.
+
+BigQuery also separates data permission from job-running permission. An analyst needs permission to query the approved view, usually through dataset access or a role such as BigQuery Data Viewer on the reporting dataset. The same analyst also needs permission to create query jobs, often through BigQuery Job User on the project where queries run. If either half is missing, the query fails for a different reason.
+
+A quick verification query should prove the intended shape:
 
 ```bash
 bq query \
+  --project_id=ticket-bi-prod \
   --use_legacy_sql=false \
-  --maximum_bytes_billed=5000000000 \
-  'SELECT payment_provider, COUNT(*) AS attempts
-   FROM `northstar-prod.analytics_raw.checkout_events`
-   WHERE event_timestamp >= TIMESTAMP("2026-06-14 00:00:00+00")
-     AND event_timestamp < TIMESTAMP("2026-06-15 00:00:00+00")
-   GROUP BY payment_provider'
+  'SELECT sale_date, event_id_for_show, tickets_sold, gross_sales_usd
+   FROM `ticket-prod.ticket_reporting.daily_sales`
+   ORDER BY sale_date DESC
+   LIMIT 3'
 ```
 
-If the query would cross the limit, BigQuery fails before charging for the full scan. That failure is useful because it points directly to a missing filter or a table design problem.
+Example output:
 
 ```console
-Error in query string: Query exceeded limit for bytes billed: 5000000000.
-31415926535 or higher required.
++------------+-------------------+--------------+-----------------+
+| sale_date  | event_id_for_show | tickets_sold | gross_sales_usd |
++------------+-------------------+--------------+-----------------+
+| 2026-07-04 | show_20260704     |         1842 |       117920.00 |
+| 2026-07-03 | show_20260703     |         1311 |        84210.00 |
++------------+-------------------+--------------+-----------------+
 ```
 
-The third guardrail is a curated layer. Dashboards should rarely hit the raw event firehose directly. A scheduled query can build a smaller hourly table, and a dashboard can read that table instead of recalculating from raw rows every minute.
+This proves analysts can run jobs in the BI project and use the reporting view. A second check should try the raw table with the same identity and record the access denied result. That failure is useful evidence because it proves the approved view path works while raw tables stay restricted.
+
+If sensitive fields exist, views are only one tool. Use row-level security for analysts limited to rows for their region or team. Use column-level security or policy tags for columns such as email, phone number, or payment token that need stronger control. Keep those controls on the source tables so every view and query path inherits the same sensitive-field rules.
+
+## Recovery and Operating Checks
+<!-- section-summary: BigQuery recovery uses time travel, snapshots, table copies, and source replay depending on the table and incident. -->
+
+BigQuery supports recovery patterns such as time travel and table snapshots. These help after a table overwrite, a bad load, or an analyst request to inspect an earlier version. Raw event replay is also important for pipelines with durable source events in Cloud Storage, Pub/Sub, or another source system.
+
+For a bad transform, land the recovered table in a restore dataset first. This time travel copy takes the table state from two hours ago and writes it to a validation table:
 
 ```sql
-CREATE OR REPLACE TABLE `northstar-prod.analytics_marts.checkout_failures_hourly`
-PARTITION BY DATE(hour_start)
-CLUSTER BY payment_provider, region AS
-SELECT
-  TIMESTAMP_TRUNC(event_timestamp, HOUR) AS hour_start,
-  payment_provider,
-  region,
-  COUNT(*) AS attempts,
-  COUNTIF(status = 'payment_failed') AS failures,
-  SAFE_DIVIDE(COUNTIF(status = 'payment_failed'), COUNT(*)) AS failure_rate
-FROM `northstar-prod.analytics_raw.checkout_events`
-WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
-GROUP BY hour_start, payment_provider, region;
-```
-
-For steady production analytics, teams also separate workloads. Finance month-end jobs, BI dashboards, data science experiments, and ingestion transforms need capacity boundaries when they run at the same time. Reservations help a platform team allocate slots to different projects or workloads, while project-level controls and budgets catch runaway usage.
-
-Cost controls protect the bill. Data quality rules protect the meaning of the data. The pipeline also needs schema rules so every number means what the team thinks it means.
-
-## Schemas, Quality, and Late Data
-<!-- section-summary: A useful warehouse keeps event fields stable, handles schema evolution deliberately, and treats retries and late arrivals as normal production behavior. -->
-
-A **schema** names the columns in a table and defines their data types. BigQuery can infer schemas for some load formats, but production event tables usually deserve an explicit schema. The schema acts like a contract between application engineers, data engineers, and analysts.
-
-Northstar Shop starts with required fields for identity and time, then leaves room for changing product details in the `attributes` JSON column. This gives the team a stable core while the checkout app evolves. A new nullable column such as `coupon_code` can arrive later through a schema update. A breaking type change, such as changing `order_total` from `NUMERIC` to `STRING`, needs a planned migration because historical queries and dashboards depend on the old type.
-
-```sql
-ALTER TABLE `northstar-prod.analytics_raw.checkout_events`
-ADD COLUMN coupon_code STRING;
-```
-
-Data quality starts before the row reaches BigQuery. The checkout service should generate one `event_id` per business event and reuse it on retry. Pub/Sub schemas can enforce message shape at the topic level. Dataflow can send malformed messages to a dead-letter topic instead of dropping them quietly. The warehouse can keep an `_ingestion_errors` table so the data team sees which fields failed validation and which release created the problem.
-
-Duplicates deserve special attention. A mobile client may retry a checkout event after a network drop. A streaming writer may retry after a timeout. A backfill may replay data that already arrived live. The raw table can keep every arrival for audit, while the curated table chooses one row per `event_id`.
-
-```sql
-CREATE OR REPLACE TABLE `northstar-prod.analytics_marts.checkout_events_clean`
-PARTITION BY DATE(event_timestamp)
-CLUSTER BY payment_provider, region, status AS
-SELECT * EXCEPT(row_number)
-FROM (
-  SELECT
-    *,
-    ROW_NUMBER() OVER (
-      PARTITION BY event_id
-      ORDER BY ingested_at DESC
-    ) AS row_number
-  FROM `northstar-prod.analytics_raw.checkout_events`
-)
-WHERE row_number = 1;
-```
-
-Late data also needs an explicit rule. If the mobile app sends an event two days late, the table partition should still follow `event_timestamp`, because the business question cares when the checkout happened. The pipeline can reprocess recent partitions, such as the last three days, on every scheduled transform. Older late data can trigger a targeted backfill job and a short note in the data incident log.
-
-Now the warehouse contains trustworthy tables. The next job is sharing those tables without handing every analyst raw customer data.
-
-## Views, IAM, and Shared Analytics
-<!-- section-summary: Views and IAM let teams expose useful answers while keeping raw tables, sensitive columns, and write paths restricted. -->
-
-A **view** is a virtual table defined by a SQL query. BigQuery runs the view query when someone reads from it. Views help teams publish a smaller, safer, and friendlier interface over raw tables. For example, analysts may need failure rates by region, and they can work without raw user IDs or every event attribute.
-
-```sql
-CREATE OR REPLACE VIEW `northstar-prod.analytics_marts.checkout_failure_rates` AS
-SELECT
-  DATE(event_timestamp) AS event_date,
-  payment_provider,
-  region,
-  COUNT(*) AS attempts,
-  COUNTIF(status = 'payment_failed') AS failures,
-  SAFE_DIVIDE(COUNTIF(status = 'payment_failed'), COUNT(*)) AS failure_rate
-FROM `northstar-prod.analytics_marts.checkout_events_clean`
-GROUP BY event_date, payment_provider, region;
-```
-
-Materialized views and aggregate tables can help when the same expensive calculation runs again and again. A logical view gives a clean SQL interface, while a materialized view or scheduled aggregate stores precomputed results. The team chooses based on freshness, cost, complexity, and dashboard speed.
-
-Access follows the same layered approach. The ingestion service account needs permission to append data to raw tables. Data engineers need permission to manage schemas and transforms. Analysts need read access to curated datasets or views. BigQuery IAM roles such as Data Viewer, Data Editor, and Job User help express those responsibilities, but teams should grant them at the smallest practical resource level.
-
-Sensitive fields need extra care. A raw checkout event might contain user identifiers, device metadata, or fraud signals. A curated view can remove those fields. Row-level security can restrict rows, and column-level access control can restrict sensitive columns. Authorized views can let a team query a view without granting direct access to the underlying source table. The exact choice depends on the data and the audience, but the production rule stays simple: raw data access should feel rare and reviewed.
-
-Sharing finishes the reporting path. Recovery finishes the operational path. BigQuery gives the team a short correction window when someone changes or deletes the wrong data.
-
-## Time Travel and Recovery
-<!-- section-summary: BigQuery time travel helps recover recent table states, while snapshots, exports, and raw replay protect longer recovery needs. -->
-
-**Time travel** lets BigQuery query table data from a previous point in time within the supported retention window. Google Cloud documents a seven-day time travel window for recovery from accidental deletion or corruption. This helps when someone runs a bad update, deletes a table, or needs to compare today's data with yesterday's table state.
-
-Here is a practical recovery query. The team checks what the clean checkout table looked like one hour before a broken transform ran:
-
-```sql
-SELECT
-  COUNT(*) AS rows_before_bad_job
-FROM `northstar-prod.analytics_marts.checkout_events_clean`
-FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR);
-```
-
-If the team needs to restore data into a replacement table, it can create a new table from the older state:
-
-```sql
-CREATE OR REPLACE TABLE `northstar-prod.analytics_marts.checkout_events_clean_recovered` AS
+CREATE TABLE `ticket-prod.ticket_restore.ticket_sales_events_pre_bad_load` AS
 SELECT *
-FROM `northstar-prod.analytics_marts.checkout_events_clean`
-FOR SYSTEM_TIME AS OF TIMESTAMP('2026-06-14 10:30:00+00');
+FROM `ticket-prod.ticket_curated.ticket_sales_events`
+FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR);
 ```
 
-The restore query is consumed by BigQuery as a new table write. The verification query should compare row counts and a few business totals before anyone points dashboards at the recovered table.
+Important details in this query:
+
+- `FOR SYSTEM_TIME AS OF` reads a previous table state inside the time travel window.
+- The destination table lives in `ticket_restore`, so validation stays separate from the curated production table.
+- The timestamp should come from the incident timeline, such as the start time of the failed scheduled query.
+
+If the team wants a named recovery point that can outlive the normal time travel window, create a table snapshot:
 
 ```sql
-SELECT
-  COUNT(*) AS recovered_rows,
-  COUNTIF(status = 'payment_failed') AS recovered_failures
-FROM `northstar-prod.analytics_marts.checkout_events_clean_recovered`;
+CREATE SNAPSHOT TABLE `ticket-prod.ticket_restore.ticket_sales_events_snapshot_20260704`
+CLONE `ticket-prod.ticket_curated.ticket_sales_events`
+FOR SYSTEM_TIME AS OF TIMESTAMP '2026-07-04 17:30:00 UTC'
+OPTIONS(
+  expiration_timestamp = TIMESTAMP '2026-07-11 00:00:00 UTC'
+);
 ```
 
-```console
-+----------------+--------------------+
-| recovered_rows | recovered_failures |
-+----------------+--------------------+
-|        1843921 |              28391 |
-+----------------+--------------------+
-```
+Important details in this statement:
 
-Time travel is a short recovery tool. Long-term recovery usually comes from stronger habits: immutable raw files in Cloud Storage, table snapshots for important cutovers, scheduled exports for compliance, and tested replay jobs. Northstar Shop keeps raw event files for the retention period required by policy, then rebuilds curated tables from raw events when a transform bug affects more than the time travel window.
+- The snapshot references the source table state at the chosen timestamp.
+- The expiration keeps the recovery artifact from living forever after validation.
+- A table copy or replay job can use the snapshot after the team approves the repair path.
 
-Recovery also includes ownership. Every important dataset should have labels, documented owners, and alerting for failed scheduled queries or failed ingestion jobs. Data incidents often start quietly: a dashboard number drops to zero, a partition stops receiving rows, or a schema update silently sends records to an error table. The warehouse needs the same operational care as application services.
+Validation should compare row counts plus facts that users care about. For the ticket table, check total rows for the affected date, min and max event timestamps, the count of known `event_id` samples, and gross sales totals used by the dashboard. If those checks match the incident expectation, the team can choose a repair: copy the restored table over the damaged table, merge selected rows, or replay raw events through the pipeline.
 
-## Putting It All Together
-<!-- section-summary: A production BigQuery design connects ingestion, table layout, quality controls, access, and recovery into one maintainable analytics path. -->
+An operating checklist should cover:
 
-Northstar Shop started with one checkout event and one business question. The finished design now has a full path. The checkout service writes live order state to the operational database, then publishes business events for analytics. Simple events can flow from Pub/Sub to BigQuery directly. More complex events can pass through Dataflow for validation, enrichment, and dead-letter handling. Historical files can load from Cloud Storage for backfills and partner data.
-
-Datasets separate raw and curated work. Tables carry explicit schemas, pipeline timestamps, and stable event IDs. Partitioning narrows time windows. Clustering helps payment-provider and region filters scan fewer blocks. Dry runs, maximum bytes billed, scheduled aggregates, and reservations keep query cost and capacity under control.
-
-The data layer also has a safety story. Deduplication chooses one curated row per event. Late-arrival rules reprocess recent partitions. Views publish useful business answers without exposing raw customer fields. IAM grants write access to services, transform access to data engineers, and read access to analysts. Time travel, snapshots, raw-file retention, and replay jobs give the team recovery options when the numbers go wrong.
-
-That is the BigQuery pattern in practical terms: keep customer-facing requests fast in the operational database, then send durable business facts into BigQuery so the organization can ask large historical questions safely. The warehouse earns its place when the team can trust both the numbers and the operating path that produced them.
+| Check | What good evidence shows |
+|---|---|
+| Dataset ownership | Labels, descriptions, IAM, and location match the data policy |
+| Schema review | Field names, types, and definitions match product and finance language |
+| Partition filters | Important queries filter the partition field |
+| Clustering | Fields match common filters or groupings |
+| Cost guardrails | Dry runs, quotas, budgets, and query review for heavy workloads |
+| Access | Views and IAM expose approved data to the right people |
+| Recovery | Time travel, snapshots, or replay can restore an important table |
 
 ![BigQuery operating loop](/content-assets/articles/article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing/bigquery-operating-loop.png)
-*The operating loop repeats: load data, validate schema and counts, guard query cost, share curated views, watch jobs, and keep a recovery path ready for bad loads or bad transforms.*
+*The operating loop connects schema quality, query behavior, cost, access, and recovery.*
 
-## What's Next
-<!-- section-summary: The next storage article moves from analytical tables to attached disks and shared filesystems for VM-based workloads. -->
+## Putting It Together
+<!-- section-summary: BigQuery is the analytics layer for many-row questions, with table design and cost controls tied to real queries. -->
 
-BigQuery handles analytical tables and SQL over historical events. Some workloads still need operating-system paths such as `/var/lib/app`, `/mnt/cache`, or `/shared/incoming`. A VM-hosted database, a media renderer, or a legacy file processor expects block devices or shared file mounts, and the next article follows that operating-system path.
+BigQuery fits analytical questions over many historical rows. The order is dataset, table, row, schema, partition, clustering, query cost, slots, views, and IAM. Recovery and operating checks keep the warehouse useful after mistakes and growth.
 
-The next article covers Persistent Disk, Hyperdisk, and Filestore, which are the Google Cloud storage choices for attached disks and shared filesystems. It uses the same production style, but the workload moves from SQL tables to Linux mount points.
+Keep BigQuery separate from the live database job. Cloud SQL or another application database protects the live workflow. BigQuery helps your team understand what happened across many users, events, releases, and days.
 
----
+## References
 
-**References**
-
-- [Google Cloud: BigQuery overview](https://cloud.google.com/bigquery/docs/introduction)
-- [Google Cloud: Overview of BigQuery storage](https://cloud.google.com/bigquery/docs/storage_overview)
-- [Google Cloud: Create datasets](https://cloud.google.com/bigquery/docs/datasets)
-- [Google Cloud: Specifying a schema](https://cloud.google.com/bigquery/docs/schemas)
-- [Google Cloud: Modifying table schemas](https://cloud.google.com/bigquery/docs/managing-table-schemas)
-- [Google Cloud: Introduction to loading data](https://cloud.google.com/bigquery/docs/loading-data)
-- [Google Cloud: BigQuery subscriptions for Pub/Sub](https://cloud.google.com/pubsub/docs/bigquery)
-- [Google Cloud: BigQuery Storage Write API](https://cloud.google.com/bigquery/docs/write-api)
-- [Google Cloud: Introduction to partitioned tables](https://cloud.google.com/bigquery/docs/partitioned-tables)
-- [Google Cloud: Introduction to clustered tables](https://cloud.google.com/bigquery/docs/clustered-tables)
-- [Google Cloud: Estimate and control BigQuery costs](https://cloud.google.com/bigquery/docs/best-practices-costs)
-- [Google Cloud: Understand BigQuery slots](https://cloud.google.com/bigquery/docs/slots)
-- [Google Cloud: Introduction to logical views](https://cloud.google.com/bigquery/docs/views-intro)
-- [Google Cloud: BigQuery IAM roles and permissions](https://cloud.google.com/bigquery/docs/access-control)
-- [Google Cloud: BigQuery reliability and time travel](https://cloud.google.com/bigquery/docs/reliability-intro)
+- [BigQuery documentation](https://cloud.google.com/bigquery/docs) - Official documentation for BigQuery analytics, SQL, storage, access, and operations.
+- [BigQuery datasets](https://cloud.google.com/bigquery/docs/datasets) - Documents datasets as table, view, location, and access containers.
+- [BigQuery tables](https://cloud.google.com/bigquery/docs/tables) - Documents table structure, metadata, and table operations.
+- [Specify a schema](https://cloud.google.com/bigquery/docs/schemas) - Documents schema fields, types, and schema management.
+- [Introduction to partitioned tables](https://cloud.google.com/bigquery/docs/partitioned-tables) - Documents partition types and partition-pruning behavior.
+- [Introduction to clustered tables](https://cloud.google.com/bigquery/docs/clustered-tables) - Documents clustered table behavior and clustering field choices.
+- [Estimate and control query costs](https://cloud.google.com/bigquery/docs/best-practices-costs) - Documents dry runs, bytes processed, and cost-control practices.
+- [BigQuery slots](https://cloud.google.com/bigquery/docs/slots) - Documents slots as BigQuery compute capacity.
+- [BigQuery reservations](https://cloud.google.com/bigquery/docs/reservations-workload-management) - Documents reservations, editions, and workload management.
+- [BigQuery workload assignments](https://cloud.google.com/bigquery/docs/reservations-assignments) - Documents assigning projects, folders, or organizations to reservations.
+- [BigQuery views](https://cloud.google.com/bigquery/docs/views) - Documents logical views and their query behavior.
+- [BigQuery authorized views](https://cloud.google.com/bigquery/docs/authorized-views) - Documents view-based sharing patterns across datasets.
+- [BigQuery IAM roles and permissions](https://cloud.google.com/bigquery/docs/access-control) - Documents access control for datasets, tables, views, and jobs.
+- [BigQuery row-level security](https://cloud.google.com/bigquery/docs/row-level-security-intro) - Documents row access policies for sensitive row filtering.
+- [BigQuery column-level access control](https://cloud.google.com/bigquery/docs/column-level-security-intro) - Documents policy tags and column access controls.
+- [BigQuery time travel](https://cloud.google.com/bigquery/docs/time-travel) - Documents querying or restoring previous table states inside the time travel window.
+- [BigQuery table snapshots](https://cloud.google.com/bigquery/docs/table-snapshots-intro) - Documents snapshots for named recovery and historical table states.

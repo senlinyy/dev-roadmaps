@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "source-boundary-q1",
+      "type": "single",
+      "scenario": "A notification worker needs `QUEUE_NAME`, `EMAIL_PROVIDER_TOKEN`, and its generated Pod name at startup. A pull request puts all three values directly in the Deployment so reviewers can see one complete list. Which revision gives each value the most appropriate source boundary?",
+      "options": [
+        { "id": "a", "text": "Put all three values in one ConfigMap and import it with `envFrom` so the contract stays compact." },
+        { "id": "b", "text": "Keep all three as literals because Pod templates are versioned with each ReplicaSet." },
+        { "id": "c", "text": "Use a ConfigMap key for `QUEUE_NAME`, a Secret key for `EMAIL_PROVIDER_TOKEN`, and `fieldRef` for the Pod name." },
+        { "id": "d", "text": "Bake `QUEUE_NAME` and the token into the image, then derive the Pod name from the container hostname in application code." }
+      ],
+      "correct": ["c"],
+      "explanation": "The three values have different owners and exposure needs: ordinary configuration belongs in a ConfigMap, sensitive provider access belongs in a Secret, and Kubernetes-assigned identity belongs in the Downward API. One bulk ConfigMap exposes the token, literals expose sensitive data and hardcode identity, and baking environment-specific values into the image removes the runtime configuration boundary."
+    },
+    {
+      "id": "explicit-contract-q2",
+      "type": "single",
+      "scenario": "The shared `notification-worker-config` ConfigMap contains `QUEUE_NAME`, `MAX_BATCH_SIZE`, `SUPPORT_NOTE`, and an experimental flag. Production approves only the queue and batch settings for the worker process. Which manifest approach gives reviewers the clearest startup contract?",
+      "options": [
+        { "id": "a", "text": "Declare two `env` entries with explicit `configMapKeyRef` mappings for the approved keys." },
+        { "id": "b", "text": "Import the entire ConfigMap with `envFrom` and ask the application to ignore unexpected names." },
+        { "id": "c", "text": "Copy the two approved values into Deployment annotations and read them through the Kubernetes API." },
+        { "id": "d", "text": "Duplicate the full ConfigMap into the container image so its complete content is fixed for the release." }
+      ],
+      "correct": ["a"],
+      "explanation": "Explicit key references show exactly which names enter the process and prevent current or future unrelated keys from appearing automatically. `envFrom` is compact only when the complete object belongs to that container. Annotations are not the normal process environment delivery path, and image-baked configuration weakens environment separation."
+    },
+    {
+      "id": "startup-validation-q3",
+      "type": "single",
+      "scenario": "A replacement worker starts with `MAX_BATCH_SIZE=ten`. Kubernetes successfully resolves the ConfigMap key, but the process exits with `configuration error: MAX_BATCH_SIZE must be an integer from 1 to 500`. Which team owns the failed check and why?",
+      "options": [
+        { "id": "a", "text": "Kubelet owns it because ConfigMaps must reject every value that is not already a typed integer." },
+        { "id": "b", "text": "The scheduler owns it because batch size determines how many Pods can fit on a node." },
+        { "id": "c", "text": "The ConfigMap controller owns it because key references validate application-specific ranges before mounting." },
+        { "id": "d", "text": "The application owns it because Kubernetes injects strings, while startup code must parse types and enforce business ranges." }
+      ],
+      "correct": ["d"],
+      "explanation": "Kubernetes can resolve whether the named source and key exist, but it does not understand the worker's integer range. Application startup validation must parse the string and fail safely. Scheduling does not validate this setting, and ConfigMaps do not enforce application-specific types or ranges."
+    },
+    {
+      "id": "rollout-change-q4",
+      "type": "single",
+      "scenario": "At 16:00 the team changes `QUEUE_NAME` in the ConfigMap used by `configMapKeyRef`. The three existing worker Pods continue consuming the old queue at 16:10, while the ConfigMap shows the new value. What is the correct release response?",
+      "options": [
+        { "id": "a", "text": "Wait for kubelet to rewrite the environment of each running process during its next synchronization." },
+        { "id": "b", "text": "Roll the Deployment and verify the replacement Pods because environment values are captured when containers start." },
+        { "id": "c", "text": "Change the reference to `envFrom`, which updates running process environments without restarting Pods." },
+        { "id": "d", "text": "Move the queue name into a Secret, because Secret-backed environment values refresh while ConfigMap-backed values do not." }
+      ],
+      "correct": ["b"],
+      "explanation": "Existing processes keep the environment they received at startup, so the release needs a rollout and health verification. Neither `envFrom` nor a Secret changes that lifecycle. Projected directory files can refresh, but process environment variables are not rewritten in place."
+    },
+    {
+      "id": "startup-diagnostics-q5",
+      "type": "multiple",
+      "scenario": "A new worker Pod reports `CreateContainerConfigError` after a manifest change. The Deployment references one ConfigMap key and one Secret key. Which two actions follow the article's safe troubleshooting path without spreading credentials?",
+      "options": [
+        { "id": "a", "text": "Inspect Pod events for the missing source object or key before looking for application logs." },
+        { "id": "b", "text": "Print the complete environment from a healthy production worker and attach it to the incident record." },
+        { "id": "c", "text": "Verify source names and key names, then inspect only safe non-secret values after the container can start." },
+        { "id": "d", "text": "Copy the Secret value into a temporary Deployment literal so responders can compare it during review." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Pod events are the first evidence when Kubernetes cannot assemble the container configuration, and source names plus key names can be checked without revealing values. Safe non-secret variables can be inspected after startup. Dumping the whole environment or copying a credential into a Deployment spreads sensitive data into logs and review systems."
+    }
+  ]
+}

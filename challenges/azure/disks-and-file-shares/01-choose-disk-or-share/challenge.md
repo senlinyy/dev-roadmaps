@@ -1,7 +1,6 @@
 ---
-title: "Choose Disk Or Share"
-sectionSlug: blob-storage-comparison
+title: "Disks and File Shares"
 order: 1
 ---
 
-This step checks the judgment from this section. Read each scenario as a release or operations review for `devpolaris-orders-api`.
+Use the scenarios to apply the linked article's storage-shape guidance for block devices, shared file paths, and durable runtime data.

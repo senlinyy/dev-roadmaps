@@ -1,7 +1,7 @@
 ---
 title: "Cloud Storage"
-description: "Design Cloud Storage buckets and objects for receipt PDFs and user uploads with private access, signed URLs, lifecycle rules, versioning, soft delete, retention, and practical gcloud and IaC examples."
-overview: "Cloud Storage is the Google Cloud home for file-like objects such as receipts, exports, uploads, images, and generated artifacts. This article follows receipt PDFs and user uploads through bucket design, object naming, IAM, signed URLs, lifecycle, and recovery controls."
+description: "Design Cloud Storage buckets and objects for profile photos, ticket PDFs, inspection documents, signed URLs, metadata, lifecycle, versioning, soft delete, and retention."
+overview: "Cloud Storage gives applications a durable home for whole files outside app servers and relational databases. The guide follows uploaded documents through buckets, objects, names, generations, metadata, IAM, signed URLs, lifecycle, and retention."
 tags: ["gcp", "cloud-storage", "buckets", "objects"]
 order: 2
 id: article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects
@@ -13,470 +13,376 @@ aliases:
 
 ## Table of Contents
 
-1. [The Receipt And Upload Problem](#the-receipt-and-upload-problem)
-2. [Buckets: The Boundary You Operate](#buckets-the-boundary-you-operate)
-3. [Objects, Names, And Generations](#objects-names-and-generations)
-4. [Upload Path And Metadata](#upload-path-and-metadata)
-5. [IAM, Uniform Bucket-Level Access, And Public Access Prevention](#iam-uniform-bucket-level-access-and-public-access-prevention)
-6. [Signed URLs For Browser Access](#signed-urls-for-browser-access)
-7. [Versioning, Soft Delete, Retention, And Lifecycle](#versioning-soft-delete-retention-and-lifecycle)
-8. [gcloud And IaC Baseline](#gcloud-and-iac-baseline)
+1. [Why Apps Store Files Outside the App](#why-apps-store-files-outside-the-app)
+2. [Buckets](#buckets)
+3. [Objects and Object Names](#objects-and-object-names)
+4. [Generations and Metadata](#generations-and-metadata)
+5. [IAM and Private Access](#iam-and-private-access)
+6. [Signed URLs](#signed-urls)
+7. [Lifecycle, Versioning, Soft Delete, and Retention](#lifecycle-versioning-soft-delete-and-retention)
+8. [A Practical Bucket Baseline](#a-practical-bucket-baseline)
 9. [Production Checks](#production-checks)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+10. [Putting It Together](#putting-it-together)
+11. [References](#references)
 
-## The Receipt And Upload Problem
-<!-- section-summary: Cloud Storage fits receipt PDFs and user uploads because the app needs durable named objects outside the request-time database. -->
+## Why Apps Store Files Outside the App
+<!-- section-summary: Cloud Storage solves the file/object problem for apps that keep whole uploaded or generated files outside runtime and database storage. -->
 
-Let's keep following the Orders product from the previous article. A customer checks out, the API creates an order in Cloud SQL, the receipt renderer creates a PDF, and the browser may upload an address image for manual review. Those files can grow large, and the API team does not want them sitting inside relational rows or on a Cloud Run container filesystem.
+Many applications need to keep whole files. A user uploads a profile photo. A venue sends a ticket PDF. A field team uploads inspection documents. The app server can receive those bytes, yet the server process should not be the long-term home for them.
 
-**Cloud Storage** gives the team a managed object store. The app writes named objects into buckets, stores the object names in the database, and later grants short-lived access to one object when a customer or reviewer needs it. The database continues to answer business questions such as "which receipt belongs to this order," while Cloud Storage holds and serves the bytes.
+Relational databases are usually the wrong default for large file bytes because the database also has to manage tables, indexes, transactions, backups, and query performance. App containers are even more temporary. A new deploy, scale-down event, or instance restart can remove local files from the runtime.
 
-The full flow moves through three handles: the order row keeps the business pointer, the object name points to the bytes, and the signed URL gives one temporary browser operation after the API checks the customer.
+Think of the app server as the front desk, not the archive room. It can accept the uploaded file, check permissions, and write a database record. The long-term bytes need a storage service designed for objects, durability, access control, lifecycle, and recovery. That keeps the runtime small and keeps the database focused on business records.
+
+For example, a ticketing app might store the order, payment status, and ticket ownership in Cloud SQL, then store the finished PDF ticket in Cloud Storage. The database record keeps the object name. The browser receives the file only through a controlled path such as a signed URL after the app verifies the user may view it.
+
+**Cloud Storage** is Google Cloud's object storage service. It gives you buckets for durable object storage, access control, signed links, metadata, lifecycle rules, versioning, soft delete, and retention controls. The app stores the object name in its database and lets Cloud Storage store the bytes.
 
 ![Signed URL upload path](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/signed-url-path.png)
-*The browser never receives bucket credentials. The backend signs a narrow URL for one object, Cloud Storage checks the signature and expiration, and the object lands in the bucket with the expected name.*
+*The app can keep business records in a database while Cloud Storage owns the file bytes and time-limited upload or download paths.*
 
-The bucket design matters because it sets the boundary for location, access, lifecycle, retention, and cost. The object design matters because your app and operations team use object names, metadata, and generations as handles during normal work and incidents.
+## Buckets
+<!-- section-summary: A bucket is the named operational boundary for Cloud Storage objects and their location, access, lifecycle, and retention settings. -->
 
-## Buckets: The Boundary You Operate
-<!-- section-summary: A bucket is the location, policy, lifecycle, and naming boundary for related Cloud Storage objects. -->
+A **bucket** is the top-level container for objects. Bucket names are globally unique, so a production name often includes the product, environment, purpose, and region, such as `venue-prod-ticket-docs-us`. The bucket also owns settings that affect every object inside it.
 
-A **bucket** is a Cloud Storage container for objects. It has a globally unique name, a location, a default storage class, IAM policy, public access settings, lifecycle rules, retention settings, soft delete policy, labels, and other controls. For the Orders product, the bucket should represent a real operational boundary, not a random folder-like convenience.
+For an inspection platform, you might create separate buckets for production documents, staging documents, and temporary upload staging. Separation gives the team clearer IAM, lifecycle, retention, and incident response boundaries.
 
-A good first bucket for receipt PDFs might be `orders-prod-receipts-us`. That name tells a human the app, environment, data type, and region family. A separate bucket such as `orders-prod-user-uploads-us` can hold customer uploads because uploads often need different antivirus processing, lifecycle rules, and review access. Development and staging should use their own buckets, because mixing environments turns IAM and cleanup rules into a guessing game.
+Important bucket decisions include:
 
-The bucket location deserves an early decision. A regional bucket near the Cloud Run service and Cloud SQL instance can reduce latency and keep the system simple. Dual-region or multi-region buckets can fit disaster recovery or global serving goals, but they also affect cost, replication behavior, and data residency discussions. Teams usually write the location choice into the architecture record so a future operator understands the reason.
+| Bucket decision | What it controls | Example choice |
+|---|---|---|
+| Location | Where object data is stored | `us-central1` for a regional app, or a dual/multi-region choice for broader resilience |
+| Storage class | Cost and access pattern | `STANDARD` for active documents |
+| IAM style | How access is granted | Uniform bucket-level access for IAM-only object access |
+| Public exposure | Whether public object access is allowed | Public access prevention for private documents |
+| Recovery and retention | How previous copies survive | Soft delete, versioning, lifecycle, and retention policies |
 
-A private production bucket can start like this:
-
-```bash
-gcloud storage buckets create gs://orders-prod-receipts-us \
-  --project=orders-prod-123 \
-  --location=us-central1 \
-  --default-storage-class=STANDARD \
-  --uniform-bucket-level-access \
-  --public-access-prevention \
-  --soft-delete-duration=14d
-```
-
-This command creates one bucket with a Standard storage class, uniform IAM-based access, enforced public access prevention, and a 14-day soft delete window. Google Cloud's default soft delete duration is seven days unless another policy applies, so the command makes the recovery window explicit. That explicit value helps reviewers, auditors, and future maintainers see the intended protection level.
-
-The important flags are `--location`, which fixes where the bucket stores data; `--uniform-bucket-level-access`, which makes IAM the access boundary; `--public-access-prevention`, which blocks public grants; and `--soft-delete-duration`, which sets the short recovery window for accidental deletion. The read-back command is the proof that the bucket carries the settings the design expected.
-
-```bash
-gcloud storage buckets describe gs://orders-prod-receipts-us \
-  --format='yaml(name,location,storageClass,uniformBucketLevelAccess,publicAccessPrevention,softDeletePolicy)'
-```
-
-```yaml
-name: orders-prod-receipts-us
-location: US-CENTRAL1
-storageClass: STANDARD
-uniformBucketLevelAccess:
-  enabled: true
-publicAccessPrevention: enforced
-softDeletePolicy:
-  retentionDurationSeconds: '1209600'
-```
+For AWS readers, a bucket is the closest GCP equivalent to an S3 bucket. The same design habit applies: use bucket boundaries for environment, ownership, access, and retention rather than dumping unrelated files into one global bucket.
 
 ![Bucket and object boundary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/bucket-object-boundary.png)
-*The bucket owns policy and location. The object keyspace owns the durable file names the application stores in Cloud SQL and uses during restore work.*
+*Bucket policy owns the broad boundary. Object names and metadata make individual files understandable inside that boundary.*
 
-## Objects, Names, And Generations
-<!-- section-summary: Objects are named byte payloads, and names plus generations give the app safe handles for lookup and recovery. -->
+## Objects and Object Names
+<!-- section-summary: An object is the stored byte payload, and its object name is the stable handle your app saves and uses later. -->
 
-An **object** is the file-like payload inside a bucket. Cloud Storage identifies an object by bucket name, object name, and generation. The generation changes when the object data changes, so it gives the team a precise version handle during debugging or recovery.
+An **object** is a stored byte payload plus metadata. A profile photo, ticket PDF, invoice export, inspection image, or ZIP archive can all be objects. Cloud Storage does not require folders in the filesystem sense; names with slashes are still object names.
 
-Object names can contain slashes, and tools often display those prefixes as folders. For ordinary receipt and upload buckets, the design should still treat the name as an object key that the app chooses. Cloud Storage also has folder-oriented features for buckets with hierarchical namespace and managed folders, but a receipt bucket usually needs stable object keys, IAM on the bucket, and database pointers.
+The **object name** is the path-like string your app uses to find the object again. A weak name such as `photo.jpg` collides quickly. A useful name carries enough context for operations while keeping the database as the source of business search.
 
-For receipts, the app could use names like these:
+Think of the bucket as a large labeled cabinet and the object name as the label on one stored item. The slash characters in `ticket-pdfs/event_20260704/order_913812/ticket.pdf` make the name readable for humans and tools, but Cloud Storage still stores an object under one name. The app should treat that full name as an important identifier.
 
-```markdown
-receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf
-receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt-redacted.pdf
-```
+Good object names often include purpose, tenant or account, date, and record ID:
 
-For user uploads, the app should avoid raw user file names as the primary object name. User file names can contain personal data, confusing characters, duplicates, and misleading extensions. A safer pattern uses an upload ID and stores the original file name as database metadata if the product needs to display it.
+- `profile-photos/user_8492/avatar/current.jpg`
+- `ticket-pdfs/event_20260704/order_913812/ticket.pdf`
+- `inspections/site_4471/2026/07/report_771/front-door.jpg`
 
-```markdown
-uploads/tenant_42/user_cus_8842/2026/06/14/upload_upl_9QS2/original
-uploads/tenant_42/user_cus_8842/2026/06/14/upload_upl_9QS2/thumbnail.webp
-```
+The database should still store the record owner, status, and permissions. Cloud Storage stores the bytes at the object name. The app joins those ideas by saving the object name on the business record.
 
-The database record can store the bucket, object name, generation, content type, size, checksum, uploader, and scan status. That record lets support and backend jobs find objects without listing the bucket as a search engine.
+This split keeps search and authorization clear. A support screen should find an inspection by site ID, inspector, date, and review status in the database. After the app decides the user may view it, the stored object name tells Cloud Storage which bytes to serve through a controlled path such as a signed URL.
 
-```sql
-CREATE TABLE order_files (
-  id TEXT PRIMARY KEY,
-  order_id TEXT NOT NULL REFERENCES orders(id),
-  bucket_name TEXT NOT NULL,
-  object_name TEXT NOT NULL,
-  object_generation TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  size_bytes BIGINT NOT NULL,
-  scan_status TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
+## Generations and Metadata
+<!-- section-summary: A generation identifies one specific write of an object, while metadata stores object facts used for serving, auditing, and cleanup. -->
 
-This small table gives the application a clean pointer. Cloud Storage holds the object, and Cloud SQL keeps the business relationship, review state, and lookup path.
+Every time Cloud Storage writes an object, it assigns a **generation**. The object name may stay the same, while the generation distinguishes one write from another. This is useful for regenerated ticket PDFs, replaced inspection photos, and restore runbooks that copy a previous version back.
 
-## Upload Path And Metadata
-<!-- section-summary: Uploads should set content metadata and use overwrite protection so one bad retry cannot replace the wrong object. -->
+An object also has **metadata**. Some metadata is system-managed, such as size, content type, checksum, creation time, and generation. You can also attach custom metadata for operational hints, such as source app, upload flow, or document category.
 
-The upload path has two jobs: place the bytes in the correct object and attach enough metadata for downstream clients and jobs. For a receipt PDF, the metadata should say that the content type is `application/pdf` and that caches should treat the file as private. For a user image, the metadata should reflect the detected content type after validation rather than trusting the browser blindly.
+Think of the object name as the public label and the generation as the exact write behind that label. The name `ticket-pdfs/event_20260704/order_913812/ticket.pdf` can stay stable while the file is regenerated. The generation lets support and restore runbooks point at one specific version of the bytes instead of guessing which replacement they are seeing.
 
-Here is a direct `gcloud` upload for a generated receipt. The `--if-generation-match=0` precondition means the copy only succeeds if no live object already exists at that name. That one flag prevents an accidental overwrite during retries or repeated jobs.
+Metadata is the small card attached to the object. It should help tools and humans understand the file without opening it. Content type helps browsers handle a PDF as a PDF. Checksums help verify bytes. Custom metadata can record safe operational hints such as `source=checkout` or `document_type=ticket`. It should not carry secrets, long notes, or the business database record.
+
+A small upload might include a content type and custom metadata:
 
 ```bash
-gcloud storage cp ./receipt.pdf \
-  gs://orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf \
+gcloud storage cp ./ticket.pdf \
+  gs://venue-prod-ticket-docs-us/ticket-pdfs/event_20260704/order_913812/ticket.pdf \
   --content-type=application/pdf \
-  --cache-control="private, max-age=0, no-transform" \
-  --custom-metadata=order-id=ord_7K2Q,tenant-id=tenant_42 \
-  --if-generation-match=0
+  --custom-metadata=source=checkout,document_type=ticket
 ```
 
-A production app usually performs the same idea through a client library. The code should generate the object name on the server, attach metadata, set an overwrite precondition, and then store the returned generation in the database after the upload succeeds.
+Important details in this command:
 
-```ts
-import { Storage } from "@google-cloud/storage";
+- `gs://venue-prod-ticket-docs-us/...` is the bucket and object name.
+- `--content-type=application/pdf` helps browsers and downstream tools handle the file correctly.
+- `--custom-metadata` adds small operational labels to the object; it should not hold secrets or large business records.
 
-const storage = new Storage();
-const bucket = storage.bucket("orders-prod-receipts-us");
-
-await bucket.upload("/tmp/receipt.pdf", {
-  destination: "receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf",
-  metadata: {
-    contentType: "application/pdf",
-    cacheControl: "private, max-age=0, no-transform",
-    metadata: {
-      orderId: "ord_7K2Q",
-      tenantId: "tenant_42"
-    }
-  },
-  preconditionOpts: {
-    ifGenerationMatch: 0
-  }
-});
-```
-
-Metadata helps clients and background jobs handle the object correctly, but it should not replace the application database. Listing millions of objects to find "all receipts for this customer" creates slow operations and weak access control. The database should answer business queries, and Cloud Storage should serve the object bytes by name.
-
-After the upload, the team should read the object metadata back. The generation and metageneration values are useful because they prove which version the database should store and whether metadata changed later.
+A quick describe command shows the exact object metadata and generation:
 
 ```bash
 gcloud storage objects describe \
-  gs://orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf \
-  --format='yaml(name,generation,metageneration,contentType,size,metadata,crc32c)'
+  gs://venue-prod-ticket-docs-us/ticket-pdfs/event_20260704/order_913812/ticket.pdf \
+  --format="yaml(name,generation,contentType,metadata,size)"
 ```
+
+Example output:
 
 ```yaml
-name: receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf
-generation: '1799948215814453'
-metageneration: '1'
 contentType: application/pdf
-size: '184233'
+generation: '1719858400123456'
 metadata:
-  order-id: ord_7K2Q
-  tenant-id: tenant_42
-crc32c: ImIEBA==
+  document_type: ticket
+  source: checkout
+name: ticket-pdfs/event_20260704/order_913812/ticket.pdf
+size: '184233'
 ```
 
-## IAM, Uniform Bucket-Level Access, And Public Access Prevention
-<!-- section-summary: Private buckets should rely on IAM at the bucket boundary, avoid object ACL drift, and block accidental public exposure. -->
+## IAM and Private Access
+<!-- section-summary: IAM controls who can use a bucket or object, and private-by-default buckets are the safer default for user documents. -->
 
-Cloud Storage supports access through IAM and, in older patterns, access control lists. **Uniform bucket-level access** turns off object ACLs and makes bucket-level IAM the access system for the bucket and its objects. Google Cloud generally recommends this mode because it simplifies access, prevents hidden object ACL exposure, and unlocks features such as IAM conditions on buckets.
+**IAM**, Identity and Access Management, controls which principals can perform actions on Cloud Storage resources. A principal can be a user, group, service account, or workload identity. For app-owned documents, the app service account should receive only the roles it needs on the specific bucket.
 
-For the Orders product, the Cloud Run runtime service account does not need broad storage administrator access. The API that writes receipts can receive `roles/storage.objectCreator` on the receipt bucket. A review worker that reads uploads after scanning can receive a reader role on the upload bucket. A cleanup job can receive a narrow delete-capable role only if the lifecycle rules do not cover that workflow.
+The key beginner idea is that bucket access and application permission are different layers. Cloud Storage IAM decides whether a principal can use the bucket or object. Your application still decides whether this customer, support agent, or internal tool is allowed to see a specific business document. Do not make the bucket public just because browsers need to download files.
+
+Two bucket settings make private storage easier to operate. **Uniform bucket-level access** makes IAM the main access model for the bucket and objects. **Public access prevention** blocks common public exposure paths. Together, they support a private-by-default design for tickets, photos, and inspection documents.
+
+For private user documents, the usual shape is: the app service account can read or write the bucket, normal users cannot access the bucket directly, and the app hands out short-lived URLs only after its own business permission check. That keeps cloud storage credentials and broad bucket permissions away from browsers.
+
+An app service account might receive object create and read access on the document bucket:
 
 ```bash
-gcloud storage buckets add-iam-policy-binding gs://orders-prod-receipts-us \
-  --member="serviceAccount:orders-api@orders-prod-123.iam.gserviceaccount.com" \
-  --role="roles/storage.objectCreator"
-
-gcloud storage buckets add-iam-policy-binding gs://orders-prod-receipts-us \
-  --member="serviceAccount:receipt-url-signer@orders-prod-123.iam.gserviceaccount.com" \
-  --role="roles/storage.objectViewer"
+gcloud storage buckets add-iam-policy-binding gs://venue-prod-ticket-docs-us \
+  --member="serviceAccount:ticket-docs-api@venue-prod.iam.gserviceaccount.com" \
+  --role="roles/storage.objectUser"
 ```
 
-**Public access prevention** blocks public grants such as `allUsers` and `allAuthenticatedUsers` when the setting is enforced. That setting protects teams from the classic mistake where a bucket or object accidentally receives public access during a rushed support task. It still allows private access through IAM and signed URLs, which is exactly what receipt downloads need.
+Important details in this command:
 
-Uniform bucket-level access deserves care when a legacy bucket already relies on object ACLs. Enabling it revokes ACL-only access, and Cloud Storage prevents disabling it after it has stayed active on a bucket for 90 consecutive days. New production buckets should start with it enabled. Existing buckets should get an access inventory and migration plan before the switch.
+- The member is the workload identity used by the API, not a human developer account.
+- `roles/storage.objectUser` allows object work without handing out broad project administration.
+- Bucket-scoped grants make review easier because the permission sits near the data it protects.
 
-## Signed URLs For Browser Access
-<!-- section-summary: Signed URLs give one temporary object operation to a browser without handing out bucket credentials. -->
+## Signed URLs
+<!-- section-summary: A signed URL gives time-limited access to one object operation without making the bucket public. -->
 
-A **signed URL** is a temporary URL that grants access to one Cloud Storage operation, such as `GET` for a receipt download or `PUT` for a browser upload. The browser does not receive Google Cloud credentials. It only receives a URL with an embedded signature, method, object path, headers, and expiration.
+A **signed URL** is a URL with a cryptographic signature that grants temporary access to a specific Cloud Storage operation. It is useful for browser uploads or downloads of one object while broad bucket permissions stay on the server side.
 
-This pattern keeps the API out of the file transfer path. The backend checks that the customer owns the order, creates a short-lived signed URL for the exact receipt object, and returns it to the browser. The browser downloads the file directly from Cloud Storage. The API handles authorization and business rules, while Cloud Storage handles the bytes.
-
-For a 10-minute receipt download URL, the team can sign with an impersonated service account:
+For example, the app can ask Cloud Storage for a 10-minute upload URL for `inspections/site_4471/2026/07/report_771/front-door.jpg`. The browser uploads directly to Cloud Storage. The app records the object name and later decides who can view or replace the file.
 
 ```bash
 gcloud storage sign-url \
-  gs://orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf \
+  gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg \
   --duration=10m \
-  --impersonate-service-account=receipt-url-signer@orders-prod-123.iam.gserviceaccount.com
-```
-
-For a direct browser upload, the backend can sign a `PUT` URL for the exact upload object. The signed request should include the content type header if the client must send that header, because signed URL validation includes signed headers.
-
-```bash
-gcloud storage sign-url \
-  gs://orders-prod-user-uploads-us/uploads/tenant_42/user_cus_8842/2026/06/14/upload_upl_9QS2/original \
   --http-verb=PUT \
-  --duration=15m \
-  --headers=content-type=image/jpeg \
-  --impersonate-service-account=upload-url-signer@orders-prod-123.iam.gserviceaccount.com
+  --headers=Content-Type=image/jpeg \
+  --format=yaml
 ```
 
-The application service account also needs permission to sign as the signer account. In many teams, platform engineers grant `roles/iam.serviceAccountTokenCreator` on the signer account to the API service account, then grant the signer account the narrow Cloud Storage role needed for the target operation.
+Important details in this command:
 
-```bash
-gcloud iam service-accounts add-iam-policy-binding \
-  receipt-url-signer@orders-prod-123.iam.gserviceaccount.com \
-  --member="serviceAccount:orders-api@orders-prod-123.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountTokenCreator"
+- `--duration=10m` limits how long the URL can be used.
+- `--http-verb=PUT` signs an upload operation; a download URL would use `GET`.
+- The signed headers should match the browser upload request, including content type if required.
+- `--format=yaml` makes the example output easy to read in a review ticket.
+
+Example redacted output:
+
+```yaml
+expiration: '2026-07-04 18:12:44'
+http_verb: PUT
+resource: gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg
+signed_url: https://storage.googleapis.com/inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=inspection-uploader%40inspection-prod.iam.gserviceaccount.com%2F20260704%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260704T180244Z&X-Goog-Expires=600&X-Goog-SignedHeaders=content-type%3Bhost&X-Goog-Signature=REDACTED
 ```
 
-Signed URLs need small expiration windows and exact object names. Anyone who has the URL can use it until it expires, so the app should generate URLs after checking the caller, keep durations short, and avoid logging full signed URLs in application logs. For large uploads, a resumable upload session gives the browser a way to continue after a network interruption without starting over.
+The app should return the signed URL and the object name together. The browser uses the URL for the upload request. The app stores the object name, such as `inspections/site_4471/2026/07/report_771/front-door.jpg`, on the inspection record. Later screens should use that stored object name to request a fresh download URL after the app checks that the current user can view the inspection.
 
-The command output prints the signed URL. In a real runbook, the team should avoid pasting the full URL into tickets or logs because the query string is the credential until expiration.
+That handoff keeps storage credentials on the server. The browser receives a narrow temporary capability for one object and one HTTP verb. If the user refreshes the page after the URL expires, the old URL should fail with a 403-style response from Cloud Storage, and the browser should ask the app for a new URL. The object is still present; only the temporary access path expired.
 
-```console
-URL: https://storage.googleapis.com/orders-prod-receipts-us/receipts/tenant_42/2026/06/14/order_ord_7K2Q/receipt.pdf?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=receipt-url-signer%40orders-prod-123.iam.gserviceaccount.com%2F20260614%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260614T104500Z&X-Goog-Expires=600&X-Goog-SignedHeaders=host&X-Goog-Signature=...
-```
+For downloads, the flow is similar. The app checks the user's business permission, signs a short-lived `GET` URL for the stored object name, and returns it to the browser. Store object names in the database instead of signed URLs; signed URLs expire, and anyone with a copied URL can use it until the expiry time.
 
-## Versioning, Soft Delete, Retention, And Lifecycle
-<!-- section-summary: Recovery and cost controls should be deliberate because object protection features keep extra data by design. -->
+For AWS readers, signed URLs are the Cloud Storage counterpart to S3 presigned URLs. One practical GCP detail is that object generations can give you an exact previous write to inspect or restore after a replace.
 
-Cloud Storage gives several protection and lifecycle tools, and they solve different problems. **Object versioning** keeps noncurrent generations when a live object changes or gets deleted. **Soft delete** keeps deleted objects and buckets in a recoverable state for a configured duration. **Retention policies** prevent deletion for a minimum period. **Object Lifecycle Management** changes storage class or deletes objects based on conditions such as age, version state, creation time, or prefix.
+## Lifecycle, Versioning, Soft Delete, and Retention
+<!-- section-summary: Lifecycle and retention controls decide how old objects, deleted objects, previous generations, and compliance records survive over time. -->
 
-The Orders team might enable versioning for receipts because a mistaken overwrite should not destroy the previous PDF immediately. The same team might use a shorter soft delete window for temporary upload staging, because temporary objects can multiply quickly. Retention policies fit compliance needs, but they can block deletion by design, so legal, security, and platform teams should agree on them before locking anything.
+Files need a cleanup and recovery plan. Temporary upload objects should expire. Ticket PDFs may need long retention. Inspection photos may need a recent recovery window. Replaced documents may need older generations for support investigations.
 
-```bash
-gcloud storage buckets update gs://orders-prod-receipts-us \
-  --versioning \
-  --soft-delete-duration=14d
-```
+**Object Versioning** keeps noncurrent generations after objects are replaced or deleted. **Soft delete** keeps recently deleted objects or buckets recoverable for a configured period. **Object Lifecycle Management** applies rules such as deleting temporary files after a set age or removing old noncurrent versions. A **retention policy** prevents objects from being removed until they satisfy the retention period.
 
-Lifecycle rules keep recovery features from turning into unlimited cost. A receipts bucket might move older PDFs to Nearline after 90 days, delete noncurrent versions after 30 days, and delete abandoned temporary upload objects after seven days. The team can express that as JSON and apply it to the bucket.
+Here is a lifecycle rule for upload staging objects:
 
 ```json
 {
   "rule": [
     {
       "action": {
-        "type": "SetStorageClass",
-        "storageClass": "NEARLINE"
-      },
-      "condition": {
-        "age": 90,
-        "matchesPrefix": ["receipts/"]
-      }
-    },
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "age": 30,
-        "isLive": false
-      }
-    },
-    {
-      "action": {
         "type": "Delete"
       },
       "condition": {
         "age": 7,
-        "matchesPrefix": ["tmp/"]
+        "matchesPrefix": ["upload-staging/"]
+      }
+    },
+    {
+      "action": {
+        "type": "Delete"
+      },
+      "condition": {
+        "isLive": false,
+        "age": 90
       }
     }
   ]
 }
 ```
 
+Important details in this config:
+
+- The first rule deletes old temporary upload objects after seven days.
+- The second rule deletes noncurrent object versions after 90 days.
+- Lifecycle rules should match the business record policy so storage cleanup does not remove evidence the app still needs.
+
+Apply the rule with:
+
 ```bash
-gcloud storage buckets update gs://orders-prod-receipts-us \
-  --lifecycle-file=receipts-lifecycle.json
+gcloud storage buckets update \
+  gs://inspection-prod-docs-us \
+  --lifecycle-file=inspection-lifecycle.json
 ```
 
-The lifecycle file is consumed by the bucket update command. The read-back command should show the same rules after Google Cloud accepts the policy, and reviewers should check the `matchesPrefix`, `age`, and noncurrent-version condition before approving the change.
+Important details in this command:
+
+- `--lifecycle-file` points Cloud Storage at the reviewed JSON policy.
+- The update changes bucket behavior, so staging should prove it before production.
+- After applying it, describe the bucket and confirm the lifecycle rule is present.
+
+Retention policy deserves a separate review because it blocks deletion before the retention age. A seven-year retention policy for submitted inspection reports might look like this:
 
 ```bash
-gcloud storage buckets describe gs://orders-prod-receipts-us \
-  --format='json(lifecycle)'
+gcloud storage buckets update gs://inspection-prod-docs-us \
+  --retention-period=7y
 ```
 
-```json
-{
-  "lifecycle": {
-    "rule": [
-      {
-        "action": {
-          "storageClass": "NEARLINE",
-          "type": "SetStorageClass"
-        },
-        "condition": {
-          "age": 90,
-          "matchesPrefix": [
-            "receipts/"
-          ]
-        }
-      },
-      {
-        "action": {
-          "type": "Delete"
-        },
-        "condition": {
-          "age": 30,
-          "isLive": false
-        }
-      }
-    ]
-  }
-}
+Important details in this command:
+
+- `--retention-period=7y` protects objects from deletion before the retention age.
+- Test retention behavior in a non-production bucket before applying it to required production records.
+- Locking a retention policy is a serious compliance action because it restricts later removal or shortening.
+
+Verify the retention setting before any lock decision:
+
+```bash
+gcloud storage buckets describe gs://inspection-prod-docs-us \
+  --format="yaml(retentionPolicy,metageneration)"
 ```
 
-The practical rule is to pair every protection feature with a cleanup rule and a restore test. Versioning without noncurrent cleanup can surprise the bill. Retention without a restore procedure still leaves the team guessing during an incident. Lifecycle without labels or prefixes can delete the wrong class of object if the naming plan is sloppy.
+Example output:
+
+```yaml
+metageneration: 8
+retentionPolicy:
+  effectiveTime: '2026-07-04T12:15:03.124Z'
+  retentionPeriod: '220752000'
+```
+
+This output gives reviewers the effective time and retention period. A production lock should require explicit approval, because the lock is meant for records the organization must keep.
 
 ![Cloud Storage summary](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-storage-buckets-objects/cloud-storage-summary.png)
-*Cloud Storage operations keep coming back to the same pieces: bucket boundary, object key, uniform access, signed URL, lifecycle, and versioned recovery.*
+*Cloud Storage design combines naming, metadata, access, signed URLs, lifecycle, and recovery controls.*
 
-## gcloud And IaC Baseline
-<!-- section-summary: Production buckets should be reproducible, so teams usually keep the bucket, IAM, lifecycle, and recovery settings in reviewed code. -->
+## A Practical Bucket Baseline
+<!-- section-summary: A first production bucket should be private, location-aware, lifecycle-managed, and easy to inspect. -->
 
-The `gcloud` commands are useful for learning and incident work, but production bucket settings should usually live in infrastructure-as-code. Reviewed code gives the team a history of location, soft delete duration, lifecycle rules, IAM bindings, labels, and retention choices. It also reduces the chance that a console change quietly moves a bucket away from the agreed design.
+After the concepts are clear, a practical production baseline can create a private regional bucket for inspection documents:
 
-Here is a Terraform-shaped baseline for the receipts bucket. The exact module layout can differ by team, but the important settings stay visible: location, uniform access, public access prevention, soft delete, versioning, lifecycle, and labels.
+The baseline is the minimum production story a reviewer should be able to follow. It should say where the objects live, whether public access is blocked, how IAM is handled, how old versions survive, how deleted files can be recovered, and how temporary files age out. A bucket without that story is only a container, not an operating design.
 
-```hcl
-resource "google_storage_bucket" "receipts" {
-  name                        = "orders-prod-receipts-us"
-  project                     = "orders-prod-123"
-  location                    = "US-CENTRAL1"
-  storage_class               = "STANDARD"
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
+The baseline is deliberately boring. A first production bucket should be private, regionally intentional, named for its purpose, protected from accidental public exposure, and covered by lifecycle or recovery controls that match the business record. Fancy settings are less important than a design a new teammate can explain.
 
-  soft_delete_policy {
-    retention_duration_seconds = 1209600
-  }
-
-  versioning {
-    enabled = true
-  }
-
-  lifecycle_rule {
-    action {
-      type          = "SetStorageClass"
-      storage_class = "NEARLINE"
-    }
-
-    condition {
-      age            = 90
-      matches_prefix = ["receipts/"]
-    }
-  }
-
-  lifecycle_rule {
-    action {
-      type = "Delete"
-    }
-
-    condition {
-      age       = 30
-      with_state = "ARCHIVED"
-    }
-  }
-
-  labels = {
-    app                 = "orders"
-    environment         = "prod"
-    data_classification = "customer-receipts"
-  }
-}
-
-resource "google_storage_bucket_iam_member" "orders_api_receipt_creator" {
-  bucket = google_storage_bucket.receipts.name
-  role   = "roles/storage.objectCreator"
-  member = "serviceAccount:orders-api@orders-prod-123.iam.gserviceaccount.com"
-}
-
-resource "google_storage_bucket_iam_member" "receipt_signer_viewer" {
-  bucket = google_storage_bucket.receipts.name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:receipt-url-signer@orders-prod-123.iam.gserviceaccount.com"
-}
-```
-
-Real teams often wrap this in a reusable bucket module. The module should still expose the settings that change risk: public access prevention, uniform access, lifecycle rules, soft delete duration, retention period, logging, labels, and IAM members. Hiding those decisions behind a one-line module call makes review weaker.
-
-This Terraform resource is consumed by the platform pipeline, usually through `terraform plan` in a pull request and `terraform apply` after approval. The verification step should compare live metadata to the reviewed code instead of trusting that apply succeeded.
+For inspection documents, the bucket should not be a dumping ground for unrelated app files. It should hold inspection document objects, use object names the inspection app stores on records, and expose access through the app or signed URLs after business permission checks. That makes bucket policy, incident response, and cleanup much easier to review.
 
 ```bash
-terraform plan -out=tfplan
-terraform show -no-color tfplan | sed -n '/google_storage_bucket.receipts/,/}/p'
+gcloud storage buckets create gs://inspection-prod-docs-us \
+  --project=inspection-prod \
+  --location=us-central1 \
+  --default-storage-class=STANDARD \
+  --uniform-bucket-level-access \
+  --public-access-prevention
 ```
 
+Important details in this command:
+
+- `--location=us-central1` keeps the bucket close to the app and its users if that region is the agreed home.
+- `--uniform-bucket-level-access` keeps access decisions in IAM.
+- `--public-access-prevention` helps prevent accidental public document exposure.
+
+Then enable object versioning and choose a soft delete duration:
+
 ```bash
-# google_storage_bucket.receipts will be created
-+ name                        = "orders-prod-receipts-us"
-+ location                    = "US-CENTRAL1"
-+ public_access_prevention    = "enforced"
-+ uniform_bucket_level_access = true
-+ storage_class               = "STANDARD"
+gcloud storage buckets update gs://inspection-prod-docs-us --versioning
+
+gcloud storage buckets update \
+  gs://inspection-prod-docs-us \
+  --soft-delete-duration=30d
+```
+
+Important details in these commands:
+
+- `--versioning` keeps previous generations after replacement or deletion.
+- `--soft-delete-duration=30d` keeps recently deleted objects recoverable for 30 days.
+- Versioning and soft delete should pair with lifecycle cleanup so old copies do not grow forever.
+
+A verification command should show the settings you expect:
+
+```bash
+gcloud storage buckets describe gs://inspection-prod-docs-us \
+  --format="yaml(name,location,iamConfiguration.uniformBucketLevelAccess.enabled,publicAccessPrevention,versioning,softDeletePolicy)"
+```
+
+Example output:
+
+```yaml
+iamConfiguration:
+  uniformBucketLevelAccess:
+    enabled: true
+location: US-CENTRAL1
+name: inspection-prod-docs-us
+publicAccessPrevention: enforced
+softDeletePolicy:
+  retentionDurationSeconds: '2592000'
+versioning:
+  enabled: true
 ```
 
 ## Production Checks
-<!-- section-summary: A production Cloud Storage bucket needs checks for access, naming, upload safety, recovery, cost, and observability. -->
+<!-- section-summary: Production Cloud Storage checks prove that the bucket, object names, access, recovery, and cleanup policy match the application job. -->
 
-Before a bucket carries customer files, the Orders team should test the boring details. Boring storage details are exactly the ones that save the incident call later. A good review asks whether the service account can do only the required operations, whether a bad retry can overwrite an object, whether the signed URL expires quickly, and whether the team can restore a deleted object.
+Before trusting the bucket, walk through the full file path. Upload a test file, describe its metadata, read it through the app path, generate a signed URL, replace it, inspect the previous generation, delete a test object, and practice restoring it during the soft delete window.
 
-| Check | What the team verifies | Example evidence |
-| --- | --- | --- |
-| Bucket boundary | Production receipts, temporary uploads, and staging data live in separate buckets | Bucket names and labels show app, environment, and data class |
-| IAM | Runtime service accounts have narrow roles on the bucket | `gcloud storage buckets get-iam-policy gs://orders-prod-receipts-us` |
-| Public exposure | Public access prevention is enforced | Bucket metadata shows public access prevention as enforced |
-| Upload safety | Writers use generation preconditions for unique names | Upload code sets `ifGenerationMatch: 0` |
-| Signed URLs | URLs include exact object names, methods, headers, and short durations | Integration test downloads one receipt and rejects after expiration |
-| Recovery | Soft delete, versioning, or backups match the data class | Restore drill recovers a test object into a private bucket |
-| Lifecycle | Old objects transition or delete according to policy | Lifecycle JSON is reviewed and applied from code |
-| Observability | Storage access and admin changes show up in audit logs | Audit log query records policy changes and object operations |
+Use a short checklist:
 
-The team can also script a small smoke test after a bucket change. It uploads a test object with a generation precondition, signs a short GET URL, downloads it, verifies the checksum, deletes it, and restores it if the recovery policy supports that path. That test gives platform and app teams confidence that the happy path and the recovery path both work.
+| Check | What good evidence shows |
+|---|---|
+| Bucket settings | Correct location, uniform bucket-level access, public access prevention, versioning, soft delete |
+| Object naming | Names include purpose, owner or record ID, and date if useful |
+| Metadata | Content type and custom metadata support serving and operations |
+| IAM | App service account has narrow bucket access; humans use reviewed roles |
+| Signed URLs | URLs expire quickly and allow only the intended method |
+| Lifecycle | Temporary objects and old versions age out on purpose |
+| Restore | A previous generation or soft-deleted object can be recovered in a sandbox drill |
 
-## Putting It All Together
-<!-- section-summary: Cloud Storage works well when buckets own policy boundaries and objects own durable named bytes. -->
+Treat the checklist as a staging upload and restore drill. Upload one harmless file through the same browser path production uses, then save the request ID, object name, object generation, metadata output, and app record ID in the release notes or runbook ticket. That evidence proves the bucket settings and naming rules apply to the real app path and the bucket configuration.
 
-The Orders product stores receipt PDFs and user uploads in Cloud Storage because those files act like durable named byte payloads. The bucket gives the team the operational boundary for location, IAM, public access prevention, soft delete, versioning, lifecycle, retention, and labels. The object name gives the app a stable handle, and the generation gives operators a precise version during recovery.
+The IAM check should use the app service account and a human account with reviewed permissions. The app service account should upload or read exactly the object path it needs. A human account without object access should fail cleanly. Those two results prove both sides of the boundary: the application can do its job, and casual project access does not expose private documents.
 
-The app should keep business meaning in Cloud SQL. It stores the bucket, object name, generation, owner, content type, scan state, and support metadata there. Cloud Storage holds the object bytes and serves them through authenticated requests or signed URLs after the backend checks the user.
+The signed URL check should include one successful `PUT`, one attempted `GET` against the upload URL, and one retry after expiry. The successful upload proves the app and browser agree on method, content type, and object name. The wrong-method and expired attempts should fail, which proves the URL is narrow and time-limited.
 
-The production version of this pattern has a few repeated habits. New buckets start private with uniform bucket-level access and public access prevention. Uploads use generated names and overwrite preconditions. Browser downloads and uploads use short-lived signed URLs. Lifecycle rules control cost. Versioning, soft delete, retention, and restore drills turn object storage from "the file is somewhere" into a system the team can operate during a real incident.
+The lifecycle and restore checks need their own evidence. In staging, use a short-lived test prefix such as `upload-staging/drills/` and confirm the bucket lifecycle rule targets that prefix. Then replace or delete a test object, list generations or soft-deleted state, restore the previous copy into a sandbox prefix, and compare size, checksum, content type, and app metadata. A restore drill only counts after someone proves the recovered object is the file the app expected.
 
-## What's Next
+## Putting It Together
+<!-- section-summary: Cloud Storage is the file/object layer for apps that need durable bytes, controlled access, and recoverable object history. -->
 
-Receipts and uploads gave us the object-storage side of the Orders product. The next storage shape is the relational data behind checkout: orders, payments, line items, refunds, schema migrations, backups, connection handling, and point-in-time recovery with Cloud SQL.
+Cloud Storage fits whole files that live outside the app runtime and outside the relational database. A good design defines the bucket boundary, object names, generations, metadata, IAM, signed URLs, lifecycle, soft delete, versioning, and retention before the first production upload matters.
 
----
+Keep the pattern direct: the database stores business meaning and object names; Cloud Storage stores the bytes and object-level controls.
 
-**References**
+## References
 
-- [Cloud Storage overview](https://cloud.google.com/storage/docs/introduction) - Explains the object storage model, buckets, objects, locations, storage classes, and common use cases.
-- [Cloud Storage buckets](https://cloud.google.com/storage/docs/buckets) - Documents bucket naming, bucket metadata, locations, labels, and bucket-level settings.
-- [About Cloud Storage objects](https://cloud.google.com/storage/docs/objects) - Defines objects, object names, metadata, generations, and object behavior.
-- [gcloud storage buckets create](https://cloud.google.com/sdk/gcloud/reference/storage/buckets/create) - Documents bucket creation flags including location, storage class, public access prevention, soft delete, retention period, and uniform bucket-level access.
-- [gcloud storage cp](https://cloud.google.com/sdk/gcloud/reference/storage/cp) - Documents upload metadata flags and generation precondition flags.
-- [Uniform bucket-level access](https://cloud.google.com/storage/docs/uniform-bucket-level-access) - Explains IAM-only bucket access, disabled ACLs, migration considerations, and the 90-day disable limit.
-- [Public access prevention](https://cloud.google.com/storage/docs/public-access-prevention) - Documents the enforced setting that blocks public grants on buckets and objects.
-- [Signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls) - Explains signed URL behavior, temporary access, methods, headers, and expiration.
-- [gcloud storage sign-url](https://cloud.google.com/sdk/gcloud/reference/storage/sign-url) - Documents signed URL CLI flags, impersonated service accounts, HTTP methods, headers, and duration limits.
-- [Object Lifecycle Management](https://cloud.google.com/storage/docs/lifecycle) - Documents lifecycle actions and conditions for deleting objects or changing storage classes.
-- [Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Explains live and noncurrent object generations and restore behavior.
-- [Soft delete](https://cloud.google.com/storage/docs/soft-delete) - Documents soft-deleted buckets and objects, the default seven-day policy, and restore behavior.
-- [Retention policies and Bucket Lock](https://cloud.google.com/storage/docs/bucket-lock) - Documents minimum retention periods and locked retention policies.
-- [Resumable uploads](https://cloud.google.com/storage/docs/resumable-uploads) - Explains upload sessions for large or interrupted object uploads.
+- [Cloud Storage buckets](https://cloud.google.com/storage/docs/buckets) - Documents bucket boundaries, naming, locations, and operational settings.
+- [Cloud Storage objects](https://cloud.google.com/storage/docs/objects) - Documents objects, object names, metadata, and generations.
+- [Signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls) - Documents temporary signed access for specific Cloud Storage operations.
+- [Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Documents previous object generations and recovery after overwrite or delete.
+- [Soft delete](https://cloud.google.com/storage/docs/soft-delete) - Documents recoverable object and bucket deletion windows.
+- [Object Lifecycle Management](https://cloud.google.com/storage/docs/lifecycle) - Documents lifecycle rules for aging, deleting, and transitioning objects.
+- [Bucket retention policies](https://cloud.google.com/storage/docs/bucket-lock) - Documents retention controls that prevent early deletion.

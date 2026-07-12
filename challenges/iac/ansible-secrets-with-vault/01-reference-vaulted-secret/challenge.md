@@ -1,13 +1,15 @@
 ---
 title: "Reference Vaulted Secret"
-sectionSlug: "where-secrets-belong-in-the-orders-playbook"
+sectionSlug: "encrypted-files-and-encrypted-variables"
 order: 1
 ---
 
-Move the runtime API token reference away from plaintext group vars and point it at a vaulted variable.
+The production token is still sitting in a readable group vars file. Split the public reference from the secret value so the playbook can use a vaulted variable without exposing the token in normal review.
 
-Requirements:
+Your job:
 
-1. **Public var file:** `orders_api_token: "{{ vault_orders_api_token }}"` in `group_vars/prod/main.yml`.
-2. **Vault var file:** define `vault_orders_api_token` in `group_vars/prod/vault.yml`.
-3. **Do not keep:** the plaintext token `plain-prod-token`.
+1. **Make the public variable reference** the vaulted token variable.
+2. **Define the vaulted token variable** in the Vault-managed file.
+3. **Remove the readable production token** from the public vars file.
+
+The grader checks the variable files, not a prose explanation.

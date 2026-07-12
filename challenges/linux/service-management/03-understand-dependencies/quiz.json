@@ -4,258 +4,224 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A web service unit contains only this dependency:\n\n```ini\n[Unit]\nRequires=postgresql.service\n```\n\nOn boot, systemd starts both units in the same transaction. The web process occasionally starts first and exits because its connection pool cannot reach Postgres yet. What did the unit author miss?",
+      "scenario": "A small company deploys its Node.js API by opening SSH and running `node server.js`. The API disappears when the session closes, does not return after reboot, and has no agreed restart or log location. Operations needs the machine to own the process lifecycle under a dedicated service user. Which change best meets that requirement?",
       "options": [
         {
           "id": "a",
-          "text": "Add `After=postgresql.service`, because `Requires=` pulls the dependency into the transaction but does not by itself order startup."
+          "text": "Run the command under `nohup` from the deploy account and add a cron `@reboot` entry that starts another copy if needed"
         },
         {
           "id": "b",
-          "text": "Add `Wants=postgresql.service`, because `Requires=` is ignored unless a matching soft dependency exists."
+          "text": "Run the app from a reviewed systemd service unit so the machine owns its user, command, environment, logs, and restart behavior"
         },
         {
           "id": "c",
-          "text": "Move the dependency to the `[Service]` section so systemd evaluates it after `ExecStart=`."
+          "text": "Keep the API inside a persistent terminal multiplexer session and document which operator must reconnect after reboot"
         },
         {
           "id": "d",
-          "text": "Replace `Requires=` with `Before=postgresql.service`, because databases must be ordered by their clients."
+          "text": "Use a boot-time shell script without service state or journal integration, then rely on process searches for recovery"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "The article separates requirement from ordering. `Requires=` says the database is load-bearing and should be part of the transaction. It does not say the web service must wait. `After=postgresql.service` is the ordering edge that prevents the race. `Wants=` is softer, `[Service]` is the wrong section, and `Before=` points the relationship in the wrong direction for this client."
+      "explanation": "A reviewed systemd unit satisfies all stated constraints: a dedicated identity, boot integration, explicit environment and command, restart behavior, status, and journal ownership. `nohup`, a terminal multiplexer, or an unmanaged boot script can keep a process running in some circumstances, but none provides the complete lifecycle and evidence contract required here. [The systemd service manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) documents service lifecycle."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A batch worker has this fragment:\n\n```ini\n[Unit]\nAfter=redis.service\n```\n\nA developer tests on a host where `redis.service` is disabled and not part of the boot transaction. The worker still starts and then fails to connect. Which explanation should you give?",
+      "scenario": "A service works when started manually from `/srv/app/current`, but fails under systemd with `ENOENT: no such file or directory, open './templates/home.html'`. The unit runs the right binary and user but has no working-directory directive. What should be added?",
       "options": [
         {
           "id": "a",
-          "text": "`After=` only orders this unit relative to Redis if Redis is already being started. It does not pull Redis in or require it to be healthy."
+          "text": "`WantedBy=/srv/app/current`, because install targets set the process current directory"
         },
         {
           "id": "b",
-          "text": "`After=` waits for Redis only when the Redis unit is also listed in `[Install] WantedBy=`."
+          "text": "`After=/srv/app/current`, because ordering directives resolve relative file paths"
         },
         {
           "id": "c",
-          "text": "`After=` means this unit should start after Redis exits, so the worker correctly waited for Redis to be inactive."
+          "text": "`WorkingDirectory=/srv/app/current` in `[Service]`, so relative paths start from the release directory"
         },
         {
           "id": "d",
-          "text": "`After=` is ignored for services and applies only to targets."
+          "text": "`Restart=always`, because repeated starts eventually inherit the deployer's shell directory"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "Ordering directives are not dependency directives. If Redis is not in the same transaction, `After=redis.service` has nothing to wait for. A load-bearing dependency needs `Requires=` or a softer `Wants=` paired with `After=` depending on whether failure should block startup. The other answers invent restrictions that the article does not describe."
+      "explanation": "systemd does not inherit the deployer's current directory. `WorkingDirectory=` makes relative application paths deterministic. `WantedBy=` controls installation into a target, `After=` controls ordering, and restart policy cannot change path resolution. The [systemd execution manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) documents working directories, users, and environment setup."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An API unit should start even if its telemetry sidecar is absent in a smaller environment:\n\n```ini\n[Unit]\nWants=metrics-exporter.service\nAfter=metrics-exporter.service\n```\n\nIn staging, `metrics-exporter.service` is masked. What should happen to the API unit?",
+      "scenario": "An operator creates `/etc/systemd/system/app.service`, then runs `systemctl start app.service`. The app works now but is absent after the next reboot. A later edit to `ExecStart` is also ignored. Which sequence addresses both mistakes?",
       "options": [
         {
           "id": "a",
-          "text": "It should still start, because `Wants=` is a soft dependency and a missing or failed wanted unit does not block the requester."
+          "text": "Run `systemctl daemon-reload`, enable the unit for boot, restart it to use the changed command, and verify status and health"
         },
         {
           "id": "b",
-          "text": "It should fail, because `After=` turns the soft dependency into a hard dependency."
+          "text": "Run `systemctl reload app.service` because reload always rereads unit files and enables boot links"
         },
         {
           "id": "c",
-          "text": "It should remain in `activating` until the masked unit is unmasked."
+          "text": "Run `journalctl --vacuum-time=1d` because old journal entries prevent new unit definitions from loading"
         },
         {
           "id": "d",
-          "text": "It should be marked `failed` only if the sidecar exits with a non-zero status."
+          "text": "Run `systemctl is-enabled` because querying enablement creates the boot symlink and replaces the process"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "`Wants=` is the soft form covered in the article. It asks systemd to pull in the sidecar if possible, but the API still proceeds when the sidecar is missing or fails. `After=` adds ordering only when both units are involved. It does not harden the dependency or create an activation wait on a masked unit."
+      "explanation": "`daemon-reload` refreshes systemd's unit definitions, `enable` creates the boot relationship, and `restart` launches a new process from changed service instructions. Reload is service-specific and does not generally reread systemd unit metadata or enable boot. Queries and journal cleanup do not mutate lifecycle state. The [systemctl manual](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html) defines these verbs."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A service performs an outbound TLS call during startup. In production it fails at boot with DNS and route errors, but succeeds after a manual restart. The unit currently contains:\n\n```ini\n[Unit]\nAfter=network.target\n```\n\nWhich change best matches the article's guidance?",
+      "scenario": "An app must start after a local credential sidecar, and startup should fail if that sidecar cannot be started. The current unit has only `After=credential-sidecar.service`; on some boots the sidecar is not included in the transaction. Which relationship is appropriate?",
       "options": [
         {
           "id": "a",
-          "text": "Use both `Wants=network-online.target` and `After=network-online.target` so systemd pulls in the online-network wait and orders the service after usable connectivity."
+          "text": "Use only `Wants=credential-sidecar.service`, because a soft dependency also guarantees ordering and blocks app startup on failure"
         },
         {
           "id": "b",
-          "text": "Use `Before=network.target` so the service gets a chance to create DNS state before the network stack starts."
+          "text": "Use only `After=credential-sidecar.service`, because ordering automatically starts the named unit"
         },
         {
           "id": "c",
-          "text": "Keep `After=network.target`, because that target guarantees DNS, a default route, and working outbound connectivity."
+          "text": "Use `Before=credential-sidecar.service`, because clients must start before the dependency they consume"
         },
         {
           "id": "d",
-          "text": "Use `Requires=network.target`, because hard dependencies are the only way to wait for DNS."
+          "text": "Use `Requires=credential-sidecar.service` plus `After=credential-sidecar.service` to pull in the hard dependency and order the app after it"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "The article distinguishes `network.target` from `network-online.target`. The first is only a broad network milestone, while the second represents usable connectivity such as route and DNS readiness. For startup code that dials out immediately, use `After=` for ordering and `Wants=` so the online target is actually pulled into the transaction."
+      "explanation": "`Requires=` makes the sidecar part of the startup transaction and treats it as load-bearing. `After=` supplies the separate ordering edge. `Wants=` is softer and does not block the requester when the wanted unit fails, while `After=` alone does not pull anything in. The [systemd unit manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html) documents dependencies and ordering."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A video pipeline has a target and three services:\n\n```ini\n# video-pipeline.target\n[Unit]\nWants=ingest.service transcode.service publish.service\n```\n\nStarting the target brings up the services. Restarting the target during a config rollout does not restart the services, so they keep stale configuration. Which directive belongs on each service?",
+      "scenario": "A restart command returns without an error, but the application health check fails seconds later. `systemctl status` reports `Active: failed`, and the latest journal entry says `Error: missing DATABASE_URL`. What is the most useful next action?",
       "options": [
         {
           "id": "a",
-          "text": "`PartOf=video-pipeline.target`, because `PartOf=` propagates stop and restart operations from the target to member units."
+          "text": "Keep restarting until one process inherits the missing variable from an operator's shell"
         },
         {
           "id": "b",
-          "text": "`After=video-pipeline.target`, because ordering causes lifecycle operations to flow from the target to services."
+          "text": "Fix the service's environment source or permissions, restart once, then verify status, journal output, and health"
         },
         {
           "id": "c",
-          "text": "`Requisite=video-pipeline.target`, because requisites restart whenever the target restarts."
+          "text": "Enable the unit again because boot enablement injects application environment variables at runtime"
         },
         {
           "id": "d",
-          "text": "`ConditionPathExists=video-pipeline.target`, because conditions gate grouped lifecycle operations."
+          "text": "Clear the journal because lifecycle errors remain active until their log lines are deleted"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "Targets aggregate units, but `Wants=` alone does not make a target restart cascade to services. The article identifies `PartOf=` as the directive for propagating stop and restart from another unit. Ordering, requisites, and conditions solve different problems and do not provide grouped lifecycle behavior."
+      "explanation": "systemd accepting a restart request does not prove the new process reached a healthy state. The journal identifies the missing runtime setting, so fix the environment contract and verify the new process. Repeated restarts, enablement, or deleting evidence do not supply the variable. The [journalctl manual](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html) documents unit and time filtering."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "A service should run only on hosts that have a hardware accelerator. The unit contains:\n\n```ini\n[Unit]\nConditionPathExists=/dev/acme-accelerator0\n```\n\nOn a host without the device, an operator runs `systemctl start acme-worker.service`. What status should they expect?",
+      "scenario": "A unit uses `Restart=on-failure`, `RestartSec=5s`, `StartLimitIntervalSec=60`, and `StartLimitBurst=5`. A bad deploy exits with status 1 repeatedly, then status shows `Result: start-limit-hit`. What should the operator do?",
       "options": [
         {
           "id": "a",
-          "text": "The unit is skipped and remains inactive, with status output indicating the condition was not met."
+          "text": "Change to `Restart=always` so the service bypasses the start-rate limit and hides the failed state"
         },
         {
           "id": "b",
-          "text": "The unit fails hard and appears in `systemctl --failed` because every missing path is treated as a startup error."
+          "text": "Increase CPUQuota because every start-limit event is caused by scheduler starvation"
         },
         {
           "id": "c",
-          "text": "The unit starts and waits in `activating` until udev creates the device node."
+          "text": "Inspect the journal for the first failure, fix the root cause, then use `reset-failed` and start the repaired unit"
         },
         {
           "id": "d",
-          "text": "systemd ignores `ConditionPathExists=` unless a matching `Requires=` line names the path."
+          "text": "Disable the journal because recording each crash consumes the allowed restart burst"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "The article says `Condition*=` gates whether a unit runs and quietly skips the unit when the condition is false. That is useful for optional hardware or environment-specific units. `Assert*=` is the louder variant for cases that should fail. Conditions do not create waits, path dependencies, or hard startup failures by default."
+      "explanation": "The start limit stops a tight crash loop so operators can inspect the first useful error. Fixing the cause comes before clearing the failed marker. More aggressive restart policy or unrelated CPU settings would keep the broken release spinning. The [systemd service manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) documents restart policies and rate limiting."
     },
     {
       "id": "q7",
       "type": "single",
-      "scenario": "A local backup job must run only when `backup-mount.service` is already active. The job should fail immediately if the mount service is not active, and it should not try to start the mount itself because a separate change-control process owns that step. Which dependency best expresses this?",
+      "scenario": "A Node service normally uses `220M`, peaks near `380M`, and leaked memory once consumed the whole VM. The unit adds `MemoryMax=512M`, `CPUQuota=80%`, and `LimitNOFILE=8192`. After `daemon-reload`, the running process still reports its old file limit. Why?",
       "options": [
         {
           "id": "a",
-          "text": "`Requisite=backup-mount.service` with an appropriate ordering line, because `Requisite=` requires an already-active unit without pulling it in."
+          "text": "The service process must be restarted because execution limits are applied when systemd launches the process"
         },
         {
           "id": "b",
-          "text": "`Wants=backup-mount.service`, because soft dependencies fail fast when the wanted unit is inactive."
+          "text": "`LimitNOFILE` applies only to timer units, so a service can never receive the configured limit"
         },
         {
           "id": "c",
-          "text": "`ConditionPathExists=backup-mount.service`, because conditions check unit state before startup."
+          "text": "The limit becomes active only after the next DNS lookup because open files are network resources"
         },
         {
           "id": "d",
-          "text": "`PartOf=backup-mount.service`, because lifecycle propagation is the same as a pre-start requirement."
+          "text": "The value must be placed in `[Install]` because runtime resource controls are boot relationships"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The article defines `Requisite=` as `Requires=` with no auto-pull: the named unit must already be active or this unit fails immediately. That matches the need to fail fast without starting the mount. `Wants=` tries to pull units in softly, conditions check preconditions rather than unit state, and `PartOf=` is about stop and restart propagation."
+      "explanation": "`daemon-reload` updates systemd's definitions but does not replace the already running process. Restarting applies new execution limits to the launched process and its service cgroup, after which `/proc/<pid>/limits` and `systemctl show` can verify them. The [systemd execution manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) documents process limits and cgroup controls."
     },
     {
       "id": "q8",
       "type": "multiple",
-      "scenario": "You review this unit for an order processor:\n\n```ini\n[Unit]\nRequires=postgresql.service\nAfter=postgresql.service\nWants=metrics-exporter.service\nAfter=metrics-exporter.service\nAfter=network-online.target\nWants=network-online.target\nConditionPathExists=/etc/order-processor/enabled\n```\n\nWhich review comments are correct? (Select all that apply.)",
+      "scenario": "A team is replacing a daily shell-history cleanup command with systemd. Which design and verification steps are correct? Select all that apply.",
       "options": [
         {
           "id": "a",
-          "text": "PostgreSQL is modeled as load-bearing and ordered before the app, which is a deliberate hard dependency rather than just an ordering hint."
+          "text": "Keep the cleanup process running forever with `Type=simple`, even though it does one finite task and exits"
         },
         {
           "id": "b",
-          "text": "The metrics exporter can be absent or fail without blocking the order processor, because it is listed under `Wants=` rather than `Requires=`."
+          "text": "Use a `Type=oneshot` service for the finite cleanup command and test that service directly before scheduling it"
         },
         {
           "id": "c",
-          "text": "The online network target is correctly pulled in and ordered before the service, which matters if startup immediately dials outside the host."
+          "text": "Use a timer with `OnCalendar=` and `Persistent=true` when a missed run after downtime should execute after boot"
         },
         {
           "id": "d",
-          "text": "The condition line means a missing marker file will skip the unit rather than mark it as a failed service."
+          "text": "Enable only the service unit because services automatically infer daily schedules from their Description field"
         },
         {
           "id": "e",
-          "text": "The order of the two `After=` lines means PostgreSQL must start before the metrics exporter."
+          "text": "Enable and start the timer, inspect `list-timers`, and read the oneshot service journal for run results"
         }
       ],
       "correct": [
-        "a",
         "b",
         "c",
-        "d"
+        "e"
       ],
-      "explanation": "The fragment uses the main relationships from the article correctly: `Requires=` plus `After=` for a load-bearing database, `Wants=` for optional telemetry, `Wants=` plus `After=` for `network-online.target`, and `Condition*=` for a quiet skip. The line order of multiple `After=` directives does not order those dependencies relative to each other. Each ordering edge is relative to this unit."
-    },
-    {
-      "id": "q9",
-      "type": "multiple",
-      "scenario": "A startup incident involves these two units:\n\n```ini\n# api.service\n[Unit]\nRequires=worker.service\nAfter=worker.service\n\n# worker.service\n[Unit]\nRequires=api.service\nAfter=api.service\n```\n\nThe boot transaction stalls and systemd eventually reports an ordering cycle. Which runbook steps or conclusions are appropriate? (Select all that apply.)",
-      "options": [
-        {
-          "id": "a",
-          "text": "Use `systemd-analyze verify` or `systemctl list-dependencies` to surface the cycle and inspect the graph."
-        },
-        {
-          "id": "b",
-          "text": "Break the mutual hard requirement, because two services that require and order after each other cannot both be first."
-        },
-        {
-          "id": "c",
-          "text": "Replace both `Requires=` lines with `After=` only, because ordering alone also pulls units into the transaction."
-        },
-        {
-          "id": "d",
-          "text": "Consider whether one relationship should be a soft `Wants=` plus `After=`, or whether a target should aggregate both services."
-        },
-        {
-          "id": "e",
-          "text": "Fix the cycle by reordering the lines in the unit file so `api.service` appears first alphabetically."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "d"
-      ],
-      "explanation": "The article's failure section names dependency loops and suggests graph-focused tools. The real fix is to remove the circular hard requirement or model the grouping differently, often with a target or a softer dependency. `After=` alone does not pull units in, and textual line order does not solve a graph cycle."
+      "explanation": "A finite job fits a oneshot service, while the timer owns its calendar schedule. `Persistent=true` can catch up a missed calendar run after downtime. Enabling and inspecting the timer plus reading the service journal verifies both scheduling and execution. A Description field does not create a schedule. The [systemd timer manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html) documents these behaviors."
     }
   ]
 }

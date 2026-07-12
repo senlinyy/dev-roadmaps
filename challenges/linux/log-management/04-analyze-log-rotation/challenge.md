@@ -1,16 +1,16 @@
 ---
-title: "Analyze Log Rotation"
-sectionSlug: rotating-logs-with-logrotate
+title: "Audit Log Rotation"
+sectionSlug: rotate-logs-with-logrotate
 order: 4
 ---
 
-Without rotation, logs grow until they fill the disk. Logrotate automates compression and deletion on a schedule. Reading a logrotate config tells you how long history is kept, whether old logs are compressed, and how large files can grow before rotating.
+Nginx logs grew faster than expected after a marketing launch. You start in `/home/dev`, and the rotation policy plus current log files are already exported.
 
-You start in `/home/dev`. Your job:
+Your job:
 
-1. **Read the nginx logrotate config** at `/etc/logrotate.d/nginx` and find how many days of logs it keeps.
-2. **Check if compression is enabled** in the nginx config.
-3. **Read the myapp logrotate config** at `/etc/logrotate.d/myapp` and identify the problems: too few rotations, no compression, and an oversized threshold.
-4. **List the rotated nginx log files** under `/var/log/nginx/` to see the naming pattern in action.
+1. **Inspect the Nginx rotation policy** under `/etc/logrotate.d`.
+2. **List the current and rotated Nginx logs** so you can compare policy with reality.
+3. **Surface the retention and compression settings** from the policy.
+4. **Surface the rotated file evidence** that proves rotation already ran.
 
-The grader requires you to use `cat` and `ls` at least once each, and checks that your output includes key directives from both configs and the rotated filenames.
+The grader checks the policy and file evidence you print.

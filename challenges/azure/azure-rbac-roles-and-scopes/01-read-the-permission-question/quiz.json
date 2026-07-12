@@ -1,142 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "02-identify-the-caller-q1",
       "type": "single",
-      "scenario": "A release engineer asks for access because `the orders API deploy is blocked`. The pipeline error says:\n\n`AuthorizationFailed: client spn-release-devpolaris cannot perform Microsoft.Web/sites/config/write over /subscriptions/sub-prod-001/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Web/sites/app-orders-prod`\n\nWhat is the best first framing of the problem?",
+      "scenario": "Maya approves a production pull request, after which the release job authenticates as service principal `spn-orders-deploy-prod` and receives `AuthorizationFailed`. Azure records caller object ID `2f6c...91a`, which matches that service principal. The deployed API later runs as managed identity `mi-orders-api-prod` with a different object ID, and the support engineers use a separate group. Which principal should the RBAC investigation follow?",
       "options": [
         {
-          "id": "a",
-          "text": "Identify the caller, action, target scope, and current role assignments before changing permissions."
+          "id": "b",
+          "text": "The deployment service principal because its object ID matches the caller in the denied Azure request."
         },
         {
-          "id": "b",
-          "text": "Grant subscription Owner to the release engineer, because deployment errors should be unblocked quickly."
+          "id": "a",
+          "text": "Maya's user account, because the approval action could have caused the deployment to inherit her Azure session."
         },
         {
           "id": "c",
-          "text": "Check the application source code first, because a config write denial usually means the API route is broken."
+          "text": "The runtime managed identity, because production apps often reuse the same identity for deployment automation and runtime secret access."
         },
         {
           "id": "d",
-          "text": "Create a new resource group with the same app name, because the existing group is probably locked to old deployments."
+          "text": "The support group, because break-glass production access is commonly granted through group membership rather than a named service principal."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Azure RBAC evaluates the principal that actually sent the denied request, and the recorded caller object ID matches the deployment service principal. The runtime managed identity is the closest distractor because it is another production identity tied to the same app, but the scenario gives direct caller evidence that rules it out. Approval and support-group context do not override the caller recorded on the failed Azure action. See [Microsoft Learn: Azure RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview)."
+    },
+    {
+      "id": "03-separate-sign-in-from-access-q1",
+      "type": "single",
+      "scenario": "An engineer signs in to the Azure portal, completes MFA, and opens the production subscription. Updating `app-orders-prod` then fails with action `Microsoft.Web/sites/config/write` at the App Service resource scope. No Conditional Access or token error appears. What does the evidence show?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Authentication succeeded, but the token may have expired before the write action was evaluated, so the engineer should treat the denial as a session-lifetime issue first."
+        },
+        {
+          "id": "b",
+          "text": "Authentication succeeded, but a deny assignment, missing role action, or too-narrow scope can still block the configuration write."
+        },
+        {
+          "id": "d",
+          "text": "Authentication succeeded, but Azure RBAC did not find a matching permission for this action at the target scope or an inherited parent scope."
+        },
+        {
+          "id": "c",
+          "text": "Authentication succeeded, but the engineer may still be using the wrong tenant or subscription context for the resource they are trying to change."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The successful sign-in proves authentication. The denied action is an authorization decision based on role assignments, role contents, and scope. A wrong tenant or subscription context can produce a similar symptom and is worth checking, but the most direct reading of the evidence is still that Azure RBAC did not find the required permission at the evaluated scope. See [Microsoft Learn: Azure RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview)."
+    },
+    {
+      "id": "04-use-object-ids-q1",
+      "type": "single",
+      "scenario": "The tenant contains two service principals named `orders-deploy`: an old test principal and the current production principal. The access request lists the production principal's object ID `2f6c...91a` and client ID `8a20...440`. Automation must create the role assignment without relying on an ambiguous display-name lookup. Which identifier should it bind as the assignee?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use the display name `orders-deploy`, because duplicate names are resolved by choosing the newest principal."
+        },
+        {
+          "id": "a",
+          "text": "Use object ID `2f6c...91a`, because Azure role assignments store the principal ID for the exact tenant object."
+        },
+        {
+          "id": "c",
+          "text": "Use the subscription ID and display name together because the deployment principal only operates in that subscription."
+        },
+        {
+          "id": "d",
+          "text": "Use Maya's user object ID, because a human approver must be the assignee for workload access."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The error gives the caller, denied action, and target scope. That is the permission question. Broad Owner access may unblock the deploy but hides the real scope issue. App code and new resource groups do not explain this RBAC evidence."
+      "explanation": "The role assignment's principal ID is the Microsoft Entra object ID of the receiving identity. Display names are not unique, a subscription ID identifies scope rather than a principal, and approval does not make the approver the workload identity. See [Microsoft Learn: Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)."
     },
     {
-      "id": "q2",
+      "id": "05-choose-the-right-scope-q1",
       "type": "single",
-      "scenario": "Maya can open the Azure portal page for `app-orders-prod`, but the Save button fails when she changes an app setting. She says, `I can see it, so I should be allowed to edit it.` What should you explain?",
+      "scenario": "The production pipeline must update configuration on existing App Service resource `app-orders-prod`. It does not create resource groups, deploy unrelated apps, or administer access. Which proposed assignment best follows least privilege for this stated job?",
       "options": [
         {
           "id": "a",
-          "text": "Seeing a resource and changing a resource are different actions, and Azure RBAC can allow read while denying write."
+          "text": "Owner at subscription scope so future deployment requirements do not need another access review."
         },
         {
           "id": "b",
-          "text": "The portal page proves she has full access, so the failure is likely a browser rendering problem."
-        },
-        {
-          "id": "c",
-          "text": "App settings are controlled by DNS, so she should check the custom domain first."
+          "text": "Contributor at the Orders resource-group scope so the pipeline can handle future release dependencies without another access review."
         },
         {
           "id": "d",
-          "text": "The resource group name decides edit access, so a clearer name would fix the Save button."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Azure permissions are action-based. Reader-style access can show a resource while write actions still fail. DNS and naming are useful context elsewhere, but they do not grant write permission."
-    },
-    {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "A production checklist asks, `Can `devpolaris-orders-api` read its payment secret?` Which pieces of evidence belong in the security review? The release note names `app-orders-prod`, managed identity `mi-orders-prod`, and vault `kv-orders-prod`, but the checklist is still missing evidence for the actual read.",
-      "options": [
-        {
-          "id": "a",
-          "text": "The runtime identity assigned to the app."
-        },
-        {
-          "id": "b",
-          "text": "The Key Vault or secret scope where access is granted."
+          "text": "Reader at the App Service resource because read access should permit configuration updates made by a trusted pipeline."
         },
         {
           "id": "c",
-          "text": "The specific secret operation the app needs, such as read secret value."
-        },
-        {
-          "id": "d",
-          "text": "The public DNS record for the customer-facing API."
+          "text": "A suitable role containing the required configuration write action at the `app-orders-prod` resource scope."
         }
       ],
       "correct": [
-        "a",
-        "b",
         "c"
       ],
-      "explanation": "Secret access needs a caller, a target, and an allowed action. DNS may be part of the traffic path, but it does not prove that the app can read a secret."
+      "explanation": "The job names one write action on one existing resource, so a role containing that action at resource scope is the narrowest supported assignment. Subscription Owner and resource-group Contributor reach beyond the stated job, while Reader does not contain write actions. See [Microsoft Learn: Azure RBAC scope](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) and [Microsoft Learn: Azure RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices)."
+    },
+    {
+      "id": "06-read-a-role-assignment-q1",
+      "type": "single",
+      "scenario": "The release job uses principal ID `2f6c...91a` and fails against `app-orders-prod`. The role assignment inventory contains:\n\n| Principal ID | Role | Scope |\n| --- | --- | --- |\n| `2f6c...91a` | Contributor | `/subscriptions/sub-prod-001/resourceGroups/rg-orders-dev` |\n| `81d4...772` | Reader | `/subscriptions/sub-prod-001/resourceGroups/rg-orders-prod` |\n\nWhat is the first RBAC correction to review?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Assign the deployment principal an appropriate role at `app-orders-prod` or a justified parent scope, because its current Contributor assignment covers only development."
+        },
+        {
+          "id": "a",
+          "text": "Wait for propagation because the existing Contributor assignment is at a parent scope and may not yet appear in the resource view."
+        },
+        {
+          "id": "c",
+          "text": "Change the runtime managed identity's Reader role because the runtime principal should inherit deployment permissions."
+        },
+        {
+          "id": "d",
+          "text": "Review whether the pipeline is targeting the intended production resource ID, because an environment mix-up in the deployment inputs can make a valid assignment look missing."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The deployment principal has Contributor only at the development resource-group scope, which does not inherit sideways into production. The runtime identity is a different caller, propagation does not expand scope, and checking the target resource ID is a useful validation step but does not change the fact that the shown assignment does not cover the intended production resource. See [Microsoft Learn: Azure RBAC scope](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)."
+    },
+    {
+      "id": "09-review-before-assigning-access-q1",
+      "type": "single",
+      "scenario": "A support group has Reader on storage account `stordersprod`. Members can inspect the account configuration, but `az storage blob list --auth-mode login` returns an authorization error for container `receipts`. The storage firewall permits their approved admin network. Which change addresses the actual permission boundary?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Replace Reader with Contributor at subscription scope so support can remediate storage incidents without waiting for escalation."
+        },
+        {
+          "id": "b",
+          "text": "Add a second Reader assignment at container scope because inherited read permissions become data permissions when repeated."
+        },
+        {
+          "id": "d",
+          "text": "Grant an appropriate Storage Blob data role at the account or receipts-container scope, because Reader covers management-plane resource visibility rather than blob data reads."
+        },
+        {
+          "id": "c",
+          "text": "Disable the storage firewall because a data authorization error should be treated as a network denial."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Blob reads are data-plane operations and need a matching data action through a Storage Blob data role. Contributor is broad management-plane access and does not automatically grant blob data, repeating Reader does not change its actions, and the scenario already shows the network path is permitted. See [Microsoft Learn: Azure RBAC overview](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) and [Microsoft Learn: Azure built-in storage roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/storage)."
     },
     {
       "id": "q4",
-      "type": "single",
-      "scenario": "A teammate proposes one shared service principal for deployments, runtime secret reads, and manual break-glass work. They say fewer identities make Azure easier. What is the best response?",
+      "type": "multiple",
+      "scenario": "Before approving a new production role assignment for the Orders release pipeline, the reviewer wants evidence that can be audited later. The pipeline updates one existing production app and does not administer the subscription. Which two review actions are required? Select two.",
       "options": [
         {
-          "id": "a",
-          "text": "Separate identities by job where possible, because deployment, runtime, and emergency access have different scopes, lifetimes, and audit needs."
-        },
-        {
           "id": "b",
-          "text": "Use one identity if it has a strong display name, because logs will still be understandable."
+          "text": "Confirm the caller's object ID, the denied or required action, and the exact target resource before choosing a role."
         },
         {
-          "id": "c",
-          "text": "Use personal accounts for runtime access, because people can rotate passwords more easily than apps."
+          "id": "a",
+          "text": "Use the display name from the ticket and assign Owner at subscription scope so the launch cannot be blocked by another permission."
         },
         {
           "id": "d",
-          "text": "Avoid Azure identities and put secrets in app settings so RBAC is not involved."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "A smaller number of identities is not automatically simpler if one identity becomes too powerful. Separate job-based identities make scope, rotation, and audit clearer. Display names and personal accounts do not solve blast radius."
-    },
-    {
-      "id": "q5",
-      "type": "single",
-      "scenario": "During an incident, checkout fails only in production. The error says `Forbidden` from Key Vault. The app revision is healthy, the database is reachable, and the secret exists. Which security question should move to the top?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Which identity is the production app using, and does that identity have the right secret-read permission at the vault or secret scope?"
-        },
-        {
-          "id": "b",
-          "text": "Which frontend route is slow, because Key Vault errors usually mean the browser could not load the page."
+          "text": "Choose the narrowest suitable role and scope, then record the principal, role, scope, reason, and observed assignment evidence."
         },
         {
           "id": "c",
-          "text": "Which database table changed, because existing secrets become unreadable when schemas change."
-        },
-        {
-          "id": "d",
-          "text": "Which region is cheapest, because secret reads are denied when the region cost changes."
+          "text": "Create duplicate assignments at resource and subscription scope so at least one grant survives future resource moves."
         }
       ],
       "correct": [
-        "a"
+        "b",
+        "d"
       ],
-      "explanation": "A Key Vault `Forbidden` after the secret exists points to identity and authorization. App health and database reachability narrow the investigation away from runtime startup and data connectivity."
+      "explanation": "A defensible review starts with the exact principal, action, and target, then records a job-shaped role assignment at the narrowest useful scope. Display-name lookup and subscription Owner create unnecessary reach, while duplicate broad assignments make effective access harder to understand. See [Microsoft Learn: Azure RBAC best practices](https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices) and [Microsoft Learn: Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments)."
     }
   ]
 }

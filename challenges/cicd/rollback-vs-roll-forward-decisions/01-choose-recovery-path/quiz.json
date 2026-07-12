@@ -4,82 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A canary at ten percent returns 6.8 percent 5xx. Stable remains healthy, still serves ninety percent of traffic, and can read all current order rows. What is the smallest safe first move?",
+      "scenario": "A canary at 10 percent produces 6 percent checkout errors. Stable remains healthy, still serves 90 percent of traffic, and can read every row written during the canary. Which action best protects users while preserving evidence?",
       "options": [
-        { "id": "a", "text": "Revert traffic so users go back to the healthy stable task set." },
-        { "id": "b", "text": "Patch forward immediately before changing traffic." },
-        { "id": "c", "text": "Redeploy the previous artifact even though the old task set is already healthy." },
-        { "id": "d", "text": "Promote the canary so the team has more failure data." }
+        {
+          "id": "a",
+          "text": "Keep the canary running until the root cause is proven."
+        },
+        {
+          "id": "b",
+          "text": "Set canary traffic to zero, record the signals, and investigate after recovery."
+        },
+        {
+          "id": "c",
+          "text": "Hold the canary at 10 percent while collecting enough traces to confirm the release is the cause."
+        },
+        {
+          "id": "d",
+          "text": "Reduce the canary to 1 percent, then prepare a hotfix while retaining a small production sample."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "When stable is healthy, available, and data-compatible, traffic revert protects users with the smallest change. Redeploying the old artifact is heavier, patching forward comes later if needed, and promotion spreads the impact."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The previous version is healthy and data-compatible, so traffic rollback is the fastest safe recovery. Recording the release evidence preserves diagnosis. Waiting or increasing exposure extends harm, while an unproven hotfix is slower than the ready recovery path. See [AWS CodeDeploy rollback and redeployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-rollback-and-redeploy.html)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "Both the new and old running task sets now fail readiness because a production secret version was manually replaced during the release. The release record still has the last known-good image digest and config version. Which path fits best?",
+      "scenario": "Version 1.8.4 renamed a production column in place and has already processed orders. Version 1.8.3 still reads the removed column. A separate code defect now causes payment timeouts. Which recovery path is most defensible?",
       "options": [
-        { "id": "a", "text": "Redeploy the previous artifact with known-good config because the current running platform state is not trustworthy." },
-        { "id": "b", "text": "Revert traffic to the old task set because old always means healthy." },
-        { "id": "c", "text": "Disable the discount feature flag because all readiness failures are feature flag failures." },
-        { "id": "d", "text": "Promote the release so ECS replaces the broken tasks faster." }
+        {
+          "id": "a",
+          "text": "Roll the application back first and repair the database only if it fails."
+        },
+        {
+          "id": "b",
+          "text": "Scale version 1.8.3 beside 1.8.4 to compare payment latency."
+        },
+        {
+          "id": "c",
+          "text": "Restore the previous application and roll the database back to its pre-release snapshot before replaying accepted orders."
+        },
+        {
+          "id": "d",
+          "text": "Use a narrow roll-forward or planned database recovery because the old application cannot run safely against current state."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Redeploying the previous artifact is useful when the running platform state cannot be trusted. A traffic revert does not help if the old running task set is also broken. A flag change only helps when the bad behavior is isolated behind that flag."
+      "correct": [
+        "d"
+      ],
+      "explanation": "The destructive schema change removed the application's rollback path. Restoring old code without restoring compatible data can cause another outage. A focused roll-forward or explicit database recovery is safer than assuming image age implies compatibility. See [Kubernetes Deployment rollback](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-back-a-deployment)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "The new artifact is healthy. Only checkout requests with the new discount engine fail, and the behavior is controlled by `FEATURE_DISCOUNT_V2`. The old discount engine is known to work. Which recovery move is most targeted?",
+      "scenario": "Logs show that the release reads PAYMENTS_TIMEOUT_MS, but production defines PAYMENT_TIMEOUT_MS. The existing production variable name is also consumed by two stable services and cannot change during the incident. The application patch is a one-line name correction, CI and deployment take six minutes, and rollback would take 20 minutes because the old environment has been scaled down. What should the incident lead choose?",
       "options": [
-        { "id": "a", "text": "Disable `FEATURE_DISCOUNT_V2` and verify checkout uses the known-good discount path." },
-        { "id": "b", "text": "Redeploy the previous artifact because flags should never be changed during incidents." },
-        { "id": "c", "text": "Keep the flag enabled and wait for more failures." },
-        { "id": "d", "text": "Stop the rollout forever because one feature path failed." }
+        {
+          "id": "a",
+          "text": "Roll forward with the reviewed fix through the fastest safe validation gate."
+        },
+        {
+          "id": "b",
+          "text": "Roll back first because the previous artifact is known, even though that path takes 20 minutes."
+        },
+        {
+          "id": "c",
+          "text": "Change the production variable to the name expected by the new release without creating a reviewed code change."
+        },
+        {
+          "id": "d",
+          "text": "Pause the release and complete the normal full regression suite before applying the one-line correction."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A flag recovery is appropriate when the bad behavior is isolated and the fallback path is known to work. It changes runtime behavior without moving traffic or rebuilding."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The cause is confirmed, the patch is narrow, and the measured recovery path is faster than rollback. Roll-forward still needs review and a release gate. A blanket rollback rule ignores recovery time, while trial-and-error config changes reduce confidence. See [Google SRE incident response](https://sre.google/workbook/incident-response/)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "Version `1.8.4` already wrote data that `1.8.3` cannot read. The root cause is a missing default value, and the fix is one small code change that can pass CI quickly. Which path is most defensible?",
+      "scenario": "Checkout success drops while payment provider latency and database write latency also rise. The canary is scheduled to increase from 10 to 25 percent in two minutes, but the team cannot yet attribute the failure. What is the best immediate decision?",
       "options": [
-        { "id": "a", "text": "Patch forward because moving traffic back to `1.8.3` may fail on the new data shape." },
-        { "id": "b", "text": "Always roll back because older code is automatically safer." },
-        { "id": "c", "text": "Disable every feature flag, even unrelated ones." },
-        { "id": "d", "text": "Delete the release record because it no longer matches production." }
+        {
+          "id": "a",
+          "text": "Hold at 10 percent and keep the current investigation informal until one dependency is proven responsible."
+        },
+        {
+          "id": "b",
+          "text": "Return application traffic to stable immediately, then determine whether current database state is compatible."
+        },
+        {
+          "id": "c",
+          "text": "Pause promotion, limit exposure, assign an owner, and set the next evidence-based decision time."
+        },
+        {
+          "id": "d",
+          "text": "Disable the canary's payment path but continue increasing traffic to its other endpoints."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Rollback can be dangerous when the previous artifact cannot read data already written by the failed release. Patch forward is defensible when the cause and fix are narrow and going backward is riskier."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Uncertainty is a reason to stop spreading the change, not to continue automatically. A pause preserves options while owners compare release and dependency evidence. Blind rollback or patching can add failure modes before compatibility and cause are known. See [Google SRE incident response](https://sre.google/workbook/incident-response/)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "Canary 5xx is normal, checkout success is lower than stable, payment provider timeouts also increased, and database write latency is elevated. The team cannot yet tell whether the release or a dependency caused the issue. What should the release lead do?",
+      "scenario": "A new producer has published queue events with a required promotionId field. Several old consumers reject unknown required fields, and the events cannot be removed from the queue. Which fact most strongly argues against an application rollback?",
       "options": [
-        { "id": "a", "text": "Stop automatic promotion, hold or reduce traffic based on user impact, name an owner, and set the next decision time." },
-        { "id": "b", "text": "Promote to 100 percent so the signal becomes clearer." },
-        { "id": "c", "text": "Patch forward without knowing the cause." },
-        { "id": "d", "text": "Delete the canary task set so evidence disappears." }
+        {
+          "id": "a",
+          "text": "The previous container image is still present in the registry."
+        },
+        {
+          "id": "b",
+          "text": "The previous consumers cannot process state already created by the failed release."
+        },
+        {
+          "id": "c",
+          "text": "The previous consumers passed their last compatibility suite against the old event schema."
+        },
+        {
+          "id": "d",
+          "text": "The producer can be rolled back before it publishes any additional incompatible events."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Stopping the rollout is an action. When signals are unclear, the safe move is to pause promotion, reduce impact if needed, assign ownership, and decide what evidence will drive the next move."
+      "correct": [
+        "b"
+      ],
+      "explanation": "Rollback safety depends on current data and message state, not just artifact availability. Old consumers that cannot understand queued events may fail immediately after rollback. Version numbers and queue capacity do not repair the contract mismatch. See [GitLab multi-version compatibility guidance](https://docs.gitlab.com/development/multi_version_compatibility/)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "Which facts should be captured in the release record after a failed canary?",
+      "scenario": "A failed checkout release is affecting users, and the incident lead must choose a recovery path within five minutes. Which conditions make application rollback the strongest first action?",
       "options": [
-        { "id": "a", "text": "The recovery action that was taken." },
-        { "id": "b", "text": "The evidence that led to that action." },
-        { "id": "c", "text": "The rejected options and why they were not chosen." },
-        { "id": "d", "text": "The owner for follow-up." },
-        { "id": "e", "text": "A vague note that says 'rollback happened' without task definitions or cause." }
+        {
+          "id": "a",
+          "text": "The previous immutable artifact or environment is still available."
+        },
+        {
+          "id": "b",
+          "text": "The failed release has made irreversible external changes that old code cannot reconcile."
+        },
+        {
+          "id": "c",
+          "text": "The previous version can operate against the current database and message state."
+        },
+        {
+          "id": "d",
+          "text": "The team prefers rollback because it avoids documenting a decision."
+        },
+        {
+          "id": "e",
+          "text": "Evidence indicates the new release introduced the user-facing failure."
+        }
       ],
-      "correct": ["a", "b", "c", "d"],
-      "explanation": "A useful release record names the action, evidence, rejected paths, and owner. A vague note is exactly what the article tries to avoid, because it does not help the next engineer understand what happened."
+      "correct": [
+        "a",
+        "c",
+        "e"
+      ],
+      "explanation": "Rollback is strongest when there is a ready target, current state remains compatible, and removing the new release is likely to remove the incident. Irreversible state argues against rollback, and recovery choices still need an audit trail. See [AWS CodeDeploy rollback and redeployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-rollback-and-redeploy.html)."
     }
   ]
 }
-

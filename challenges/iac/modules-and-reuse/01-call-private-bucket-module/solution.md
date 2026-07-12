@@ -19,5 +19,3 @@ module "invoice_bucket" {
   versioning_enabled = true
 }
 ```
-
-The root module calls the child module and passes only the values needed for this production bucket instance.

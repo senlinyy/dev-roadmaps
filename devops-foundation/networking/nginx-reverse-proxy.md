@@ -23,15 +23,15 @@ id: article-devops-foundation-networking-nginx-reverse-proxy
 ## Web Server, App Server, and Reverse Proxy
 <!-- section-summary: A web server handles public HTTP infrastructure work, while the app server focuses on application logic. -->
 
-The first deployment often exposes the app process directly: Node, Django, Rails, FastAPI, Go, or Java listens on a public port and answers browser traffic itself. That can work for a small test, then the rough edges appear. TLS certificates need renewal. Static files need caching. Slow clients can tie up app workers. Redirects, access logs, compression, and large uploads all land inside the app runtime.
+The first deployment often feels straightforward: start the app, bind it to a public port, open the firewall, and point the browser at it. A Node, Django, Rails, FastAPI, Go, or Java process can answer HTTP directly for a small test. Then real web traffic adds chores that have little to do with product code. TLS certificates need renewal. Static files need caching. Slow clients can tie up app workers. Redirects, access logs, compression, and large uploads all land inside the app runtime.
 
 Production teams usually put a **web server** in front of that app process. Nginx is a web server. Apache httpd, Caddy, and Envoy can play similar roles. The web server handles repeatable HTTP infrastructure work: connections, static files, TLS, logging, compression, redirects, buffering, and proxying.
 
 The **app server** stays focused on product behavior. It talks to databases, checks authentication, renders pages, or returns JSON.
 
-A **reverse proxy** is the web server role where Nginx sits in front of one or more app servers and forwards client requests inward. The client believes it is talking to `app.example.com`. Nginx receives that request and proxies it to an internal app address.
+A **reverse proxy** is the web server role where Nginx sits in front of one or more app servers and forwards client requests inward. The client talks to `app.example.com`. Nginx receives that public request and sends it to an internal app address such as `http://127.0.0.1:3000`.
 
-This split exists because public web traffic includes a lot of repeatable infrastructure work. Nginx can handle TLS certificates, HTTP redirects, static assets, access logs, buffering, and slow clients with a small, stable config. The app server can spend its time on routes, database calls, authentication, and business behavior.
+This separation is useful because public web traffic includes a lot of repeatable infrastructure work. Nginx can handle TLS certificates, HTTP redirects, static assets, access logs, buffering, and slow clients with a small, stable config. The app server can spend its time on routes, database calls, authentication, and business behavior.
 
 On a single server, the layout often looks like this:
 
@@ -45,18 +45,20 @@ In a cloud deployment, it may look like this:
 Browser HTTPS -> Load balancer :443 -> Nginx or app target -> app containers
 ```
 
-The benefit is separation. Nginx handles public web mechanics. The app handles product behavior. Your app does not need to implement TLS renewal, static asset caching, gzip, slow-client buffering, virtual hosts, or access logs from scratch.
+The benefit is practical separation. Nginx handles public web mechanics. The app handles product behavior. Your app does not need to implement TLS renewal, static asset caching, gzip, slow-client buffering, virtual hosts, or access logs from scratch.
 
 Nginx also has a useful architecture for this job. It runs a master process and worker processes. Workers use an event loop to handle many connections without one thread per client. That design lets Nginx absorb slow clients and keep app servers focused on complete requests.
 
-The production symptom usually points at the side that needs attention. If static files return `403`, inspect Nginx paths and file permissions. If `/api/health` returns `502`, inspect the app process and `proxy_pass`. If login redirects loop, inspect forwarded headers and app trust-proxy settings.
+The production symptom usually points at the side that needs attention. If static files return `403`, inspect Nginx paths and file permissions. If `/api/health` returns `502`, inspect the app process and `proxy_pass`. If login redirects loop, inspect forwarded headers and app trust-proxy settings. From there, the path moves one step at a time: public listener, site selection, static files, proxying, TLS, load balancing, and debugging.
 
 ## Nginx in a Browser Request
 <!-- section-summary: Nginx receives the request after DNS, routing, firewall policy, and TLS have brought the browser to the server. -->
 
-Before Nginx sees a request, several network checks have already happened. The browser resolved `app.example.com`, routed to the right IP, passed firewall rules, and completed TLS on port `443`. Nginx receives the request after those steps and decides which site or upstream should handle it.
+A browser request reaches Nginx only after several network checks have already happened. The browser resolved `app.example.com`, routed to the right IP, passed firewall rules, and completed TLS on port `443`. Nginx receives the request after those steps and decides which site or upstream should handle it.
 
-For the user, the URL still looks simple:
+A common beginner situation is strange at first: you can run `curl http://127.0.0.1:3000/health` on the server and the app says `200 OK`, but the browser still cannot load `https://app.example.com/api/health`. That means the app can answer locally, while the public browser path still needs a working handoff through TLS, the firewall, and Nginx. The next check moves from "is the app alive?" to "did Nginx receive the browser request and proxy it to the right place?"
+
+For your user, the URL still looks simple:
 
 ```
 https://app.example.com/dashboard
@@ -66,26 +68,45 @@ Nginx receives the public HTTPS request. It chooses the right site based on the 
 
 Under the hood, Nginx selects a `server` block from the local address, port, SNI hostname during TLS, and HTTP `Host` header. Then it selects a `location` block from the request path. That two-step matching is why a request can reach Nginx and still land in the wrong app if `server_name` or `location` rules are too broad.
 
-This is the final handoff in the networking section. Everything before Nginx gets the request to the front door. Nginx decides which internal door the request should use.
+This is the final handoff in the networking path. Firewalls get the request to the front door. Nginx decides which internal route the request should use.
+
+You can prove the handoff with two short checks:
+
+```bash
+curl -v http://127.0.0.1:3000/health
+curl -I https://app.example.com/api/health
+
+# Example output:
+# HTTP/1.1 200 OK
+# content-type: application/json
+#
+# HTTP/2 502
+# server: nginx
+```
+
+The local app answers, but the public path returns `502` from Nginx. That points at the Nginx proxy layer: the `proxy_pass` target, the upstream port, the app listen address, or the error log line for that request.
+
+![Reverse proxy front door infographic showing browser HTTPS to Nginx, static files, app server proxying, and TLS termination](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/reverse-proxy-front-door.png)
+
+_The image shows Nginx as the public front door that routes static files, application requests, and TLS work._
 
 ## Installing Nginx and Finding the Config
 <!-- section-summary: Nginx installs as a system service with predictable config and log paths on common Linux distributions. -->
 
-Installing Nginx turns the proxy role into a real service on the VM. Before writing a server block for `app.example.com`, confirm that the package is installed, the systemd service can start, and the config paths match the distribution. On Ubuntu and Debian, Nginx uses a main config file plus enabled site files. Logs live under `/var/log/nginx`, so a broken proxy has a predictable place to leave evidence.
+Before writing a proxy config, make sure Nginx can run as a normal Linux service. This setup step saves time later. If the package is missing, the service is stopped, or the config path is different from the guide you copied, every later debug step gets noisy.
+
+On Ubuntu and Debian, Nginx uses a main config file plus enabled site files. Logs live under `/var/log/nginx`, so a broken proxy has a predictable place to leave evidence.
 
 On Ubuntu or Debian, Nginx installation is usually:
 
 ```bash
 sudo apt update
 sudo apt install nginx -y
-```
 
-Example output:
-
-```console
-Reading package lists... Done
-Setting up nginx (1.24.0-2ubuntu1) ...
-Created systemd service link for nginx.service.
+# Example output:
+# Reading package lists... Done
+# Setting up nginx (1.24.0-2ubuntu1) ...
+# Created systemd service link for nginx.service.
 ```
 
 The service is managed by systemd:
@@ -94,29 +115,23 @@ The service is managed by systemd:
 sudo systemctl enable nginx
 sudo systemctl start nginx
 sudo systemctl status nginx
-```
 
-Example output:
-
-```console
-● nginx.service - A high performance web server and a reverse proxy server
-     Loaded: loaded (/lib/systemd/system/nginx.service; enabled)
-     Active: active (running) since Wed 2026-06-24 10:21:00 UTC
-   Main PID: 1200 (nginx)
-      Tasks: 3
+# Example output:
+# ● nginx.service - A high performance web server and a reverse proxy server
+#      Loaded: loaded (/lib/systemd/system/nginx.service; enabled)
+#      Active: active (running) since Wed 2026-06-24 10:21:00 UTC
+#    Main PID: 1200 (nginx)
+#       Tasks: 3
 ```
 
 The `Active: active (running)` line shows the service is up, and `Main PID: 1200 (nginx)` shows the master process is running. The default page confirms Nginx is listening:
 
 ```bash
 curl -I http://localhost
-```
 
-Example output:
-
-```console
-HTTP/1.1 200 OK
-Server: nginx
+# Example output:
+# HTTP/1.1 200 OK
+# Server: nginx
 ```
 
 The most useful paths are:
@@ -134,13 +149,10 @@ Every config change should pass the syntax test before reload:
 
 ```bash
 sudo nginx -t
-```
 
-Example output:
-
-```console
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
+# Example output:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
 ```
 
 After the test succeeds, reload the service:
@@ -155,14 +167,14 @@ The safe rollout sequence is:
 - The `syntax is ok` and `test is successful` lines mean Nginx accepted the config.
 - `systemctl reload nginx` applies the new config without dropping existing connections.
 
-A syntax test protects the running service from a typo.
+A syntax test protects the running service from a typo. If `nginx -t` fails, leave the old process alone, fix the config, and test again before reloading.
 
-The next decision after a successful reload is verification from both sides. `curl http://localhost` proves the local listener works. `curl -I https://app.example.com` proves DNS, firewall rules, TLS, and the public server block work together. If the local check passes and the public check fails, the problem sits earlier in the network path or in TLS/server-name selection.
+After a successful reload, verify from both sides. `curl http://localhost` proves the local listener works. `curl -I https://app.example.com` proves DNS, firewall rules, TLS, and the public server block work together. If the local check passes and the public check fails, the problem sits earlier in the network path or in TLS/server-name selection.
 
 ## Server Blocks and Location Blocks
 <!-- section-summary: A server block selects the hostname and port, while location blocks choose behavior for specific URL paths. -->
 
-Two requests can land on the same Nginx process and need different handling. `https://app.example.com/api/users` should go to the app. `https://app.example.com/assets/main.js` should come from disk. If the same machine also hosts `admin.example.com`, that hostname may need a completely different site config.
+Once Nginx is running, give it a map. Two requests can land on the same Nginx process and need different handling. `https://app.example.com/api/users` should go to the app. `https://app.example.com/assets/main.js` should come from disk. If the same machine also hosts `admin.example.com`, that hostname may need a completely different site config.
 
 Nginx uses a **server block** to answer "which site is this request for?" It usually matches the local port and `server_name`, which comes from the requested hostname.
 
@@ -206,12 +218,16 @@ The important lines split the request by hostname, port, and path:
 
 Location matching has an order that matters. Exact matches such as `location = /health` are checked before ordinary prefix matches. A longer prefix such as `/api/` is more specific than `/`. That is why `/api/users` goes to the app while `/dashboard` falls through to the static app route.
 
-This routing happens after TLS and HTTP parsing. If `curl -I https://app.example.com/dashboard` returns a response with `server: nginx`, the request has reached this part of the path. The next decision is to test the exact path that fails. A passing `/health` route proves Nginx can answer, while a failing `/api/users` route may still point at proxy or upstream behavior.
+This routing happens after TLS and HTTP parsing. If `curl -I https://app.example.com/dashboard` returns a response with `server: nginx`, the request has reached this part of the path. Test the exact path that fails. A passing `/health` route proves Nginx can answer, while a failing `/api/users` route may still point at proxy or upstream behavior.
+
+![Nginx config nesting infographic showing http, server, location, directives, and request matching order](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-config-nesting.png)
+
+_The image shows how Nginx configuration nesting decides which directives apply to a request._
 
 ## Serving Static Files
 <!-- section-summary: Static file serving lets Nginx return built assets directly without sending every request to the app process. -->
 
-A frontend build can contain thousands of files that do not need application logic on every request: HTML, CSS, JavaScript bundles, images, fonts, and downloadable assets. Sending all of that through the app process wastes CPU and memory that the app could use for dynamic work. Nginx can return those files directly from disk and leave the app process focused on API requests, auth decisions, background state, and database-backed pages.
+Now give Nginx an easy job before asking it to proxy anything. A frontend build can contain thousands of files that do not need application logic on every request: HTML, CSS, JavaScript bundles, images, fonts, and downloadable assets. Sending all of that through the app process wastes CPU and memory that the app could use for dynamic work. Nginx can return those files directly from disk and leave the app process focused on API requests, auth decisions, background state, and database-backed pages.
 
 A simple static site config looks like this:
 
@@ -229,7 +245,7 @@ server {
 }
 ```
 
-The `root` directive maps URL paths to files under `/var/www/app`. A request for `/assets/main.js` maps to `/var/www/app/assets/main.js`. The `try_files` directive checks the requested path first, then a directory path, then falls back to `/index.html`.
+The **root** directive maps URL paths to files under `/var/www/app`. A request for `/assets/main.js` maps to `/var/www/app/assets/main.js`. The **try_files** directive checks the requested path first, then a directory path, then falls back to `/index.html`.
 
 The static block keeps the file-serving path explicit:
 
@@ -262,14 +278,14 @@ The permissions are doing practical work:
 - Directory mode `755` lets Nginx enter directories.
 - File mode `644` lets Nginx read files.
 
-If Nginx cannot read files, users see `403 Forbidden` even though the files are present. The error log will usually say `permission denied`. The next decision is whether the file is missing or unreadable: `404` usually points at the path, while `403` usually points at permissions or directory execute bits.
+If Nginx cannot read files, users see `403 Forbidden` even though the files are present. The error log will usually say `permission denied`. Separate missing files from unreadable files: `404` usually points at the path, while `403` usually points at permissions or directory execute bits.
 
 ## Reverse Proxying to the App
 <!-- section-summary: proxy_pass forwards requests to an internal app while headers preserve the original client and scheme. -->
 
-Now put Nginx on the public side and keep the app private. The browser reaches `app.example.com` on port `80` or `443`. The app listens only on `127.0.0.1:3000`, so outside clients cannot bypass Nginx and hit the app port directly.
+After static files work, put the app behind Nginx. The browser reaches `app.example.com` on port `80` or `443`. The app listens only on `127.0.0.1:3000`, so outside clients cannot bypass Nginx and hit the app port directly. The firewall lesson is the same here: expose the web server, keep the app port private.
 
-The bridge between those two sides is `proxy_pass`. It tells Nginx where to send matching requests after Nginx has accepted the public HTTP request.
+The bridge between those two sides is **proxy_pass**. It tells Nginx where to send matching requests after Nginx has accepted the public HTTP request.
 
 ```nginx
 server {
@@ -302,7 +318,7 @@ The `proxy_set_header` lines preserve information the app needs:
 | `X-Forwarded-For` | The app can track the chain of client and proxy IPs |
 | `X-Forwarded-Proto` | The app knows the original request scheme was HTTP or HTTPS |
 
-Without these headers, every request may look like it came from Nginx. Rate limiting, audit logs, absolute URL generation, and HTTPS redirects can all break.
+Without these headers, every request may look like it came from Nginx. Rate limiting, audit logs, absolute URL generation, and HTTPS redirects can all break. The page may load while login redirects, secure cookies, or audit logs quietly use the wrong client context.
 
 The app also needs to know which proxy headers it can trust. Many frameworks ignore `X-Forwarded-*` by default because clients can spoof those headers if the app is exposed directly. In production, restrict direct access to the app port and enable the framework's trusted proxy setting only for the Nginx or load balancer path.
 
@@ -364,7 +380,7 @@ server {
 }
 ```
 
-That keeps static asset load away from the app and sends only dynamic API work to the app process.
+That config keeps static asset load away from the app and sends only dynamic API work to the app process.
 
 The split config gives each path a clear owner:
 
@@ -376,12 +392,16 @@ The split config gives each path a clear owner:
 - The proxy headers preserve the original hostname, client address chain, and request scheme.
 - `location /` serves the frontend shell and uses `try_files` so deep client-side routes refresh correctly.
 
-The next decision after writing a proxy block is to test from Nginx's point of view and from the public hostname. Local `curl http://127.0.0.1:3000/health` proves the upstream app answers on the host. Public `curl -I https://app.example.com/api/health` proves Nginx path matching, proxy headers, firewall rules, and TLS work together.
+After writing a proxy block, test from Nginx's point of view and from the public hostname. Local `curl http://127.0.0.1:3000/health` proves the upstream app answers on the host. Public `curl -I https://app.example.com/api/health` proves Nginx path matching, proxy headers, firewall rules, and TLS work together.
+
+![Proxy pass trailing slash infographic comparing URI forwarding with and without a trailing slash](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/proxy-pass-trailing-slash.png)
+
+_The image shows why one trailing slash can change the path Nginx sends to the upstream app._
 
 ## TLS Termination with Let's Encrypt
 <!-- section-summary: TLS termination lets Nginx handle public HTTPS while the app receives internal HTTP. -->
 
-After the proxy works over HTTP, the public site still needs HTTPS. Nginx is the right place to handle the certificate because it already owns the public listener and hostname selection.
+After the proxy works over HTTP, the public site still needs HTTPS. Nginx is the right place to handle the certificate because it already owns the public listener and hostname selection. The app can keep speaking simple internal HTTP on loopback while browsers get encrypted HTTPS on the public side.
 
 **TLS termination** means the encrypted browser connection ends at Nginx. Nginx decrypts the request, reads the HTTP message, and forwards plain HTTP to the app over a trusted internal hop such as `127.0.0.1`. Teams use TLS termination because it centralizes certificate files, renewal, redirects, and TLS settings in the web server.
 
@@ -392,16 +412,13 @@ Let's Encrypt and Certbot are a common setup:
 ```bash
 sudo apt install certbot python3-certbot-nginx -y
 sudo certbot --nginx -d app.example.com
-```
 
-Example output:
-
-```console
-Successfully received certificate.
-Certificate is saved at: /etc/letsencrypt/live/app.example.com/fullchain.pem
-Key is saved at:         /etc/letsencrypt/live/app.example.com/privkey.pem
-Deploying certificate
-Successfully deployed certificate for app.example.com to /etc/nginx/sites-enabled/app
+# Example output:
+# Successfully received certificate.
+# Certificate is saved at: /etc/letsencrypt/live/app.example.com/fullchain.pem
+# Key is saved at:         /etc/letsencrypt/live/app.example.com/privkey.pem
+# Deploying certificate
+# Successfully deployed certificate for app.example.com to /etc/nginx/sites-enabled/app
 ```
 
 The two commands do different jobs:
@@ -449,42 +466,36 @@ The TLS config has two jobs: redirect plain HTTP and serve HTTPS correctly:
 - `proxy_pass http://127.0.0.1:3000` keeps the app on internal HTTP behind Nginx.
 - `Host`, `X-Real-IP`, `X-Forwarded-For`, and `X-Forwarded-Proto` preserve the public request details for logs, redirects, rate limits, and absolute URL generation.
 
-SNI connects TLS termination back to server-block matching. When a client asks for `app.example.com`, Nginx uses the SNI hostname to choose which certificate to present. If the wrong default server block catches the request, the browser may receive a certificate for another domain before HTTP routing even starts.
+SNI connects TLS termination back to server-block matching. During the TLS handshake, the client sends the hostname it wants. Nginx uses that SNI hostname to choose which certificate to present. If the wrong default server block catches the request, the browser may receive a certificate for another domain before HTTP routing even starts.
 
 Renewal checks should be routine:
 
 ```bash
 sudo certbot certificates
-```
 
-Example output:
-
-```console
-Certificate Name: app.example.com
-    Domains: app.example.com
-    Expiry Date: 2026-08-30 23:59:59+00:00 (VALID: 58 days)
-    Certificate Path: /etc/letsencrypt/live/app.example.com/fullchain.pem
+# Example output:
+# Certificate Name: app.example.com
+#     Domains: app.example.com
+#     Expiry Date: 2026-08-30 23:59:59+00:00 (VALID: 58 days)
+#     Certificate Path: /etc/letsencrypt/live/app.example.com/fullchain.pem
 ```
 
 Now test renewal without replacing the live certificate:
 
 ```bash
 sudo certbot renew --dry-run
+
+# Example output:
+# Congratulations, all simulated renewals succeeded:
+#   /etc/letsencrypt/live/app.example.com/fullchain.pem (success)
 ```
 
-Example output:
-
-```console
-Congratulations, all simulated renewals succeeded:
-  /etc/letsencrypt/live/app.example.com/fullchain.pem (success)
-```
-
-The first output lists the installed certificate and expiration date. The dry run proves renewal can complete before the certificate is close to expiration. External monitoring should still watch the public certificate date because local automation can fail silently. The next decision is alert timing: alert early enough to renew, reload Nginx, and test the certificate from outside the server.
+The first output lists the installed certificate and expiration date. The dry run proves renewal can complete before the certificate is close to expiration. External monitoring should still watch the public certificate date because local automation can fail silently. Alert early enough to renew, reload Nginx, and test the certificate from outside the server.
 
 ## Load Balancing and Health Behavior
 <!-- section-summary: Nginx can send requests to multiple app backends and temporarily avoid backends that fail. -->
 
-Once one app process works, the next production step is often multiple app processes. Several processes give the service more capacity and make restarts less disruptive, but Nginx needs one shared name for that group so the public route can stay stable. The `upstream` block creates that backend group.
+Once one app process works, the next production step is often multiple app processes. Several processes give the service more capacity and make restarts less disruptive, but Nginx needs one shared name for that group so the public route can stay stable. The **upstream** block creates that backend group.
 
 Load balancing exists because one backend should not carry all requests forever. It also lets you restart one process while other processes keep serving. Nginx still needs a way to notice repeated backend failures, which is where `max_fails` and `fail_timeout` help.
 
@@ -522,7 +533,7 @@ The upstream block names the backend pool and sets failure behavior:
 - `proxy_pass http://app_backend` sends matching requests to the named backend group.
 - The proxy headers keep the app aware of the public hostname and request scheme even while traffic is load balanced.
 
-Open source Nginx mainly uses passive health behavior for proxied HTTP backends. That means Nginx reacts to failures it sees during real requests. A separate load balancer or Nginx Plus can run active health checks that probe backends before user traffic arrives. The practical decision is whether passive failure handling is enough for the service or whether a platform load balancer should own active health checks.
+Open source Nginx mainly uses passive health behavior for proxied HTTP backends. That means Nginx reacts to failures it sees during real requests. A separate load balancer or Nginx Plus can run active health checks that probe backends before user traffic arrives. Decide whether passive failure handling is enough for the service or whether a platform load balancer should own active health checks.
 
 Other balancing methods exist:
 
@@ -542,26 +553,76 @@ The method change is small and important:
 - The `server` lines still list the backend endpoints that can receive traffic.
 - New requests prefer the backend with fewer active connections, which helps with long downloads, slow API calls, or mixed request lengths.
 
-One app design detail matters here: session storage. If login sessions live only in memory inside one app process, round-robin routing can make users appear logged out when the next request lands on a different process. Production apps behind load balancers usually store sessions in Redis, a database, signed cookies, or another shared place so any backend can handle any request.
+One app design detail matters here: session storage. If login sessions live only in memory inside one app process, round-robin routing can make users appear logged out as requests move across backends. Production apps behind load balancers usually store sessions in Redis, a database, signed cookies, or another shared place so any backend can handle any request.
 
-The next decision after adding an upstream group is observability. Access logs should include upstream address and timing so a slow or failing backend can be identified. Without that, every `502` looks the same from the outside.
+After adding an upstream group, add observability. Access logs should include upstream address and timing so a slow or failing backend can be identified. Without that, every `502` looks the same from the outside.
+
+For a concrete incident, say one backend has a slow database connection while the other two are healthy. Users see occasional slow pages because round-robin sends some requests to the weak backend. A useful access log format includes upstream address, upstream status, and response time:
+
+```nginx
+log_format upstream_timing '$remote_addr "$request" status=$status '
+                           'upstream=$upstream_addr upstream_status=$upstream_status '
+                           'request_time=$request_time upstream_time=$upstream_response_time';
+access_log /var/log/nginx/access.log upstream_timing;
+
+# Example output:
+# 198.51.100.50 "GET /api/orders HTTP/2.0" status=200 upstream=127.0.0.1:3001 upstream_status=200 request_time=0.081 upstream_time=0.080
+# 198.51.100.51 "GET /api/orders HTTP/2.0" status=504 upstream=127.0.0.1:3002 upstream_status=504 request_time=60.002 upstream_time=60.000
+# 198.51.100.52 "GET /api/orders HTTP/2.0" status=200 upstream=127.0.0.1:3003 upstream_status=200 request_time=0.093 upstream_time=0.092
+```
+
+Now the slow or down backend has a name: `127.0.0.1:3002`. Check that process directly from the Nginx host:
+
+```bash
+curl -v http://127.0.0.1:3002/api/orders
+
+# Example output:
+# *   Trying 127.0.0.1:3002...
+# * Connected to 127.0.0.1 port 3002
+# > GET /api/orders HTTP/1.1
+# < HTTP/1.1 504 Gateway Timeout
+```
+
+That output moves the debug work away from the load balancer feature list and toward the failing backend. Check the app logs, database connection pool, deployment health, or remove that backend from the upstream group while it recovers. Keep the Nginx config change small, reload after `nginx -t`, and watch the upstream timing lines after traffic shifts.
+
+![Nginx load balancing health infographic showing upstream servers, round robin, failure counters, paused backend, and health evidence](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-load-balancing-health.png)
+
+_The image shows how upstream selection and failure behavior affect real user requests._
 
 ## Nginx Failure Modes
 <!-- section-summary: Nginx failures usually show up as syntax errors, port conflicts, upstream 502 or 504 responses, missing proxy headers, buffering, or WebSocket upgrade problems. -->
 
-Nginx failures are easier to debug if you gather the evidence in the same order each time. First check whether the configuration parses. Then confirm the service can bind to its ports. After that, use access logs, error logs, and upstream status to separate client problems, proxy problems, and application problems.
+Nginx failure reports usually sound simple: "the site is down," "`/api` gives `502`," or "WebSockets reconnect forever." The fix gets faster if you gather evidence in the same order each time. First check whether the configuration parses. Then confirm the service can bind to its ports. After that, use access logs, error logs, and upstream status to separate client problems, proxy problems, and application problems.
+
+Use this diagnostic sequence as the spine for most proxy incidents:
+
+```bash
+sudo systemctl status nginx
+sudo nginx -t
+sudo ss -tlnp | grep -E ':80|:443|:3000'
+sudo tail -50 /var/log/nginx/error.log
+sudo tail -20 /var/log/nginx/access.log
+curl -v http://127.0.0.1:3000/health
+curl -I https://app.example.com/dashboard
+
+# Example output:
+# ● nginx.service - A high performance web server and a reverse proxy server
+#      Active: active (running)
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
+# HTTP/2 502
+# server: nginx
+```
+
+The sequence asks a clear question at each step. Is Nginx running? Does the config parse? Are the public and app ports owned by the expected processes? Did Nginx log the request? Does the upstream answer locally? Does the public hostname still fail? Your answer decides which section below matters, so you avoid changing TLS, firewall rules, and app code in the same guess.
 
 **Config syntax error** prevents reload:
 
 ```bash
 sudo nginx -t
-```
 
-Example output:
-
-```console
-nginx: [emerg] unknown directive "proxypass" in /etc/nginx/sites-enabled/app:18
-nginx: configuration file /etc/nginx/nginx.conf test failed
+# Example output:
+# nginx: [emerg] unknown directive "proxypass" in /etc/nginx/sites-enabled/app:18
+# nginx: configuration file /etc/nginx/nginx.conf test failed
 ```
 
 The error names the file and line. In this case, `proxypass` should be `proxy_pass`. Because the test failed, a reload should wait until the config is fixed.
@@ -570,40 +631,31 @@ The error names the file and line. In this case, `proxypass` should be `proxy_pa
 
 ```bash
 sudo ss -tlnp | grep -E ':80|:443'
-```
 
-Example output:
-
-```console
-LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("apache2",pid=1400,fd=4))
+# Example output:
+# LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("apache2",pid=1400,fd=4))
 ```
 
 The output shows Apache owns port `80`. Nginx cannot bind a port already held by Apache, another Nginx instance, a dev server, or a container port mapping.
 
-**502 Bad Gateway** means Nginx could not get a valid response from the upstream app. The app may be down, listening on another port, crashing mid-response, or bound to the wrong interface.
+**502 Bad Gateway** means Nginx could not get a valid response from the upstream app. The app may be down, listening on another port, crashing mid-response, or bound to the wrong interface. The diagnostic sequence now narrows the handoff: public curl proves Nginx answered, local curl checks whether the app can answer from the same host, and the error log names the upstream failure.
 
 ```bash
 curl -v http://127.0.0.1:3000/health
-```
 
-Example output:
-
-```console
-*   Trying 127.0.0.1:3000...
-* connect to 127.0.0.1 port 3000 failed: Connection refused
-curl: (7) Failed to connect to 127.0.0.1 port 3000
+# Example output:
+# *   Trying 127.0.0.1:3000...
+# * connect to 127.0.0.1 port 3000 failed: Connection refused
+# curl: (7) Failed to connect to 127.0.0.1 port 3000
 ```
 
 Now check the Nginx error log for the proxy-side evidence:
 
 ```bash
 sudo tail -50 /var/log/nginx/error.log
-```
 
-Example output:
-
-```console
-2026/06/24 10:45:12 [error] 1201#1201: *18 connect() failed (111: Connection refused) while connecting to upstream, client: 198.51.100.50, server: app.example.com, request: "GET /api/health HTTP/2.0", upstream: "http://127.0.0.1:3000/api/health"
+# Example output:
+# 2026/06/24 10:45:12 [error] 1201#1201: *18 connect() failed (111: Connection refused) while connecting to upstream, client: 198.51.100.50, server: app.example.com, request: "GET /api/health HTTP/2.0", upstream: "http://127.0.0.1:3000/api/health"
 ```
 
 The local curl checks the backend from the same host as Nginx. The error log usually shows `connect() failed`, `upstream prematurely closed connection`, or another upstream clue. If local curl fails, fix the app process or its listen address before changing public DNS or firewall rules.
@@ -619,7 +671,7 @@ location /api/ {
 }
 ```
 
-Longer timeouts can help a known long request, but the app logs and database timings should explain why the request took that long.
+Longer timeouts can help a known long request, but the app logs and database timings should explain why the request took that long. A timeout setting should describe a real workload, such as a report export or large upload, instead of hiding an unknown slow query.
 
 The timeout lines describe which part of the upstream conversation waited too long:
 
@@ -681,19 +733,7 @@ The streaming route disables features that delay chunks:
 - `proxy_buffering off` asks Nginx to pass upstream chunks through promptly.
 - `proxy_cache off` prevents a cache layer from storing or replaying a live stream response.
 
-A fast diagnostic set covers most Nginx incidents:
-
-```bash
-sudo systemctl status nginx
-sudo nginx -t
-sudo tail -50 /var/log/nginx/error.log
-sudo tail -20 /var/log/nginx/access.log
-sudo ss -tlnp | grep -E ':80|:443|:3000'
-curl -v http://127.0.0.1:3000/health
-curl -I https://app.example.com/dashboard
-```
-
-Example output:
+When the incident is fixed, run the same sequence again and expect a clean public response:
 
 ```console
 HTTP/2 200
@@ -701,7 +741,7 @@ server: nginx
 content-type: text/html; charset=utf-8
 ```
 
-Those commands walk the final part of the path:
+Those commands walk the final part of your path:
 
 - `systemctl status nginx` checks whether the service is running.
 - `nginx -t` checks whether the current config is valid.
@@ -711,7 +751,11 @@ Those commands walk the final part of the path:
 - Local `curl` checks the upstream app from Nginx's point of view.
 - Public `curl -I` checks the user-facing hostname.
 
-If they all pass, the browser request has crossed DNS, routing, firewalls, TLS, Nginx, and reached the app path successfully.
+If they all pass, your browser request has crossed DNS, routing, firewalls, TLS, Nginx, and reached the app path successfully.
+
+![Nginx reverse proxy summary infographic showing install, config, static files, proxy headers, TLS, load balancing, and failure checks](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-reverse-proxy-summary.png)
+
+_The summary image gathers the Nginx concepts into one operations checklist._
 
 ## References
 

@@ -23,7 +23,7 @@ id: article-devops-foundation-linux-linux-basics-permissions-users
 ## How Linux Permissions Control Access
 <!-- section-summary: Users, groups, ownership, and permission bits decide which humans and processes can read, change, or execute files. -->
 
-The first permission problem many beginners hit is painfully ordinary. You SSH into a server as `deploy`, try to copy a release into `/srv/web`, and Linux replies with `Permission denied`. The directory exists. The command looks right. The missing piece is access control.
+The first permission problem many beginners hit is painfully ordinary. You SSH into a server as `deploy`, try to copy a release into `/srv/web`, and Linux replies with `Permission denied`. The directory exists. The command looks right. The missing piece is who Linux thinks you are allowed to be in that directory.
 
 Linux answers access questions by asking who is doing the work first. That "who" may be a human SSH account such as `deploy`, a service account such as `app`, or the root account during administration. A **user** is the account behind a running process or a file owner.
 
@@ -38,7 +38,7 @@ The goal is to give each job enough access to do its work. The application proce
 ## Users, Groups, UID, and GID
 <!-- section-summary: Linux tracks accounts with numeric user IDs and groups with numeric group IDs, while names make them readable to humans. -->
 
-Suppose `deploy` writes new releases and `app` runs the service from those releases. Both accounts need to touch the same tree, but they do different jobs. The deploy account needs write access during release. The app account needs enough access to run the code afterward.
+Keep the same failed deploy in mind. The `deploy` account writes new releases, and the `app` account runs the service from those releases. Both accounts need to touch the same tree, but they do different jobs. The deploy account needs write access during release. The app account needs enough access to run the code afterward.
 
 A **user** is one account, such as `deploy` or `app`. A **group** is a named collection used to share access, such as `web`. If both accounts belong to the `web` group, files owned by that group can be shared without giving access to every local user.
 
@@ -48,12 +48,9 @@ Ask Linux what identity a user has:
 
 ```bash
 id deploy
-```
 
-Example output:
-
-```console
-uid=1001(deploy) gid=1001(deploy) groups=1001(deploy),1002(web)
+# Example output:
+# uid=1001(deploy) gid=1001(deploy) groups=1001(deploy),1002(web)
 ```
 
 The output has three important pieces:
@@ -82,23 +79,20 @@ This gives each job a name. When `ps`, `ls`, or `journalctl` shows a user, you c
 ## Read Long Listings Without Guessing
 <!-- section-summary: Long directory listings show file type, permissions, owner, group, size, and timestamp in one line. -->
 
-A permission problem usually starts with one simple question: who owns this file, and what is each identity allowed to do with it? A long listing puts the important clues in one line: file type, permission bits, owner, group, size, timestamp, and name. That makes it the bridge between a vague error such as "permission denied" and a safe fix.
+After `id deploy` tells you the user's groups, inspect the path that failed. A permission problem usually starts with one simple question: who owns this file, and what is each identity allowed to do with it? A long listing puts the important clues in one line: file type, permission bits, owner, group, size, timestamp, and name. That makes it the bridge between a vague error such as "permission denied" and a safe fix.
 
 The first inspection command is `ls -l`. Use `-a` for hidden files and `-h` for readable sizes:
 
 ```bash
 ls -lah /srv/web
-```
 
-Example output:
-
-```console
-total 20K
-drwxr-xr-x  5 root   root 4.0K Jun 24 09:00 .
-drwxr-xr-x  3 root   root 4.0K Jun 10 12:00 ..
-lrwxrwxrwx  1 deploy web    32 Jun 24 09:10 current -> releases/20260624-091000
-drwxrwsr-x  8 deploy web  4.0K Jun 24 09:10 releases
--rw-r-----  1 root   web   320 Jun 24 08:55 config.env
+# Example output:
+# total 20K
+# drwxr-xr-x  5 root   root 4.0K Jun 24 09:00 .
+# drwxr-xr-x  3 root   root 4.0K Jun 10 12:00 ..
+# lrwxrwxrwx  1 deploy web    32 Jun 24 09:10 current -> releases/20260624-091000
+# drwxrwsr-x  8 deploy web  4.0K Jun 24 09:10 releases
+# -rw-r-----  1 root   web   320 Jun 24 08:55 config.env
 ```
 
 Focus on `config.env` first:
@@ -133,10 +127,14 @@ drwxrwsr-x  8 deploy web  4.0K Jun 24 09:10 releases
 
 The leading `d` says it is a directory. The `s` in the group execute position means the directory has the setgid bit. New files created inside tend to inherit the `web` group, which helps keep release files shareable by the right accounts.
 
+![Permission string anatomy infographic explaining file type, owner bits, group bits, other bits, owner, group, and timestamp](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/permission-string-anatomy.png)
+
+_The image breaks one `ls -l` line into the exact permission fields operators inspect during access debugging._
+
 ## The `rwx` Rules for Files and Directories
 <!-- section-summary: Read, write, and execute mean different things on files and directories, so directory execute permission is especially important. -->
 
-The confusing permission case is a readable file inside a directory you cannot enter. The file may show `-rw-r--r--`, which looks readable by everyone, yet `cat /srv/web/current/package.json` still returns `Permission denied`.
+The next confusing case appears when the file itself looks readable. The file may show `-rw-r--r--`, which appears open to everyone, yet `cat /srv/web/current/package.json` still returns `Permission denied`.
 
 That happens because Linux checks every directory in the path before it reaches the file. A user needs permission to traverse `/srv`, then `/srv/web`, then `/srv/web/current`, and only then can Linux apply the file permissions.
 
@@ -164,24 +162,25 @@ You can inspect one path at a time:
 
 ```bash
 ls -ld /srv /srv/web /srv/web/current
-```
 
-Example output:
-
-```console
-drwxr-xr-x  3 root   root 4096 Jun 10 12:00 /srv
-drwxr-x---  5 root   web  4096 Jun 24 09:00 /srv/web
-lrwxrwxrwx  1 deploy web    32 Jun 24 09:10 /srv/web/current -> releases/20260624-091000
+# Example output:
+# drwxr-xr-x  3 root   root 4096 Jun 10 12:00 /srv
+# drwxr-x---  5 root   web  4096 Jun 24 09:00 /srv/web
+# lrwxrwxrwx  1 deploy web    32 Jun 24 09:10 /srv/web/current -> releases/20260624-091000
 ```
 
 In this output, `/srv/web` gives the group `web` read and execute access. A user outside that group cannot list or traverse it. This is a common shape for private service directories.
 
 The symptom is usually "Permission denied" even when the file itself looks readable. The file may be `644`, and the parent directory may be `750` with the wrong group. The next decision is to inspect every parent directory with `ls -ld` before changing the file mode.
 
+![Directory rwx model infographic comparing read, write, and execute behavior on files versus directories](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/directory-rwx-model.png)
+
+_The image shows why `rwx` means different things on files and directories, which is the part that usually causes surprises._
+
 ## Change Permissions with `chmod`
 <!-- section-summary: `chmod` changes permission bits using either symbolic notation or octal numbers. -->
 
-A common deploy failure is direct:
+A common deploy failure is direct. The script is right there in the directory, and the shell still refuses to run it:
 
 ```console
 ./scripts/deploy.sh: Permission denied
@@ -201,12 +200,9 @@ This adds execute permission for the owner. Check the result:
 
 ```bash
 ls -l scripts/deploy.sh
-```
 
-Example output:
-
-```console
--rwxr--r-- 1 deploy web 842 Jun 24 09:10 scripts/deploy.sh
+# Example output:
+# -rwxr--r-- 1 deploy web 842 Jun 24 09:10 scripts/deploy.sh
 ```
 
 The owner permissions changed from `rw-` to `rwx`, so `deploy` can run the script.
@@ -246,12 +242,9 @@ Check it:
 
 ```bash
 ls -l /srv/web/config.env
-```
 
-Example output:
-
-```console
--rw-r----- 1 root web 320 Jun 24 08:55 /srv/web/config.env
+# Example output:
+# -rw-r----- 1 root web 320 Jun 24 08:55 /srv/web/config.env
 ```
 
 The mode `640` has three digits:
@@ -270,12 +263,9 @@ Check the directory:
 
 ```bash
 ls -ld /srv/web/releases
-```
 
-Example output:
-
-```console
-drwxr-s--- 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
+# Example output:
+# drwxr-s--- 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
 ```
 
 The leading `2` sets the setgid bit on the directory. The `s` in the group execute position shows it is active. New files and directories created inside inherit the directory's group, which helps keep release files grouped under `web`.
@@ -285,7 +275,7 @@ Setgid exists to make shared directories less fragile. Without it, a file create
 ## Change Ownership with `chown` and `chgrp`
 <!-- section-summary: Ownership controls which user and group permission bits apply to each file. -->
 
-Another common failure appears after someone copies files as root. The release lands under `/srv/web/releases`. The deploy user has no permission to update it, and the app service has no permission to open its expected config. The permission bits may look reasonable while the owner and group point at the wrong identities.
+After permission bits, ownership is the other half of the same error. Someone copies files as root, the release lands under `/srv/web/releases`, and now the deploy user cannot update it. The app service may also fail to open its expected config. The permission bits may look reasonable while the owner and group point at the wrong identities.
 
 Ownership decides which permission triplet applies. `chown` changes the owning user and group. `chgrp` changes only the group. These commands usually require root privileges because ownership affects access control.
 
@@ -299,15 +289,35 @@ Check it:
 
 ```bash
 ls -l /srv/web/config.env
-```
 
-Example output:
-
-```console
--rw-r----- 1 root web 320 Jun 24 08:55 /srv/web/config.env
+# Example output:
+# -rw-r----- 1 root web 320 Jun 24 08:55 /srv/web/config.env
 ```
 
 This shape lets root edit the file and lets members of `web` read it. Combined with `640`, it keeps unrelated users out.
+
+Sometimes the owner is already correct, and only the group is wrong. In that case, `chgrp` is the smaller tool because it changes only the group:
+
+```bash
+sudo chgrp web /srv/web/config.env
+```
+
+Check the result:
+
+```bash
+ls -l /srv/web/config.env
+
+# Example output:
+# -rw-r----- 1 root web 320 Jun 24 08:55 /srv/web/config.env
+```
+
+That output tells you:
+
+- `root` still owns the file, so the editing owner did not change.
+- `web` is now the owning group, so members of the `web` group can use the group permission bits.
+- `-rw-r-----` still keeps everyone outside the owner and group from opening the file.
+
+Use `chgrp` when the user owner is already right and the shared group is the only mistake. Use `chown user:group` when both pieces need correction.
 
 Set ownership on release files:
 
@@ -319,22 +329,16 @@ Recursive ownership changes deserve caution. `chown -R` walks a tree and changes
 
 ```bash
 pwd
-```
 
-Example output:
-
-```console
-/srv/web
+# Example output:
+# /srv/web
 ```
 
 ```bash
 ls -ld /srv/web/releases
-```
 
-Example output:
-
-```console
-drwxr-s--- 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
+# Example output:
+# drwxr-s--- 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
 ```
 
 If the path is correct, the recursive change is easier to reason about. If the path is wrong, stop before the command touches the wrong tree.
@@ -342,7 +346,7 @@ If the path is correct, the recursive change is easier to reason about. If the p
 ## Service Users and Deploy Users
 <!-- section-summary: A service user runs the application with limited access, while a deploy user performs controlled release tasks. -->
 
-Running an app as root can hide permission mistakes during setup, then create a much larger risk later. A safer shape gives the running service its own account and gives the deploy workflow a different account for releases.
+Once you can read and change file permissions, the server design question is which account should do each job. Running an app as root can hide permission mistakes during setup, then create a much larger risk later. A safer shape gives the running service its own account and gives the deploy workflow a different account for releases.
 
 A **service user** is a Linux account dedicated to running one service. It usually has no interactive shell and no password login. Its job is isolation. If the application process is compromised, the attacker lands inside the permissions of `app` instead of a human administrator account.
 
@@ -368,12 +372,9 @@ Check the account:
 
 ```bash
 id app
-```
 
-Example output:
-
-```console
-uid=998(app) gid=997(web) groups=997(web)
+# Example output:
+# uid=998(app) gid=997(web) groups=997(web)
 ```
 
 Each flag supports a safer service shape:
@@ -402,12 +403,9 @@ Check the directory:
 
 ```bash
 ls -ld /srv/web/releases
-```
 
-Example output:
-
-```console
-drwxrwsr-x 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
+# Example output:
+# drwxrwsr-x 8 deploy web 4096 Jun 24 09:10 /srv/web/releases
 ```
 
 The deploy commands have a few sharp edges:
@@ -424,7 +422,7 @@ The production symptom is a service that works only when run as root. That usual
 ## ACLs and Shared Access
 <!-- section-summary: POSIX ACLs add specific user or group permissions when the owner-group-other model is too coarse. -->
 
-Sometimes one extra engineer needs temporary read access during an incident. Changing `/srv/web/config.env` to a broad group or opening it to everyone would solve the moment and weaken the normal access design.
+Sometimes the owner-group-other layout is almost right, and one incident creates an exception. One extra engineer needs temporary read access to `/srv/web/config.env`. Changing the file to a broad group or opening it to everyone would solve the moment and weaken the normal access design.
 
 Traditional permissions give one owner, one group, and one "others" set. That works most of the time. **POSIX ACLs** add more specific entries for named users or groups when one shared group is not enough.
 
@@ -434,17 +432,14 @@ First inspect ACLs:
 
 ```bash
 getfacl /srv/web/config.env
-```
 
-Example output:
-
-```console
-# file: srv/web/config.env
-# owner: root
-# group: web
-user::rw-
-group::r--
-other::---
+# Example output:
+# # file: srv/web/config.env
+# # owner: root
+# # group: web
+# user::rw-
+# group::r--
+# other::---
 ```
 
 This output shows the same access you saw in `ls -l`: owner read/write, group read, and no access for others.
@@ -459,19 +454,16 @@ Inspect again:
 
 ```bash
 getfacl /srv/web/config.env
-```
 
-Example output:
-
-```console
-# file: srv/web/config.env
-# owner: root
-# group: web
-user::rw-
-user:maya:r--
-group::r--
-mask::r--
-other::---
+# Example output:
+# # file: srv/web/config.env
+# # owner: root
+# # group: web
+# user::rw-
+# user:maya:r--
+# group::r--
+# mask::r--
+# other::---
 ```
 
 The `user:maya:r--` line is the new specific rule. The `mask::r--` line limits the maximum effective access for named users and groups in the ACL.
@@ -499,7 +491,7 @@ ACLs are useful, and they can hide access paths from people who only check `ls -
 ## Sudo with Least Privilege
 <!-- section-summary: `sudo` should grant the narrow admin commands a user needs rather than full root access by default. -->
 
-A deploy account often needs exactly one privileged action: restart the application after publishing a release. Giving that account a full root shell would make every file and service reachable from the deploy path, which is far more access than the job needs.
+The final permission problem is admin access. A deploy account often needs exactly one privileged action: restart the application after publishing a release. Giving that account a full root shell would make every file and service reachable from the deploy path, which is far more access than the job needs.
 
 `sudo` lets an authorized user run specific commands with elevated privileges. The broad version gives full root access. Production servers usually benefit from narrower rules. The deploy user may need to restart only `app.service`, reload Nginx after validation, and inspect service status.
 
@@ -529,26 +521,20 @@ This grants the deploy user exactly those commands as root. The exact paths must
 
 ```bash
 command -v systemctl nginx
-```
 
-Example output:
-
-```console
-/usr/bin/systemctl
-/usr/sbin/nginx
+# Example output:
+# /usr/bin/systemctl
+# /usr/sbin/nginx
 ```
 
 Verification is part of the setup:
 
 ```bash
 sudo -l -U deploy
-```
 
-Example output:
-
-```console
-User deploy may run the following commands on server01:
-    (root) NOPASSWD: /usr/bin/systemctl restart app.service, /usr/bin/systemctl status app.service, /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx
+# Example output:
+# User deploy may run the following commands on server01:
+#     (root) NOPASSWD: /usr/bin/systemctl restart app.service, /usr/bin/systemctl status app.service, /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx
 ```
 
 The output should show only the commands the deployment flow needs. If it shows `(ALL : ALL) ALL`, the user has broad root access.
@@ -557,18 +543,23 @@ Sudo logs also matter. On many distributions, sudo activity appears in `/var/log
 
 ```bash
 sudo journalctl _COMM=sudo --since "today"
-```
 
-Example output:
-
-```console
-Jun 24 09:15:02 server01 sudo[2384]: deploy : TTY=pts/0 ; PWD=/srv/web ; USER=root ; COMMAND=/usr/bin/systemctl restart app.service
-Jun 24 09:15:08 server01 sudo[2401]: deploy : TTY=pts/0 ; PWD=/srv/web ; USER=root ; COMMAND=/usr/sbin/nginx -t
+# Example output:
+# Jun 24 09:15:02 server01 sudo[2384]: deploy : TTY=pts/0 ; PWD=/srv/web ; USER=root ; COMMAND=/usr/bin/systemctl restart app.service
+# Jun 24 09:15:08 server01 sudo[2401]: deploy : TTY=pts/0 ; PWD=/srv/web ; USER=root ; COMMAND=/usr/sbin/nginx -t
 ```
 
 The practical goal is simple. Human users, deploy automation, service processes, and Nginx each receive only the access their job needs. That design keeps day-to-day operations smooth while limiting damage from mistakes and compromises.
 
 If `sudo -l -U deploy` shows a broader rule than expected, the next decision is to narrow it in a separate sudoers file and test the deploy flow. If a command fails even though the rule looks right, compare `command -v` output with the path written in sudoers.
+
+![Sudo permission gate infographic showing a deploy user passing through a narrow sudoers rule to restart one service](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/sudo-permission-gate.png)
+
+_The image makes least-privilege sudo concrete: one user, one allowed command, and a clear audit path._
+
+![Permissions and users summary infographic showing users, groups, rwx bits, ownership, ACLs, sudo, and service accounts](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/permissions-users-summary.png)
+
+_The summary image gathers users, groups, ownership, ACLs, and sudo into one access-control map._
 
 ## References
 

@@ -1,1 +1,1 @@
-Define the named decisions in `locals.tf`. Then make `s3.tf` consume `local.name_prefix` and `local.common_tags` instead of repeating the logic.
+Locals are internal names for repeated expressions. Let the resource read the shaped local values rather than rebuilding them.

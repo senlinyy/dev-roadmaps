@@ -1,6 +1,6 @@
 ---
 title: "Trace the Stale-Deploy Outage to a Missing TTL Drop"
-sectionSlug: ttl-and-caching-the-migration-trap
+sectionSlug: ttl-and-safe-cutovers
 order: 4
 ---
 
@@ -12,4 +12,4 @@ You start in `/home/dev`. Your job:
 2. **Find the runbook step that should have lowered the TTL before the cutover** in `/var/log/change/app-cutover.log`.
 3. **Count how many resolvers in `/var/log/dns/cache-survey.log` still serve the old IP** so the stale-cache blast radius is explicit.
 
-The grader requires you to use `grep`, and checks that your combined output contains the TTL `3600`, the word `SKIPPED`, and the count `2`.
+The grader requires `cat`, `grep`, and `wc`, and checks that your combined output contains the TTL, the skipped runbook step, and the stale resolver count.

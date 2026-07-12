@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A role change updates Nginx config for two production web hosts. You want a preview against one host before touching the fleet. Which first run is safest?",
+      "scenario": "The orders web fleet has six hosts behind a load balancer. A PR changes the Nginx timeout and the team wants the first real production run to touch one host only. Which command shape is safest?",
       "options": [
         {
-          "id": "a",
-          "text": "`ansible-playbook -i inventory/prod.yml site.yml --limit orders-web-01 --check --diff`."
-        },
-        {
-          "id": "b",
-          "text": "`ansible-playbook -i inventory/prod.yml site.yml --limit all` because production has only two hosts."
-        },
-        {
           "id": "c",
-          "text": "`ansible-playbook site.yml` without inventory because Ansible can infer production hosts."
+          "text": "Edit the inventory to temporarily remove five hosts so nobody sees the real target set."
         },
         {
           "id": "d",
-          "text": "`ansible-playbook -i inventory/prod.yml site.yml --check` and ignore the target because check mode cannot affect anything."
+          "text": "Run from staging inventory and assume production will behave the same."
+        },
+        {
+          "id": "b",
+          "text": "Run the playbook against the whole `orders_web` group because `serial` can be added later if needed."
+        },
+        {
+          "id": "a",
+          "text": "Run the reviewed playbook against production inventory with `--limit orders-web-01`, then verify health before widening."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A careful first preview uses the real inventory, a narrow limit, check mode, and diff mode. Check mode reduces risk but does not replace intentional target selection."
+      "explanation": "A canary limit narrows the first production target without changing the reusable playbook or hiding the real inventory. See [ansible-playbook CLI reference](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "DevPolaris is rolling a reviewed Nginx timeout change across six production web hosts with `serial: 2`. The first two hosts complete their tasks and pass the required local readiness checks, and no external alarm has fired. The runbook allows the next batch only after the current batch meets those gates. What should Ansible do next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ansible can move to the next batch of two selected hosts because the current batch completed."
+        },
+        {
+          "id": "c",
+          "text": "Ansible should rerun only handlers on every host before continuing."
+        },
+        {
+          "id": "d",
+          "text": "Ansible should change the inventory order randomly to prove resilience."
+        },
+        {
+          "id": "b",
+          "text": "Ansible should jump to all four remaining hosts because the first batch passed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The `serial` keyword makes Ansible complete the play on one batch before starting the next batch. Passing one batch does not remove the configured boundary. See [Ansible execution strategies](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The orders web fleet has six equal-capacity hosts and normally runs at about 75% total utilization during the release window. The proposed play uses `serial: 2`, and both hosts in a batch may be unavailable together during restart. The service must remain within capacity without relying on emergency scaling. What is the most important rollout concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Two hosts out of rotation could leave too little spare capacity, so a smaller first batch or canary is safer."
+        },
+        {
+          "id": "d",
+          "text": "Capacity only matters for database hosts, not web hosts."
+        },
+        {
+          "id": "b",
+          "text": "The batch size is irrelevant because Ansible always updates hosts one at a time internally."
+        },
+        {
+          "id": "c",
+          "text": "The load balancer will automatically change `serial` if traffic is high."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Removing two of six equal hosts from a fleet already at 75% utilization can leave too little capacity for normal traffic and failure margin. A smaller canary or batch directly reduces that risk. Ansible does not secretly serialize a larger configured batch, and the load balancer cannot rewrite the play's `serial` value."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The orders team limits its first production run to one canary host. Ansible installs the new configuration and restarts the service, but the required local readiness check exhausts its retries. Five unchanged hosts still serve traffic, and the runbook requires a healthy canary before widening. What is the safest next action?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Disable the failing health gate for later batches and rely on the final play recap to assess the release."
+        },
+        {
+          "id": "a",
+          "text": "Stop widening, keep the target narrow, investigate or roll back the changed host, and only resume after health is restored."
+        },
+        {
+          "id": "c",
+          "text": "Increase forks and update the remaining healthy hosts quickly so their capacity can compensate for the failed canary."
+        },
+        {
+          "id": "b",
+          "text": "Continue to the next configured batch because a single failed canary is acceptable evidence during a rolling change."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Health checks are batch gates. A failed canary is the signal to pause before spreading the same change. See [Ansible rolling upgrade guide](https://docs.ansible.com/projects/ansible/latest/playbook_guide/guide_rolling_upgrade.html)."
+    },
+    {
+      "id": "spot-check-mode-limit-q1",
+      "type": "single",
+      "scenario": "A check-and-diff preview against `orders-web-01` shows the Nginx template would change. The database migration task is skipped because it is guarded during check mode. What is the correct reading?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The preview gives useful file evidence, but it does not prove the skipped migration or the final canary behavior."
+        },
+        {
+          "id": "d",
+          "text": "The team should remove check mode from the process because one task skipped."
+        },
+        {
+          "id": "c",
+          "text": "The skipped migration means Ansible will also skip it during the real run."
+        },
+        {
+          "id": "b",
+          "text": "The preview proves the entire production rollout is safe because one file diff is visible."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Check mode is preview evidence, not a full replacement for a real canary. Some tasks may skip or behave differently during preview. See [Ansible check and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)."
+    },
+    {
+      "id": "spot-check-mode-limit-q3",
+      "type": "multiple",
+      "scenario": "The orders release selects one canary with an inventory limit, then uses `serial: 2` for the remaining fleet. Which two statements accurately describe these target and batch controls?",
+      "options": [
+        {
+          "id": "b",
+          "text": "`serial` controls how many selected hosts complete the play together."
+        },
+        {
+          "id": "c",
+          "text": "A successful local health check widens the inventory limit automatically to the remaining hosts."
+        },
+        {
+          "id": "d",
+          "text": "Higher `forks` overrides `serial` and forces all selected hosts to update at once."
+        },
+        {
+          "id": "a",
+          "text": "`--limit` narrows the selected inventory for a particular run."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "`--limit` narrows the inventory selected for a particular run, while `serial` controls how many of those selected hosts complete the play as a batch. Health evidence can inform an operator or automation gate, but it does not rewrite the selected inventory. Increasing `forks` changes parallel capacity without overriding a tighter serial boundary."
+    },
+    {
+      "id": "spot-check-mode-limit-q5",
+      "type": "single",
+      "scenario": "The canary process on `orders-web-01` returns HTTP 200 from its local readiness endpoint, but the production load balancer still marks the target unhealthy after the registration grace period. Customer traffic depends on that external route, and the release gate requires both local and load balancer evidence. What should the rollout do?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Increase `serial` so more hosts can compensate for the unhealthy target."
+        },
+        {
+          "id": "b",
+          "text": "Continue because local health is the only signal that matters."
+        },
+        {
+          "id": "c",
+          "text": "Remove load balancer checks from the release process because Ansible cannot see them automatically."
+        },
+        {
+          "id": "a",
+          "text": "Pause before widening because user traffic depends on the external routing path, not only local process health."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Local readiness proves the process responds on the host, while the unhealthy load balancer target shows the customer traffic path is still broken. The release gate requires both, so the rollout must pause. Increasing the batch, ignoring external health, or removing the check would widen risk without resolving routing or registration."
     }
   ]
 }

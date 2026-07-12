@@ -1,6 +1,6 @@
 ---
 title: "Automate the Runbook Workflow"
-sectionSlug: automating-the-runbook-in-github-actions
+sectionSlug: human-gates-and-automation-boundaries
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Scope a Deployment to an Environment"
-sectionSlug: environments-scoping-secrets-to-stages
+sectionSlug: environments
 order: 1
 ---
 

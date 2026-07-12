@@ -6,65 +6,190 @@
       "type": "single",
       "scenario": "A pull request for `devpolaris-orders` adds an invoice bucket lifecycle rule. The PR workflow ran a speculative plan yesterday and showed `Plan: 1 to add, 0 to change, 0 to destroy.` The team wants every merge to `main` to auto-apply production immediately from that old PR result. What is the safest beginner boundary?",
       "options": [
-        { "id": "a", "text": "Auto-apply production from the old PR plan because the plan had no destroys." },
-        { "id": "b", "text": "Use the PR plan as review evidence, then run a protected apply workflow from the merged commit with a fresh final plan and approval." },
-        { "id": "c", "text": "Skip the PR plan and let the apply workflow be the first place Terraform runs." },
-        { "id": "d", "text": "Let any branch apply production as long as the workflow file contains `fmt` and `validate`." }
+        {
+          "id": "a",
+          "text": "Auto-apply production from the old PR plan because the plan had no destroys."
+        },
+        {
+          "id": "c",
+          "text": "Skip the PR plan and let the apply workflow be the first place Terraform runs."
+        },
+        {
+          "id": "b",
+          "text": "Use the PR plan as review evidence, then run a protected apply workflow from the merged commit with a fresh final plan and approval."
+        },
+        {
+          "id": "d",
+          "text": "Let any branch apply production as long as the workflow file contains `fmt` and `validate`."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The safest beginner boundary separates review evidence from production change. A speculative PR plan can become stale after other changes, so production apply should run from the merged commit, produce a fresh final plan, wait for approval, and then verify. The no-destroy summary is encouraging but not a license to auto-apply. Skipping PR plans removes useful evidence, and branch-wide apply is too broad for production."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The safest beginner boundary separates review evidence from production change. A speculative PR plan can become stale after other changes, so production apply should run from the merged commit, produce a fresh final plan, wait for approval, and then verify. The no-destroy summary is encouraging but not a license to auto-apply. Skipping PR plans removes useful evidence, and branch-wide apply is too broad for production. See the [Terraform plan command reference](https://developer.hashicorp.com/terraform/cli/commands/plan)."
     },
     {
       "id": "q2",
       "type": "single",
       "scenario": "A team is comfortable auto-applying a disposable development environment after merge, but production serves customers and has a change window. Which automation split fits that maturity level?",
       "options": [
-        { "id": "a", "text": "Auto-apply development after merge, but keep production behind a protected workflow with approval, a final plan, and verification." },
-        { "id": "b", "text": "Use the same auto-apply workflow for development and production so environments stay consistent." },
-        { "id": "c", "text": "Disable all CI plans until production can also auto-apply." },
-        { "id": "d", "text": "Allow production auto-apply only when the pull request changes fewer than five lines." }
+        {
+          "id": "a",
+          "text": "Auto-apply development after merge, but keep production behind a protected workflow with approval, a final plan, and verification."
+        },
+        {
+          "id": "b",
+          "text": "Use the same auto-apply workflow for development and production so environments stay consistent."
+        },
+        {
+          "id": "d",
+          "text": "Allow production auto-apply only when the pull request changes fewer than five lines."
+        },
+        {
+          "id": "c",
+          "text": "Disable all CI plans until production can also auto-apply."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Different environments can have different automation boundaries. Auto-applying development can be reasonable when the blast radius is low, while production still deserves approval, a current plan, state locking, and post-apply checks. Sharing the exact same auto-apply boundary with production ignores impact. Line count is not a risk model, and disabling plans removes the evidence reviewers need."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Different environments can have different automation boundaries. Auto-applying development can be reasonable when the blast radius is low, while production still deserves approval, a current plan, state locking, and post-apply checks. Sharing the exact same auto-apply boundary with production ignores impact. Line count is not a risk model, and disabling plans removes the evidence reviewers need. See the [Terraform apply command reference](https://developer.hashicorp.com/terraform/cli/commands/apply)."
     },
     {
       "id": "q3",
       "type": "multiple",
-      "scenario": "A production apply workflow is being designed for `infra/orders/prod`. Which controls should be present before the team considers it safe enough for routine use?",
+      "scenario": "A production apply workflow is being designed for `infra/orders/prod`. Which two controls directly prove that the apply uses reviewed code and a current plan rather than stale pull request evidence?",
       "options": [
-        { "id": "a", "text": "It runs only from the reviewed main branch or a protected release trigger." },
-        { "id": "b", "text": "It generates a final plan close to the apply moment." },
-        { "id": "c", "text": "It uses a production identity that can apply only the intended environment scope." },
-        { "id": "d", "text": "It accepts apply requests from any pull request branch so reviewers get faster feedback." }
+        {
+          "id": "a",
+          "text": "It runs only from the reviewed main branch or a protected release trigger."
+        },
+        {
+          "id": "d",
+          "text": "It accepts apply requests from any pull request branch so reviewers get faster feedback."
+        },
+        {
+          "id": "b",
+          "text": "It generates a final plan close to the apply moment."
+        },
+        {
+          "id": "c",
+          "text": "It uses one account-wide production identity, relying on the workflow path rather than identity scope to prevent unrelated changes."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A production apply workflow should run from a protected source, generate a current plan, and use a tightly scoped identity. Those controls help answer which commit ran, what it proposed, and what identity changed production. Pull request branches are useful for speculative plans, but allowing them to apply production gives unmerged code too much power."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "A protected release source proves which reviewed commit is eligible, and a final plan near apply time proves what that commit proposes against current state. Pull request branches are appropriate for speculative plans, not direct production applies. A broad account identity weakens blast-radius control even when the workflow path is restricted. See [running Terraform in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform)."
     },
     {
       "id": "q4",
       "type": "single",
       "scenario": "A green Terraform PR check shows `fmt`, `validate`, and `plan` all passed. The author writes, \"CI is green, so this change is safe.\" The plan summary is `0 to add, 4 to change, 1 to destroy`, but the pull request only says it updates tags. What should the reviewer do?",
       "options": [
-        { "id": "a", "text": "Approve because a green check means Terraform accepted the change." },
-        { "id": "b", "text": "Ask the author to explain the destroy action or change the Terraform before approval." },
-        { "id": "c", "text": "Ignore the plan body because validation already caught configuration mistakes." },
-        { "id": "d", "text": "Merge and let the production apply workflow decide whether the destroy is acceptable." }
+        {
+          "id": "c",
+          "text": "Ignore the plan body because validation already caught configuration mistakes."
+        },
+        {
+          "id": "b",
+          "text": "Ask the author to explain the destroy action or change the Terraform before approval."
+        },
+        {
+          "id": "d",
+          "text": "Merge and let the production apply workflow decide whether the destroy is acceptable."
+        },
+        {
+          "id": "a",
+          "text": "Approve because a green check means Terraform accepted the change."
+        }
       ],
-      "correct": ["b"],
+      "correct": [
+        "b"
+      ],
       "explanation": "A green check proves the commands exited successfully, not that the infrastructure change is wise. A destroy action that was not described by the pull request is review evidence that needs explanation or a code change. Validation checks configuration shape, not business risk. Deferring the question to apply moves risk later instead of handling it during review."
     },
     {
-      "id": "q5",
+      "id": "credentials-backend-locks-quiz-q1",
       "type": "single",
-      "scenario": "Leadership asks for auto-apply production because Terraform changes are slowing releases. The current workflow has no environment approval, no post-apply verification, and no written answer for which identity ran the change. What is the best response?",
+      "scenario": "A pull request plan job for `infra/orders/prod` fails with this output:\n\n```text\nError: No valid credential sources found\n```\n\nA developer proposes pasting their personal AWS access key into `provider \"aws\"` so CI can plan. What should the team do instead?",
       "options": [
-        { "id": "a", "text": "Auto-apply production now and add verification after the team has a failure to learn from." },
-        { "id": "b", "text": "Keep production manual for now and first add the missing controls that prove who ran, what changed, who approved, and what verification passed." },
-        { "id": "c", "text": "Replace Terraform plans with screenshots from the cloud console so approvals are faster." },
-        { "id": "d", "text": "Move production apply back to laptops because CI is too slow." }
+        {
+          "id": "a",
+          "text": "Paste the key into Terraform for the PR and remove it after merge."
+        },
+        {
+          "id": "c",
+          "text": "Disable planning because credentials make CI too dangerous."
+        },
+        {
+          "id": "d",
+          "text": "Give the pull request job production apply permissions so it can test everything."
+        },
+        {
+          "id": "b",
+          "text": "Configure a deliberate CI identity with the least access needed to read state and resources for planning."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The article recommends the smallest boundary the team can operate well. If the team cannot answer identity, approval, plan, and verification questions, production auto-apply is premature. Screenshots are weaker evidence than Terraform output, and laptop applies reduce repeatability. Learning from an avoidable production failure is not a responsible control."
+      "correct": [
+        "b"
+      ],
+      "explanation": "A plan job still touches real infrastructure data, so it needs a deliberate identity with limited permissions. Pasting personal credentials into Terraform commits a secret and hides who really ran the job. Disabling plans removes useful review evidence, while giving apply permissions to a PR job exceeds the work it needs to do. HashiCorp's [dynamic provider credentials guidance](https://developer.hashicorp.com/terraform/tutorials/cloud/dynamic-credentials) shows how short-lived workload identity narrows scope and lifetime."
+    },
+    {
+      "id": "credentials-backend-locks-quiz-q2",
+      "type": "single",
+      "scenario": "Two workflows start against the same production state. The first apply is still running. The second job fails with:\n\n```text\nError: Error acquiring the state lock\n\nLock Info:\n  Operation: OperationTypeApply\n  Who:       github-actions@devpolaris-orders\n```\n\nWhat is the safest first response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Force unlock immediately so the second job can continue."
+        },
+        {
+          "id": "c",
+          "text": "Delete the remote state file and let Terraform rebuild it from cloud resources."
+        },
+        {
+          "id": "b",
+          "text": "Find the active Terraform run, wait for it to finish, and use the team's lock recovery process only if the holder is gone."
+        },
+        {
+          "id": "d",
+          "text": "Re-run the second job with a local backend so it does not need the lock."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A state lock conflict is protective evidence that another run is operating on the same state. The safe response is to identify the holder and wait or follow recovery if the holder is dead. Force unlock without context can allow concurrent writes. Deleting state or switching to a local backend makes state consistency worse. See [Terraform state locking](https://developer.hashicorp.com/terraform/language/state/locking)."
+    },
+    {
+      "id": "credentials-backend-locks-quiz-q4",
+      "type": "single",
+      "scenario": "A repository stores a long-lived cloud access key as a repository-level secret. The key is available to `lint`, `test`, `plan`, and `apply` jobs, even though only Terraform needs it. What is the main risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The repository key might expire during a long Terraform plan, leaving later jobs unable to reuse the same credential."
+        },
+        {
+          "id": "b",
+          "text": "Any job that can reference the secret has access to a broad, long-lived credential, which increases blast radius if a workflow step leaks it."
+        },
+        {
+          "id": "c",
+          "text": "Terraform providers cannot read credentials supplied by repository secrets, so every job will ignore the key automatically."
+        },
+        {
+          "id": "d",
+          "text": "The backend lock record will copy the repository key into its holder field whenever plan and apply overlap."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Long-lived repository-level credentials create a broad exposure window and are available wherever the workflow references them. A short-lived, job-scoped identity is safer because it narrows scope and lifetime. Terraform can read credentials from the CI environment, and the lock holder records who holds the lock, not the secret value."
     }
   ]
 }

@@ -1,57 +1,195 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
       "scenario": "A staging root module has this backend configuration:\n\n```hcl\nterraform {\n  backend \"s3\" {\n    bucket = \"dp-terraform-state\"\n    key    = \"devpolaris-orders/prod/terraform.tfstate\"\n    region = \"eu-west-2\"\n  }\n}\n```\n\nThe staging resource names all include `staging`. What should the reviewer do first?",
       "options": [
-        { "id": "a", "text": "Stop the change and fix the backend key before trusting the staging plan." },
-        { "id": "b", "text": "Approve because staging names prevent production state from being read." },
-        { "id": "c", "text": "Change every bucket name again until the plan no longer mentions production." },
-        { "id": "d", "text": "Run apply from staging because the backend bucket itself is shared by design." }
+        {
+          "id": "d",
+          "text": "Run apply from staging because the backend bucket itself is shared by design."
+        },
+        {
+          "id": "a",
+          "text": "Stop the change and fix the backend key before trusting the staging plan."
+        },
+        {
+          "id": "c",
+          "text": "Change every bucket name again until the plan no longer mentions production."
+        },
+        {
+          "id": "b",
+          "text": "Approve because staging names prevent production state from being read."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Names help humans, but state decides Terraform's managed inventory. A staging root module pointing at the production state key can read or update production-managed objects, so the state boundary must be repaired before apply."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Names help humans, but state decides Terraform's managed inventory. A staging root module pointing at the production state key can read or update production-managed objects, so the state boundary must be repaired before apply. See [Terraform module configuration](https://developer.hashicorp.com/terraform/language/modules/configuration)."
     },
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "A pull request says it updates only development, but the plan shows resources named `dp-orders-invoices-prod`. Which checks are reasonable before apply?",
+      "scenario": "A pull request says it updates only development, but the plan shows resources named `dp-orders-invoices-prod`. Which two checks most directly verify the selected execution and state boundaries before another plan?",
       "options": [
-        { "id": "a", "text": "Confirm the working directory or automation root module is the development directory." },
-        { "id": "b", "text": "Check the backend key or managed workspace state location." },
-        { "id": "c", "text": "Inspect the selected CLI workspace if this repository uses workspaces." },
-        { "id": "d", "text": "Ignore the names because Terraform plans are always environment-neutral." }
+        {
+          "id": "b",
+          "text": "Check the backend key or managed workspace state location."
+        },
+        {
+          "id": "c",
+          "text": "Review only `dev.tfvars`, because variable values determine the backend state even when initialization selected another key."
+        },
+        {
+          "id": "d",
+          "text": "Rename the resources to include `dev` before checking which root module and state instance produced the plan."
+        },
+        {
+          "id": "a",
+          "text": "Confirm the working directory or automation root module is the development directory."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The mismatch may come from the run directory, state location, workspace selection, or variable values. Production names in a development plan are evidence to investigate, not noise to ignore."
-    },
-    {
-      "id": "q3",
-      "type": "single",
-      "scenario": "A teammate wants to write this backend block:\n\n```hcl\nterraform {\n  backend \"s3\" {\n    bucket = \"dp-terraform-state\"\n    key    = \"devpolaris-orders/${var.environment}/terraform.tfstate\"\n    region = var.aws_region\n  }\n}\n```\n\nWhat is the most accurate review comment?",
-      "options": [
-        { "id": "a", "text": "Backend configuration is resolved during initialization, so normal input variables are not the right mechanism here." },
-        { "id": "b", "text": "This is required because backend keys should always use variables." },
-        { "id": "c", "text": "This is safe only when the bucket name also changes with the environment." },
-        { "id": "d", "text": "This removes the need for separate state because the resource names will differ." }
+      "correct": [
+        "a",
+        "b"
       ],
-      "correct": ["a"],
-      "explanation": "Terraform resolves backend configuration during init and backend blocks do not use normal input variables the way resource arguments do. Teams usually use separate backend files, partial backend config, or managed workspace settings."
+      "explanation": "The working directory identifies the selected root module, and the backend key or equivalent state location identifies the managed inventory being compared. Variable review can follow, but a var file does not override an already selected backend. Renaming resources before proving the target can hide rather than resolve an environment-boundary error."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "The production plan summary says:\n\n```text\nTarget: devpolaris-orders production app root module\nState key: devpolaris-orders/prod/terraform.tfstate\nPlan: 0 to add, 1 to change, 0 to destroy\n```\n\nThe changed resource is the production invoice bucket lifecycle rule. What makes this reviewable?",
+      "scenario": "A reviewer is checking a proposed lifecycle change for the production invoice bucket. The plan was generated from the `devpolaris-orders` production root module against state key `devpolaris-orders/prod/terraform.tfstate`, and it proposes one in-place change with no creates or destroys. What makes this evidence suitable for the production review?",
       "options": [
-        { "id": "a", "text": "The target, state key, and plan scope all point at the same production boundary." },
-        { "id": "b", "text": "The plan has only one change, so the environment target no longer matters." },
-        { "id": "c", "text": "Lifecycle rules are always safe because they do not use state." },
-        { "id": "d", "text": "The resource name contains `prod`, so no other evidence is needed." }
+        {
+          "id": "c",
+          "text": "Lifecycle rules are always safe because they do not use state."
+        },
+        {
+          "id": "a",
+          "text": "The target, state key, and plan scope all point at the same production boundary."
+        },
+        {
+          "id": "d",
+          "text": "The resource name contains `prod`, so no other evidence is needed."
+        },
+        {
+          "id": "b",
+          "text": "The plan has only one change, so the environment target no longer matters."
+        }
       ],
-      "correct": ["a"],
+      "correct": [
+        "a"
+      ],
       "explanation": "A small plan is not enough by itself. It becomes reviewable because the working target, state key, and described resource all match the production change story."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A CI job prints this context before planning:\n\n```text\nworking_dir=live/dev\nbackend_key=devpolaris-orders/prod/terraform.tfstate\nvar_file=env/dev.tfvars\n```\n\nThe plan summary is small: `Plan: 0 to add, 1 to change, 0 to destroy`. What is the safest response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop and repair the backend target because the dev values are being compared against production state."
+        },
+        {
+          "id": "c",
+          "text": "Apply and then move the state file afterward if the resource name looks wrong."
+        },
+        {
+          "id": "d",
+          "text": "Ignore the backend key because the working directory always wins."
+        },
+        {
+          "id": "b",
+          "text": "Approve because a one-change plan cannot cross environment boundaries."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The backend key chooses the state record Terraform compares against. A small plan can still be dangerous when dev configuration is pointed at production state. See [Terraform backend configuration](https://developer.hashicorp.com/terraform/language/backend)."
+    },
+    {
+      "id": "workspace-misuse-q1",
+      "type": "single",
+      "scenario": "The team uses one root directory and this bucket name pattern for all long-lived environments:\n\n```hcl\nbucket = \"dp-orders-invoices-${terraform.workspace}\"\n```\n\nProduction applies depend on someone selecting the `prod` CLI workspace before running the plan. What is the best review response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "This is risky for serious environments because names change with workspace selection, but credentials, root module design, and review boundaries are still shared."
+        },
+        {
+          "id": "c",
+          "text": "This prevents accidental production changes because interpolation from `terraform.workspace` makes Terraform ignore any previously selected state."
+        },
+        {
+          "id": "d",
+          "text": "This is only risky when the generated bucket name omits the service name, because naming is the only environment boundary Terraform needs."
+        },
+        {
+          "id": "b",
+          "text": "This is safest because selecting a CLI workspace also separates provider identity, permissions, configuration review, and state ownership."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "CLI workspaces are separate state instances inside one working directory. They can change names and state selection, but they do not create separate provider identity, permissions, or root module boundaries by themselves."
+    },
+    {
+      "id": "workspace-misuse-q3",
+      "type": "single",
+      "scenario": "During a production incident review, the team discovers that CI ran Terraform from `infra/envs/orders` using the shared `s3://dp-terraform-state/devpolaris-orders` backend, but the selected CLI workspace was `staging`. The pull request had described the run as a production apply. What is the most important control lesson from this mismatch?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Production and staging should share a workspace if they use the same root directory."
+        },
+        {
+          "id": "c",
+          "text": "The directory line is enough, so the workspace line can be removed from future logs."
+        },
+        {
+          "id": "b",
+          "text": "The workspace line is harmless because the backend bucket name is the same."
+        },
+        {
+          "id": "a",
+          "text": "Workspace evidence belongs in every plan record when a repository relies on CLI workspaces."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "When CLI workspaces select long-lived environment state, the chosen workspace is part of the production target evidence and must appear in the plan record. The directory and backend bucket alone do not prove which workspace state was selected. Sharing a workspace or omitting the evidence would preserve the ambiguity that caused the incident."
+    },
+    {
+      "id": "workspace-misuse-q5",
+      "type": "single",
+      "scenario": "A preview-environment system creates a short-lived Terraform workspace per pull request. Each preview uses its own backend state instance, a non-production account, and automatic cleanup after merge. How should this compare to using one workspace for long-lived prod and dev?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The preview use is more defensible because the workspace boundary is temporary, automated, and paired with non-production credentials."
+        },
+        {
+          "id": "c",
+          "text": "It is unsafe because workspaces can never be used outside production."
+        },
+        {
+          "id": "d",
+          "text": "It removes the need for backend review because each workspace selects credentials automatically."
+        },
+        {
+          "id": "b",
+          "text": "It has the same risk as production workspaces because all workspaces always share one state file."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Workspaces can fit short-lived copies when state, credentials, naming, and cleanup are automated. Long-lived environments usually need more explicit roots, credentials, and approval boundaries."
     }
   ]
 }

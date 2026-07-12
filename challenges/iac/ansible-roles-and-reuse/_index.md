@@ -1,5 +1,5 @@
 ---
-title: "Roles and Reuse"
+title: "Structuring Roles"
 description: "Practice role calls, role task structure, defaults, and reuse review decisions."
 articleId: "article-infrastructure-as-code-ansible-roles-and-reuse"
 difficulty: "medium"

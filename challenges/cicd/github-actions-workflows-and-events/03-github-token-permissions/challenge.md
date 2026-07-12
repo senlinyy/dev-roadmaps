@@ -1,6 +1,6 @@
 ---
 title: "Restrict GITHUB_TOKEN Permissions"
-sectionSlug: the-built-in-github_token
+sectionSlug: workflows-jobs-and-steps
 order: 3
 ---
 

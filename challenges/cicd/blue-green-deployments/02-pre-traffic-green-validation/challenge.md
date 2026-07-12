@@ -1,6 +1,6 @@
 ---
 title: "Validate Green Before the Switch"
-sectionSlug: testing-green-before-users-reach-it
+sectionSlug: validation-before-the-switch
 order: 2
 ---
 

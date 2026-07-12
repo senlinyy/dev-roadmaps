@@ -1,6 +1,6 @@
 ---
 title: "Check Disk Space"
-sectionSlug: disk-space-df-du-and-inode-exhaustion
+sectionSlug: disk-space-inodes-and-mount-points
 order: 5
 ---
 

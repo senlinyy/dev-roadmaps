@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "The team is drawing the first production map for devpolaris-orders-api. The inventory says:\n\npublic name: orders.devpolaris.com\nentry point: orders-prod-alb\napp runtime: ECS Fargate tasks in private-a and private-b\ndatabase: orders-prod RDS in db-a and db-b\n\nWhich first question keeps the design review useful?",
-      "options": [
-        { "id": "a", "text": "Who should be able to reach each layer, and which path should traffic take between those layers?" },
-        { "id": "b", "text": "Can the team place the ALB, tasks, and database in one shared public subnet to reduce route-table choices?" },
-        { "id": "c", "text": "Can the ECS tasks receive public traffic directly until the first incident is solved?" },
-        { "id": "d", "text": "Can the task IAM role make Route 53, ALB, and RDS traffic reachable by itself?" }
-      ],
-      "correct": ["a"],
-      "explanation": "The article starts with reachability and path because those two questions organize the whole map. The service names matter, but they come after you know who may reach the ALB, the app, and the database. IAM is still important, but it does not replace a network path."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A customer clicks Place order and the browser sends `GET https://orders.devpolaris.com/checkout`. Which path best matches the intended customer request flow?",
-      "options": [
-        { "id": "a", "text": "Browser, Route 53 answer, ALB HTTPS listener, target group, ECS task, then RDS." },
-        { "id": "b", "text": "Browser, ECS task role, Secrets Manager, RDS, then the ALB sends the response." },
-        { "id": "c", "text": "Browser, public ECS task IP, public RDS endpoint, then Route 53 for TLS." },
-        { "id": "d", "text": "Browser, NAT gateway, private route table, ECS task, then the ALB listener." }
-      ],
-      "correct": ["a"],
-      "explanation": "The main request enters through the public name and the public ALB, then moves inward to the target group, the task, and the database. Secrets Manager and NAT can support the service, but they are not the browser request path. Reading the path in order keeps later debugging calm."
-    },
-    {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Maya is collecting evidence for the same map. Which evidence correctly explains a layer in the devpolaris-orders-api path?",
-      "options": [
-        { "id": "a", "text": "`orders.devpolaris.com -> orders-prod-alb...elb.amazonaws.com` explains where the public name points." },
-        { "id": "b", "text": "Target group health with task IPs on port `3000` explains which backend targets the ALB can use." },
-        { "id": "c", "text": "Security group rules explain which source can reach which protocol and port." },
-        { "id": "d", "text": "An IAM allow for `s3:PutObject` proves that the RDS port accepts TCP connections." }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "DNS, target health, and security groups each explain a different part of the network path. IAM can allow an AWS API action, but it does not prove packet reachability to the database. That distinction prevents random rule changes."
-    },
-    {
-      "id": "q4",
-      "type": "single",
-      "scenario": "A draft diagram labels `subnet-app-a` as private. The route table attached to it is:\n\nDestination      Target\n10.20.0.0/16     local\n0.0.0.0/0        nat-0f12ab34\n\nWhat does this prove?",
-      "options": [
-        { "id": "a", "text": "The subnet has local VPC routing and an outbound path through NAT, but it is not an internet-facing subnet." },
-        { "id": "b", "text": "The subnet is public because every `0.0.0.0/0` route means inbound internet traffic can start there." },
-        { "id": "c", "text": "The ECS task can skip security groups because the route table already allows trusted sources." },
-        { "id": "d", "text": "The database must also use this route table so the app can write orders." }
-      ],
-      "correct": ["a"],
-      "explanation": "A NAT default route gives private resources a way to start outbound connections. It does not make those resources directly reachable from public clients. Security groups and the ALB path still decide who may reach the task."
-    },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "The team has this first access sketch:\n\nALB inbound: TCP 443 from 0.0.0.0/0\nTask inbound: TCP 3000 from sg-orders-alb\nDB inbound: TCP 5432 from sg-admin-bastion\n\nCheckout returns 500 and app logs later show database timeouts. Which rule is missing from the intended path?",
+      "scenario": "The DevPolaris network team is validating the first production request path.\n\nALB inbound is TCP 443 from 0.0.0.0/0. Task inbound is TCP 3000 from sg-orders-alb. DB inbound is TCP 5432 from sg-admin-bastion.\n\nCheckout returns 500 and app logs later show database timeouts. Which rule is missing from the intended path?",
       "options": [
-        { "id": "a", "text": "DB inbound TCP 5432 from `sg-orders-task`." },
-        { "id": "b", "text": "Task inbound TCP 3000 from `0.0.0.0/0`." },
-        { "id": "c", "text": "ALB inbound TCP 5432 from `sg-orders-db`." },
-        { "id": "d", "text": "DB inbound TCP 443 from the public ALB security group." }
+        {
+          "id": "b",
+          "text": "Task inbound TCP 3000 from `0.0.0.0/0`."
+        },
+        {
+          "id": "a",
+          "text": "DB inbound TCP 5432 from `sg-orders-task`."
+        },
+        {
+          "id": "c",
+          "text": "ALB inbound TCP 5432 from `sg-orders-db`."
+        },
+        {
+          "id": "d",
+          "text": "DB inbound TCP 443 from the public ALB security group."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The intended database hop is from the orders API tasks to RDS on port `5432`. Admin access does not help the app tier connect. Opening the task or database more broadly would hide the real missing hop and weaken the design."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The intended database hop is from the orders API tasks to RDS on port `5432`. Admin access does not help the app tier connect. Opening the task or database more broadly would hide the real missing hop and weaken the design.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-separate-access-and-reachability-5",
+      "type": "single",
+      "scenario": "A replacement orders task initially cannot read its database secret. After the IAM policy is corrected, startup advances but readiness still fails. The incident timeline is:\n\n```text\n09:20 task started\n09:21 Secrets Manager returned AccessDeniedException\n09:24 IAM policy updated\n09:29 secret read succeeded\n09:30 PostgreSQL rejected password for user orders_app\n```\n\nWhere should the team investigate next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Inspect the database security group first because a timeout can indicate that the task cannot establish TCP 5432."
+        },
+        {
+          "id": "c",
+          "text": "Rotate the database user's password immediately because authentication failure proves the stored secret is stale."
+        },
+        {
+          "id": "a",
+          "text": "The secret value and database user, because the TCP path reached database authentication."
+        },
+        {
+          "id": "d",
+          "text": "Rotate the database password first because the earlier Secrets Manager denial may have returned a stale credential."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom moved again. A password authentication failure means the app reached the database server far enough to attempt login. That is different from IAM denial and different from a TCP timeout.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-debug-the-network-path-2",
+      "type": "single",
+      "scenario": "CloudWatch adds this line after the target health check:\n\n```text\npath=/health\nstatus=500\nreason=db_not_ready\ncause=database connection timeout\ndb_port=5432\n```\n\nThe DB security group currently allows:\n\nTCP 5432 from sg-admin-bastion\n\nWhich fix direction matches the evidence?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Point `orders.devpolaris.com` to the RDS endpoint so the browser bypasses the ALB."
+        },
+        {
+          "id": "c",
+          "text": "Change the ALB listener from HTTPS 443 to database port 5432."
+        },
+        {
+          "id": "a",
+          "text": "Allow TCP 5432 from `sg-orders-api` or `sg-orders-task` on the database security group."
+        },
+        {
+          "id": "d",
+          "text": "Delete the health check so unhealthy tasks can still receive customer traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app reached its health handler, then failed on the private database hop. The database allows only the admin group today. The fix is to add the intended app task group as a source while keeping customer and ALB traffic out of the database path.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-place-the-network-boundary-3",
+      "type": "multiple",
+      "scenario": "The DevPolaris network team is reviewing a first production deployment across a VPC, public entry point, private application tasks, and database. Which statements correctly interpret the proposed boundaries?\n\nVPC CIDR is 10.20.0.0/16. Public-a is 10.20.0.0/24 in us-east-1a. App-a is 10.20.10.0/24 in us-east-1a. Db-a is 10.20.20.0/24 in us-east-1a. Public-b is 10.20.1.0/24 in us-east-1b. App-b is 10.20.11.0/24 in us-east-1b. Db-b is 10.20.21.0/24 in us-east-1b.",
+      "options": [
+        {
+          "id": "b",
+          "text": "Each subnet belongs to exactly one Availability Zone."
+        },
+        {
+          "id": "d",
+          "text": "The database subnets become public because their CIDR blocks are inside the VPC CIDR."
+        },
+        {
+          "id": "a",
+          "text": "The VPC gives all listed subnets one shared private address range."
+        },
+        {
+          "id": "c",
+          "text": "The design separates public entry, private app, and private database placement."
+        },
+        {
+          "id": "e",
+          "text": "Use one route table for public and private subnets, relying on security groups to prevent private resources from using the internet gateway."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The VPC CIDR is the larger private range, and each subnet is an AZ-specific slice of it. The names show a layered placement plan, but public behavior still depends on route tables. Being inside the VPC CIDR does not make a database subnet public.\n\nLearn more in [VPC subnet basics](https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html)."
+    },
+    {
+      "id": "q-place-the-network-boundary-2",
+      "type": "single",
+      "scenario": "DevPolaris is designing the first production VPC for the orders service. A teammate proposes placing the internet-facing ALB, ECS tasks, and RDS database in `subnet-app-a` because the subnet is already inside `vpc-orders-prod`. That subnet belongs only to Availability Zone `us-east-1a`, while the service requirement is to continue serving checkout if one Availability Zone fails. What is the most important concern with the proposal?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Separate ALB, tasks, and RDS into public and private subnets but keep all subnets in the same Availability Zone."
+        },
+        {
+          "id": "a",
+          "text": "A subnet lives in one Availability Zone, so putting everything in one subnet also puts everything in one AZ."
+        },
+        {
+          "id": "c",
+          "text": "Place the ALB and tasks in public subnets but leave RDS private, using security groups as the main exposure boundary."
+        },
+        {
+          "id": "d",
+          "text": "Keep every tier private and publish the service through a NAT gateway so inbound traffic can reach the ALB."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Subnets are smaller slices of a VPC, and each subnet belongs to one Availability Zone. Spreading app and database placement across AZ-specific subnets improves the shape of the design. The VPC can contain many subnets.\n\nLearn more in [VPC subnet basics](https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html)."
+    },
+    {
+      "id": "q-read-route-tables-2",
+      "type": "single",
+      "scenario": "The private app subnet route table says:\n\n```text\nDestination      Target\n10.20.0.0/16     local\n0.0.0.0/0        nat-0aaa2222\n```\n\nThe app task needs to connect to RDS at `10.20.21.18:5432`. Which route handles that packet?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use the local route for traffic to another subnet in the same VPC, and use NAT only for destinations outside the VPC."
+        },
+        {
+          "id": "c",
+          "text": "Use the NAT route for all traffic from a private subnet, including traffic to RDS in another private subnet."
+        },
+        {
+          "id": "d",
+          "text": "Use the most specific matching route, so an endpoint prefix route can take precedence over the default NAT route."
+        },
+        {
+          "id": "a",
+          "text": "`10.20.0.0/16 -> local`, because the database address is inside the VPC CIDR."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AWS uses the most specific matching destination. `10.20.21.18` fits inside `10.20.0.0/16`, so the local route keeps the packet inside the VPC. NAT is for destinations outside the VPC; this database hop stays local.\n\nLearn more in [VPC route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)."
+    },
+    {
+      "id": "q-diagnose-broken-network-1",
+      "type": "single",
+      "scenario": "Users see `502 Bad Gateway`. The ALB subnet check returns:\n\n```text\nsubnet-0puba  us-east-1a\nsubnet-0pubb  us-east-1b\n```\n\nTarget health returns:\n\n```text\n10.20.10.45  us-east-1a  healthy\n10.20.11.88  us-east-1b  unhealthy  Target.Timeout\n```\n\nWhat question should drive the next check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "What is different about the app subnet, route table, or access path for the unhealthy target in us-east-1b?"
+        },
+        {
+          "id": "b",
+          "text": "Why is the public ALB using two subnets when one healthy target exists?"
+        },
+        {
+          "id": "c",
+          "text": "Can the RDS database be moved into the public ALB subnets to make both targets healthy?"
+        },
+        {
+          "id": "d",
+          "text": "Should Route 53 be changed because target health includes private IP addresses?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The ALB is enabled in both expected AZs, and one target is healthy. The unhealthy target is specific to one AZ, so compare that target's subnet, route table, and security path. Do not jump to DNS or database placement before checking the differing hop.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
     }
   ]
 }

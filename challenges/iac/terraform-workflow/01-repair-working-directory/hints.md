@@ -1,1 +1,1 @@
-Use `main.tf` for provider requirements and provider configuration, and `s3.tf` for the bucket resource. Keep each file focused on one job.
+The first plan needs provider setup and resource intent. Keep the provider settings separate from the managed bucket so review stays clear.

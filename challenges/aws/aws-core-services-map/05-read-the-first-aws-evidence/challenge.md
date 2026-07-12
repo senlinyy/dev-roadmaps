@@ -1,6 +1,6 @@
 ---
 title: "Read The First AWS Evidence"
-sectionSlug: debugging-with-the-map
+sectionSlug: a-first-debugging-path
 order: 5
 ---
 

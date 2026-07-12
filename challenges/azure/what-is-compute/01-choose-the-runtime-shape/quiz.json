@@ -1,88 +1,195 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The team has a normal Node.js checkout API. It receives HTTPS requests all day, needs app settings, reads secrets, and should give the team logs and health checks without managing a full server. Which first runtime shape fits best?",
+      "scenario": "The Orders team ships its public checkout API as a container image. The service is stateless, needs HTTPS ingress, revision-based releases, and autoscaling, and the team does not want to operate Kubernetes controllers or nodes. Which Azure compute option is the best first fit?",
       "options": [
         {
           "id": "a",
-          "text": "Azure Functions, because every backend can be split into event handlers later."
+          "text": "Azure Container Apps."
         },
         {
           "id": "b",
-          "text": "Azure Virtual Machines, because a server gives the most control by default."
+          "text": "Azure App Service for a code-first web app, even though the team specifically wants container revisions and container-native rollout controls."
         },
         {
           "id": "c",
-          "text": "Azure App Service or Azure Container Apps, because the team is bringing application code or a container and wants Azure to own much of the runtime work."
+          "text": "Azure Virtual Machines, because every production API should start with full operating-system control."
         },
         {
           "id": "d",
-          "text": "Azure Storage, because the service mostly stores order data after each request."
+          "text": "Azure Functions, because any HTTP workload should begin as an event-triggered function."
         }
       ],
       "correct": [
-        "c"
+        "a"
       ],
-      "explanation": "The article separates bringing code or a container from bringing a machine. A steady API usually wants a managed application runtime first. Functions and VMs can be right for specific cases, but they change what the team owns."
+      "explanation": "Azure Container Apps is the best first fit because the scenario centers on container images, revisions, managed ingress, and autoscaling without cluster operations. App Service is the closest distractor because it can host web apps and containers, but the scenario points more directly at the revision-oriented container platform described in the article. VMs and Functions add the wrong ownership or execution model for this workload. See [Microsoft Learn: What is Azure Container Apps?](https://learn.microsoft.com/en-us/azure/container-apps/overview)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "The same product also has a nightly export job, a receipt sender triggered by queue messages, and one legacy worker that requires a custom Linux package. Which pairings are reasonable starting points?",
+      "type": "single",
+      "scenario": "A receipt processor wakes up only when a queue message arrives, updates one order record, writes a small blob, and then exits. The team does not want to keep idle workers running between messages. Which compute shape is the closest fit?",
       "options": [
         {
-          "id": "a",
-          "text": "Use Azure Functions for the queue-triggered receipt sender."
-        },
-        {
           "id": "b",
-          "text": "Use a VM for the legacy worker if the custom package and OS control are real requirements."
+          "text": "AKS with a permanently running consumer deployment so the event workload shares the same cluster as the API."
         },
         {
           "id": "c",
-          "text": "Use one large VM for everything because shared hosting reduces the number of Azure services."
+          "text": "Azure Container Apps with one always-on replica, because event-driven work should begin with a long-lived container."
+        },
+        {
+          "id": "a",
+          "text": "Azure Functions with the queue trigger for that event source."
         },
         {
           "id": "d",
-          "text": "Use Container Apps for a packaged API if the team already ships a container image."
+          "text": "Azure Virtual Machines with a cron daemon, because short triggered jobs still need host-level process supervision."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Functions is the closest fit because the work is short-lived, event-driven, and should not require always-on compute between messages. The closest distractor is the Container Apps worker because it can also process events, but the scenario emphasizes the simplest trigger-driven runtime rather than a long-lived container service. AKS and VMs add more platform ownership than the workload asks for. See [Microsoft Learn: Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A platform team wants to enforce Kubernetes network policies, run sidecars, install custom controllers, and separate workloads with dedicated node pools. The team accepts cluster operations because those controls are part of the requirement. Which Azure compute option fits that contract?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Azure Container Apps, because every managed container platform exposes the same controller and node-pool surface as Kubernetes."
+        },
+        {
+          "id": "a",
+          "text": "Azure Kubernetes Service."
+        },
+        {
+          "id": "c",
+          "text": "Azure App Service, because deployment slots and scale-out workers replace the need for Kubernetes policy."
+        },
+        {
+          "id": "d",
+          "text": "Azure Functions, because triggers are the same thing as Kubernetes controllers."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AKS is the right fit because the requirement is explicitly about Kubernetes APIs and cluster-level controls. Container Apps is the closest distractor because it also runs containers on managed infrastructure, but it does not expose the same node, controller, and policy surface that the scenario requires. App Service and Functions solve different runtime shapes. See [Microsoft Learn: What is Azure Kubernetes Service?](https://learn.microsoft.com/en-us/azure/aks/what-is-aks)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A commercial inventory package requires a full Windows Server guest, vendor-installed monitoring agents, a scheduled Windows service, and access to a fixed local drive path. The vendor does not support the software on a managed web platform. Which Azure compute option should the architect evaluate first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Azure App Service, because any Windows workload can be simplified into a managed web worker."
+        },
+        {
+          "id": "c",
+          "text": "Azure Container Apps, because packaging the software in a container removes the need for server features the vendor explicitly requires."
+        },
+        {
+          "id": "d",
+          "text": "Azure Functions, because a timer trigger replaces scheduled Windows services and host-level agents."
+        },
+        {
+          "id": "a",
+          "text": "Azure Virtual Machines."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Virtual Machines are the first fit because the workload explicitly depends on guest operating-system control and vendor-managed server features. App Service is the closest distractor because it offers managed Windows hosting for web apps, but it does not give the team the full server surface the vendor requires. Container Apps and Functions assume a different runtime contract. See [Microsoft Learn: Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)."
+    },
+    {
+      "id": "03-read-the-ownership-tradeoff-q1",
+      "type": "single",
+      "scenario": "A team chooses VMs for `vm-devpolaris-orders-legacy-01` because they want maximum package and host control. In the design review, they have no guest patching plan, no backup routine, no process-supervision check, and no operating-system monitoring plan. Which tradeoff did they miss?",
+      "options": [
+        {
+          "id": "a",
+          "text": "More control comes with more runtime and operating-system ownership."
+        },
+        {
+          "id": "b",
+          "text": "Azure still owns the guest operating system, so the missing plan belongs to the platform rather than the team."
+        },
+        {
+          "id": "c",
+          "text": "Monitoring is optional for VMs as long as the application logs locally."
+        },
+        {
+          "id": "d",
+          "text": "The real tradeoff is only higher cost, because VM operations do not change the engineering ownership boundary."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Choosing VMs shifts more work to the team because the guest OS, service operation, backups, and monitoring stay inside the team's responsibility boundary. The closest distractor is the higher-cost option because VMs can cost more, but the article's main tradeoff is ownership, not just price. Azure does not operate the guest OS for you, and local logs do not replace monitoring. See [Microsoft Learn: Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)."
+    },
+    {
+      "id": "03-read-the-ownership-tradeoff-q2",
+      "type": "multiple",
+      "scenario": "The architecture board compares raw VMs with managed app platforms such as App Service and Container Apps. It wants to be precise about which responsibilities move more toward Azure when the team stops running its own guest operating systems. Which two responsibilities shift most clearly toward the platform?",
+      "options": [
+        {
+          "id": "a",
+          "text": "More of the host and platform patching."
+        },
+        {
+          "id": "c",
+          "text": "Application schema design and downstream dependency ownership."
+        },
+        {
+          "id": "b",
+          "text": "Built-in deployment and scaling primitives."
+        },
+        {
+          "id": "d",
+          "text": "Incident decision-making and release accountability."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "d"
+        "b"
       ],
-      "explanation": "Different jobs can use different compute choices. The question is what each workload needs at runtime, not how to force every job into one hosting model."
+      "explanation": "Managed app platforms move more host maintenance to Azure and give the team built-in deployment and scaling features. The closest distractor is the application-schema option because teams often hope managed platforms will simplify everything, but application behavior and dependency design still belong to the app team. Incident decisions also stay with the team even when Azure operates more of the platform. See [Microsoft Learn: Azure App Service overview](https://learn.microsoft.com/en-us/azure/app-service/overview) and [Microsoft Learn: What is Azure Container Apps?](https://learn.microsoft.com/en-us/azure/container-apps/overview)."
     },
     {
-      "id": "q3",
+      "id": "03-read-the-ownership-tradeoff-q4",
       "type": "single",
-      "scenario": "A deployment succeeds, but the new API copy never becomes ready. The build artifact is the expected version. What evidence should the team collect before changing the runtime service?",
+      "scenario": "A queue-triggered Functions workload scales quickly after a backlog spike. The downstream database cannot absorb the burst, and requests begin timing out. The team argues that Azure should have prevented the incident because the runtime is serverless. Which responsibility still belongs to the application team?",
       "options": [
         {
-          "id": "a",
-          "text": "Resource names only, because names prove the deployment reached Azure."
-        },
-        {
           "id": "b",
-          "text": "The runtime image or code version, app settings, identity, health check path, recent logs, and scale or revision state."
+          "text": "Maintaining Azure datacenter power and cooling so the Functions host stays online."
         },
         {
           "id": "c",
-          "text": "The developer machine output, because the same code passed locally."
+          "text": "Maintaining the host operating system that runs the Functions worker."
+        },
+        {
+          "id": "a",
+          "text": "Designing concurrency limits, retries, idempotency, and downstream protection."
         },
         {
           "id": "d",
-          "text": "A list of all Azure services in the subscription, because the failure might be anywhere."
+          "text": "Choosing the disk cache policy for the Functions host virtual machine."
         }
       ],
       "correct": [
-        "b"
+        "a"
       ],
-      "explanation": "Compute failures usually sit at the boundary between artifact, configuration, identity, health, logs, and scaling. A broad inventory or local result is less useful than direct runtime evidence."
+      "explanation": "Serverless does not remove the need to design for downstream limits, retries, and idempotent behavior. The closest distractor is host-operating-system maintenance because that is something Azure does own, but it is not the failure described here. Datacenter power and VM disk-cache choices are even further from the application's concurrency design. See [Microsoft Learn: Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview)."
     }
   ]
 }

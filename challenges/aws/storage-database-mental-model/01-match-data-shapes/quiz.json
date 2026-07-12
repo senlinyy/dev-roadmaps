@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
       "scenario": "`devpolaris-orders-api` writes this log after checkout:\n\n```text\nreceiptId=rcpt_ord_8841 contentType=application/pdf bytes=734812\nownerCustomerId=cus_77 downloadLater=true\n```\n\nThe database already has the order row and only needs to remember where the file lives. Which service shape best fits the receipt bytes?",
       "options": [
-        { "id": "a", "text": "S3, because the receipt is a whole object that can be stored by bucket and key." },
-        { "id": "b", "text": "RDS, because every checkout artifact should be stored in the same relational table as the order." },
-        { "id": "c", "text": "DynamoDB, because the receipt has one customer id and could be fetched by a key." },
-        { "id": "d", "text": "EBS, because a PDF is a file and files should stay on a mounted server disk." }
+        {
+          "id": "b",
+          "text": "Store receipt bytes in RDS so the order transaction and file lifecycle share one consistency boundary."
+        },
+        {
+          "id": "a",
+          "text": "S3, because the receipt is a whole object that can be stored by bucket and key."
+        },
+        {
+          "id": "c",
+          "text": "Store receipt metadata in DynamoDB and the binary payload as a base64 attribute for exact-key reads."
+        },
+        {
+          "id": "d",
+          "text": "EFS, because several API tasks can mount the receipt path and serve the PDF through shared filesystem access."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The PDF is file-shaped data: the app writes the whole object and later reads the whole object. S3 fits that promise, while RDS should keep the ownership and pointer metadata. Storing the PDF bytes in RDS or on one server disk would make the database or server carry file delivery work it does not need."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The PDF is file-shaped data: the app writes the whole object and later reads the whole object. S3 fits that promise, while RDS should keep the ownership and pointer metadata. Storing the PDF bytes in RDS or on one server disk would make the database or server carry file delivery work it does not need.\n\nLearn more in [Amazon S3 object keys](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html)."
     },
     {
-      "id": "q2",
+      "id": "q-place-orders-data-1",
       "type": "single",
-      "scenario": "A checkout write must create an order row, three order item rows, and a payment attempt row. Support also needs queries by customer, status, date range, and payment reference. Which service shape is the best first home for this state?",
+      "scenario": "DevPolaris is adding durable receipt downloads to the orders API. The order transaction already commits in RDS, and the generated PDF must survive task replacement and remain tied to the authorized order.\n\nOrder write is create the order in RDS, then generate the receipt PDF. RDS row is `orderId=ord_1042 customerId=cus_77 receiptKey=null`. Receipt is 734812 bytes with content type `application/pdf`.\n\nWhat is the cleanest design after the receipt is generated?",
       "options": [
-        { "id": "a", "text": "RDS, because the data has relationships, constraints, transactions, and flexible SQL questions." },
-        { "id": "b", "text": "S3, because the order can be serialized as one JSON file after checkout." },
-        { "id": "c", "text": "EFS, because several app tasks may need to read the same order data." },
-        { "id": "d", "text": "EBS, because transactions are safer when rows are written to one attached disk." }
+        {
+          "id": "b",
+          "text": "Write the PDF to S3 before the order transaction, then store its key whether or not the order commits."
+        },
+        {
+          "id": "c",
+          "text": "Commit the order and upload the receipt, but mark receipt state complete before verifying the S3 write."
+        },
+        {
+          "id": "a",
+          "text": "Upload the PDF to S3 and update the RDS row with the S3 key after authorization metadata is clear."
+        },
+        {
+          "id": "d",
+          "text": "Store the PDF in RDS first, then migrate older files to S3 after the table reaches a size threshold."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The order state is relational business data, not just bytes. RDS fits because it can protect related rows with constraints and transactions while still answering support queries later. A JSON file in S3 might work for a demo, but it makes queries and consistency harder."
+      "correct": [
+        "a"
+      ],
+      "explanation": "This split keeps each service doing its natural job. RDS stores the business record and ownership, while S3 stores the durable receipt object. Putting large file bytes into RDS or a task-local path makes later downloads and recovery harder.\n\nLearn more in [Amazon S3 object keys](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html)."
     },
     {
-      "id": "q3",
+      "id": "q-diagnose-storage-failures-3",
       "type": "single",
-      "scenario": "The API receives a retry with `Idempotency-Key: checkout_01HW2S8RN8Z7`. The only hot-path question is: have we already seen this exact checkout request, and what result should we return? Which service shape is a clean fit?",
+      "scenario": "A retry storm produces this DynamoDB log:\n\n```text\nevent=checkout.idempotency_duplicate\nawsError=ConditionalCheckFailedException\nidempotencyKey=checkout_01HW2S8RN8Z7\nrequestHash=sha256:18f9b31c\nexistingStatus=processing\n```\n\nHow should the on-call engineer interpret it?",
       "options": [
-        { "id": "a", "text": "DynamoDB, because the app has a known key and needs a small item lookup or conditional write." },
-        { "id": "b", "text": "S3, because the key could become an object name under an idempotency prefix." },
-        { "id": "c", "text": "EFS, because idempotency records must be visible to every task through a shared directory." },
-        { "id": "d", "text": "RDS read replica, because retries should avoid the primary database writer." }
+        {
+          "id": "b",
+          "text": "Treat the conditional failure as a duplicate and return success without checking whether the existing item is still processing or failed."
+        },
+        {
+          "id": "c",
+          "text": "Increase table capacity because conditional failures consume the same diagnosis path as throttled writes."
+        },
+        {
+          "id": "a",
+          "text": "It may be the correct safety behavior, so the app should read the existing item and return the current job or result."
+        },
+        {
+          "id": "d",
+          "text": "Change the condition to an unconditional put so the latest retry becomes authoritative."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "This is a key-based operational record. DynamoDB is a good fit when the app can build the exact key and use a conditional write to prevent duplicate work. A read replica does not protect the write, and object or filesystem storage would make the app invent its own safety rules."
+      "correct": [
+        "a"
+      ],
+      "explanation": "For idempotency, a conditional check failure can mean another request already claimed the key. That is not automatically an outage. Removing the condition would allow duplicate work, which is exactly what the check prevents.\n\nLearn more in [DynamoDB condition expressions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html)."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A design note for the orders service lists these data needs:\n\n```text\n1. Final order and payment records\n2. Receipt PDF objects\n3. Checkout idempotency records\n4. Temporary report chunks for one EC2 worker before upload\n```\n\nWhich pairings are reasonable first choices?",
+      "scenario": "DevPolaris needs to place four kinds of data for the orders workload: final order and payment records that require transactions, receipt PDFs downloaded later, checkout idempotency records read by exact key, and temporary report chunks used by one worker before the final archive is uploaded. Which three service pairings are reasonable first choices?",
       "options": [
-        { "id": "a", "text": "Final order and payment records in RDS." },
-        { "id": "b", "text": "Receipt PDF objects in S3, with the order row storing the object key." },
-        { "id": "c", "text": "Checkout idempotency records in DynamoDB when the access pattern is exact-key lookup." },
-        { "id": "d", "text": "Final order truth on the EC2 worker EBS volume because the worker already writes files." }
+        {
+          "id": "b",
+          "text": "Receipt PDF objects in S3, with the order row storing the object key."
+        },
+        {
+          "id": "d",
+          "text": "Temporary report chunks on EFS as the durable source of truth after the producing worker exits."
+        },
+        {
+          "id": "a",
+          "text": "Final order and payment records in RDS."
+        },
+        {
+          "id": "c",
+          "text": "Checkout idempotency records in DynamoDB when the access pattern is exact-key lookup."
+        },
+        {
+          "id": "e",
+          "text": "Receipt PDF objects on EFS because browser downloads require filesystem paths shared by every API task."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The first three pairings match the data shape: relational records in RDS, file-shaped objects in S3, and known-key operational state in DynamoDB. The EBS option is tempting when a worker is already involved, but an attached disk is not a safe source of truth for checkout records."
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The first three pairings match the data shape: relational records in RDS, file-shaped objects in S3, and known-key operational state in DynamoDB. The EBS option is tempting when a worker is already involved, but an attached disk is not a safe source of truth for checkout records.\n\nLearn more in [DynamoDB NoSQL design](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-general-nosql-design.html)."
     },
     {
-      "id": "q5",
+      "id": "q-read-the-feature-5",
       "type": "single",
-      "scenario": "The report worker runs on one EC2 instance and logs this path while building a monthly export before uploading the finished file to S3:\n\n```text\npath=/var/lib/devpolaris-orders-api/reports/ordexp_8841.tmp\nneedsSurviveReboot=true sharedAcrossWorkers=false\n```\n\nWhat storage shape should the team consider for that working path?",
+      "scenario": "DevPolaris is designing a vendor-file workflow for several workers. The workflow currently depends on a shared mounted path and filesystem operations.\n\nName is vendor input processing. Data is large input files from a private transfer process. Read path is several workers need open, read, rename, and directory listing on the same tree. Path is /mnt/devpolaris-input/incoming.\n\nWhich question best decides between EFS and S3 plus queue processing?",
       "options": [
-        { "id": "a", "text": "EBS, because one EC2 instance needs a mounted disk path that can survive reboot." },
-        { "id": "b", "text": "EFS, because every file path in AWS should be shared by default." },
-        { "id": "c", "text": "RDS, because temporary files should be transactionally protected." },
-        { "id": "d", "text": "S3, because the worker should append to objects as if they were local files." }
+        {
+          "id": "b",
+          "text": "Choose EFS from the current path syntax without testing whether workers can process immutable objects independently."
+        },
+        {
+          "id": "a",
+          "text": "Do workers truly need shared filesystem semantics, or can each worker process a named object independently?"
+        },
+        {
+          "id": "c",
+          "text": "Choose S3 plus SQS even if the application still requires shared rename and directory-listing semantics."
+        },
+        {
+          "id": "d",
+          "text": "Choose EFS from one mount-target plan without checking access from each worker Availability Zone."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "EBS matches a one-instance mounted disk need. The finished export can still move to S3 after generation, but the working path behaves like local filesystem storage. EFS would matter if several workers needed the same live file tree."
+      "correct": [
+        "a"
+      ],
+      "explanation": "EFS is useful when existing tools need a shared mounted directory. If the workflow can pass object keys through a queue, S3 may be simpler and more durable. The right choice depends on file semantics, not on the presence of a path string.\n\nLearn more in [Amazon EFS concepts](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html)."
+    },
+    {
+      "id": "q-review-data-choices-5",
+      "type": "single",
+      "scenario": "A DevPolaris report job writes disposable chunks under `/tmp`, builds one archive, uploads the archive to `s3://devpolaris-orders-prod-objects/exports/2026/05/report.zip`, and then records the output key as complete. The worker may be replaced between attempts, so the workflow must distinguish temporary work from the durable result. Which statement is most accurate?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep temporary chunks local but mark the job complete before verifying the final S3 upload."
+        },
+        {
+          "id": "c",
+          "text": "Upload each chunk as the durable report and derive job completion from the number of objects under the prefix."
+        },
+        {
+          "id": "d",
+          "text": "Record job completion before upload so retries can skip rebuilding the archive."
+        },
+        {
+          "id": "a",
+          "text": "Temporary local chunks are acceptable only if the job can retry and the durable result is confirmed elsewhere."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scratch space is fine when the data is disposable and the final output is durable. The job still needs a record of completion so the UI and support can distinguish done, failed, and still running. S3 stores the object, but it does not replace all workflow state.\n\nLearn more in [Amazon S3 object keys](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html)."
+    },
+    {
+      "id": "q-spot-wrong-fit-failures-2",
+      "type": "single",
+      "scenario": "The receipt route logs:\n\n```text\nroute=GET /orders/ord_1042/receipt\nquery=select receipt_blob from orders where id=$1\nreceipt_bytes=734812\nduration_ms=1840\n```\n\nWhat wrong-fit pattern does this suggest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "RDS is carrying file bytes that would be better stored as S3 objects with keys in the database."
+        },
+        {
+          "id": "b",
+          "text": "Keep the PDF in RDS but add a read replica so file downloads do not affect the writer."
+        },
+        {
+          "id": "c",
+          "text": "Move the PDF to S3 but omit the object key and ownership metadata from the relational order record."
+        },
+        {
+          "id": "d",
+          "text": "Move the complete order record and receipt into S3 so one storage service owns the feature."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The database can store bytes, but that does not make it the right file delivery layer. Receipt PDFs are durable objects, while the database should keep ownership and pointer metadata. This is the opposite wrong fit from using S3 as an order database.\n\nLearn more in [Amazon RDS DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.html)."
     }
   ]
 }

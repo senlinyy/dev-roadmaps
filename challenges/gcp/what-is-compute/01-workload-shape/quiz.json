@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The Orders API receives HTTP checkout requests all day and is already packaged as a container. Which GCP runtime is the natural first option?",
+      "scenario": "Northstar Retail is launching one stateless HTTP service from a container image. It has no host customization, background scheduler, sidecars, or Kubernetes policy requirement, and the team wants request-based scaling with minimal platform operations. Which compute option should the design review evaluate first?",
       "options": [
-        { "id": "a", "text": "Cloud Run." },
-        { "id": "b", "text": "A Cloud Run function for every route." },
-        { "id": "c", "text": "A GKE cluster because every container must use Kubernetes." },
-        { "id": "d", "text": "A billing account." }
+        {
+          "id": "a",
+          "text": "A request-driven container platform such as Cloud Run."
+        },
+        {
+          "id": "b",
+          "text": "A GKE Autopilot cluster to preserve future Kubernetes options, even though the current service uses no Kubernetes API or policy."
+        },
+        {
+          "id": "c",
+          "text": "A Compute Engine managed instance group so the team can control the guest OS, despite having no host-level requirement."
+        },
+        {
+          "id": "d",
+          "text": "A Cloud Run job started by each request, treating a bounded batch execution as the public request-serving endpoint."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A normal HTTP container service is a strong Cloud Run fit before introducing server or cluster responsibility."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer maps stateless HTTP container work to request-driven compute. GKE may be right with Kubernetes needs, while disks and Firestore are storage products. See [Google Cloud docs documentation](https://cloud.google.com/run/docs/overview)."
     },
     {
-      "id": "q2",
+      "id": "cloud-run-q4",
       "type": "single",
-      "scenario": "A receipt email should be sent after checkout, and the customer should not wait for the email provider. Which workload shape is this?",
+      "scenario": "A service uses Cloud Run but fails when traffic spikes because a downstream database rejects too many connections. Which review point is specific and useful?",
       "options": [
-        { "id": "a", "text": "Event-shaped side work." },
-        { "id": "b", "text": "A public entry DNS record." },
-        { "id": "c", "text": "A VM boot disk." },
-        { "id": "d", "text": "A cluster upgrade." }
+        {
+          "id": "c",
+          "text": "Disable autoscaling and run one large instance, accepting a single capacity and availability boundary for the API."
+        },
+        {
+          "id": "d",
+          "text": "Move the database password into the container image so new instances establish connections faster during scale-out."
+        },
+        {
+          "id": "a",
+          "text": "Tune Cloud Run concurrency, instance limits, and connection management with the database capacity in mind."
+        },
+        {
+          "id": "b",
+          "text": "Raise maximum instances without changing connection pooling, allowing the service to open more database connections during each spike."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The work starts because checkout happened. That makes it a good candidate for an event-driven handler."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer ties Cloud Run scale knobs to downstream capacity. Secrets in images, disabling scale, and labels do not solve connection pressure safely. See [Google Cloud about instance autoscaling documentation](https://cloud.google.com/run/docs/about-instance-autoscaling)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which questions help choose compute responsibly?",
+      "id": "sample-compute-map-q3",
+      "type": "single",
+      "scenario": "A legacy batch import currently runs on one VM with a cron entry. The team wants to modernize but has not measured run time, retry behavior, or file dependencies. What should the reviewer request?",
       "options": [
-        { "id": "a", "text": "What starts the work?" },
-        { "id": "b", "text": "What does the team need to operate?" },
-        { "id": "c", "text": "Where will failure evidence appear?" },
-        { "id": "d", "text": "Which product name sounds most advanced?" }
+        {
+          "id": "d",
+          "text": "Select a function from the cron trigger alone, then adapt the 12-minute runtime and filesystem assumptions after migration."
+        },
+        {
+          "id": "a",
+          "text": "A workload fact sheet before choosing between VM, Cloud Run job, function, or GKE job."
+        },
+        {
+          "id": "b",
+          "text": "Select GKE Standard because the job can be represented as a Kubernetes Job, without establishing a broader Kubernetes platform need."
+        },
+        {
+          "id": "c",
+          "text": "Keep the VM cron implementation and add another VM for failover, without defining duplicate-run protection or shared file behavior."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Runtime choice should follow work shape, ownership, and evidence, not product prestige."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer asks for workload evidence first. The distractors jump to a platform or metadata without understanding runtime behavior. See [Google Cloud system design documentation](https://cloud.google.com/architecture/framework/system-design)."
+    },
+    {
+      "id": "sample-compute-map-q2",
+      "type": "multiple",
+      "scenario": "A production compute map currently lists only Cloud Run and Compute Engine product names. Reviewers cannot see which identities make API calls, where traffic enters, where state survives, or how data is recovered. Which three relationships should the map add?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Ingress and egress paths, including the caller and private or public dependency route."
+        },
+        {
+          "id": "c",
+          "text": "Durable state, ownership, backup, and restore boundaries outside replaceable compute."
+        },
+        {
+          "id": "d",
+          "text": "The personal runtime preference of the engineer who first created the service."
+        },
+        {
+          "id": "e",
+          "text": "The product names and regions alone, without caller, network, state, or recovery relationships."
+        },
+        {
+          "id": "a",
+          "text": "The runtime identity and the permissions it uses for each dependency."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful compute map connects runtime to identity, networking, durable state, and recovery. Personal preference does not explain or verify production behavior. See [Google Cloud Architecture Framework](https://cloud.google.com/architecture/framework)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Northstar Support publishes about 3,000 ticket events each day to Pub/Sub. Each event needs an independent transformation that usually finishes in eight seconds, traffic is bursty, and the team has no host, sidecar, or Kubernetes scheduling requirement. Which compute shape should the architecture review evaluate first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "An event-driven function or service connected to the event source."
+        },
+        {
+          "id": "b",
+          "text": "A continuously running Cloud Run service with minimum instances, even though the work starts only when Pub/Sub events arrive."
+        },
+        {
+          "id": "c",
+          "text": "A Compute Engine VM that polls Pub/Sub continuously, accepting guest maintenance and idle capacity despite the bounded event workload."
+        },
+        {
+          "id": "d",
+          "text": "A dedicated GKE Autopilot cluster for the handler, even though the workload has no Kubernetes policy, scheduling, or extension requirement."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An event-driven function or service matches the Pub/Sub start signal, short independent executions, and minimal platform requirement. A continuously running service or polling VM can process events but adds idle capacity and operational responsibility that the scenario does not require. A dedicated GKE cluster adds Kubernetes control-plane and policy complexity without a Kubernetes-shaped need. See [Cloud Run functions concepts](https://cloud.google.com/functions/docs/concepts/overview)."
+    },
+    {
+      "id": "cloud-run-q2",
+      "type": "single",
+      "scenario": "Northstar Claims writes uploaded evidence to `/tmp/claims` inside a Cloud Run container, then returns a URL that another request uses hours later. The service scales to multiple instances and deploys several revisions each week, and customers report intermittent missing files. What should the design review require?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Write uploads into the image layer during each request so a later revision can inherit them from the container registry."
+        },
+        {
+          "id": "d",
+          "text": "Increase concurrency so every request is more likely to reach the instance that holds the previous local file."
+        },
+        {
+          "id": "a",
+          "text": "Container filesystem state is not the durable place for uploads; use a managed storage service."
+        },
+        {
+          "id": "b",
+          "text": "Keep uploads on the container filesystem and set minimum instances, assuming warm instances preserve files across revisions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer separates ephemeral container filesystem from durable storage. The distractors invent automatic persistence through Firestore, revisions, or concurrency. See [Google Cloud container contract documentation](https://cloud.google.com/run/docs/container-contract)."
+    },
+    {
+      "id": "sample-compute-map-q4",
+      "type": "single",
+      "scenario": "Northstar Markets proposes Cloud Run for a pricing process that must maintain a continuous market feed even when no HTTP requests arrive. Losing the process for more than 10 seconds violates the trading requirement, and the work is not a bounded job. What must the architect determine before approving the runtime?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep Cloud Run service semantics and use minimum instances, assuming a warm instance guarantees one uninterrupted background process."
+        },
+        {
+          "id": "c",
+          "text": "Move the background loop into the request handler and issue synthetic requests continuously to keep it active."
+        },
+        {
+          "id": "d",
+          "text": "Increase request timeout and concurrency because those controls convert a service into an unrestricted generally-on process."
+        },
+        {
+          "id": "a",
+          "text": "Whether the workload actually matches Cloud Run request or job semantics, or needs a runtime designed for continuous processing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer checks runtime semantics against continuous background work. Names, Firestore documents, and buckets do not make a request-driven service always active. See [Google Cloud container contract documentation](https://cloud.google.com/run/docs/container-contract)."
     }
   ]
 }

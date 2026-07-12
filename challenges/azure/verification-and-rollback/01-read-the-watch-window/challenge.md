@@ -1,7 +1,6 @@
 ---
-title: "Read The Watch Window"
-sectionSlug: watch-window
+title: "Verification, Rollback, and Runtime Operations"
 order: 1
 ---
 
-Practice deciding what evidence belongs in the period after traffic moves.
+Answer the scenarios using the linked article's Azure release verification guidance.

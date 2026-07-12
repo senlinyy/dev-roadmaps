@@ -1,6 +1,6 @@
 ---
 title: "Check Private Outbound Path"
-sectionSlug: private-workloads-still-need-outbound-paths
+sectionSlug: outbound-paths-from-private-code
 order: 4
 ---
 

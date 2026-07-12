@@ -4,67 +4,94 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "You want to add a step that any Jenkinsfile can call as `buildJavaService(...)`. The step renders an entire declarative pipeline.\n\nWhere does it go?",
+      "scenario": "Thirty Maven services repeat checkout, test, image build, and publication logic in their Jenkinsfiles. The platform team wants each service to call `standardMavenService(serviceName: 'checkout-api')`, while keeping semantic-version validation independently testable and a default deployment template versioned with the library. Which design gives callers a small Pipeline interface without concentrating all logic in one script?",
       "options": [
-        { "id": "a", "text": "`vars/buildJavaService.groovy` with a `def call(Map config = [:]) { pipeline { ... } }` entry point." },
-        { "id": "b", "text": "`src/com/example/BuildJavaService.groovy` as a class." },
-        { "id": "c", "text": "`resources/build-java-service.yaml`." },
-        { "id": "d", "text": "Inlined into every Jenkinsfile that needs it." }
+        { "id": "a", "text": "Expose `standardMavenService` from `vars/`, delegate ordinary validation logic to packaged classes under `src/`, and load the deployment template from `resources/`." },
+        { "id": "b", "text": "Expose every helper class as a separate global name under `vars/` and generate the deployment template inside each Jenkinsfile." },
+        { "id": "c", "text": "Put the complete pipeline, validator, and template in one `vars/standardMavenService.groovy` file so callers have only one dependency." },
+        { "id": "d", "text": "Keep the orchestration in each Jenkinsfile and use the shared library only to download a template from `resources/`." }
       ],
       "correct": ["a"],
-      "explanation": "Global steps callable as a top-level identifier from a Jenkinsfile live in `vars/`. The filename is the step name. The `def call(...)` form is what makes `buildJavaService(...)` work as a method call. `src/` is for helper classes that you import; you cannot directly call a `src/` class as a top-level step. `resources/` is for non-code template files."
+      "explanation": "The `vars/` entry point provides the concise Pipeline-facing API, `src/` keeps ordinary reusable logic packaged and testable, and `resources/` holds versioned non-code files. A single large `vars/` script reduces duplication but creates a tightly coupled global step that is harder to test and evolve. Exposing every helper globally enlarges the public API, while leaving orchestration in every repository preserves the original drift. See [Jenkins Shared Library directory structure](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#directory-structure)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "You want to extract a `SemverHelper` class that parses and compares version strings, then call it from several `vars/` steps.\n\nWhere does the class go?",
+      "scenario": "A multibranch job loads `summit-pipeline@main` implicitly from the controller. A pull request needs to validate a candidate library change from ref `feature/retry-policy` before that ref is released. Production branch builds must continue using the reviewed default. Which loading strategy keeps the test explicit and limits production exposure?",
       "options": [
-        { "id": "a", "text": "`vars/SemverHelper.groovy`." },
-        { "id": "b", "text": "`src/com/devpolaris/SemverHelper.groovy` with a package declaration; import from the global step via `import com.devpolaris.SemverHelper`." },
-        { "id": "c", "text": "`resources/SemverHelper.txt`." },
-        { "id": "d", "text": "Helpers cannot be reused across `vars/` steps." }
+        { "id": "a", "text": "Change the controller's default version to `feature/retry-policy`, run the pull request, then change it back after validation." },
+        { "id": "b", "text": "Allow version overrides and load `summit-pipeline@feature/retry-policy` only in the controlled validation job, while production consumers remain pinned to their reviewed refs." },
+        { "id": "c", "text": "Merge the candidate to `main`, let all consumers exercise it, and revert the merge if a representative pipeline fails." },
+        { "id": "d", "text": "Copy the changed library step into the pull request Jenkinsfile so the job does not need a non-default library ref." }
       ],
       "correct": ["b"],
-      "explanation": "`src/` is the standard Java/Groovy source tree for the shared library: real classes with packages and imports. Global steps in `vars/` then `import com.devpolaris.SemverHelper` like any other class. Putting the class under `vars/` would expose it as a top-level step (callable as `SemverHelper(...)` from a Jenkinsfile), which is rarely what you want."
+      "explanation": "An explicit candidate ref gives the validation job the intended code without moving the default beneath production consumers. Temporarily changing the controller default and merging first both widen the blast radius before evidence exists. Copying the step tests a forked implementation rather than the library artifact that will be released. See [Jenkins Shared Library versions](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#library-versions)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "You want to ship a default `kustomization.yaml` template that pipeline steps can render with build-time substitutions, instead of inlining the YAML in Groovy strings.\n\nWhere does the template go?",
+      "scenario": "A shared deployment step reads `resources/com/summit/helm/values.yaml`, substitutes the image digest, and writes the result into the caller workspace. After a refactor, the step tries to open that path directly from the service repository and fails on every agent. The template is present in the checked-out library revision. What is the best correction?",
       "options": [
-        { "id": "a", "text": "`resources/templates/kustomization.yaml`. Read it from `vars/` with `libraryResource('templates/kustomization.yaml')`." },
-        { "id": "b", "text": "`vars/kustomization.yaml`." },
-        { "id": "c", "text": "`src/templates/kustomization.yaml`." },
-        { "id": "d", "text": "Templates must be inlined as Groovy strings." }
+        { "id": "a", "text": "Load the packaged file with `libraryResource`, then write the returned content into the caller workspace before invoking Helm." },
+        { "id": "b", "text": "Require every service repository to copy the template to the same relative path before calling the shared step." },
+        { "id": "c", "text": "Move the YAML into a class under `src/` and resolve it through the agent's Java classpath." },
+        { "id": "d", "text": "Pass the controller's shared-library checkout directory to agents as a new global environment variable." }
       ],
       "correct": ["a"],
-      "explanation": "`resources/` is exactly for non-code files (templates, default configs, generated test data). The `libraryResource(path)` step reads them at runtime. Putting non-code under `vars/` or `src/` does not work because those trees are compiled. Inlining as Groovy strings is fine for short snippets but unwieldy for full configs."
+      "explanation": "`libraryResource` loads non-code files packaged with an external shared library and returns their content for the Pipeline to use. Copying the template into every service would reintroduce drift, while a classpath or controller checkout path couples agent execution to Jenkins implementation details. See [Loading resources from Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#loading-resources)."
     },
     {
       "id": "q4",
-      "type": "multiple",
-      "scenario": "Which of these are real reasons to keep most logic in `src/` classes rather than directly in `vars/` global steps?",
+      "type": "single",
+      "scenario": "Twenty production services load `summit-pipeline@main`. A merge renames the required `imageName` input, and their next builds fail before deployment. A low-risk test service had passed because it supplied both the old and new inputs. Which consumption policy would have limited the fleet-wide failure?",
       "options": [
-        { "id": "a", "text": "Classes can be unit-tested with JenkinsPipelineUnit or similar; `vars/` steps are harder to mock." },
-        { "id": "b", "text": "Classes can have private methods; `vars/` exposes everything as top-level callable." },
-        { "id": "c", "text": "Classes can extend each other and use polymorphism; `vars/` steps cannot." },
-        { "id": "d", "text": "`src/` classes load faster than `vars/` steps." }
+        { "id": "a", "text": "Set `main` as the controller default and disable version overrides so every consumer receives fixes consistently." },
+        { "id": "b", "text": "Keep production on `main`, but delay its scheduled builds long enough for the platform team to observe the test service." },
+        { "id": "c", "text": "Pin production consumers to reviewed tags or commits, validate candidate refs with representative callers, and upgrade services through controlled changes." },
+        { "id": "d", "text": "Mirror `main` into a second moving branch and configure production consumers to retry with that branch after a failure." }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Testability, encapsulation, and composability are the load-bearing reasons. Load time is not a meaningful difference. The pattern: thin `vars/` steps that delegate to classes in `src/`, with templates in `resources/`. This is also how the article's `devpolaris-pipeline` library is structured."
+      "correct": ["c"],
+      "explanation": "Immutable reviewed refs turn a library update into an intentional consumer change and representative tests expose interface breaks before broad rollout. Delaying builds still leaves every consumer on the same moving ref. A second moving branch provides no known-good fallback, and disabling overrides removes the mechanism needed for controlled adoption. See [Jenkins Shared Library versions](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#library-versions)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A junior engineer puts a 600-line `def call(Map config = [:]) { ... }` in `vars/buildJavaService.groovy` with all the helper functions defined as nested closures inside `call`.\n\nWhat is the right refactor recommendation?",
+      "scenario": "The library team wants to replace `imageName` with `imageRepository`. Forty services cannot migrate in the same release window, and several deploy only once per month. The platform team also needs failures for genuinely unknown inputs to remain visible. Which release design is safest?",
       "options": [
-        { "id": "a", "text": "Extract helpers to `src/com/devpolaris/Build.groovy` (or similar) as proper class methods, leave `vars/buildJavaService.groovy` as a thin wrapper that constructs the helper and orchestrates." },
-        { "id": "b", "text": "Leave it; nested closures are idiomatic." },
-        { "id": "c", "text": "Move everything to `resources/` as a template." },
-        { "id": "d", "text": "Convert the file to Java." }
+        { "id": "a", "text": "Keep `imageName` indefinitely and silently ignore `imageRepository` until every repository has migrated." },
+        { "id": "b", "text": "Accept both names for a documented migration window, map the old input to the new behavior, warn consumers, and remove it in a planned breaking release." },
+        { "id": "c", "text": "Remove `imageName` in the next release and rely on pinned consumers to discover the break only when they choose to upgrade." },
+        { "id": "d", "text": "Catch missing-property and method errors around the deployment step, then continue the build using the previous image reference." }
       ],
-      "correct": ["a"],
-      "explanation": "Nested closures inside `call` are the classic shape of a `vars/` step that has outgrown itself. The refactor is to pull helpers into a `src/` class with real methods (testable, reusable, namespaced), then keep the global step as the thin entry point. Templates under `resources/` are for non-code. Java would lose Groovy's pipeline-step DSL."
+      "correct": ["b"],
+      "explanation": "A bounded compatibility period preserves existing callers while giving teams an observable migration path and a clear breaking-release boundary. Keeping both names forever leaves permanent ambiguity. Pinning limits immediate blast radius but does not make the new version compatible, and swallowing input errors can deploy an unintended artifact. See [Jenkins Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A globally trusted library deploys to production and calls Jenkins APIs outside the Groovy sandbox. Service teams may propose changes, but a new repository rule would let any service maintainer merge directly to the library's release branch. Which review response best matches the real trust boundary?",
+      "options": [
+        { "id": "a", "text": "Keep broad repository access and rely on Script Approval to intercept any privileged method used by the trusted library." },
+        { "id": "b", "text": "Allow direct merges but require every service Jenkinsfile to pin a commit before using the change." },
+        { "id": "c", "text": "Move the library to folder scope so it remains globally trusted but repository permissions become less important." },
+        { "id": "d", "text": "Require restricted writers, independent review, protected release refs, and representative consumer tests before a trusted library release." }
+      ],
+      "correct": ["d"],
+      "explanation": "Writers to a globally trusted library can introduce code with controller-level capabilities, so repository and release controls are part of Jenkins security. Consumer pinning limits rollout but does not make malicious trusted code safe when adopted. Folder-scoped libraries are sandboxed rather than globally trusted, and Script Approval does not constrain code that already runs as trusted. See [Global trusted Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#global-shared-libraries)."
+    },
+    {
+      "id": "q7",
+      "type": "multiple",
+      "scenario": "A trusted shared library serves more than fifty build and deployment pipelines. A candidate release changes a global step signature, updates a Helm template, and adds a helper that calls a Jenkins controller API. Which controls should be required before broad production adoption?",
+      "options": [
+        { "id": "a", "text": "Exercise the candidate ref with representative consumer Jenkinsfiles, including deployment and failure paths." },
+        { "id": "b", "text": "Publish a versioned release with compatibility notes and let production consumers upgrade through reviewed changes." },
+        { "id": "c", "text": "Keep the release branch moving so an urgent follow-up fix reaches every consumer without another adoption decision." },
+        { "id": "d", "text": "Review the controller API use as privileged code and restrict who can approve the trusted release." },
+        { "id": "e", "text": "Validate only the library's unit tests because consumer Jenkinsfiles are outside the library team's ownership boundary." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "Representative consumer tests expose Pipeline integration failures, versioned releases control adoption, and trusted controller API access requires privileged review. A moving production ref recreates fleet-wide blast radius. Unit tests remain valuable, but they cannot replace integration evidence from real caller contracts. See [Testing Shared Library pull request changes](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#testing-library-pull-request-changes) and [Global trusted Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/#global-shared-libraries)."
     }
   ]
 }

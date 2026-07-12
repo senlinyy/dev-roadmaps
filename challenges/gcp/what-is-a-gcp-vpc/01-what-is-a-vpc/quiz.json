@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The Orders API team says a private database is safe because it is \"in the project.\" Which concept better describes the private network map that traffic uses?",
+      "scenario": "Northstar Retail is extending its Orders platform from `us-central1` to `europe-west1`. The company needs one Google Cloud network boundary that contains regional subnets, exchanges private routes between them, and applies workload-targeted firewall policy across both regions. Which resource provides that scope?",
       "options": [
-        { "id": "a", "text": "The VPC network." },
-        { "id": "b", "text": "The billing account." },
-        { "id": "c", "text": "The release branch." },
-        { "id": "d", "text": "The service account display name." }
+        {
+          "id": "b",
+          "text": "A Cloud DNS private zone, which creates IP ranges and route next hops for every attached VM."
+        },
+        {
+          "id": "c",
+          "text": "A Shared VPC host project, which is required before any project can contain regional subnets or custom routes."
+        },
+        {
+          "id": "d",
+          "text": "A Network Connectivity Center hub, which becomes the enclosing boundary for VM addresses, subnets, and VPC firewall rules."
+        },
+        {
+          "id": "a",
+          "text": "A VPC network, which contains subnet and route relationships and provides the network scope for firewall policy."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A project owns resources, but the VPC network is the private network map for addresses, routes, and firewall rules."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The VPC network is the global network container for regional subnets, routes, and applicable firewall policy. DNS maps names, labels describe resources, and Cloud NAT provides outbound translation rather than the enclosing network. See [VPC documentation](https://cloud.google.com/vpc/docs/vpc)."
     },
     {
-      "id": "q2",
-      "type": "multiple",
-      "scenario": "Which questions belong in a first GCP VPC review?",
-      "options": [
-        { "id": "a", "text": "Which VPC network owns the private path?" },
-        { "id": "b", "text": "Which regional subnet provides the address range?" },
-        { "id": "c", "text": "Which route handles the destination?" },
-        { "id": "d", "text": "Which JavaScript framework renders the frontend?" }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The first network review names the network, subnet, and route before it moves to application details."
-    },
-    {
-      "id": "q3",
+      "id": "global-network-q4",
       "type": "single",
-      "scenario": "A developer opens a firewall rule to a private address, but traffic still cannot reach the destination. What might still be missing?",
+      "scenario": "The API subnet is in europe-west1, but its only private database endpoint is in us-central1. Routes exist and requests succeed, yet p95 latency is far above the target. What should the design review examine?",
       "options": [
-        { "id": "a", "text": "A route or private access path to the destination range." },
-        { "id": "b", "text": "A different article title." },
-        { "id": "c", "text": "A broader billing role." },
-        { "id": "d", "text": "A public DNS record for every private IP." }
+        {
+          "id": "d",
+          "text": "Adding a higher-priority route to the same endpoint, assuming route priority changes the geographic distance of the selected dependency."
+        },
+        {
+          "id": "a",
+          "text": "Regional placement of the subnet, dependency, and data path, because a global VPC does not remove physical distance."
+        },
+        {
+          "id": "b",
+          "text": "Converting the VPC to a regional network, because GCP VPC scope can be changed after creation."
+        },
+        {
+          "id": "c",
+          "text": "Lowering private DNS TTL and keeping the cross-region endpoint, assuming connection reuse removes the application data-path latency."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Firewall rules allow or deny traffic that has a path. They do not create the path."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A global VPC connects regional resources but does not eliminate geographic latency. VPC scope is not converted to regional, DNS TTL does not remove application round trips, and duplicate routes do not shorten the path. See [VPC network documentation](https://cloud.google.com/vpc/docs/vpc)."
+    },
+    {
+      "id": "routes-q5",
+      "type": "single",
+      "scenario": "A custom route sends 10.60.0.0/16 through a stateful inspection appliance. Packet capture shows requests traverse the appliance, but replies take a more specific direct route back to the source. What failure mode should the reviewer suspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Asymmetric routing that causes the stateful appliance or return-path checks to drop the connection."
+        },
+        {
+          "id": "b",
+          "text": "An IAM denial, because different forward and return next hops change the caller principal."
+        },
+        {
+          "id": "c",
+          "text": "A DNS cache failure, because replies must use the same recursive resolver as requests."
+        },
+        {
+          "id": "d",
+          "text": "A subnet-range resize, because every asymmetric path means the destination CIDR is invalid."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Stateful inspection expects both directions of a connection to traverse the required path. A more specific return route can create asymmetry and dropped sessions; IAM, DNS, and subnet resizing do not explain the observed next-hop difference. See [VPC route documentation](https://cloud.google.com/vpc/docs/routes)."
+    },
+    {
+      "id": "routes-q3",
+      "type": "multiple",
+      "scenario": "A VM cannot reach 10.60.4.25 through a VPN after a new custom route was added. Which three evidence items belong in the first route-focused investigation?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Firewall decisions and the expected return path after route selection."
+        },
+        {
+          "id": "d",
+          "text": "The count of project labels, without packet destination or next-hop evidence."
+        },
+        {
+          "id": "e",
+          "text": "The VPN gateway's monthly availability percentage, without the route selected for `10.60.4.25` or return-path evidence."
+        },
+        {
+          "id": "a",
+          "text": "The destination IP and every route whose range could match it."
+        },
+        {
+          "id": "b",
+          "text": "The selected next hop and route priority, including any more specific competing route."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Route troubleshooting starts with destination matching, precedence and next hop, then checks firewall and the return path. Project-label count does not affect packet route selection. See [VPC route documentation](https://cloud.google.com/vpc/docs/routes)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Private build VMs have no external IPs. They use the default Internet route but package downloads time out, and the subnet has no Cloud NAT configuration. Which network component should the team evaluate?",
+      "options": [
+        {
+          "id": "b",
+          "text": "External IP addresses on the managed instance template, accepting direct public addressing instead of the approved centralized egress boundary."
+        },
+        {
+          "id": "c",
+          "text": "A private DNS override for the package hostname, without an internal mirror or reachable proxy behind the private answer."
+        },
+        {
+          "id": "d",
+          "text": "A broader egress firewall rule alone, even though the subnet still has no source translation or approved proxy path."
+        },
+        {
+          "id": "a",
+          "text": "Cloud NAT or another approved outbound proxy or gateway path for the private VM source addresses."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Private VMs need an approved outbound path when they have no external IP. Cloud NAT or a controlled proxy can provide it; per-VM public IPs are not the only design, and DNS or ingress policy does not perform outbound translation. See [Cloud NAT overview](https://cloud.google.com/nat/docs/overview)."
+    },
+    {
+      "id": "global-network-q5",
+      "type": "single",
+      "scenario": "A VPC ingress rule targets tag api and allows TCP 8080 from a proxy range. Managed instance groups create tagged API VMs in us-central1 and europe-west1, and both sets receive the rule. What should the reviewer conclude?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The rule applies only to serverless services, so the VM behavior must come from an implied allow rule."
+        },
+        {
+          "id": "a",
+          "text": "The firewall rule is VPC scoped and applies to matching targets across regional subnets unless the rule is narrowed."
+        },
+        {
+          "id": "b",
+          "text": "The rule leaked between regions because VPC firewall rules should be regional by default."
+        },
+        {
+          "id": "c",
+          "text": "The network tag is a billing label, so it should not affect packet filtering in either region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "GCP VPC firewall rules can apply to matching VM targets across the network, while subnets remain regional. The behavior is expected, not a regional leak, and network tags are target selectors rather than billing labels. See [VPC firewall documentation](https://cloud.google.com/firewall/docs/firewalls)."
+    },
+    {
+      "id": "routes-q4",
+      "type": "single",
+      "scenario": "A route to 10.60.0.0/16 selects the VPN tunnel and the tunnel is up. Connectivity still fails, and firewall logging shows an ingress deny on the destination VM for the source subnet. What is the most accurate diagnosis?",
+      "options": [
+        {
+          "id": "c",
+          "text": "A second route with a lower priority number will grant access even if the firewall continues to deny the packet."
+        },
+        {
+          "id": "d",
+          "text": "Cloud NAT is required for all private VPN destinations, so the firewall log can be ignored."
+        },
+        {
+          "id": "a",
+          "text": "Route selection is working, but firewall policy separately denies the packet and must be reviewed at the destination path."
+        },
+        {
+          "id": "b",
+          "text": "The VPN route is invalid because a working route by default overrides every firewall deny."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Routes choose a next hop, while firewall rules independently allow or deny the packet. The tunnel and matching route can be healthy at the same time as an ingress denial; another route or Cloud NAT does not override that policy decision. See [VPC routes documentation](https://cloud.google.com/vpc/docs/routes) and [firewall rules documentation](https://cloud.google.com/vpc/docs/firewalls)."
     }
   ]
 }

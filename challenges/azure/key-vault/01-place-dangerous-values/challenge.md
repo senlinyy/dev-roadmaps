@@ -1,7 +1,6 @@
 ---
-title: "Place Dangerous Values"
-sectionSlug: what-is-key-vault
+title: "Practical: Set Up Azure Identity And Access For A Startup"
 order: 1
 ---
 
-Practice deciding which values belong in Key Vault and which values are normal runtime configuration.
+Use the scenarios to apply the linked article's guidance on placing secrets, proving caller identity, and granting Key Vault access safely.

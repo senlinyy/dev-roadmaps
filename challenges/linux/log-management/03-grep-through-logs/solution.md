@@ -1,8 +1,7 @@
 ```bash
-$ grep "myapp" /var/log/journal-export.log
-$ grep -i "error" /var/log/journal-export.log
-$ grep -c "postgresql" /var/log/journal-export.log
-$ grep "502" /var/log/journal-export.log
+cat /var/log/journal/orders-api.export
+grep DATABASE_URL /var/log/journal/orders-api.export
+grep "Main process exited" /var/log/journal/orders-api.export
+grep "Failed with result" /var/log/journal/orders-api.export
+grep "restart counter" /var/log/journal/orders-api.export
 ```
-
-`grep "myapp"` isolates all entries from that service, revealing the crash and recovery sequence. `grep -i "error"` catches both `ERROR` (from myapp) and `error` in other contexts. `grep -c "postgresql"` returns `5` because postgresql appears in five log lines. `grep "502"` pulls out the upstream failure entries.

@@ -1,7 +1,6 @@
 ---
-title: "Security Concepts and Tradeoffs"
-sectionSlug: the-security-tradeoff
+title: "Environments and Security"
 order: 3
 ---
 
-Knowledge check covering secret scoping, environment protection rules, OIDC mechanics, credential risks, and security tradeoffs.
+Review secret scope, environment protection, token permissions, OIDC trust, and least-privilege cloud access.

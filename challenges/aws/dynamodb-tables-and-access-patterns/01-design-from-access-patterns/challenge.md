@@ -1,7 +1,6 @@
 ---
-title: "Design From Access Patterns"
-sectionSlug: access-patterns
+title: "NoSQL with DynamoDB"
 order: 1
 ---
 
-The checkout team wants DynamoDB for idempotency, job status, and session state. Start from the exact read and write patterns before choosing keys or indexes.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

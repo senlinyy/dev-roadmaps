@@ -1,7 +1,6 @@
 ---
-title: "Trace The Browser Request"
-sectionSlug: the-question-after-the-browser
+title: "What Is a VPC?"
 order: 1
 ---
 
-Knowledge check on tracing the `devpolaris-orders-api` request before jumping into service names. Focus on the next hop, the intended path, and the evidence each layer can provide.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

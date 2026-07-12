@@ -1,6 +1,6 @@
 ---
 title: "Check Service Status"
-sectionSlug: systemctl-verbs-you-will-type-every-day
+sectionSlug: ask-systemd-about-a-service
 order: 2
 ---
 

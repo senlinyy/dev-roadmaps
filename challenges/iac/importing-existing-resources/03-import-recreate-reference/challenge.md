@@ -1,7 +1,6 @@
 ---
-title: "Choose Import, Recreate, or Reference"
-sectionSlug: import-or-reference
+title: "Manipulating State"
 order: 3
 ---
 
-Choose the ownership path before changing state. Decide whether each existing object should be imported, recreated, referenced, or investigated first.
+Use ownership, dependency, state, and plan evidence to decide whether an existing object should be imported, recreated, referenced, or investigated.

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "restricted-shape-q1",
+      "type": "single",
+      "scenario": "A review of `devpolaris-orders-api` finds that it already runs as UID `10001`, but its container security context still allows privilege escalation, keeps the root filesystem writable, retains default capabilities, and has no seccomp profile. Which change best matches the article's restricted application shape?",
+      "options": [
+        { "id": "a", "text": "Keep the writable root filesystem but set `runAsUser: 10001` again at container level." },
+        { "id": "b", "text": "Set `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, drop `ALL` capabilities, and use `RuntimeDefault` seccomp." },
+        { "id": "c", "text": "Set `privileged: true` so the runtime can apply its default seccomp profile without compatibility failures." },
+        { "id": "d", "text": "Add `fsGroup: 10001` only, because volume ownership also removes kernel capabilities and escalation paths." }
+      ],
+      "correct": ["b"],
+      "explanation": "The restricted shape combines all four container controls with non-root execution. Repeating the UID leaves the other risks open. Privileged mode expands access, and `fsGroup` helps volume ownership but does not drop capabilities, block escalation, or select seccomp."
+    },
+    {
+      "id": "explicit-writes-q2",
+      "type": "single",
+      "scenario": "After `readOnlyRootFilesystem: true` is enabled, the API fails because it writes request buffers under `/tmp`. The application needs no persistent storage, and security review does not want to reopen writes across the image layer. What is the best repair?",
+      "options": [
+        { "id": "a", "text": "Set the root filesystem back to writable and document `/tmp` as the intended path." },
+        { "id": "b", "text": "Run the container as root so it can bypass the read-only mount for `/tmp`." },
+        { "id": "c", "text": "Bake an empty `/tmp` directory into the image and keep the image layer read-only." },
+        { "id": "d", "text": "Mount an `emptyDir` volume at `/tmp` while keeping the container root filesystem read-only." }
+      ],
+      "correct": ["d"],
+      "explanation": "An `emptyDir` makes the required temporary write path explicit and keeps the rest of the image immutable. Reopening the root filesystem weakens the boundary. Root cannot make a read-only mount writable, and an image directory remains part of the read-only image layer."
+    },
+    {
+      "id": "admission-rollout-q3",
+      "type": "single",
+      "scenario": "The `orders` namespace contains several older workloads whose restricted compliance has not been reviewed. The platform team wants evidence on new changes before blocking deployment, then plans to reject violations after fixes are complete. Which rollout sequence matches the article?",
+      "options": [
+        { "id": "a", "text": "Apply restricted `warn` and `audit` labels first, fix reported workloads, then set restricted `enforce`." },
+        { "id": "b", "text": "Set restricted `enforce` immediately, then remove it permanently if any workload is rejected." },
+        { "id": "c", "text": "Label each Deployment with restricted `warn`, because admission mode is configured on workload objects." },
+        { "id": "d", "text": "Enable privileged `enforce` first, because it blocks only the most dangerous Pod shapes during migration." }
+      ],
+      "correct": ["a"],
+      "explanation": "Warn and audit provide review evidence without denying changes, which supports a controlled move to restricted enforcement. Immediate enforcement can disrupt unreviewed workloads. Pod Security Admission modes are namespace labels, and privileged is the least restrictive level."
+    },
+    {
+      "id": "root-dependent-image-q4",
+      "type": "single",
+      "scenario": "A legacy API image fails under non-root execution because it binds directly to port `80` and writes cache files under `/var/cache/orders`. The Service can map a public port to a different container port. Which remediation best preserves the intended security boundary?",
+      "options": [
+        { "id": "a", "text": "Grant the container privileged mode and keep both application behaviors unchanged." },
+        { "id": "b", "text": "Add only `runAsNonRoot: true` and accept startup failures as proof that admission works." },
+        { "id": "c", "text": "Change the app to listen on `8080`, map Service port `80` to it, and mount an explicit writable cache volume." },
+        { "id": "d", "text": "Keep port `80`, make the whole root filesystem writable, and drop `ALL` capabilities." }
+      ],
+      "correct": ["c"],
+      "explanation": "The article recommends removing root dependencies: use a higher application port behind the Service and declare writable paths as volumes. Privileged mode expands risk. A policy field without image compatibility does not produce a working service, and reopening the root filesystem weakens the write boundary."
+    },
+    {
+      "id": "runtime-proof-q5",
+      "type": "multiple",
+      "scenario": "A hardened orders API has passed manifest review and deployed successfully. Reviewers now need live evidence that the process identity and filesystem boundary match the intended Pod shape. Which two observations provide that evidence?",
+      "options": [
+        { "id": "a", "text": "The process reports UID and GID `10001` when inspected inside the running API container." },
+        { "id": "b", "text": "The Deployment has three replicas available, proving every container dropped all Linux capabilities." },
+        { "id": "c", "text": "A write attempt under `/root` fails because the image filesystem is read-only." },
+        { "id": "d", "text": "The Service has port `80`, proving the container process cannot be running as root." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "The observed UID and GID prove the running process identity, while the failed write proves the image filesystem boundary. Replica availability does not reveal capability state. A Service port can map to any container port and does not prove the container user."
+    }
+  ]
+}

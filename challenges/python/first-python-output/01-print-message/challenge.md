@@ -3,12 +3,12 @@ title: "Print A Message"
 order: 1
 ---
 
-The editor contains a tiny Python program. Make it print the exact message `hello from devpolaris` so you can verify the new sandbox path end to end.
+This practice-only smoke test checks that the Python executor runs `main.py` and grades stdout. The starter code prints the wrong message.
 
 Your job:
 
 1. **Keep the script in `main.py`** so the executor has a stable entrypoint.
-2. **Print the required message** with Python.
-3. **Run the code** and confirm stdout shows the message.
+2. **Change the program output** to exactly `hello from devpolaris`.
+3. **Run the code** and confirm stdout shows the required message.
 
-The grader checks the file content, while Run Code sends the file to the sandbox.
+The grader runs the program in the sandbox and checks stdout, not a source-text substring.

@@ -1,1 +1,1 @@
-Add the provider version in `main.tf`. Remove committed credentials from `main.tf`; CI should provide identity outside Terraform source.
+Keep provider selection reviewable in `main.tf`, but keep identity out of source control. The CI system should provide credentials through its runtime environment or federated identity, not committed Terraform arguments.

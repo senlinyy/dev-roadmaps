@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A tiny reusable web role needs tasks, defaults, a template, and a handler. Which shape is most useful?",
+      "scenario": "DevPolaris is extracting repeated orders-web configuration from two environment playbooks into one reusable role. The role must install packages, render one Nginx template, expose caller-tunable values, and restart Nginx only when that template changes. Which role shape creates the clearest reusable contract without empty scaffolding?",
       "options": [
         {
           "id": "a",
-          "text": "`roles/orders_web/tasks/main.yml`, `defaults/main.yml`, `templates/nginx.conf.j2`, and `handlers/main.yml`."
-        },
-        {
-          "id": "b",
-          "text": "One giant `site.yml` with every environment copied into it."
-        },
-        {
-          "id": "c",
-          "text": "Only `handlers/main.yml` because handlers can install packages."
+          "text": "`tasks/main.yml`, `handlers/main.yml`, `templates/nginx.conf.j2`, and `defaults/main.yml` with only the variables callers may override."
         },
         {
           "id": "d",
-          "text": "A role with no defaults so callers must read task internals."
+          "text": "A role with every standard directory prefilled, even if most directories are empty or unrelated."
+        },
+        {
+          "id": "b",
+          "text": "One `site.yml` file with all tasks copied into every environment."
+        },
+        {
+          "id": "c",
+          "text": "`vars/main.yml` only, because roles should hide tasks from callers."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A small role should put each kind of artifact in a predictable place. That makes review and reuse easier."
+      "explanation": "Roles load related tasks, handlers, templates, files, and variables from a known structure. The smallest useful role includes the directories it actually uses. See [Ansible roles guide](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The orders role must work in development and production without forks. Its proposed defaults are:\n\n```yaml\norders_api_port: 8080\norders_server_name: orders.devpolaris.internal\n```\n\nInventory may override both values for a specific environment. Why does `defaults/main.yml` fit this public role interface?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Defaults document the role interface and are easy for inventory or callers to override."
+        },
+        {
+          "id": "d",
+          "text": "Defaults are encrypted automatically by the role loader."
+        },
+        {
+          "id": "c",
+          "text": "Defaults run before tasks as shell commands."
+        },
+        {
+          "id": "b",
+          "text": "Defaults cannot be overridden, so they guarantee every environment is identical."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Role defaults document normal caller-tunable behavior at low precedence, so inventory can deliberately select staging or production values. Defaults are not encrypted, do not execute as commands, and do not guarantee identical environments. Stronger role vars would be a poor fit when callers are expected to override the values."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The `orders_web` role owns package installation, rendered Nginx configuration, and the reload caused by configuration changes. Which two artifacts are part of that reusable implementation rather than environment policy?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Production host membership and the production database password shared by several roles."
+        },
+        {
+          "id": "a",
+          "text": "Task files that install the web package and place the role-owned configuration."
+        },
+        {
+          "id": "b",
+          "text": "Handlers notified by the role when its managed configuration changes."
+        },
+        {
+          "id": "c",
+          "text": "The production inventory and approval policy that decide where and when the role runs."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The role should contain the tasks and handlers that implement its web-service behavior. Environment host membership, approval policy, and shared production secrets belong at clearer caller, inventory, automation, or secret-management boundaries. A role can also own its templates, but that is not one of the two correct choices in this question."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The orders team plans to add a shared platform role to Friday's production play. The change description gives no operational detail, while the role can restart services, create users, and edit firewall rules. Production approval requires reviewers to understand scope and side effects before the first canary. What information should they require first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Approval without details because roles are reusable by definition."
+        },
+        {
+          "id": "d",
+          "text": "Running the role against all hosts first so review can happen after the fact."
+        },
+        {
+          "id": "a",
+          "text": "A clear role interface and change summary: which tasks run, which variables callers set, and which handlers or service restarts can happen."
+        },
+        {
+          "id": "c",
+          "text": "Moving every variable into role vars so callers cannot override anything."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A role can package implementation files, but production review still needs its input contract, selected targets, changed resources, and possible service or firewall side effects. Reuse alone is not approval evidence. Running broadly before review or making all values non-overridable would increase risk rather than explain the change."
+    },
+    {
+      "id": "review-role-boundary-q1",
+      "type": "single",
+      "scenario": "A platform team proposes one `common_everything` role for every Linux host. It installs Nginx, creates database users, edits SSH settings, deploys applications, and restarts services, even when a release intends to change only one web template. What is the main operational risk of this boundary?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Roles can only contain one task, so Ansible will reject the role."
+        },
+        {
+          "id": "a",
+          "text": "The role boundary is too broad, so a small intended change can trigger unrelated host changes and restarts."
+        },
+        {
+          "id": "c",
+          "text": "Handlers cannot be used from roles."
+        },
+        {
+          "id": "d",
+          "text": "A role with many tasks is automatically safer because there are fewer playbook files."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A role that combines unrelated security, database, web, and deployment responsibilities gives a small release a much larger possible change surface. Ansible permits many tasks and handlers inside a role, but that does not make the boundary safe. Fewer files also do not compensate for harder review, rollback, and ownership."
+    },
+    {
+      "id": "review-role-boundary-q2",
+      "type": "single",
+      "scenario": "The same `orders_web` role must serve staging on port `8081` and production on `8080`. The role currently fixes `orders_api_port: 8080` in `vars/main.yml`, so the staging inventory cannot apply its reviewed environment value. Which design restores a deliberate caller override?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Duplicate the whole role for staging."
+        },
+        {
+          "id": "a",
+          "text": "Move environment-tunable values to role defaults or inventory so callers can override them deliberately."
+        },
+        {
+          "id": "c",
+          "text": "Hardcode the port inside the template so nobody changes it."
+        },
+        {
+          "id": "b",
+          "text": "Keep the value in role vars because role vars are the best place for all settings."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A value that environments are expected to tune belongs in a weak role default or a clearly scoped inventory source. Keeping it in strong role vars blocks the intended caller contract. Duplicating the role creates drift, while hardcoding the template would preserve the same environment-coupling problem."
+    },
+    {
+      "id": "review-role-boundary-q4",
+      "type": "single",
+      "scenario": "A new service team calls the shared orders role but omits `orders_service_name`. The role fails with `orders_service_name is required` before installing packages or changing files. Why is this early contract check valuable in a production automation path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It fails before partial configuration changes make the host harder to reason about."
+        },
+        {
+          "id": "d",
+          "text": "It means the role no longer needs defaults or documentation."
+        },
+        {
+          "id": "c",
+          "text": "It encrypts missing variables automatically."
+        },
+        {
+          "id": "b",
+          "text": "It lets Ansible ignore all later failures."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Early input validation stops before package, file, or service changes leave a partially configured host and gives the caller a precise contract failure. It does not encrypt variables, suppress later operational failures, or replace documented defaults. Its value is the clean failure boundary before mutation begins."
     }
   ]
 }

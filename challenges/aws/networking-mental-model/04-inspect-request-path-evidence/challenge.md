@@ -1,6 +1,6 @@
 ---
 title: "Inspect Request Path Evidence"
-sectionSlug: a-diagnostic-path-for-one-request
+sectionSlug: a-small-vpc-sketch
 order: 4
 ---
 

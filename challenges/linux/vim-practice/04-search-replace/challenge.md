@@ -1,6 +1,6 @@
 ---
 title: "Search and Replace"
-sectionSlug: search-and-replace
+sectionSlug: search-replace-and-review
 order: 4
 ---
 

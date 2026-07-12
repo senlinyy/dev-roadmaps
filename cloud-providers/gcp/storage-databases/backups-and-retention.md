@@ -1,7 +1,7 @@
 ---
 title: "Backups and Retention"
-description: "Plan recoverable data systems on Google Cloud with Cloud Storage versions, soft delete, retention policies, Cloud SQL PITR, Firestore backups, BigQuery history, disk snapshots, restore sandboxes, and drills."
-overview: "Production recovery means choosing which previous copy must survive, how long it must survive, who can delete it, and how the team proves a restore before an incident."
+description: "Plan recovery on Google Cloud with backups, restores, RPO, RTO, retention, PITR, object versioning, soft delete, snapshots, BigQuery time travel, and restore drills."
+overview: "Recovery planning covers deletion, corruption, bad deploys, and audit retention. The guide defines backup, restore, RPO, RTO, retention, PITR, versioning, soft delete, snapshots, time travel, and practical restore checks."
 tags: ["gcp", "backups", "retention", "recovery"]
 order: 7
 id: article-cloud-providers-gcp-storage-databases-backups-retention
@@ -13,500 +13,321 @@ aliases:
 
 ## Table of Contents
 
-1. [The Recovery Story](#the-recovery-story)
-2. [RPO, RTO, and Restore Targets](#rpo-rto-and-restore-targets)
-3. [Cloud Storage Versions, Soft Delete, and Retention](#cloud-storage-versions-soft-delete-and-retention)
-4. [Cloud SQL Backups, PITR, and Clones](#cloud-sql-backups-pitr-and-clones)
-5. [Firestore Backups, PITR, and Exports](#firestore-backups-pitr-and-exports)
-6. [BigQuery Time Travel, Snapshots, and Partitions](#bigquery-time-travel-snapshots-and-partitions)
-7. [Persistent Disk Snapshots for VM Data](#persistent-disk-snapshots-for-vm-data)
-8. [Restore Sandboxes and Validation](#restore-sandboxes-and-validation)
-9. [Deletion Guardrails and Ownership](#deletion-guardrails-and-ownership)
-10. [Restore Drills and Operating Rhythm](#restore-drills-and-operating-rhythm)
-11. [Putting It All Together](#putting-it-all-together)
+1. [What Recovery Planning Protects You From](#what-recovery-planning-protects-you-from)
+2. [Backup and Restore](#backup-and-restore)
+3. [RPO and RTO](#rpo-and-rto)
+4. [Retention](#retention)
+5. [Point-in-Time Recovery](#point-in-time-recovery)
+6. [Versions, Soft Delete, Snapshots, and Time Travel](#versions-soft-delete-snapshots-and-time-travel)
+7. [Restore Sandboxes](#restore-sandboxes)
+8. [Deletion Guardrails and Audit Needs](#deletion-guardrails-and-audit-needs)
+9. [Restore Drills](#restore-drills)
+10. [Putting It Together](#putting-it-together)
+11. [References](#references)
 
-## The Recovery Story
-<!-- section-summary: A good recovery plan names the data, the accident, the previous copy, and the place where the team proves the restore. -->
+## What Recovery Planning Protects You From
+<!-- section-summary: Recovery planning answers what happens after deletion, corruption, bad deploys, ransomware-like mistakes, or audit retention needs. -->
 
-Imagine a small retail platform running on Google Cloud. The checkout service stores orders in a Cloud SQL for PostgreSQL instance called `orders-prod`. Receipt PDFs land in a Cloud Storage bucket called `orders-receipts-prod`. Customer support notes live in Firestore, analytics tables live in BigQuery, and an old worker VM still writes export batches to a Persistent Disk before another job uploads them.
+Durable storage keeps data after a request ends. It also keeps bad writes after a bad release. A clinic import script can overwrite appointment notes. A cleanup job can delete inspection photos. A profile editor bug can replace drafts with stale data. A BigQuery transform can overwrite a revenue table with an incomplete result. A VM worker can corrupt a local render directory.
 
-One Friday afternoon, several mistakes arrive close together. A bad deployment writes `0.00` into the amount field for thousands of orders. A cleanup job deletes a folder of receipt PDFs. A support automation overwrites Firestore customer profiles with stale loyalty data. An analyst replaces a BigQuery revenue table with an incomplete query result. The VM worker also corrupts a local staging directory before the team notices the alert.
+Backups and retention answer the uncomfortable question: what happens after the mistake? The answer needs more than "the data is durable." Durability protects against hardware loss. Recovery planning protects against deletion, corruption, bad deploys, operator mistakes, and audit requirements.
 
-Replication and durability protect the platform from disk failures, machine failures, and some zone failures. They also copy valid writes and bad writes very quickly. If an application sends the wrong update, the storage system usually preserves that wrong update with excellent reliability, so the team needs separate previous copies that survive outside the active write path.
+This is the beginner leap: durable does not mean recoverable to the exact state you need. If bad data is written at 13:41, the storage system may keep that bad data perfectly. Recovery planning gives you an earlier state, a safe place to restore it, and a tested path to repair production without creating more damage.
 
-That is the job of **backups and retention**. A backup gives the team a copy from a previous point in time. A retention rule decides how long that copy survives. A restore process turns that copy into something usable again. A restore drill proves the process before customers, auditors, and incident commanders need it.
-
-Here is the recovery map for the retail platform:
+The shape changes by service. Cloud SQL may use backups and point-in-time recovery. Cloud Storage may use object versioning, soft delete, lifecycle rules, and retention policies. BigQuery may use time travel and snapshots. VM disks may use snapshots. A useful recovery plan names the tool and proves the team can actually use it.
 
 ![Recovery map by data shape](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/recovery-map-by-data-shape.png)
-*Each data shape has a different recovery tool. A good incident plan routes objects, rows, documents, analytics tables, disks, and file shares into a sandbox before production repair.*
+*Each data shape has a different recovery tool, so the incident plan should route the data to the right previous copy.*
 
-Notice the shape. Each data system has its own recovery tool because each system stores changes differently. Object storage has generations and soft-deleted objects. Databases have backups and transaction logs. Analytics tables have time travel and snapshots. VM disks have block snapshots. The senior engineering habit is matching the incident to the right previous copy.
+For AWS readers, the anchors are familiar after the GCP recovery jobs are clear. AWS Backup, S3 Versioning and Object Lock, S3 lifecycle rules, RDS PITR, DynamoDB PITR, EBS snapshots, and Redshift snapshot or restore patterns all map to similar recovery conversations. Google Cloud uses its own service-specific controls.
 
-## RPO, RTO, and Restore Targets
-<!-- section-summary: RPO says how much data the business can lose, RTO says how long recovery can take, and the restore target keeps recovery away from production until validation passes. -->
+## Backup and Restore
+<!-- section-summary: A backup is a previous copy, and a restore turns that copy into usable data again. -->
 
-Before choosing a Google Cloud feature, the team needs two simple numbers. **Recovery Point Objective**, usually called **RPO**, means the maximum amount of data change the business can lose. **Recovery Time Objective**, usually called **RTO**, means the maximum time the business can spend getting the service back into a usable state.
+A **backup** is a previous copy of data. It may be a database backup, object version, Firestore backup, BigQuery table snapshot, disk snapshot, or Filestore backup. The backup exists so the team can return to or inspect an earlier state.
 
-For the retail platform, the `orders-prod` database may need an RPO of five minutes because every paid order matters. The analytics aggregate table may tolerate an RPO of one day because the raw clickstream can rebuild it overnight. The receipt PDFs may need a retention window of months or years because customers, finance, and compliance teams ask for those files long after checkout.
+A **restore** is the process of turning a backup into usable data. A restore may create a new Cloud SQL instance, copy an older Cloud Storage object generation back to the live name, restore Firestore data, create a disk from a snapshot, or copy a BigQuery table from an earlier state.
 
-RPO and RTO sound abstract until someone writes them next to real data. A practical recovery table might look like this:
+The restore target matters. In many incidents, the first restore should land in a separate project, instance, dataset, bucket, or disk. That gives the team a safe place to inspect recovered data before changing production again.
 
-| Data set | Main failure | Recovery tool | Example target |
-|---|---|---|---|
-| Cloud SQL orders | Bad write or dropped table | Automated backups plus PITR clone | RPO 5 minutes, RTO 1 hour |
-| Cloud Storage receipts | Accidental overwrite or folder delete | Object Versioning, soft delete, retention policy | Recover files within 30 days, preserve locked receipts for 7 years |
-| Firestore support profiles | Bad automation write | Scheduled backup, PITR read/export, or clone | Recover profile state from earlier today |
-| BigQuery revenue tables | Bad replace query or expired table | Time travel copy, table snapshot, rebuild from raw facts | Restore dashboard table within 2 hours |
-| Persistent Disk staging | VM script corrupts local files | Scheduled standard snapshot | Create a new disk from last good snapshot |
-
-The third concept is the **restore target**. A restore target is the project, instance, bucket, dataset, or disk where recovered data lands first. In production teams, the first target should usually be a **restore sandbox**, such as a separate project named `commerce-restore`, because a restore can overwrite data, trigger jobs, or confuse applications if it lands directly in production.
-
-So the team does three things before the incident. It names the RPO and RTO for each data set. It chooses the Google Cloud recovery feature that can meet those numbers. It defines a restore target where people can inspect recovered data without touching the live system.
-
-## Cloud Storage Versions, Soft Delete, and Retention
-<!-- section-summary: Cloud Storage protects objects with different layers: versions for overwrites, soft delete for recent deletes, lifecycle rules for cost control, and retention policies for delete prevention. -->
-
-Cloud Storage stores objects such as PDFs, images, export files, raw event archives, and database dumps. An **object generation** is the unique version number Cloud Storage gives an object write. If the retail platform uploads `receipts/2026/06/order-90210.pdf` twice, the object name stays familiar, but the generation number lets Cloud Storage distinguish the older bytes from the newer bytes.
-
-**Object Versioning** keeps old object generations as noncurrent versions after a live object gets replaced or deleted. This helps with a common mistake: an application uploads a broken receipt PDF over a good one. With versioning turned on, the team can copy the previous generation back to the live object name after it identifies the generation it wants.
-
-A production setup can turn on versioning and inspect older generations with commands like these:
+Imagine a clinic import job loads `appointments_import_20260704.csv` and overwrites appointment notes for the wrong clinic. The useful recovery path is backup artifact, separate restore target, then validation. For Cloud SQL, the artifact may be an automated backup plus transaction logs inside the PITR window. The separate target could be `clinic-restore-20260704`.
 
 ```bash
-gcloud storage buckets update gs://orders-receipts-prod --versioning
-
-gcloud storage ls --all-versions gs://orders-receipts-prod/receipts/2026/06/
-
-gcloud storage cp \
-  gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#GENERATION_NUMBER \
-  gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf
+gcloud sql instances clone clinic-prod clinic-restore-20260704 \
+  --project=clinic-prod \
+  --point-in-time="2026-07-04T13:41:00Z"
 ```
 
-The `--all-versions` output should show the live generation and older generations. The generation number after `#` is the exact version handle the restore command consumes.
+Important details in this command:
 
-```console
-gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718216000123456  184233  2026-06-12T14:10:00Z
-gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718217100456789  192018  2026-06-12T14:31:40Z
-```
+- The timestamp should sit just before the import job started damaging rows.
+- The restore target is a new instance, so validation can happen away from production.
+- The clone gives the team a source for comparison or selective repair.
 
-Versioning protects against many overwrites, but Cloud Storage also gives teams **soft delete** for recent object and bucket deletes. Google Cloud creates new buckets with soft delete turned on by default, and the default duration is seven days unless a user or organization policy changes it. During the soft delete window, Cloud Storage keeps deleted objects or buckets in a recoverable state, then permanently deletes them after the window ends.
-
-The receipt bucket may use a 30-day soft delete window because support teams often notice accidental deletes within a month. The team can configure and verify that policy like this:
-
-```bash
-gcloud storage buckets update \
-  gs://orders-receipts-prod \
-  --soft-delete-duration=30d
-
-gcloud storage buckets describe \
-  gs://orders-receipts-prod \
-  --format="default(soft_delete_policy)"
-```
-
-```console
-soft_delete_policy:
-  effectiveTime: 2026-06-10T09:12:55.123Z
-  retentionDurationSeconds: '2592000'
-```
-
-During the Friday incident, the cleanup job deletes `receipts/2026/06/order-90210.pdf`. The recovery runbook lists soft-deleted versions for that object and restores the generation that matches the incident timeline:
-
-```bash
-gcloud storage ls \
-  gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf \
-  --soft-deleted
-
-gcloud storage restore \
-  gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#GENERATION_NUMBER
-```
-
-```console
-Restoring gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf#1718216000123456...
-Completed 1 restore operation.
-```
-
-The bucket also needs cost control. Object Versioning can keep many noncurrent generations, so production teams pair it with **Object Lifecycle Management**. A lifecycle rule can delete noncurrent versions after a chosen age, while soft delete still gives an additional recent-deletion recovery window.
-
-```json
-{
-  "rule": [
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "isLive": false,
-        "age": 90
-      }
-    }
-  ]
-}
-```
-
-```bash
-gcloud storage buckets update \
-  gs://orders-receipts-prod \
-  --lifecycle-file=receipt-lifecycle.json
-```
-
-Some receipt files also have legal retention requirements. A **retention policy** stops objects from deletion or replacement until they reach the required age. A **locked retention policy** gives stronger compliance protection because, after the team locks it, nobody can remove the policy or shorten the retention period.
-
-The lock deserves a careful change process. Teams usually test the policy on a non-production bucket, confirm lifecycle behavior, confirm application uploads, and confirm restore drills before locking the production bucket. The command exists for the final step, but the human process around it matters because Google Cloud treats the lock as irreversible:
-
-```bash
-gcloud storage buckets update \
-  gs://orders-receipts-prod \
-  --retention-period=2555d
-
-gcloud storage buckets update \
-  gs://orders-receipts-prod \
-  --lock-retention-period
-```
-
-The simple rule for Cloud Storage is this: **versions recover older object contents, soft delete recovers recent deletes, retention policies prevent early removal, and lifecycle rules keep old generations from growing forever**. A real receipt bucket often needs all four, with separate IAM roles for people who upload, people who restore, and people who approve retention changes.
-
-![Cloud Storage recovery layers](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/cloud-storage-recovery-layers.png)
-*Object recovery is layered: generations help with overwritten files, soft delete helps with recent deletes, retention protects required records, and lifecycle rules keep the extra copies affordable.*
-
-## Cloud SQL Backups, PITR, and Clones
-<!-- section-summary: Cloud SQL recovery uses backups for base copies, transaction logs for PITR, and clones or restored instances for sandbox validation. -->
-
-Cloud SQL runs managed MySQL, PostgreSQL, and SQL Server. For the retail platform, the most important failure is a logical database mistake: a migration, admin script, or application release writes the wrong values into valid tables. High availability can keep the database online during infrastructure failures, yet it still accepts application writes, including bad ones.
-
-**Automated backups** give Cloud SQL regular database copies. **Point-in-time recovery**, usually shortened to **PITR**, uses retained transaction logs so the team can recover to a specific timestamp inside the log retention window. The base backup gives Cloud SQL a starting point, and the logs move the database forward to the requested recovery time.
-
-For PostgreSQL, a team might enable automated backups and PITR on `orders-prod`, then set retained transaction log days according to the business RPO:
-
-```bash
-gcloud sql instances patch orders-prod \
-  --backup-start-time=03:00
-
-gcloud sql instances patch orders-prod \
-  --enable-point-in-time-recovery
-
-gcloud sql instances patch orders-prod \
-  --retained-transaction-log-days=7
-```
-
-Cloud SQL editions and backup options affect the exact retention range. The important production habit is documenting the chosen window next to the application risk. A five-minute RPO on orders has little value if the instance keeps too few logs or if nobody has tested a restore to the timestamp format the runbook uses.
-
-During the Friday incident, logs show the bad deployment began writing corrupted rows at `2026-06-12T14:18:30Z`. The database team chooses `2026-06-12T14:18:00Z` as the recovery point and creates a new target instance in the agreed restore target. The exact project and network belong in the runbook because Cloud SQL target options depend on the backup option and organization design.
-
-```bash
-gcloud sql instances clone orders-prod orders-restore-20260612 \
-  --point-in-time="2026-06-12T14:18:00Z"
-```
-
-The clone command creates a new instance. The first read-back should show `RUNNABLE`; the second check should come from SQL queries against the clone, not from the source instance.
-
-```bash
-gcloud sql instances describe orders-restore-20260612 \
-  --format='table(name,state,region,databaseVersion)'
-```
-
-```console
-NAME                    STATE     REGION       DATABASE_VERSION
-orders-restore-20260612 RUNNABLE  us-central1  POSTGRES_16
-```
-
-That clone gives the team a safe place to query the recovered orders. The team can compare row counts, inspect a sample of paid orders, and export selected rows back into production if the live database only needs a narrow data repair. If the production database needs a full rollback, the team still validates the clone first, then plans the application cutover, connection string update, traffic pause, and rollback path.
-
-Here is a small validation query set that belongs in the restore runbook:
+Validation should answer the business question and confirm the database starts. A few SQL checks might compare damaged rows in production with the restored target:
 
 ```sql
-SELECT COUNT(*) AS zero_amount_orders
-FROM orders
-WHERE amount = 0.00
-  AND created_at >= TIMESTAMP '2026-06-12 14:18:00+00';
+SELECT COUNT(*) AS missing_notes
+FROM appointments
+WHERE clinic_id = 'clinic_42'
+  AND appointment_date = DATE '2026-07-05'
+  AND appointment_notes IS NULL;
 
-SELECT status, COUNT(*) AS orders
-FROM orders
-WHERE created_at >= TIMESTAMP '2026-06-12 00:00:00+00'
-GROUP BY status
-ORDER BY status;
-
-SELECT order_id, amount, status, updated_at
-FROM orders
-WHERE order_id IN ('90210', '90211', '90212')
-ORDER BY order_id;
+SELECT appointment_id, patient_id, appointment_notes, updated_at
+FROM appointments
+WHERE appointment_id IN ('appt_88421', 'appt_88422', 'appt_88423')
+ORDER BY appointment_id;
 ```
 
+Example validation output from the restore target:
+
 ```console
-zero_amount_orders
+missing_notes
+-------------
 0
 
-status      orders
-paid        48219
-pending      831
-refunded      44
+appointment_id | patient_id | appointment_notes        | updated_at
+---------------+------------+--------------------------+------------------------
+appt_88421     | pat_1021   | Bring referral documents | 2026-07-04 12:58:11 UTC
+appt_88422     | pat_1104   | Follow-up blood pressure | 2026-07-04 13:02:44 UTC
 ```
 
-Notice how Cloud SQL recovery combines engineering and operations. The Google Cloud feature gives the previous database state, while the team supplies the timestamp, the sandbox, the validation queries, and the application cutover plan. That is the difference between "we have backups" and "we can restore this service under pressure."
+This evidence proves the restored target contains useful pre-import data. The team can then choose a repair path, such as exporting selected rows from the restore target and applying a reviewed update to production.
 
-## Firestore Backups, PITR, and Exports
-<!-- section-summary: Firestore has scheduled backups for database-level restore, PITR for recent historical reads or clones, and exports for long-lived portability. -->
+## RPO and RTO
+<!-- section-summary: RPO names how much data change the business can lose, and RTO names how long recovery may take. -->
 
-Firestore stores documents rather than relational rows. The retail platform uses it for customer support profiles because the support UI needs flexible fields such as loyalty notes, contact preferences, and recent case summaries. The Friday incident changes thousands of `customers/{id}` documents with stale loyalty data, so the team needs a previous version of those documents.
+**Recovery Point Objective**, or **RPO**, means the maximum amount of data change the business can lose. **Recovery Time Objective**, or **RTO**, means the maximum time the business can spend getting useful service back.
 
-Firestore gives teams several recovery paths. **Scheduled backups** create consistent database copies on a daily or weekly schedule, and a restore creates a new database from a backup. The backup includes data and index configurations at that point in time, while Google documents separate exclusions such as TTL policies and Firebase Security Rules.
+These terms are easier with a clock. If the clinic appointment database has a 5-minute RPO, a bad import at 13:41 should let the team recover to a point very close to 13:36 or later. The business accepts losing at most about five minutes of changes. If the same system has a 1-hour RTO, the team should be able to make useful service available again within that hour.
 
-A team can configure a daily backup schedule with a retention period like this:
+RPO talks about data loss. RTO talks about time to usable service. A system can have a strong RPO and a weak RTO if backups are frequent but restores are slow. A system can have a strong RTO and a weak RPO if it comes back quickly with stale data. The business needs both numbers because they answer different pain points.
 
-```bash
-gcloud firestore backups schedules create \
-  --database='(default)' \
-  --recurrence=daily \
-  --retention=14w
-```
+These terms make sense only after you attach them to real data:
 
-The schedule list should show retention and recurrence. This output gives the team evidence that the restore window matches the support-profile recovery target.
-
-```bash
-gcloud firestore backups schedules list \
-  --database='(default)' \
-  --format='table(name,retention,dailyRecurrence)'
-```
-
-```console
-NAME                                                                    RETENTION  DAILY_RECURRENCE
-projects/commerce-prod/databases/(default)/backupSchedules/a1b2c3d4     14w        02:00
-```
-
-Firestore also supports **point-in-time recovery**. With PITR enabled, Firestore keeps older versions for seven days; without PITR, the older-version window is one hour. Teams can use PITR for historical reads, exports, and clone-style recovery flows, depending on the operation they need and the permissions their operators hold.
-
-For the retail platform, the response may use two paths. If the team needs to recover the whole profile database from the previous night, a scheduled backup restore into a new database gives a clean inspection target. If the team only needs the values from one hour before the bad automation, PITR can read or export data at that point and let the team repair only affected documents.
-
-The first runbook question is scope. Whole database recovery usually points at a backup restore. Narrow document repair usually points at PITR reads or an export from a historical timestamp. Long-term migration or audit copies often use Firestore export to Cloud Storage because export files can live under a separate bucket retention strategy.
-
-Here is a production-style Firestore recovery checklist for the support profile incident:
-
-| Question | Why it matters |
-|---|---|
-| Which collection paths changed? | Narrowing to `customers/*/supportProfile` may avoid a full database rollback. |
-| Which timestamp marks the last good profile state? | PITR and backup restore both need a precise recovery point or backup name. |
-| Which database receives the restore or clone? | The restored data needs isolation before engineers compare it with live data. |
-| Which fields can merge safely into production? | Profile repair may update loyalty fields while preserving new support notes. |
-| Which job caused the write? | Recovery without disabling the bad writer can corrupt the repaired documents again. |
-
-Firestore recovery has one practical wrinkle that junior engineers often miss. Restoring or cloning data can give the team the old documents, but the application still needs a careful merge plan if production received valid writes after the incident. A support note added after the bad loyalty update may be real customer history, so the recovery script should target the corrupted fields rather than blindly copying whole documents over live ones.
-
-## BigQuery Time Travel, Snapshots, and Partitions
-<!-- section-summary: BigQuery recovery usually copies historical table data, restores snapshots, or rebuilds derived tables from protected raw facts. -->
-
-BigQuery stores analytical data, so its recovery path differs from application database recovery. The retail platform stores raw checkout events in `commerce_raw.events`, modeled tables in `commerce_mart`, and dashboard aggregates in `commerce_reporting`. When the analyst replaces `commerce_reporting.daily_revenue` with an incomplete query result, customers can still place orders, but executives and finance teams now see wrong numbers.
-
-**Time travel** lets BigQuery query or restore table data that changed or disappeared within the dataset's time travel window. Google documents seven days as the default window, and teams can use GoogleSQL `FOR SYSTEM_TIME AS OF` to query a historical table version. This is excellent for asking, "What did the table contain one hour before the bad query?"
-
-```sql
-SELECT order_date, gross_revenue, order_count
-FROM `commerce_reporting.daily_revenue`
-  FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
-WHERE order_date >= DATE '2026-06-01'
-ORDER BY order_date;
-```
-
-For restore, the team usually copies historical table data into a new table first. That keeps the inspection step clear and gives analysts a stable table name for validation:
-
-```bash
-bq cp \
-  commerce_reporting.daily_revenue@-7200000 \
-  commerce_restore.daily_revenue_before_incident
-```
-
-```console
-Table 'commerce_restore.daily_revenue_before_incident' successfully copied.
-```
-
-**Table snapshots** help with planned protection. A BigQuery table snapshot is a read-only table that preserves a table at a specific time. Google recommends creating snapshots in a different dataset from the base table so a dataset deletion leaves a separate restore path for the base table.
-
-```sql
-CREATE SNAPSHOT TABLE `commerce_recovery_snapshots.daily_revenue_20260612`
-CLONE `commerce_reporting.daily_revenue`
-OPTIONS (
-  expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-);
-```
-
-BigQuery teams also think about **partitions**. A partitioned table stores data in date, timestamp, integer-range, or ingestion-time slices. If a bad job only changed `2026-06-12`, the recovery might copy one partition or rebuild one date range rather than replacing the entire table.
-
-The strongest analytics recovery plan keeps raw facts safer than derived tables. Raw event tables can use narrow write paths, careful IAM, dataset-level controls, and export or snapshot policies. Derived tables can then rebuild from raw facts with versioned SQL, scheduled pipelines, and validation queries. This keeps the expensive recovery work focused on the business source of truth.
-
-For the Friday incident, the team first queries `daily_revenue` from two hours earlier, copies that historical data into `commerce_restore`, and compares totals against raw events. If the raw event tables survived, the team can rebuild the aggregate cleanly. If the raw tables changed too, table snapshots and dataset restore procedures give the team the next recovery path.
-
-## Persistent Disk Snapshots for VM Data
-<!-- section-summary: Persistent Disk snapshots protect VM disks by creating restorable block-level backups, and the restore creates a new disk rather than changing the source disk. -->
-
-Modern application data should usually live in managed databases, object stores, or analytics systems, but real platforms often keep a few VM disks around. The retail platform has an export worker that stages files on a Persistent Disk before uploading them to Cloud Storage. A script bug can corrupt that staging directory or delete files before the upload step runs.
-
-A **Persistent Disk snapshot** captures disk data so Compute Engine can create a new disk from that snapshot later. Standard snapshots and archive snapshots live separately from the source disk and continue to exist after the source disk disappears. Google documents standard snapshots as incremental, which makes regular schedules more practical than full disk copies every time.
-
-Snapshot type matters for recovery expectations. Instant snapshots help with fast local rollback from user error or application corruption, but they stay tied to the source disk location and lifecycle. Standard snapshots and archive snapshots provide remote backup copies; standard snapshots suit regular restore needs, and archive snapshots suit long retention where access happens rarely.
-
-A VM disk runbook might create a scheduled snapshot policy for the staging disk:
-
-```bash
-gcloud compute resource-policies create snapshot-schedule worker-daily \
-  --region=us-central1 \
-  --daily-schedule \
-  --start-time=03:00 \
-  --max-retention-days=14
-
-gcloud compute disks add-resource-policies worker-staging-disk \
-  --zone=us-central1-a \
-  --resource-policies=worker-daily
-```
-
-During restore, Compute Engine creates a new disk from the snapshot. The source disk stays as it was, which is exactly what the team wants during incident investigation. The recovered disk can attach to a quarantine VM where engineers inspect files without mounting it into the production worker.
-
-```bash
-gcloud compute snapshots list \
-  --filter="sourceDisk~worker-staging-disk"
-
-gcloud compute disks create worker-staging-restore-20260612 \
-  --zone=us-central1-a \
-  --source-snapshot=SNAPSHOT_NAME \
-  --type=pd-balanced
-```
-
-```console
-NAME                                     DISK_SIZE_GB  SRC_SNAPSHOT                     STATUS
-worker-staging-restore-20260612          200           worker-staging-disk-20260612      READY
-```
-
-Disk snapshots have a boundary that every team should say out loud. They capture blocks, so an application may still need database-level or filesystem-level steps for a clean, application-consistent recovery. For the staging disk, a crash-consistent snapshot may be fine because files either exist or the upload job retries. For a self-managed database on a VM, the team should use database-native backup procedures or carefully coordinate snapshots with the database.
-
-## Restore Sandboxes and Validation
-<!-- section-summary: A restore sandbox gives recovered data a safe landing zone where engineers can test integrity, permissions, and application behavior before production changes. -->
-
-A **restore sandbox** is an isolated environment where restored data lands before it affects production. It can be a separate Google Cloud project, a separate VPC, a separate Cloud SQL instance, a separate BigQuery dataset, a different Firestore database, or a quarantine VM. The key idea is simple: recovered data needs inspection before the application trusts it.
-
-For the retail platform, the sandbox project `commerce-restore` has its own IAM group, its own logging sink, and no production service account keys. Network rules block outbound calls to payment processors, email services, and customer webhooks. That prevents a restored application from sending old receipts, retrying old orders, or replaying support notifications.
-
-The restore flow usually follows four steps:
-
-| Step | What the team proves |
-|---|---|
-| Land the recovered copy | Cloud SQL clone, restored Firestore database, BigQuery copied table, Cloud Storage restored object, or new disk exists in the sandbox. |
-| Validate data integrity | Counts, checksums, sample records, critical business invariants, and schema expectations match the last good point. |
-| Validate application behavior | A read-only or isolated app version can load the data without calling external systems. |
-| Choose the production repair | The team chooses targeted merge, full cutover, table replace, object restore, or rebuild from raw data. |
-
-Validation should have commands and recorded evidence. For Cloud SQL, the team can run SQL checks against the clone. For Cloud Storage, it can compare object sizes, checksums, and metadata. For BigQuery, it can compare aggregate totals between historical tables and raw events. For Firestore, it can sample repaired fields and compare write timestamps.
-
-Here is a small mixed validation script that shows the idea:
-
-```bash
-gcloud storage objects describe \
-  gs://orders-receipts-prod/receipts/2026/06/order-90210.pdf \
-  --format="value(size,md5Hash)"
-
-bq query --use_legacy_sql=false '
-SELECT
-  SUM(gross_revenue) AS revenue,
-  SUM(order_count) AS orders
-FROM `commerce_restore.daily_revenue_before_incident`
-WHERE order_date = DATE "2026-06-12";
-'
-```
-
-```console
-184233 ImIEBA==
-
-+----------+--------+
-| revenue  | orders |
-+----------+--------+
-| 9283312  | 48219  |
-+----------+--------+
-```
-
-The team should record the result of each restore drill in an incident-style note. That note should include the source system, recovery point, target resource, operator, duration, validation evidence, and cleanup steps. A backup without a recent restore record leaves too much guessing for the real incident.
-
-## Deletion Guardrails and Ownership
-<!-- section-summary: Recovery improves when IAM, org policies, project liens, retention locks, and approval paths reduce who can delete the recovery path. -->
-
-Backups help after damage, and guardrails reduce the chance that one person or one script destroys both production data and the recovery path. On Google Cloud, the most important guardrail is ownership separation. The account that writes receipts should not also control bucket retention locks. The data pipeline that writes BigQuery aggregates should not also delete raw event tables and recovery snapshots.
-
-Cloud Storage gives several guardrail layers. Soft delete protects recent object and bucket deletes. Retention policies prevent early object deletion or replacement. Locked retention policies protect compliance buckets from later policy removal. IAM controls decide which humans and service accounts can update those settings, restore objects, delete versions, or manage lifecycle policies.
-
-Project-level deletion also deserves attention. Cloud Storage soft delete cannot recover buckets and objects after the entire project disappears. For business-critical data, teams often limit project deletion permissions tightly, use project liens where appropriate, and keep recovery copies in a different project with a different owner group.
-
-The IAM split can look like this:
-
-| Role group | Normal permissions | Approval expectation |
+| Data | Likely incident | Recovery target |
 |---|---|---|
-| App writers | Write live objects, write database rows, run analytics pipelines | Normal deployment review |
-| Data restorers | Restore soft-deleted objects, clone databases, create restore datasets | Incident commander or data owner approval |
-| Retention admins | Change bucket retention, lifecycle, backup retention, snapshot policies | Change advisory review and audit ticket |
-| Break-glass admins | Emergency access to projects and recovery controls | MFA, logging, short session, post-incident review |
+| Clinic appointments in Cloud SQL | Bad import updates appointment notes | RPO 5 minutes, RTO 1 hour |
+| Inspection photos in Cloud Storage | Folder deleted during cleanup | Recover deleted files within 30 days |
+| Support case drafts in Firestore | Automation overwrites case fields | Recover earlier state from same day |
+| Product analytics in BigQuery | Transform replaces table with bad data | Restore dashboard table within 2 hours |
+| Render cache on Persistent Disk | VM script corrupts local files | Recreate disk from latest useful snapshot |
 
-The key habit is protecting the recovery path from the same mistake that damages production. A cleanup job that can delete live objects should have no permission to shorten soft delete duration. A BigQuery transformation job that replaces dashboard tables should have no permission to delete recovery snapshots. A CI/CD service account that deploys code should have no permission to remove Cloud SQL backups.
+RPO and RTO guide feature choices. A short RPO for appointments may require Cloud SQL PITR and tested clones. A longer RPO for derived analytics may rely on raw event replay and table snapshots. A legal retention need for inspection documents may require Cloud Storage retention policies.
 
-Guardrails also need audit. Cloud Audit Logs, Cloud Logging sinks, Monitoring alerts, and Security Command Center findings can alert on changes to backup policies, retention policies, snapshot schedules, and project deletion risk. The alert should tell the owner which recovery objective the change affects, because "backup policy changed" matters more when it means "orders RPO no longer meets five minutes."
+## Retention
+<!-- section-summary: Retention decides how long previous copies or protected records must survive. -->
 
-## Restore Drills and Operating Rhythm
-<!-- section-summary: Restore drills turn recovery settings into a practiced runbook with measured RPO, measured RTO, validation evidence, and cleanup. -->
+**Retention** means how long data or previous copies must remain available. Retention can support recovery, compliance, customer support, finance, legal hold, or audit review. It can also control cost by removing old versions after they stop being useful.
 
-A **restore drill** is a rehearsal where the team restores real or representative data into a safe target and measures the result. Google Cloud's reliability guidance recommends judging recovery tests by data integrity, RTO, and RPO. That matches how incident commanders think during a real data loss event: did we recover the right data, how much did we lose, and how long did it take?
+Retention policy should be written in business language first. For example: keep submitted inspection documents for seven years, keep temporary upload staging objects for seven days, keep object versions for 90 days, and keep database PITR logs for the agreed recovery window.
 
-For the retail platform, a quarterly drill can choose one data system each month and rotate through the full set over the quarter. January restores a Cloud SQL clone to a timestamp. February restores a receipt from Cloud Storage soft delete and a noncurrent generation. March creates a BigQuery table from time travel and validates it against raw events. April creates a disk from a snapshot and attaches it to a quarantine VM.
+Cloud Storage retention policies can prevent object deletion before the required age. Lifecycle rules can remove temporary objects and old noncurrent versions. Database backup retention and log retention should match the RPO and audit needs of the data set.
 
-A useful drill record might use this format:
+A practical retention table should name the owner and cleanup mechanism:
 
-| Field | Example |
+| Data type | Retention rule | Owner | Reason | Cleanup mechanism |
+|---|---|---|---|---|
+| Temporary upload staging objects | Keep for 7 days | Platform storage owner | Users abandon uploads and retries create leftovers | Cloud Storage lifecycle rule on `upload-staging/` |
+| Submitted inspection reports | Keep for 7 years | Compliance owner and product owner | Contract, audit, and customer dispute review | Cloud Storage retention policy, then approved lifecycle cleanup after the retention age |
+| Cloud SQL appointment records and PITR logs | Keep backups and logs for the agreed recovery window | Database owner | Recover from bad imports and migrations | Cloud SQL automated backup and PITR retention settings |
+| Firestore profile drafts | Keep inactive drafts for 180 days | Product owner | Let users return to unfinished work without storing drafts forever | Firestore TTL on an `expiresAt` timestamp field |
+| BigQuery raw product events | Keep raw events for 13 months | Analytics data owner | Trend analysis, finance checks, and pipeline replay | Partition expiration or scheduled deletion after export review |
+| Persistent Disk snapshots | Keep daily snapshots for 30 days and selected weekly snapshots longer | Platform owner | VM and legacy workload rollback | Snapshot schedule retention policy |
+
+This table makes retention review concrete. The owner knows why the data survives, engineers know which control performs cleanup, and reviewers can see where a legal or compliance rule outranks a simple storage-cost decision.
+
+## Point-in-Time Recovery
+<!-- section-summary: PITR recovers a database or document store to a specific timestamp inside a retained recovery window. -->
+
+**Point-in-Time Recovery**, often shortened to **PITR**, restores data to a specific timestamp inside a supported recovery window. PITR is useful after the team identifies the rough start time of a bad deploy, import, migration, or automation run that wrote wrong data.
+
+Cloud SQL PITR uses backups and retained transaction logs. Firestore also supports point-in-time recovery for supported databases. The team still needs evidence for the timestamp: deploy records, audit logs, application logs, or incident notes.
+
+Example Cloud SQL clone for a clinic appointment database:
+
+```bash
+gcloud sql instances clone clinic-prod clinic-restore-20260704 \
+  --point-in-time="2026-07-04T13:42:00Z"
+```
+
+Important details in this command:
+
+- The clone creates a separate instance for inspection.
+- The timestamp should be just before the damaging write began.
+- After the clone is ready, SQL validation should check appointment counts, sample records, and missing updates before production repair.
+
+Firestore PITR uses the same idea for document data: choose the timestamp, restore or clone to a separate target, then validate real document paths before repair. For a profile-draft incident, the recovery command might look like this:
+
+```bash
+gcloud firestore databases clone \
+  --source-database='projects/profile-prod/databases/(default)' \
+  --snapshot-time='2026-07-04T14:10:00Z' \
+  --destination-database='profile-restore-20260704'
+```
+
+Important details in this command:
+
+- `--snapshot-time` should come from deploy records, audit logs, or incident notes.
+- The destination database is separate, so validation does not overwrite production drafts.
+- The validation should compare a few known document paths and the fields damaged by the incident.
+
+PITR is powerful only inside its retained window. If the bad write happened outside that window, the team needs scheduled backups, exports, raw event replay, or another service-specific recovery copy.
+
+## Versions, Soft Delete, Snapshots, and Time Travel
+<!-- section-summary: Google Cloud recovery controls differ by service: objects use versions and soft delete, disks use snapshots, and BigQuery uses time travel and snapshots. -->
+
+Different services store history differently. A good recovery runbook sends each incident to the right tool:
+
+| Service | Recovery control | Good fit |
+|---|---|---|
+| Cloud Storage | Object Versioning | Recover a previous generation after overwrite |
+| Cloud Storage | Soft delete | Recover recently deleted objects or buckets inside the soft delete window |
+| Cloud Storage | Retention policy | Prevent early deletion of required records |
+| Cloud SQL | Automated backups and PITR | Restore relational data to a timestamp |
+| Firestore | Backups, PITR, exports | Recover document data or inspect earlier states |
+| BigQuery | Time travel, table snapshots, table copies | Recover or inspect earlier table data |
+| Persistent Disk | Snapshots | Create a new disk from an earlier block-device state |
+| Filestore | Backups or snapshots where supported | Recover shared filesystem data |
+
+Cloud Storage object recovery might look like this:
+
+```bash
+gcloud storage ls --all-versions \
+  gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg
+
+gcloud storage cp \
+  gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg#1719858400123456 \
+  gs://inspection-prod-docs-us/inspections/site_4471/2026/07/report_771/front-door.jpg
+```
+
+Important details in these commands:
+
+- `--all-versions` lists generations, including noncurrent versions if versioning is enabled.
+- The `#1719858400123456` suffix chooses one exact generation.
+- The copy restores that generation to the live object name.
+
+![Cloud Storage recovery layers](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/cloud-storage-recovery-layers.png)
+*Cloud Storage recovery can combine versions, soft delete, retention, and lifecycle rules.*
+
+A disk restore uses a snapshot:
+
+```bash
+gcloud compute disks create render-cache-restore \
+  --project=studio-prod \
+  --zone=us-central1-a \
+  --source-snapshot=render-cache-before-upgrade
+```
+
+Important details in this command:
+
+- The restored disk is new, so the team can attach it to a test VM first.
+- The snapshot name should come from the incident timeline or scheduled policy.
+- Application owners should verify files before the disk replaces any production path.
+
+BigQuery recovery often uses time travel or table snapshots. A recovery query might copy an earlier table state into a new validation table:
+
+```sql
+CREATE TABLE `ticket-prod.ticket_restore.ticket_sales_events_20260704`
+CLONE `ticket-prod.ticket_curated.ticket_sales_events`
+FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR);
+```
+
+Important details in this SQL:
+
+- The restored table lands in a restore dataset.
+- `FOR SYSTEM_TIME AS OF` asks for an earlier table state inside the time travel window.
+- Analysts should compare row counts and known event samples before replacing reporting data.
+
+## Restore Sandboxes
+<!-- section-summary: A restore sandbox lets the team validate recovered data without overwriting production during an incident. -->
+
+A **restore sandbox** is a safe place to land recovered data first. It can be a separate Google Cloud project, Cloud SQL instance, BigQuery dataset, bucket prefix, VM, or disk. The sandbox keeps validation away from production until the team knows exactly what it has.
+
+The sandbox exists because "restore" and "repair production" are different moves. During an incident, the team may need to inspect old data, compare rows, export a few records, or prove a file still exists. Doing that directly in production can create a second accident. A sandbox gives responders a place to look before they touch the live system again.
+
+For the clinic appointment incident, the restore sandbox might include:
+
+| Restored item | Sandbox target | Validation |
+|---|---|---|
+| Cloud SQL appointments | `clinic-restore-20260704` | Compare appointment counts and sample corrupted records |
+| Cloud Storage intake forms | `gs://clinic-restore-docs-us/` | Confirm deleted forms and metadata |
+| Firestore case notes | Restore target database or export location | Check affected patient support cases |
+| BigQuery reports | `clinic_restore` dataset | Compare dashboard totals before and after incident |
+
+The sandbox should have separate IAM, clear labels, and cleanup rules. It should also block accidental app connections unless the restore plan explicitly needs a test app.
+
+Good sandbox evidence includes the restore source, restore timestamp or backup ID, target name, owner, validation queries, and cleanup date. That evidence helps reviewers understand whether the restored data is safe to use for repair or only useful for investigation.
+
+## Deletion Guardrails and Audit Needs
+<!-- section-summary: Guardrails reduce accidental loss, while audit retention keeps required records available for review. -->
+
+Recovery features help after damage. Guardrails reduce the chance of damage. Useful guardrails include delete protection on important databases, retention policies on required object records, IAM separation for destructive roles, approval workflows for retention changes, and alerts for backup failures.
+
+Audit needs should be named clearly. A finance export, signed agreement, inspection report, medical record, or security log may need a retention period that is longer than the engineering restore window. That retention choice should involve legal, security, finance, or compliance owners for regulated or sensitive data.
+
+For Cloud Storage, a locked retention policy needs careful review because shortening or removing it after the lock is restricted. Test the policy on non-production data, confirm application behavior, confirm lifecycle behavior, and document the approval before locking a production bucket.
+
+A destructive-change workflow can use this shape:
+
+| Step | Evidence to keep |
 |---|---|
-| Drill name | Cloud SQL orders PITR drill |
-| Source | `orders-prod` |
-| Recovery point | `2026-06-12T14:18:00Z` |
-| Restore target | `commerce-restore:orders-restore-20260612` |
-| Measured RPO | 30 seconds from last good order update |
-| Measured RTO | 43 minutes to validated clone |
-| Validation | Zero corrupted rows, status counts match expected range, sample orders verified |
-| Cleanup | Clone deleted after export, temporary IAM access removed, runbook updated |
+| Request the change | Ticket names the resource, action, reason, owner, expected data impact, and rollback or restore path |
+| Review backup state | Current backup schedule, PITR setting, snapshot policy, or object retention output is attached before approval |
+| Separate duties | One identity can request the change, a different owner approves it, and a tightly scoped operator or service account applies it |
+| Apply in staging first | Staging command, output, and restore test show the same control path works before production |
+| Apply in production | Command output, change ticket, and resource description after the change show the final state |
+| Verify audit logs | Cloud Audit Logs show who changed the resource, from which principal, and at what time |
+| Alert on future drift | Monitoring or log-based alerts notify the team about backup schedule changes, retention policy updates, lifecycle rule changes, PITR changes, and failed backup jobs |
 
-Teams should treat failed drills as useful findings. A failed drill may reveal missing IAM permissions, expired backups, slow clone times, unknown dataset owners, untested lifecycle rules, or queries that no longer match the schema. Every one of those findings is cheaper during a calm drill than during a customer-impacting incident.
+IAM separation should match the danger level. Keep the identity that deploys application code separate from the identity that can shorten retention on required records. Backup administrators can manage schedules. Restore operators can restore into approved targets. Storage administrators can manage lifecycle rules after review. Broad project owner access should be rare enough that audit logs are meaningful.
 
-The operating rhythm should also include policy review. Backup retention, soft delete duration, lifecycle rules, BigQuery snapshot expiration, Firestore backup schedules, and snapshot policies drift as products grow. A new marketplace integration may require longer receipt retention. A new analytics dataset may need snapshots because finance now uses it for reporting. A new privacy rule may require shorter retention for a different class of data.
+Alerting closes the loop after approval. A retention policy change, Cloud SQL PITR disablement, failed backup, snapshot schedule deletion, or lifecycle rule update should create a visible signal for the owning team. The alert should link to the runbook and the audit log query so the responder can tell whether the change was approved or unexpected.
 
-Good recovery work combines platform settings with team habits. The platform keeps previous copies. The team keeps the runbooks, owners, access reviews, validation queries, and drill records current.
+## Restore Drills
+<!-- section-summary: A restore drill proves that backups, permissions, runbooks, validation queries, and human decisions work before the incident. -->
+
+A backup has limited value until someone proves a restore. A **restore drill** is a scheduled practice run that restores real-enough data into a safe target, validates it, records timing, and updates the runbook.
+
+The drill tests more than the storage feature. It tests whether the right person has permission, whether the command still works, whether the backup is recent enough, whether validation queries exist, whether the restored data can be understood, and whether the team can make a repair decision under time pressure.
+
+For a clinic database, the drill can simulate a bad import. The team picks a timestamp, clones Cloud SQL to a restore instance, runs appointment-count and sample-record checks, measures the clone time, and records the repair options. For Cloud Storage, the drill can replace a harmless test object, restore the previous generation to a sandbox prefix, and compare checksum, content type, and metadata.
+
+A practical drill includes:
+
+| Step | Evidence |
+|---|---|
+| Pick scenario | "Bad import corrupted clinic appointments at 13:42 UTC" |
+| Restore | Clone Cloud SQL to a sandbox timestamp |
+| Validate | Run row counts, sample checks, and app-level queries |
+| Decide repair | Export selected rows, cut over, or rebuild from source |
+| Measure | Compare actual recovery time with RTO |
+| Update | Fix missing IAM, unclear commands, or slow approvals |
 
 ![Restore drill checklist](/content-assets/articles/article-cloud-providers-gcp-storage-databases-backups-retention/restore-drill-checklist.png)
-*A restore drill is successful when the team chooses a recovery point, restores into a sandbox, validates records, checks application reads, records RPO/RTO evidence, and cleans up access afterward.*
+*A restore drill should test people, permissions, commands, validation, and timing.*
 
-## Putting It All Together
-<!-- section-summary: The complete recovery plan maps each data system to a protected previous copy, an isolated restore target, deletion guardrails, and a practiced restore drill. -->
+The best drill output is boring and specific. It should say which backup was used, how long the restore took, which validation checks passed, which permissions were missing, and which runbook step changed afterward. That record is what turns a backup setting into an operational recovery path.
 
-The Friday incident gives the team five different recovery motions. Cloud SQL gets a PITR clone in `commerce-restore` at the timestamp before the bad deployment. Cloud Storage recovers deleted receipt PDFs from soft delete and older overwritten files from object generations. Firestore uses scheduled backups or PITR paths depending on whether the team needs whole-database recovery or targeted profile repair. BigQuery copies historical table data or restores snapshots, then rebuilds derived aggregates from protected raw facts. Persistent Disk creates a new disk from a snapshot and mounts it on a quarantine VM.
+## Putting It Together
+<!-- section-summary: Recovery design connects each data shape to backup, restore, RPO, RTO, retention, and a tested runbook. -->
 
-Those actions only work because the team prepared the recovery path before the incident. It gave the order database a small RPO and tested PITR. It gave receipts versioning, soft delete, lifecycle rules, and retention protection. It configured Firestore backups and understood the PITR window. It protected BigQuery raw data and created snapshots for important reporting tables. It scheduled disk snapshots for the VM that still holds local state.
+Backups and retention turn storage from "durable" into "recoverable." Define backup and restore first. Attach RPO and RTO to real data. Set retention in business language. Use PITR where timestamp recovery matters. Match object versions, soft delete, snapshots, and time travel to the service that stores the data.
 
-The practical lesson is simple enough to carry into every storage design review. For each data set, ask which previous copy survives, how long it survives, who can delete it, where the restore lands first, and how the team proves the restored data. If nobody can answer those questions, the system has storage, but the team still lacks recovery.
+The final proof is a restore drill. If the team can restore into a sandbox, validate the data, and explain the repair path calmly, the recovery design is doing real work.
 
-Backups and retention close the storage and database module because they connect every earlier design choice to operational reality. A bucket, database, analytics table, or disk only protects the business when the team can recover from human mistakes, bad code, malicious deletion, and messy incidents with a practiced path back to valid data.
+## References
 
----
-
-**References**
-
-- [Cloud Storage soft delete](https://cloud.google.com/storage/docs/soft-delete) - Explains soft delete behavior, default retention, retention limits, propagation timing, and project deletion limits.
-- [Set and manage Cloud Storage soft delete policies](https://cloud.google.com/storage/docs/use-soft-delete) - Documents the `--soft-delete-duration` command and soft delete policy management.
-- [Restore soft-deleted Cloud Storage objects](https://cloud.google.com/storage/docs/use-soft-deleted-objects) - Shows how to list and restore soft-deleted objects and object generations.
-- [Cloud Storage Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Explains object generations, noncurrent versions, and how versioning interacts with soft delete.
-- [Use Cloud Storage versioned objects](https://cloud.google.com/storage/docs/using-versioned-objects) - Documents listing noncurrent versions and copying a generation back as the live object.
-- [Cloud Storage lifecycle management](https://cloud.google.com/storage/docs/managing-lifecycles) - Shows lifecycle configuration for deleting noncurrent versions and managing object cost.
-- [Use and lock Cloud Storage retention policies](https://cloud.google.com/storage/docs/using-bucket-lock) - Documents bucket retention periods, retention policy locks, and the irreversible lock behavior.
-- [Cloud SQL backups overview for PostgreSQL](https://cloud.google.com/sql/docs/postgres/backup-recovery/backups) - Explains automated backups, on-demand backups, backup retention, and backup use in PITR.
-- [Configure Cloud SQL PITR for PostgreSQL](https://cloud.google.com/sql/docs/postgres/backup-recovery/configure-pitr) - Documents enabling PITR and setting retained transaction log days.
-- [Perform Cloud SQL PITR for PostgreSQL](https://cloud.google.com/sql/docs/postgres/backup-recovery/pitr) - Shows point-in-time clone and restore behavior for Cloud SQL instances.
-- [Firestore backups](https://cloud.google.com/firestore/docs/backups) - Documents scheduled backups, retention, restore-to-new-database behavior, and backup schedule commands.
-- [Firestore point-in-time recovery](https://cloud.google.com/firestore/native/docs/use-pitr) - Documents PITR permissions, retention windows, historical reads, exports, and clone permissions.
-- [Firestore export and import](https://cloud.google.com/firestore/docs/manage-data/export-import) - Explains export and import workflows for Firestore data.
-- [BigQuery time travel and fail-safe](https://cloud.google.com/bigquery/docs/time-travel) - Explains BigQuery time travel windows, fail-safe storage, and historical data retention.
-- [BigQuery access historical data](https://cloud.google.com/bigquery/docs/access-historical-data) - Shows `FOR SYSTEM_TIME AS OF` queries and restoring historical table data.
-- [BigQuery table snapshots](https://cloud.google.com/bigquery/docs/table-snapshots-intro) - Explains read-only table snapshots and restoring standard tables from snapshots.
-- [Create BigQuery table snapshots](https://cloud.google.com/bigquery/docs/table-snapshots-create) - Documents snapshot creation and the recommendation to store snapshots in a different dataset.
-- [Managing BigQuery partitioned tables](https://cloud.google.com/bigquery/docs/managing-partitioned-tables) - Documents partition metadata and partition management practices.
-- [Compute Engine disk snapshots](https://cloud.google.com/compute/docs/disks/snapshots) - Explains standard, archive, and instant snapshots, incremental behavior, retention after source deletion, and restore boundaries.
-- [Restore Compute Engine snapshots](https://cloud.google.com/compute/docs/disks/restore-snapshot) - Shows how snapshots create new disks for recovery.
-- [Disaster recovery planning guide](https://cloud.google.com/architecture/dr-scenarios-planning-guide) - Explains end-to-end recovery planning from backup through restore and cleanup.
-- [Testing recovery from data loss](https://cloud.google.com/architecture/framework/reliability/perform-testing-for-recovery-from-data-loss) - Recommends judging recovery tests by data integrity, RTO, and RPO.
+- [Cloud Storage Object Versioning](https://cloud.google.com/storage/docs/object-versioning) - Documents previous object generations for overwrite and delete recovery.
+- [Cloud Storage soft delete](https://cloud.google.com/storage/docs/soft-delete) - Documents recoverable deletion windows for Cloud Storage objects and buckets.
+- [Cloud Storage retention policies](https://cloud.google.com/storage/docs/bucket-lock) - Documents retention controls that protect required records from early deletion.
+- [Cloud SQL backups](https://cloud.google.com/sql/docs/postgres/backup-recovery/backups) - Documents automated backup behavior for Cloud SQL for PostgreSQL.
+- [Cloud SQL point-in-time recovery](https://cloud.google.com/sql/docs/postgres/backup-recovery/configure-pitr) - Documents PITR configuration and retained transaction logs.
+- [Firestore backup and restore](https://cloud.google.com/firestore/native/docs/backups) - Documents scheduled Firestore backups and restore operations.
+- [Firestore point-in-time recovery](https://cloud.google.com/firestore/native/docs/pitr) - Documents Firestore PITR behavior and recovery windows.
+- [BigQuery time travel](https://cloud.google.com/bigquery/docs/time-travel) - Documents querying earlier table states inside BigQuery time travel.
+- [BigQuery table snapshots](https://cloud.google.com/bigquery/docs/table-snapshots-intro) - Documents table snapshots for named historical recovery points.
+- [Persistent Disk snapshots](https://cloud.google.com/compute/docs/disks/snapshots) - Documents creating and restoring snapshots for attached disks.
+- [Filestore backups](https://cloud.google.com/filestore/docs/backups) - Documents Filestore backup behavior for supported tiers.
+- [Cloud Audit Logs](https://cloud.google.com/logging/docs/audit) - Documents audit evidence for Google Cloud administrative and data access events.
+- [Cloud Monitoring alerting](https://cloud.google.com/monitoring/alerts) - Documents alerting policies for operational and recovery signals.

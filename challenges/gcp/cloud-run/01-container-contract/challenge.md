@@ -1,7 +1,6 @@
 ---
-title: "Check The Container Contract"
-sectionSlug: container-contract
+title: "Cloud Run"
 order: 1
 ---
 
-Practice spotting the difference between a container image that builds and a container that can run as a Cloud Run service.
+Review production scenarios covering Cloud Run container contracts, services, revisions, traffic, scaling, runtime identity, configuration, and rollout evidence.

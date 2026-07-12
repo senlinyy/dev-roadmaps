@@ -12,5 +12,3 @@ locals {
   }
 }
 ```
-
-With the rest of the seeded files unchanged, Preview Plan should show two creates and resolve the bucket name from the variable-backed local.

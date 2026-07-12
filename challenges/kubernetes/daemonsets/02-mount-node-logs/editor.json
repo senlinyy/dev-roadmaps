@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "notification-log-agent-daemonset.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: notification-log-agent\n  namespace: observability\nspec:\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-log-agent\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-log-agent\n    spec:\n      nodeSelector:\n        devpolaris.io/node-pool: app\n      containers: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "agent", "label": "agent container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/log-agent:2026.06.14", "label": "approved agent image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "cpu"], "equals": "100m", "label": "CPU request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "memory"], "equals": "128Mi", "label": "memory request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "cpu"], "equals": "500m", "label": "CPU limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "memory"], "equals": "512Mi", "label": "memory limit" },
+      { "path": ["spec", "template", "spec", "volumes"], "containsObject": { "name": "varlogcontainers", "hostPath": { "path": "/var/log/containers", "type": "Directory" } }, "label": "node container log volume" },
+      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "varlogcontainers", "mountPath": "/var/log/containers", "readOnly": true }, "label": "read-only node log mount" }
+    ]
+  }
+}

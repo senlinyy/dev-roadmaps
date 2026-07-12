@@ -1,6 +1,6 @@
 ---
 title: "Sorting and Counting"
-sectionSlug: supporting-utilities
+sectionSlug: build-incident-pipelines
 order: 5
 ---
 

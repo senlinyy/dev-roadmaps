@@ -1,12 +1,15 @@
 ---
 title: "Gate Debian Package Task"
-sectionSlug: "conditionals-with-variables-and-facts"
+sectionSlug: "facts-registered-results-and-set_fact"
 order: 2
 ---
 
-Make the apt task run only on Debian-family hosts.
+The package task uses the Debian apt module, so it should only run when the managed host facts say the host belongs to the Debian family. Add the condition without changing the package intent.
 
-Requirements:
+Your job:
 
-1. **Task:** install `nginx` with `ansible.builtin.apt`.
-2. **Condition:** `when: ansible_facts.os_family == "Debian"`.
+1. **Keep the Nginx apt task** in the play.
+2. **Gate the task with the OS family fact** for Debian hosts.
+3. **Leave the condition at task level** so the module arguments stay focused on package state.
+
+The grader checks the parsed playbook structure, not command output.

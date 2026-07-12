@@ -1,7 +1,6 @@
 ---
-title: "Read Service Metrics"
-sectionSlug: namespaces-and-dimensions
+title: "CloudWatch Metrics, Dashboards, and Alarms"
 order: 1
 ---
 
-Use each metric snapshot to decide what CloudWatch is measuring and which AWS layer deserves the next check. The goal is to connect namespaces, metric names, dimensions, periods, and statistics to real operating questions.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

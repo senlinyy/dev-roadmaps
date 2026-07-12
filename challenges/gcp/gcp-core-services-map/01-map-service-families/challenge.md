@@ -1,7 +1,6 @@
 ---
-title: "Map Service Families"
-sectionSlug: job-based-map
+title: "GCP Core Services Map"
 order: 1
 ---
 
-Use the job-based map to choose the first GCP service family to inspect. The questions start from application needs instead of product names.
+Review production scenarios covering mapping GCP service families to app jobs for traffic, compute, state, access, signals, deployment, cost, and recovery.

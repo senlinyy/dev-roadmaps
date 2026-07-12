@@ -1,14 +1,16 @@
 ---
 title: "Return a Module Output"
-sectionSlug: outputs
+sectionSlug: extracting-one-private-bucket-module
 order: 3
 ---
 
-Add the bucket outputs in `modules/private-bucket/outputs.tf`.
+A downstream IAM policy needs to reference the bucket created inside the module. Expose the module values callers actually need instead of asking them to rebuild provider identifiers by hand.
 
-Requirements:
+Your job:
 
-1. **Output:** `bucket_name` with value `aws_s3_bucket.this.bucket`.
-2. **Output:** `bucket_arn` with value `aws_s3_bucket.this.arn`.
-3. **Descriptions:** add a clear `description` to both outputs.
-4. **Do not use** a literal ARN string.
+1. **Publish the bucket name** from the managed bucket resource.
+2. **Publish the bucket ARN** from the same resource so policies can reference it safely.
+3. **Describe both outputs** so the module contract is readable.
+4. **Avoid rebuilding provider identifiers** from literal strings.
+
+The grader checks the output blocks in HCL.

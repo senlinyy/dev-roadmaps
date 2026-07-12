@@ -20,4 +20,4 @@
         mode: "0755"
 ```
 
-The directory task describes the final filesystem state without relying on a repeated `mkdir` command.
+- The directory task describes the final filesystem state without relying on a repeated `mkdir` command.

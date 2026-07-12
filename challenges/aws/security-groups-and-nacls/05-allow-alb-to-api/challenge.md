@@ -1,6 +1,6 @@
 ---
 title: "Allow ALB To API"
-sectionSlug: make-security-groups-name-the-sender
+sectionSlug: security-group-rules-for-the-app
 order: 5
 ---
 

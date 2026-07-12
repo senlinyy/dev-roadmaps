@@ -1,70 +1,140 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The ECS service has this 30-day review:\n\n```text\ntask size: 1024 CPU, 2048 MB memory\ndesired count: 6\nnormal CPU: 12 to 24 percent\nnormal memory: 18 to 33 percent\np95 latency: stable\n5xx: stable\nrecent deploys: no task restart impact at count 4\n```\n\nWhat is a reasonable next step?",
+      "scenario": "DevPolaris wants to reduce ECS cost without weakening checkout reliability. The team reviews 30 days of production demand and a previous lower-capacity test.\n\nTask size is 1024 CPU, 2048 MB memory. Desired count is 6. Normal CPU is 12 to 24 percent. Normal memory is 18 to 33 percent. P95 latency is stable. 5xx is stable. Recent deploys is no task restart impact at count 4.\n\nWhat is a reasonable next step?",
       "options": [
-        { "id": "a", "text": "Test a smaller desired count or task size with monitoring and a rollback plan." },
-        { "id": "b", "text": "Set desired count to 1 immediately because low average CPU proves no resilience need." },
-        { "id": "c", "text": "Resize RDS first because ECS evidence cannot support ECS changes." },
-        { "id": "d", "text": "Disable alarms before testing so the change does not page anyone." }
+        {
+          "id": "b",
+          "text": "Reduce desired count from six to two in one change because the previous test at four did not restart tasks."
+        },
+        {
+          "id": "c",
+          "text": "Lower task CPU reservations first because average CPU is low, while keeping task count unchanged for availability."
+        },
+        {
+          "id": "a",
+          "text": "Test a smaller desired count or task size with monitoring and a rollback plan."
+        },
+        {
+          "id": "d",
+          "text": "Choose a smaller task size from average CPU and memory alone, without testing peak latency or restart behavior."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Sustained low utilization with stable health can justify a careful right-sizing test. The change still needs a rollback path and post-change monitoring. Desired count also protects availability, so avoid jumping straight to one task."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "RDS is the largest monthly line, but the review says:\n\n```text\nCPU mostly low\nconnections steady during normal traffic\nwrite latency normal except export window\nstorage growing because monthly export metadata was retained\nrelease week starts tomorrow\n```\n\nWhat is the best sequencing?",
-      "options": [
-        { "id": "a", "text": "Do not resize during release week; first fix workload shape and review the instance after representative metrics." },
-        { "id": "b", "text": "Downsize immediately because RDS is the largest line in the snapshot." },
-        { "id": "c", "text": "Ignore storage growth because database cost cannot be affected by retained data." },
-        { "id": "d", "text": "Delete backups first because backups never affect recovery promises." }
+      "correct": [
+        "a"
       ],
-      "correct": ["a"],
-      "explanation": "RDS changes can be slower and riskier than ECS changes because the database holds shared state. The evidence suggests export behavior may be distorting the workload. Fix the shape first, then review sizing after a stable period."
+      "explanation": "Sustained low utilization with stable health can justify a careful right-sizing test. The change still needs a rollback path and post-change monitoring. Desired count also protects availability, so avoid jumping straight to one task.\n\nLearn more in [Compute Optimizer recommendations for Amazon ECS services on Fargate](https://docs.aws.amazon.com/compute-optimizer/latest/ug/view-ecs-recommendations.html)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "S3 prefix usage shows:\n\n```text\nbucket: devpolaris-orders-prod-artifacts\nreceipts/: accessed by support for customer requests\nexports/monthly/: needed for reporting window\nexports/tmp/: rarely read after jobs finish, growing every week\n```\n\nWhich right-sizing move is safest to investigate?",
+      "scenario": "DevPolaris is reviewing S3 growth before changing lifecycle rules. The bucket contains durable business objects and disposable processing artifacts with different retention needs.\n\nBucket is devpolaris-orders-prod-artifacts. Receipts/ is accessed by support for customer requests. Exports/monthly/ is needed for reporting window. Exports/tmp/ is rarely read after jobs finish, growing every week.\n\nWhich right-sizing move is safest to investigate?",
       "options": [
-        { "id": "a", "text": "Add or adjust lifecycle for `exports/tmp/` after confirming the retry and audit window." },
-        { "id": "b", "text": "Apply one immediate expiration rule to the whole bucket because all prefixes have the same job." },
-        { "id": "c", "text": "Delete receipt objects first because they are older than temporary exports." },
-        { "id": "d", "text": "Move every object to logs so S3 storage no longer grows." }
+        {
+          "id": "b",
+          "text": "Apply lifecycle expiration to confirmed temporary chunks while retaining receipts and exports according to their business policies."
+        },
+        {
+          "id": "c",
+          "text": "Move temporary chunks to a cheaper storage class even though they have no reuse or retention requirement."
+        },
+        {
+          "id": "d",
+          "text": "Expire old receipt objects using the same rule as temporary chunks because both share the bucket prefix."
+        },
+        {
+          "id": "a",
+          "text": "Add or adjust lifecycle for `exports/tmp/` after confirming the retry and audit window."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Different prefixes have different jobs. Temporary export chunks may be safe to expire sooner, but receipts and monthly exports may have customer or reporting value. Lifecycle should follow retention intent, not one bucket-level rule."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Different prefixes have different jobs. Temporary export chunks may be safe to expire sooner, but receipts and monthly exports may have customer or reporting value. Lifecycle should follow retention intent, not one bucket-level rule.\n\nLearn more in [Amazon S3 lifecycle management](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "RDS is the largest monthly cost for DevPolaris, but the team is entering release week and the database CPU remains between 10 and 18 percent. The same review finds a retrying query, an unbounded application connection pool, and table plus index growth that has not been separated from retained data. The team wants a lower bill without adding release risk. What is the best sequence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not resize during release week; first fix workload shape and review the instance after representative metrics."
+        },
+        {
+          "id": "b",
+          "text": "Resize the RDS instance from the current low CPU before fixing the retrying query and unbounded connection pool."
+        },
+        {
+          "id": "c",
+          "text": "Reduce allocated storage because current free space is high, without checking whether RDS permits the reduction."
+        },
+        {
+          "id": "d",
+          "text": "Change instance class first because storage growth and compute sizing are the same right-sizing decision."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "RDS changes can be slower and riskier than ECS changes because the database holds shared state. The evidence suggests export behavior may be distorting the workload. Fix the shape first, then review sizing after a stable period.\n\nLearn more in [Compute Optimizer recommendations for Amazon RDS](https://docs.aws.amazon.com/compute-optimizer/latest/ug/view-rds-recommendations.html)."
     },
     {
       "id": "q4",
-      "type": "multiple",
-      "scenario": "Which right-sizing habits are healthy for the orders service?",
+      "type": "single",
+      "scenario": "Thirty days of evidence shows the orders ECS tasks stay below 35 percent CPU and 45 percent memory, including peak traffic. Latency, errors, and target health are stable, but release week starts in two days and the database has a separate connection-pool issue. Which change plan best reduces risk while testing a smaller task size?",
       "options": [
-        { "id": "a", "text": "Compare utilization with latency, errors, target health, and deployment behavior." },
-        { "id": "b", "text": "Change one layer carefully and watch user-impact metrics after the change." },
-        { "id": "c", "text": "Keep recovery and observability requirements in the review before reducing retention or backups." },
-        { "id": "d", "text": "Reduce every layer at once so the team cannot tell which change caused a regression." }
+        {
+          "id": "b",
+          "text": "Schedule one ECS task-size reduction after release week, preserve desired count and recovery controls, use a canary deployment, and watch latency, errors, saturation, and target health with a rollback threshold."
+        },
+        {
+          "id": "d",
+          "text": "Reduce task size and desired count before release week, then use aggregate CPU as the only rollback signal."
+        },
+        {
+          "id": "a",
+          "text": "Bundle the ECS task-size change with a smaller RDS class so the monthly bill clearly shows the maximum saving."
+        },
+        {
+          "id": "c",
+          "text": "Delete older operational logs first because observability retention is not part of compute right-sizing."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Right-sizing works best when each change is evidence-based, scoped, and observable. User impact and recovery promises are part of the decision. Changing everything at once makes troubleshooting much harder."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The utilization history supports testing a smaller task, but the nearby release and unrelated database issue make immediate bundled changes hard to attribute and roll back. A delayed, single-layer canary with customer-impact and saturation signals tests the hypothesis without weakening desired count, recovery, or observability.\n\nLearn more in [AWS Cost Optimization Pillar](https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "Worker cost rises with SQS backlog. The worker review says:\n\n```text\nvisible messages: rising\noldest message age: rising\nworker errors: repeated ExportPayloadTooLarge\nDLQ: empty\nworker concurrency: increased after autoscaling reacted to backlog\n```\n\nWhat is the safest first control?",
+      "scenario": "DevPolaris worker cost and SQS backlog are rising during repeated downstream failures. The team must control spend without losing queued work.\n\nVisible messages is rising. Oldest message age is rising. Worker errors is repeated ExportPayloadTooLarge. DLQ is empty. Worker concurrency is increased after autoscaling reacted to backlog.\n\nWhat is the safest first control?",
       "options": [
-        { "id": "a", "text": "Reduce worker concurrency enough to stop the retry storm, fix payload splitting, then replay carefully." },
-        { "id": "b", "text": "Increase worker concurrency because more workers always make backlog healthier." },
-        { "id": "c", "text": "Delete the queue because an empty DLQ proves messages are safe to drop." },
-        { "id": "d", "text": "Resize the API tasks because all worker retries are caused by public HTTP traffic." }
+        {
+          "id": "b",
+          "text": "Shorten the SQS visibility timeout so failed messages return faster while the payload error remains."
+        },
+        {
+          "id": "a",
+          "text": "Reduce worker concurrency enough to stop the retry storm, fix payload splitting, then replay carefully."
+        },
+        {
+          "id": "c",
+          "text": "Increase concurrency from backlog age alone so the queue drains before the downstream system recovers."
+        },
+        {
+          "id": "d",
+          "text": "Purge the oldest messages so queue age falls, then restore the previous worker concurrency."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A backlog caused by failing work is different from a backlog caused by useful work. More concurrency can make repeated failures more expensive and can pressure downstream services. First slow the failure loop, fix the code path, and replay with control."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The backlog is caused by repeated payload failures, so more concurrency or faster retries amplify the same bad work. Reducing concurrency buys time, preserving the queue avoids data loss, and fixing payload splitting addresses the cause before controlled replay. Purging messages lowers the chart by discarding work rather than recovering it.\n\nLearn more in [Amazon SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)."
     }
   ]
 }

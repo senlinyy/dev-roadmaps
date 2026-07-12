@@ -1,6 +1,6 @@
 ---
 title: "Inspect Blob Boundaries"
-sectionSlug: storage-account
+sectionSlug: storage-accounts
 order: 2
 ---
 

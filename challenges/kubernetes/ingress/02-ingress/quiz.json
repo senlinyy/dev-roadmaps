@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "controller-class-q1",
+      "type": "single",
+      "scenario": "A platform team applies a valid Ingress named `checkout-web`. The API server stores it, but no external address appears and requests never reach the cluster. The object uses `ingressClassName: public`, while the cluster only has an `internal` IngressClass and no controller watching `public`. What is the most direct explanation?",
+      "options": [
+        { "id": "a", "text": "The Service must use NodePort because an Ingress controller cannot forward to a ClusterIP Service." },
+        { "id": "b", "text": "The Ingress records desired routing, but no matching controller is present to publish and implement the `public` route." },
+        { "id": "c", "text": "The host rule must be removed because a hostname prevents an Ingress from receiving an address." },
+        { "id": "d", "text": "The application Pods must each receive the public hostname as a label before the Ingress can be reconciled." }
+      ],
+      "correct": ["b"],
+      "explanation": "The Ingress object stores the route, while a controller watching the selected class makes it operational and reports an address. ClusterIP is the normal private backend, host rules are valid, and Pod labels are selected by the Service rather than matched to the public hostname."
+    },
+    {
+      "id": "path-match-q2",
+      "type": "single",
+      "scenario": "The checkout app owns `/checkout` and child URLs such as `/checkout/review`. It must not capture the separate `/checkout-history` application. Which path configuration best expresses that contract?",
+      "options": [
+        { "id": "a", "text": "Use path `/checkout` with `pathType: Exact` because Exact includes every child URL below the path." },
+        { "id": "b", "text": "Use path `/` with `pathType: Prefix` because the backend Service will reject unrelated paths." },
+        { "id": "c", "text": "Use path `/checkout-history` with `pathType: Exact` because the controller infers the checkout parent path." },
+        { "id": "d", "text": "Use path `/checkout` with `pathType: Prefix` because it matches the path family by segments without matching `/checkout-history`." }
+      ],
+      "correct": ["d"],
+      "explanation": "A Prefix rule on `/checkout` matches that segment and its child paths, but not the different `/checkout-history` segment. Exact would exclude child paths, `/` would be too broad, and a rule for the history path does not infer another route."
+    },
+    {
+      "id": "tls-diagnosis-q3",
+      "type": "single",
+      "scenario": "DNS for `shop.devpolaris.example` points to the new controller address. The edge presents a certificate for `admin.devpolaris.example`, so the browser stops at a hostname mismatch before any HTTP response appears. The checkout Service has three ready endpoints. Which area should the team repair first?",
+      "options": [
+        { "id": "a", "text": "Align the Ingress TLS host and referenced Secret with a certificate that covers `shop.devpolaris.example`." },
+        { "id": "b", "text": "Change the Service selector because a selector mismatch causes the edge to present another hostname's certificate." },
+        { "id": "c", "text": "Change `pathType` from Prefix to Exact because path matching happens before the TLS handshake." },
+        { "id": "d", "text": "Increase the Deployment replica count because TLS selects a certificate from the number of ready Pods." }
+      ],
+      "correct": ["a"],
+      "explanation": "The client fails during TLS, before host and path routing reaches the Service. The TLS host, Secret, certificate names, and selected controller are the relevant layer. Service selectors, route path types, and replica counts do not choose the certificate presented at the edge."
+    },
+    {
+      "id": "rollout-evidence-q4",
+      "type": "single",
+      "scenario": "A team wants to test a new Ingress controller address at `203.0.113.20` before changing public DNS. The certificate is ready for `shop.devpolaris.example`, and the route should serve `/checkout`. Which check gives the strongest pre-DNS evidence?",
+      "options": [
+        { "id": "a", "text": "Curl one Pod IP directly because that proves DNS, TLS, controller matching, and Service routing together." },
+        { "id": "b", "text": "Read only the Ingress YAML because accepted desired state proves the controller has programmed the route." },
+        { "id": "c", "text": "Send an HTTPS request for the public hostname and path while resolving that hostname to `203.0.113.20` for the test." },
+        { "id": "d", "text": "Change public DNS first and use browser reports as the initial test of the new address." }
+      ],
+      "correct": ["c"],
+      "explanation": "A hostname-preserving request directed at the new address exercises TLS, host and path matching, the controller, the Service, and the Pods before DNS cutover. A Pod request bypasses the edge, desired YAML is not runtime proof, and changing DNS first removes the safety of a preflight."
+    },
+    {
+      "id": "request-path-q5",
+      "type": "multiple",
+      "scenario": "Users reach the correct controller and complete TLS successfully. HTTPS requests to host `shop.devpolaris.example` on path `/checkout` return `503`. The Ingress host and path match, but the checkout EndpointSlice has no ready addresses. Which two findings could directly explain this backend failure?",
+      "options": [
+        { "id": "a", "text": "The Service selector does not match the labels on the checkout Pods." },
+        { "id": "b", "text": "Public DNS uses the controller address already reported in Ingress status." },
+        { "id": "c", "text": "The TLS certificate includes `shop.devpolaris.example` in its DNS names." },
+        { "id": "d", "text": "The selected checkout Pods are failing readiness checks and are not eligible for Service traffic." }
+      ],
+      "correct": ["a", "d"],
+      "explanation": "A selector mismatch can leave the Service with no selected backends, and failed readiness can leave selected Pods absent from the ready endpoint set. Correct DNS and a matching certificate explain why the request reached and passed the edge, not why the Service has no usable backends."
+    }
+  ]
+}

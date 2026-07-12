@@ -1,5 +1,5 @@
 ---
-title: "Handlers and Service Restarts"
+title: "Handlers and Restarts"
 description: "Practice handler notifications, reloads, restarts, and restart timing decisions."
 articleId: "article-infrastructure-as-code-ansible-handlers-service-restarts"
 difficulty: "medium"

@@ -1,142 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "A design note for devpolaris-orders-api says:\n\nworkload: long-running Node.js HTTP API\npackage: container image in ECR\ntraffic: ALB forwards to port 3000\nteam goal: avoid host patching and SSH operations for this API\n\nWhich compute shape is the best first fit?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Run it as an ECS service on Fargate, with the image, task definition, service, health check, and logs as the main operating surface."
-        },
-        {
-          "id": "b",
-          "text": "Run it on one EC2 instance because any service with an HTTP port must expose a virtual server to operators."
-        },
-        {
-          "id": "c",
-          "text": "Run it as one Lambda function without changing the request model, because Lambda is just a hidden port listener."
-        },
-        {
-          "id": "d",
-          "text": "Keep only the ECR image and skip a runtime service until traffic arrives."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The evidence points to a containerized service that should stay alive behind a load balancer. ECS on Fargate keeps the service shape while AWS manages the host capacity. EC2 would add server work, and Lambda would require an event or request handler design rather than a normal long-running port listener."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A fraud-scoring side component has this support note:\n\nrequires vendor Linux agent on host\nrequires local file inspection under /var/lib/vendor\nsupport team asks for VM-level logs during incidents\ntraffic is internal and low volume\n\nWhich first compute choice is most honest?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Use EC2 for this component, because the requirement is host-level control and the team must accept server operations with it."
-        },
-        {
-          "id": "b",
-          "text": "Use Fargate and plan to install the vendor agent on the managed host after the task starts."
-        },
-        {
-          "id": "c",
-          "text": "Use Lambda because the traffic is low volume, even though the vendor requires a host agent."
-        },
-        {
-          "id": "d",
-          "text": "Keep it in the same ECS service as the orders API so every backend has one deployment surface."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "This is the kind of exception where EC2 can be the right answer. The useful clue is not traffic volume, it is host control. Fargate and Lambda deliberately move the host away from your operating boundary."
-    },
-    {
-      "id": "q3",
-      "type": "single",
-      "scenario": "The team plans a receipt email worker with this input:\n\n{ \"type\": \"receipt.email.requested\", \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\" }\n\nThe worker should run when the event arrives, send one receipt, log the request ID, and finish. Which compute shape matches that mental model?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Lambda, because this is handler-shaped work that starts from an event and ends after processing that event."
-        },
-        {
-          "id": "b",
-          "text": "EC2, because every background job needs a process manager even when it only reacts to events."
-        },
-        {
-          "id": "c",
-          "text": "The existing ALB target group, because target groups execute small jobs when HTTP traffic is quiet."
-        },
-        {
-          "id": "d",
-          "text": "A larger Fargate task for the checkout API, because side effects should stay inside the request path."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The event is the important evidence. Lambda is a good fit when each run is tied to an invocation and can finish inside the function limits. Keeping slow side work inside the checkout path would make the API more fragile."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "A runbook lists where failures appeared during three incidents:\n\nEC2 incident: systemd inactive, disk 96 percent full, ALB target timeout\nECS incident: task stopped reason ResourceInitializationError, target unhealthy, CloudWatch startup log missing DATABASE_URL\nLambda incident: REPORT line status timeout, SQS message retried, duplicate receipt blocked by idempotency key\n\nWhich statements match the compute ownership boundary?",
-      "options": [
-        {
-          "id": "a",
-          "text": "EC2 puts more server evidence in the team path, including service status, disk, OS logs, and instance access."
-        },
-        {
-          "id": "b",
-          "text": "ECS on Fargate shifts host care away, but the team still owns task definitions, roles, health checks, and logs."
-        },
-        {
-          "id": "c",
-          "text": "Lambda failures are usually read through invocation logs, duration, retries, event shape, and concurrency signals."
-        },
-        {
-          "id": "d",
-          "text": "All three compute shapes should be debugged first by SSHing to the host and checking port 3000."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c"
-      ],
-      "explanation": "The same app family can fail in different evidence streams depending on the compute shape. EC2 is server-shaped, ECS is service-shaped, and Lambda is invocation-shaped. A single SSH and port checklist misses the point of Fargate and Lambda."
-    },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A release review says:\n\nimage built: yes\nECS service updated: yes\ntarget health: 0 healthy, 2 unhealthy\nCloudWatch logs: DATABASE_URL missing\nALB response: 503 from awselb/2.0\n\nWhat is the best correction to the statement \"compute is the whole architecture\"?",
+      "scenario": "DevPolaris is releasing a new orders API image to an ECS service. The image built successfully and the service update created two replacement tasks, but neither task passed the target-group health check. Customers now receive `503` responses from the ALB, and both replacement tasks log that required `DATABASE_URL` configuration is missing. The release captain must restore service without treating a successful image build as proof that the runtime is ready. What should the captain do before allowing this release to continue?",
       "options": [
         {
-          "id": "a",
-          "text": "Compute is where the code runs, but the runtime also depends on configuration, secrets, IAM, health checks, networking, and logs."
-        },
-        {
           "id": "b",
-          "text": "Compute is only the Docker image, so target health and secrets are outside the release conversation."
+          "text": "Treat the image as complete release evidence and investigate only target-group configuration because the service update succeeded."
         },
         {
           "id": "c",
-          "text": "Compute replaces IAM because a running task can read every secret by default."
+          "text": "Treat missing `DATABASE_URL` as an application defect because the task reached RUNNING before health checks failed."
+        },
+        {
+          "id": "a",
+          "text": "Treat the release as blocked, restore the required database configuration and its runtime access path, redeploy, and require healthy targets before continuing."
         },
         {
           "id": "d",
-          "text": "Compute replaces networking because the app will receive public traffic once a process starts."
+          "text": "Treat the 503 as a capacity problem and increase desired count before checking why each replacement task lacks configuration."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The evidence shows a runtime contract, not just a place where code exists. The code can be built and the service can be updated while traffic still fails because config, secrets, or health checks are wrong. Naming those surrounding pieces makes debugging calmer."
+      "explanation": "The built image and updated service prove only part of the release path. Both tasks identify the same missing runtime dependency and fail readiness, so adding capacity or changing the target group would reproduce the failure. The release should remain blocked until configuration, secret access, task startup, and target health all satisfy the runtime contract.\n\nLearn more in [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)."
+    },
+    {
+      "id": "q-read-traffic-and-scaling-signals-3",
+      "type": "single",
+      "scenario": "DevPolaris has deployed its staging orders API on an EC2 instance in a private subnet behind an internet-facing Application Load Balancer. The systemd service is active, and `curl http://127.0.0.1:3000/health` returns `200` on the instance. However, the target group reports `Target.Timeout` for `i-0abc123:3000`. The instance security group currently allows TCP 3000 only from the administration bastion security group, while production traffic must arrive through the ALB security group. What is the most appropriate change?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Change the target group health path because local `/health` proves the listener can reach port 3000."
+        },
+        {
+          "id": "c",
+          "text": "Attach a public IPv4 address to the instance so the internet-facing ALB can reach the target directly."
+        },
+        {
+          "id": "d",
+          "text": "Allow TCP 3000 from the VPC CIDR to restore reachability while preserving a private target."
+        },
+        {
+          "id": "a",
+          "text": "Allow the ALB security group to reach the instance security group on port 3000, then recheck target health."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The local service is healthy, but the ALB cannot reach it. The security group evidence shows port 3000 is allowed from the bastion, not from the ALB. That makes the network path a better first fix than code or disk changes.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-debug-compute-failures-1",
+      "type": "single",
+      "scenario": "An ECS release creates RUNNING tasks, but customers receive 503 responses and both targets fail with `Target.ResponseCodeMismatch`. The application log confirms that `/health` returns 500 because `DATABASE_URL` is absent. The prior task definition references the database secret in its container `secrets` field, while the new revision has no `DATABASE_URL` entry. Which correction best follows the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restore the reviewed `DATABASE_URL` secret reference in the task definition, deploy replacement tasks, and require healthy targets before continuing."
+        },
+        {
+          "id": "b",
+          "text": "Add HTTP 500 to the target group's success-code matcher so the release can serve traffic while configuration is repaired."
+        },
+        {
+          "id": "c",
+          "text": "Grant `secretsmanager:GetSecretValue` to the application task role even though the application never makes a runtime Secrets Manager call."
+        },
+        {
+          "id": "d",
+          "text": "Increase desired count because additional tasks can compensate for each task receiving the same incomplete definition."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new task definition omits the secret reference that existed in the reviewed revision, so every replacement task receives the same incomplete runtime contract. Masking readiness failure or adding capacity would send traffic to broken tasks. If ECS later reports a pre-start secret retrieval denial, the task execution role becomes relevant; this evidence instead shows a missing task-definition entry.\n\nLearn more in [Passing Secrets Manager secrets to ECS containers](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)."
+    },
+    {
+      "id": "q-debug-compute-failures-4",
+      "type": "multiple",
+      "scenario": "DevPolaris is consolidating 35 containerized services from two business units. The platform team already operates Kubernetes controllers, admission policies, Helm releases, and shared observability, and product teams require Kubernetes APIs for custom rollout and scheduling behavior. Leadership accepts the control-plane and cluster-operating cost but wants a managed AWS control plane. Which three facts support evaluating Amazon EKS rather than choosing it merely because the workloads use containers?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The platform team already owns Kubernetes operations and can support cluster upgrades, policy, capacity, and workload troubleshooting."
+        },
+        {
+          "id": "d",
+          "text": "EKS removes responsibility for worker capacity, add-ons, networking, and Kubernetes version upgrades."
+        },
+        {
+          "id": "a",
+          "text": "The workloads require Kubernetes APIs and controllers that are part of the existing delivery and governance model."
+        },
+        {
+          "id": "c",
+          "text": "A shared Kubernetes platform can justify its operational cost across many services with consistent platform needs."
+        },
+        {
+          "id": "e",
+          "text": "Any containerized service should use EKS once the number of services exceeds one."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "EKS is justified by Kubernetes-specific requirements plus a team and service portfolio that can carry the operating model. AWS manages the control plane, but the team still owns worker capacity, networking, add-ons, policy, upgrades, and workload diagnosis. Container packaging alone does not require Kubernetes; ECS with Fargate may be simpler when those APIs and platform conventions are not needed.\n\nLearn more in [Amazon EKS concepts](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html)."
+    },
+    {
+      "id": "q-read-the-workload-shape-2",
+      "type": "single",
+      "scenario": "DevPolaris is separating receipt email from the checkout request. The proposed worker starts from SQS, usually runs for less than 700 ms, does not listen on a port, and must prevent duplicate sends with an idempotency key.\n\nName is receipt-email-worker. Starts when is SQS message arrives. Work duration is usually under 700 ms. Needs port listener is no. Duplicate risk is must use idempotency key receipt:{orderId}.\n\nWhich compute choice fits best?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use a small Fargate worker with desired count one so the team can reuse its container deployment and logging model."
+        },
+        {
+          "id": "a",
+          "text": "Lambda, because the job is event-shaped and should be safe across retries."
+        },
+        {
+          "id": "c",
+          "text": "Run the email call in the checkout ECS task to avoid operating another asynchronous runtime."
+        },
+        {
+          "id": "d",
+          "text": "Use an EC2 worker because the team wants full control over retry and concurrency behavior."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The trigger and duration point to Lambda. The idempotency note is also important because queue-based work can retry. The main checkout service should not wait on slow side effects if a queue can decouple them.\n\nLearn more in [AWS Lambda concepts](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)."
+    },
+    {
+      "id": "q-follow-the-decision-path-3",
+      "type": "single",
+      "scenario": "DevPolaris finance needs a monthly export from the production orders database. The job must process 14 million rows, checkpoint progress, and finish outside the current Lambda time limit.\n\nTrigger is monthly schedule. Work is scans 14 million rows, can run 45 minutes. Partial progress is should checkpoint and resume. Timeout requirement is longer than current Lambda limit and needs steady worker logs.\n\nWhat should the team consider?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep one Lambda invocation for the 45-minute scan and raise its configured timeout to match the job."
+        },
+        {
+          "id": "c",
+          "text": "Run the export inside a continuously serving ECS API task so it can reuse the checkout database pool."
+        },
+        {
+          "id": "d",
+          "text": "Schedule the job on the existing checkout EC2 host so no separate worker runtime is required."
+        },
+        {
+          "id": "a",
+          "text": "Use a longer-running worker shape such as ECS or EC2 instead of forcing the job into Lambda."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Event-shaped does not automatically mean Lambda. The path asks whether the work can finish inside function limits and whether the operational shape fits. A long checkpointed job may be cleaner as a worker service.\n\nLearn more in [AWS Fargate for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html)."
+    },
+    {
+      "id": "q-use-decision-records-5",
+      "type": "single",
+      "scenario": "Six months later, a teammate wants to move the receipt worker from Lambda to the main ECS service. Current evidence says:\n\nQueue age is normal. Duplicate sends is 0 after idempotency fix. Function errors is low. Checkout latency is stable because email is off the request path.\n\nHow should the old decision record guide the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the record to ask what problem the move solves and what tradeoff changes, rather than changing compute just for uniformity."
+        },
+        {
+          "id": "b",
+          "text": "Keep Lambda unless the old record explicitly predicted this migration, even if new operational evidence changes the tradeoff."
+        },
+        {
+          "id": "c",
+          "text": "Move to ECS to reduce the number of deployment mechanisms, without identifying a reliability, cost, or ownership problem."
+        },
+        {
+          "id": "d",
+          "text": "Compare only current compute cost because queue behavior and failure handling stay the same after a runtime migration."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A decision record is not a cage. It is a memory aid for tradeoffs. If current evidence is healthy, the reviewer should ask what new requirement justifies the move and what operational cost it introduces.\n\nLearn more in [AWS Fargate for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html)."
     }
   ]
 }

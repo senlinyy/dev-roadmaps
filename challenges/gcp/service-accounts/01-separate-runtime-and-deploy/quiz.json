@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Northstar Retail uses GitHub Actions to deploy Cloud Run. Security requires separate deployment and runtime permissions and prohibits long-lived Google Cloud private keys in CI, but the proposal stores a JSON key for the production runtime service account as a repository secret. Which identity design meets the requirements?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Use a maintainer's user credential in CI and rely on account MFA, accepting that release actions remain tied to a human lifecycle."
+        },
+        {
+          "id": "a",
+          "text": "Use a separate deploy identity with keyless federation or impersonation, and keep the runtime service account attached only to the running service."
+        },
+        {
+          "id": "b",
+          "text": "Use the production runtime service account key in CI but rotate it weekly, keeping deployment and application permissions combined."
+        },
+        {
+          "id": "c",
+          "text": "Create a separate deployer key in the repository secret store, preserving identity separation but retaining a long-lived private key."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A deployer and runtime service account should be separate, and keyless federation or impersonation avoids a long-lived key. Sharing the runtime key increases blast radius, distributing copies compounds the risk, and disabling IAM is not a safe release practice. See [Google Cloud workload identity federation documentation](https://cloud.google.com/iam/docs/workload-identity-federation)."
+    },
+    {
+      "id": "read-adc-context-q5",
+      "type": "single",
+      "scenario": "A developer can read production objects locally, but the deployed service gets permission denied. The bucket policy shows the developer group has access and the runtime service account does not. What is the right fix?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Attach the developer's user credential through a runtime secret so the deployed service reproduces the successful local caller."
+        },
+        {
+          "id": "c",
+          "text": "Grant the developer group broader bucket access because the deployed service can inherit permissions from its maintainers."
+        },
+        {
+          "id": "d",
+          "text": "Grant the runtime service account project-level Storage Admin because the developer's broader local access already passed the test."
+        },
+        {
+          "id": "a",
+          "text": "Grant the runtime service account the required bucket role at the right scope instead of relying on the developer's local ADC access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Production uses the runtime service account, so that principal needs the appropriate bucket access. Laptop credentials cannot power the deployed service, broad Owner is excessive, and disabling local ADC does not grant runtime permissions. See [Google Cloud application default credentials documentation](https://cloud.google.com/docs/authentication/application-default-credentials)."
+    },
+    {
+      "id": "avoid-long-lived-keys-q2",
+      "type": "single",
+      "scenario": "A third-party build system outside Google Cloud needs temporary access to deploy. The team is choosing between Workload Identity Federation and a downloadable service account key. What is the strongest reason to prefer federation?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Encrypt a long-lived key in the external build system and treat encryption at rest as removal of key-leak risk."
+        },
+        {
+          "id": "d",
+          "text": "Use a separate deploy service account key with narrow roles, accepting key distribution and rotation instead of federated credentials."
+        },
+        {
+          "id": "a",
+          "text": "Federation can exchange trusted external identity for short-lived Google Cloud credentials without storing a long-lived private key."
+        },
+        {
+          "id": "b",
+          "text": "Create a service account key with a seven-day rotation schedule, because frequent replacement is equivalent to short-lived federation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Workload Identity Federation is meant to avoid long-lived keys by using short-lived credentials tied to an external identity. It does not automatically grant Owner, it still needs role design, and it is not limited to human browser sign-in. See [Google Cloud workload identity federation documentation](https://cloud.google.com/iam/docs/workload-identity-federation)."
+    },
+    {
+      "id": "avoid-long-lived-keys-q4",
+      "type": "multiple",
+      "scenario": "A legacy partner integration cannot yet use federation and has a temporary service account key exception. Which two controls make the exception reviewable?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The minimum roles needed by the partner at the narrowest practical scope."
+        },
+        {
+          "id": "c",
+          "text": "A project-wide Owner grant so the partner does not need future requests."
+        },
+        {
+          "id": "d",
+          "text": "A copy of the key in multiple team chat channels for backup."
+        },
+        {
+          "id": "a",
+          "text": "A named owner, expiration date, rotation schedule, and migration path away from the key."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "A key exception needs ownership, expiry, rotation, migration, and least-privilege scope. Owner and chat copies make the exception broader and harder to contain. See [Google Cloud keys create delete documentation](https://cloud.google.com/iam/docs/keys-create-delete)."
+    },
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The Orders API runs on Cloud Run and reads one database secret while serving requests. Which identity should carry that runtime access?",
+      "scenario": "The deploy pipeline and Cloud Run service both use service account orders-prod@. The account has Editor so CI can deploy and the app can read data. What should the identity review recommend?",
       "options": [
-        { "id": "a", "text": "The Cloud Run runtime service account for the Orders API." },
-        { "id": "b", "text": "Maya's personal user account." },
-        { "id": "c", "text": "The production billing account." },
-        { "id": "d", "text": "Every user in the company domain." }
+        {
+          "id": "d",
+          "text": "Use a human engineer's user account as the runtime identity during business hours."
+        },
+        {
+          "id": "a",
+          "text": "Split deploy and runtime identities, then grant each service account only the roles needed for its job."
+        },
+        {
+          "id": "b",
+          "text": "Keep one account because fewer identities generally means less privilege."
+        },
+        {
+          "id": "c",
+          "text": "Rename the service account to editor-prod so everyone remembers it is powerful."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Production app code should run as a workload identity. The runtime service account gets the access needed while the app serves requests."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Deploy and runtime identities have different responsibilities and blast radius, so they should not share a broad Editor account. One powerful account concentrates risk, naming does not reduce permissions, and human user accounts are the wrong runtime identity. See [Google Cloud service account overview documentation](https://cloud.google.com/iam/docs/service-account-overview)."
     },
     {
-      "id": "q2",
+      "id": "read-adc-context-q2",
       "type": "single",
-      "scenario": "A CI/CD pipeline deploys Cloud Run revisions and shifts traffic. The app runtime only reads a secret and writes receipts. What is the healthy identity split?",
+      "scenario": "A teammate runs gcloud auth login and assumes Python client libraries will now use those credentials through ADC. The app still fails locally. What command family did they confuse?",
       "options": [
-        { "id": "a", "text": "Use a deploy identity for releases and a separate runtime service account for the app." },
-        { "id": "b", "text": "Use the runtime service account for all deployment administration by default." },
-        { "id": "c", "text": "Use a developer's personal ADC file in production." },
-        { "id": "d", "text": "Use the same broad Owner identity everywhere to avoid review." }
+        {
+          "id": "b",
+          "text": "Set the active gcloud account and assume every local client library reads the CLI credential store directly."
+        },
+        {
+          "id": "c",
+          "text": "Copy a gcloud access token into the application environment and refresh it manually whenever the token expires."
+        },
+        {
+          "id": "d",
+          "text": "Grant Service Account Token Creator to the user before creating any ADC file, even though the app only needs local user ADC."
+        },
+        {
+          "id": "a",
+          "text": "User login for gcloud CLI versus application-default credentials used by client libraries."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Deploy and runtime are different jobs. Separating them limits the power available to running application code."
+      "correct": [
+        "a"
+      ],
+      "explanation": "gcloud CLI credentials and ADC credentials are related but not the same store or command flow. The other option pairs are different Google Cloud concepts and do not explain why client libraries still lack local ADC. See [Google Cloud application default credentials documentation](https://cloud.google.com/docs/authentication/application-default-credentials)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which statements about service accounts are correct?",
+      "id": "avoid-long-lived-keys-q5",
+      "type": "single",
+      "scenario": "Audit logs show an old key for deployer-prod@ was used from an unfamiliar network. The service account also has legitimate impersonation users. What is the cleanest containment sequence?",
       "options": [
-        { "id": "a", "text": "A service account is an identity for software or automation." },
-        { "id": "b", "text": "A service account can receive IAM roles." },
-        { "id": "c", "text": "A service account can appear in audit evidence." },
-        { "id": "d", "text": "A service account should always share a human's password." }
+        {
+          "id": "a",
+          "text": "Disable the suspicious key, preserve evidence, verify legitimate impersonation paths, and replace the workflow with keyless access where possible."
+        },
+        {
+          "id": "b",
+          "text": "Delete the whole service account immediately, accepting outages in legitimate impersonation workflows to remove the suspicious key."
+        },
+        {
+          "id": "c",
+          "text": "Rotate every key but leave the suspicious key enabled until partners confirm whether they still depend on it."
+        },
+        {
+          "id": "d",
+          "text": "Issue another downloaded key for the replacement workflow before preserving logs or identifying how the old key was used."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Service accounts are workload principals. They should not depend on human passwords."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Disabling the suspicious key contains the credential while preserving the service account for legitimate paths that can be reviewed. Deleting the account first can break workloads, keys can be used outside Google Cloud, and issuing more keys expands risk. See [Google Cloud keys create delete documentation](https://cloud.google.com/iam/docs/keys-create-delete)."
     }
   ]
 }

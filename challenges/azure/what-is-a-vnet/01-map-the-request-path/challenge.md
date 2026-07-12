@@ -1,7 +1,6 @@
 ---
-title: "Map The Request Path"
-sectionSlug: the-problem
+title: "What Is a VNet"
 order: 1
 ---
 
-Use the scenario questions to decide which Azure network layer owns each part of the request path for `devpolaris-orders-api`. Each question asks you to reason from evidence instead of starting with a product name.
+Use the article's network model to answer the production scenarios in this quiz.

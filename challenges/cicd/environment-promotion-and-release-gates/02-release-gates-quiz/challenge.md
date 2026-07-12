@@ -1,8 +1,6 @@
 ---
-title: "Evaluate Release Gates"
-sectionSlug: what-each-gate-should-prove
+title: "Environment Promotion"
 order: 2
 ---
 
-Knowledge check covering digest promotion, staging and production separation, smoke tests, moving tags, and approval gates.
-
+Review artifact identity, staging evidence, runtime configuration, approval context, and production concurrency before promotion.

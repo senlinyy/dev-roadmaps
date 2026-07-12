@@ -1,6 +1,6 @@
 ---
 title: "Read a Timer Unit"
-sectionSlug: timers-cron-without-the-footguns
+sectionSlug: restart-policy-resource-limits-and-timers
 order: 6
 ---
 

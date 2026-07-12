@@ -1,13 +1,15 @@
 ---
 title: "Expose Review Outputs"
-sectionSlug: outputs
+sectionSlug: consuming-variables-in-locals-and-resources
 order: 3
 ---
 
-Add the bucket outputs in `outputs.tf` using the resource from `s3.tf`.
+The deployment handoff needs the bucket identity after apply. Add outputs for the values humans and scripts actually need, and keep those values tied to the managed resource.
 
-Requirements:
+Your job:
 
-1. **Output:** `bucket_name` with value `aws_s3_bucket.orders_invoices.bucket`.
-2. **Output:** `bucket_arn` with value `aws_s3_bucket.orders_invoices.arn`.
-3. **Descriptions:** add a clear `description` to both outputs.
+1. **Expose the bucket name** from the invoice bucket resource.
+2. **Expose the bucket ARN** from the same managed resource.
+3. **Describe both outputs** so the module interface is understandable.
+
+The grader checks the output blocks in HCL.

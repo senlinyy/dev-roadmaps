@@ -26,6 +26,6 @@
       "SKIPPED",
       "2"
     ],
-    "requireCommands": ["grep"]
+    "requireCommands": ["cat", "grep", "wc"]
   }
 }

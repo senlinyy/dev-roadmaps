@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "profile-selection-q1",
+      "type": "single",
+      "scenario": "The notification team is preparing two production claims. PostgreSQL needs low-latency durable storage, while a nightly export needs a cheaper retention-focused profile. The platform catalog publishes `fast-ssd`, `standard`, and `archive-retain`. Reviewers want workload manifests to show the intended storage behavior without copying CSI parameters. What is the best design?",
+      "options": [
+        { "id": "a", "text": "Omit `storageClassName` from both claims so the current cluster default can choose a profile for each workload." },
+        { "id": "b", "text": "Create application-owned StorageClasses that copy provider parameters into each workload repository." },
+        { "id": "c", "text": "Set PostgreSQL to `fast-ssd` and the export claim to `archive-retain` using explicit `storageClassName` values." },
+        { "id": "d", "text": "Name specific PersistentVolumes in both claims so the application team bypasses the profile catalog." }
+      ],
+      "correct": ["c"],
+      "explanation": "Explicit class names connect each application need to a platform-owned profile while keeping provider details out of the PVCs. A default hides the production choice, copying parameters transfers platform ownership into application repositories, and naming PVs bypasses dynamic profile selection."
+    },
+    {
+      "id": "binding-mode-q2",
+      "type": "single",
+      "scenario": "A new PostgreSQL PVC uses class `fast-ssd` and remains `Pending`. Its event says `waiting for first consumer to be created before binding`. The class uses zonal disks and `volumeBindingMode: WaitForFirstConsumer`, but no Pod references the claim yet. How should the on-call engineer interpret this evidence?",
+      "options": [
+        { "id": "a", "text": "The state can be healthy because provisioning waits for a consuming Pod so storage placement can match scheduling." },
+        { "id": "b", "text": "The CSI provisioner is missing because every valid claim must bind before any Pod is created." },
+        { "id": "c", "text": "The reclaim policy blocked provisioning because retained volumes cannot be created until a consumer exists." },
+        { "id": "d", "text": "The requested capacity is invalid because zonal disks require a bound Pod before Kubernetes can parse storage size." }
+      ],
+      "correct": ["a"],
+      "explanation": "`WaitForFirstConsumer` deliberately delays provisioning until scheduling supplies node and zone context. A missing provisioner produces different failure evidence, reclaim policy governs cleanup after claim deletion, and capacity parsing is unrelated to waiting for a consumer."
+    },
+    {
+      "id": "reclaim-review-q3",
+      "type": "single",
+      "scenario": "A platform review finds that the class proposed for a production notification archive uses `reclaimPolicy: Delete`. Namespace cleanup is automated, and the team expects deleted claims to leave backing storage available for manual recovery. Which review comment is most accurate?",
+      "options": [
+        { "id": "a", "text": "Keep `Delete` because an archive filename causes the provisioner to preserve the backing volume." },
+        { "id": "b", "text": "Enable volume expansion because expansion changes claim deletion into manual storage cleanup." },
+        { "id": "c", "text": "Use immediate binding because early provisioning prevents the backing volume from being removed later." },
+        { "id": "d", "text": "Reconsider the class or use a retention-focused profile because `Delete` can remove backing storage after PVC deletion." }
+      ],
+      "correct": ["d"],
+      "explanation": "The reclaim policy controls what happens to dynamically provisioned storage after claim deletion, so `Delete` conflicts with the stated recovery expectation. Names do not change lifecycle behavior, expansion controls growth, and binding mode controls provisioning timing rather than cleanup."
+    },
+    {
+      "id": "wrong-class-q4",
+      "type": "single",
+      "scenario": "A bound PostgreSQL claim has much higher write latency than the platform promise. The PVC requests `standard`, while the approved database profile is `fast-ssd`. Pod scheduling and mounts are healthy. What is the most useful first correction?",
+      "options": [
+        { "id": "a", "text": "Change the Pod restart policy so Kubernetes upgrades the existing volume to the faster provider tier." },
+        { "id": "b", "text": "Review migration to a claim that explicitly requests `fast-ssd`, following the platform's safe data movement process." },
+        { "id": "c", "text": "Add `ReadWriteMany` because a broader access mode increases the provisioned disk performance tier." },
+        { "id": "d", "text": "Remove the PVC namespace because StorageClasses can only serve claims in the default namespace." }
+      ],
+      "correct": ["b"],
+      "explanation": "The evidence points to wrong profile selection, so the team should move safely to a claim using the approved class. Restart policy does not change backing storage, access modes describe mount capability rather than performance, and StorageClasses are cluster-scoped profiles usable by namespaced claims."
+    },
+    {
+      "id": "class-review-q5",
+      "type": "multiple",
+      "scenario": "The platform team is reviewing a new class for a zonal database workload. Which two properties most directly protect scheduling compatibility and make later capacity growth possible?",
+      "options": [
+        { "id": "a", "text": "Use `WaitForFirstConsumer` so provisioning can consider the consuming Pod's placement." },
+        { "id": "b", "text": "Mark the class as default so every omitted `storageClassName` receives the database profile." },
+        { "id": "c", "text": "Set `allowVolumeExpansion: true` and confirm the CSI driver's tested expansion behavior." },
+        { "id": "d", "text": "Use `reclaimPolicy: Delete` because deletion policy keeps a full volume schedulable while it grows." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Delayed binding lets storage placement use scheduling context, and expansion support provides a tested growth path when the driver supports it. Making a specialized class default hides workload intent, while reclaim policy controls cleanup after claim deletion rather than scheduling or growth."
+    }
+  ]
+}

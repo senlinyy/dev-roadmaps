@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "workload-choice-q1",
+      "type": "single",
+      "scenario": "The cluster autoscaler adds `worker-f` to the application node pool during a campaign. The platform needs a log collector on that node without changing an application replica count or editing a list of node names. Which workload best matches the requirement?",
+      "options": [
+        { "id": "a", "text": "A DaemonSet whose placement rules make `worker-f` eligible, allowing the controller to add one node-local agent Pod." },
+        { "id": "b", "text": "A Deployment with a fixed replica count equal to the current number of nodes." },
+        { "id": "c", "text": "A CronJob that starts a new long-running collector on every schedule." },
+        { "id": "d", "text": "A StatefulSet whose ordinal number is manually mapped to each node name." }
+      ],
+      "correct": ["a"],
+      "explanation": "A DaemonSet follows eligible nodes and adds an agent as the node set changes. A fixed Deployment count does not guarantee one Pod per node. CronJobs create finite scheduled work, and StatefulSet ordinals provide stable member identity rather than node coverage."
+    },
+    {
+      "id": "missing-agent-q2",
+      "type": "single",
+      "scenario": "Four application nodes are Ready, but the DaemonSet reports `DESIRED 3`, `CURRENT 3`, and `READY 3`. The missing node `worker-d` has label `devpolaris.io/node-pool=general`, while the DaemonSet selects `devpolaris.io/node-pool=app`. What is the best first repair direction?",
+      "options": [
+        { "id": "a", "text": "Increase a `replicas` field to four because DaemonSet desired count is manually configured." },
+        { "id": "b", "text": "Correct the node-pool labeling or its infrastructure template if `worker-d` should be an app node, then recheck coverage." },
+        { "id": "c", "text": "Change the agent image because image startup controls whether a node counts as eligible." },
+        { "id": "d", "text": "Add another hostPath volume because each mounted directory increases desired coverage by one." }
+      ],
+      "correct": ["b"],
+      "explanation": "The desired count is three because only three nodes match the selector. If `worker-d` should belong to the app pool, its label source is the first repair. DaemonSets do not use a replicas field, and neither image startup nor hostPath count determines node eligibility."
+    },
+    {
+      "id": "taint-diagnosis-q3",
+      "type": "single",
+      "scenario": "A new app node has the correct node-pool label, but it also has taint `dedicated=app:NoSchedule`. The log-agent Pod remains Pending, and the DaemonSet template has no tolerations. Which change addresses the scheduling evidence without targeting other node pools?",
+      "options": [
+        { "id": "a", "text": "Remove the node selector so the agent can run on every node that has spare resources." },
+        { "id": "b", "text": "Change the taint effect to `PreferNoSchedule` because trusted agents should never declare tolerations." },
+        { "id": "c", "text": "Add a toleration matching key `dedicated`, value `app`, and effect `NoSchedule` while keeping the app node selector." },
+        { "id": "d", "text": "Add a replicas field so the scheduler reserves a fourth agent for the tainted node." }
+      ],
+      "correct": ["c"],
+      "explanation": "The app selector still chooses the right pool, while a matching toleration lets the trusted agent pass the intentional taint. Removing the selector broadens placement, weakening the taint changes node policy, and DaemonSets do not use replicas to place Pods."
+    },
+    {
+      "id": "hostpath-review-q4",
+      "type": "single",
+      "scenario": "A review changes the log agent mount from read-only `/var/log/containers` to writable `/` from the host. The agent only needs to read container log files. What is the most accurate review comment?",
+      "options": [
+        { "id": "a", "text": "Approve it because DaemonSet Pods require writable access to the full node filesystem." },
+        { "id": "b", "text": "Replace hostPath with a PVC because every node writes its logs into one shared claim by default." },
+        { "id": "c", "text": "Keep the broad mount but lower the CPU request because resource limits contain filesystem access." },
+        { "id": "d", "text": "Reject the broader writable mount and keep a focused read-only mount of `/var/log/containers`." }
+      ],
+      "correct": ["d"],
+      "explanation": "The article's agent needs only focused read access to the node log directory, so a writable host root mount creates unnecessary risk. DaemonSets do not inherently require full host access, a shared PVC does not expose each node's local logs, and CPU limits do not constrain filesystem permissions."
+    },
+    {
+      "id": "rollout-incident-q5",
+      "type": "multiple",
+      "scenario": "A new log-agent image is rolling across four eligible nodes. The DaemonSet shows `DESIRED 4`, `UP-TO-DATE 2`, and `AVAILABLE 3`. One new Pod is crashing, and logs from its node have stopped arriving centrally. Which two actions or settings directly support a controlled response?",
+      "options": [
+        { "id": "a", "text": "Keep `maxUnavailable: 1` so the rollout limits how many node agents can be absent at once." },
+        { "id": "b", "text": "Raise `maxUnavailable` to four so every node reaches the crashing image before diagnosis." },
+        { "id": "c", "text": "Inspect the failed Pod evidence and roll back to the known good revision if telemetry is production-critical." },
+        { "id": "d", "text": "Delete the DaemonSet selector because unmanaged Pods remain available during rollbacks." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A one-at-a-time unavailability budget limits coverage loss, and preserving failed-Pod evidence before a prompt rollback supports diagnosis and recovery. Updating every node at once expands the incident, while removing the selector breaks the controller ownership contract."
+    }
+  ]
+}

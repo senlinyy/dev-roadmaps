@@ -1,88 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "03-choose-private-link-or-service-endpoint-q1",
       "type": "single",
-      "scenario": "Users need to reach `orders.devpolaris.com`, but the API should reach Azure SQL over a private address. Which design matches that requirement?",
+      "scenario": "The Orders API runs in `vnet-devpolaris-prod` and must reach Azure SQL after the user request arrives through the public edge. Security requires public network access on the SQL server to stay disabled, and the application team wants the normal SQL hostname to resolve to a private address from the VNet. Which design best matches those requirements?",
       "options": [
         {
           "id": "a",
-          "text": "Public entry point for users, private endpoint and private DNS for SQL."
+          "text": "Use Private Link with a private endpoint for the SQL server and private DNS for the normal service name."
         },
         {
           "id": "b",
-          "text": "Public SQL endpoint so the browser and API use the same path."
+          "text": "Use a service endpoint and VNet firewall rules, because that keeps traffic scoped to the subnet even though the service still uses its public endpoint model."
         },
         {
           "id": "c",
-          "text": "Private endpoint for the browser traffic and public endpoint for SQL."
+          "text": "Use VNet peering and keep the SQL public endpoint, because private VNet reachability is enough even when the database itself stays public."
         },
         {
           "id": "d",
-          "text": "No DNS records, because private access removes name resolution."
+          "text": "Keep the public endpoint disabled but rely on an outbound NAT path, because the translated egress IP can substitute for private DNS and a private endpoint."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Public user traffic and private data access are different paths. The app can be public-facing while the database stays private."
+      "explanation": "Private endpoints give the service a private address in the VNet and pair naturally with private DNS so the normal hostname resolves to that private path. The closest distractor is the service endpoint because it can still restrict access from selected VNets, but it does not place a private IP in your subnet or make the hostname resolve privately. See [Azure private endpoint overview](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview)."
     },
     {
-      "id": "q2",
+      "id": "03-choose-private-link-or-service-endpoint-q2",
       "type": "single",
-      "scenario": "A private endpoint exists for Azure SQL, but the app still resolves the public SQL hostname. What is likely missing or wrong?",
+      "scenario": "Another team has a simpler requirement. Their subnet needs controlled access to a supported Azure service, but they are willing to keep the service's public endpoint model and enforce access through service firewall rules tied to selected VNets. They do not need a private IP in the subnet or private DNS for the service name. Which pattern might be sufficient?",
       "options": [
         {
-          "id": "a",
-          "text": "Private DNS integration or the private DNS A record."
-        },
-        {
           "id": "b",
-          "text": "The browser CNAME record."
+          "text": "A private endpoint, because any VNet restricted service access requirement automatically means the public endpoint model is unsupported."
         },
         {
           "id": "c",
-          "text": "The Application Gateway health probe."
+          "text": "Private DNS zone links, because subnet based service access is mainly a name resolution problem rather than a service network feature choice."
+        },
+        {
+          "id": "a",
+          "text": "A service endpoint, if the service and the security requirements support that public endpoint model."
         },
         {
           "id": "d",
-          "text": "The resource group tags."
+          "text": "VNet peering, because once the workload can reach another VNet it no longer needs a service specific access pattern such as service endpoints."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A private endpoint gives the resource a private IP. Private DNS is what makes the normal service name resolve to that private IP."
+      "explanation": "Service endpoints can be enough when the workload accepts the public service endpoint model and only needs subnet based service access controls. The closest distractor is the private endpoint because it is stronger for private IP requirements, but the scenario explicitly says that private addressing and private DNS are not required. See [Virtual network service endpoints overview](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoints-overview)."
     },
     {
-      "id": "q3",
+      "id": "03-choose-private-link-or-service-endpoint-q4",
+      "type": "single",
+      "scenario": "A private endpoint for `devpolaris-orders-sql` lives in a hub VNet and shows an approved connection state. Workloads in a peered spoke VNet still resolve the SQL hostname to the public address instead of the private endpoint IP. Network routes between hub and spoke are already in place. Which design area should be reviewed next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the spoke workloads are using the intended DNS servers, because hub linked private zones still require the spoke name resolution path to consult them."
+        },
+        {
+          "id": "a",
+          "text": "Private DNS zone links, forwarding, and the hub to spoke DNS design."
+        },
+        {
+          "id": "c",
+          "text": "Whether a competing private DNS zone or custom conditional forwarder in the spoke is overriding the expected private answer."
+        },
+        {
+          "id": "d",
+          "text": "Whether the application is using a cached public answer from before the private DNS link was created or updated."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If the endpoint exists and routing is present but the hostname still resolves publicly, the most direct next check is private DNS design across the VNets. The closest distractor is the spoke DNS server path because that is part of the same troubleshooting area, but the broader review target is still the zone link, forwarding, and hub to spoke DNS design that decides whether the private answer is available in the first place. See [What is Azure Private DNS?](https://learn.microsoft.com/en-us/azure/dns/private-dns-privatednszone)."
+    },
+    {
+      "id": "04-fix-reachability-safely-q1",
+      "type": "single",
+      "scenario": "The team disables public network access on a storage account after creating a blob private endpoint. Minutes later, the app fails because the storage hostname from the workload subnet still resolves to a public IP. Management wants the quickest safe recovery that preserves the approved private design. What should the team do first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Reopen public network access temporarily and let the workload use the service's public endpoint while the private DNS repair is scheduled."
+        },
+        {
+          "id": "c",
+          "text": "Create a second private endpoint in another subnet before checking DNS, because duplicate endpoints are the fastest way to recover a broken private name."
+        },
+        {
+          "id": "d",
+          "text": "Switch the application to the blob service private endpoint IP directly, because that avoids the dependency on private DNS during the incident."
+        },
+        {
+          "id": "a",
+          "text": "Repair private DNS resolution for the private endpoint and verify the storage name resolves privately from the workload network."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The confirmed symptom is public name resolution, so the safest first recovery is to restore the private DNS path and verify the workload now resolves to the endpoint IP. The closest distractor is reopening public access because it may restore connectivity, but it abandons the approved private boundary even though the incident already points to a narrower DNS cause. See [Azure private endpoint DNS configuration](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns)."
+    },
+    {
+      "id": "04-fix-reachability-safely-q2",
       "type": "multiple",
-      "scenario": "Which resources are reasonable public entry resources for `devpolaris-orders-api`?",
+      "scenario": "An app in `snet-orders-api` can no longer connect to Azure SQL after a network deployment. Public network access remains disabled, and the approved design says the SQL hostname must resolve through the existing private endpoint. Which two checks most directly prove whether the private DNS and private endpoint path are still intact?",
       "options": [
         {
           "id": "a",
-          "text": "Front Door for a global HTTPS entry."
-        },
-        {
-          "id": "b",
-          "text": "Application Gateway for regional HTTP routing."
+          "text": "The resolved SQL hostname answer from the workload network."
         },
         {
           "id": "c",
-          "text": "The Azure SQL private endpoint."
+          "text": "Whether the workload subnet still has the intended DNS server and resolver path after the network deployment."
+        },
+        {
+          "id": "b",
+          "text": "The private endpoint connection state and the subnet where the endpoint NIC lives."
         },
         {
           "id": "d",
-          "text": "A public DNS record for `orders.devpolaris.com`."
+          "text": "Whether the SQL server compute tier or backup settings changed during the same deployment window."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "d"
+        "b"
       ],
-      "explanation": "The public path can include DNS and an HTTP entry point. A private endpoint for SQL should not become the public user door."
+      "explanation": "Private connectivity starts with the name resolving to the intended private address and the private endpoint existing in an approved, usable state. The closest distractor is the DNS server path because it is relevant context, but the two most direct proofs are still the actual resolved answer seen by the workload and the private endpoint connection state itself. See [Azure private endpoint overview](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview)."
+    },
+    {
+      "id": "04-fix-reachability-safely-q3",
+      "type": "single",
+      "scenario": "Two subnets use the same managed identity to access a Key Vault through one private endpoint. Calls from `snet-orders-api` succeed, but the same secret read from `snet-batch-workers` fails before the app even reaches the vault. The identity evidence looks identical. What should the network review compare first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The VNet path, subnet placement, private DNS resolution, route path, and firewall differences between the two subnets."
+        },
+        {
+          "id": "b",
+          "text": "Recreating the managed identity because a working secret read from one subnet proves the identity is pinned to that subnet."
+        },
+        {
+          "id": "c",
+          "text": "Adding a broad Key Vault firewall exception for both subnets before checking whether the failing subnet resolves the private endpoint name correctly."
+        },
+        {
+          "id": "d",
+          "text": "Creating a second private endpoint immediately because each consumer subnet should always have its own endpoint regardless of DNS or route evidence."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "When the same identity works from one subnet and fails from another, the first disciplined comparison is the network path and name resolution for those two subnets. The closest distractor is creating a second endpoint because that can sometimes appear to help, but it adds complexity without first proving that the existing endpoint, DNS links, and routes are actually the source of the difference. See [Azure Private Link overview](https://learn.microsoft.com/en-us/azure/private-link/private-link-overview)."
+    },
+    {
+      "id": "04-fix-reachability-safely-q4",
+      "type": "single",
+      "scenario": "During an infrastructure change, someone removed the private DNS zone link for the SQL private endpoint. The database remains healthy, public network access is still disabled, and the workload subnet now resolves the SQL hostname to the public address. The incident commander wants the safest first action that restores the intended architecture. What should the team do?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Enable public network access temporarily and allow the workload subnet through the service firewall while the private DNS fix is prepared."
+        },
+        {
+          "id": "c",
+          "text": "Create a replacement private endpoint in another subnet first, because the missing DNS link may indicate the original endpoint registration is no longer trustworthy."
+        },
+        {
+          "id": "a",
+          "text": "Restore the private DNS zone link, verify the workload subnet resolves the private address again, and keep public network access disabled."
+        },
+        {
+          "id": "d",
+          "text": "Change the workload connection string to the private endpoint IP directly so the app can bypass private DNS until the next change window."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The broken DNS link is already identified, so restoring that private resolution path is the narrowest fix that preserves the approved private connectivity design. The closest distractor is temporary public access because it may restore service, but it broadens exposure even though the incident already names the exact private DNS regression. See [Azure private endpoint DNS configuration](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns)."
     }
   ]
 }

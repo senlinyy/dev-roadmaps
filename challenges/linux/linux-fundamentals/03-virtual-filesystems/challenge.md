@@ -1,6 +1,6 @@
 ---
 title: "Everything Is a File"
-sectionSlug: virtual-filesystems-and-everything-is-a-file
+sectionSlug: virtual-filesystems-live-views-from-the-kernel
 order: 3
 ---
 

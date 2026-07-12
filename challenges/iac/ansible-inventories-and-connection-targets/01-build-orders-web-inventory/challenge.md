@@ -1,6 +1,6 @@
 ---
 title: "Build the Orders Web Inventory"
-sectionSlug: "inventory-is-your-server-map"
+sectionSlug: static-inventory-you-can-review
 order: 1
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Inspect Function And Trigger"
-sectionSlug: sample-function-shape
+sectionSlug: handlers-and-event-payloads
 order: 4
 ---
 

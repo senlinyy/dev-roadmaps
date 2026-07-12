@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q4",
       "type": "single",
-      "scenario": "The team wants to mix dev test files and production receipts in one bucket because prefixes are easy. What is the main review concern?",
+      "scenario": "Cost review finds a receipt export bucket in multi-region storage even though all producers and consumers are in us-central1. No lifecycle rule removes exports older than 90 days. What change should be reviewed first?",
       "options": [
-        { "id": "a", "text": "Bucket boundaries affect access, lifecycle, ownership, and review." },
-        { "id": "b", "text": "Buckets cannot contain objects." },
-        { "id": "c", "text": "Production receipts must live in BigQuery." },
-        { "id": "d", "text": "Prefixes remove all IAM risk." }
+        {
+          "id": "c",
+          "text": "Copy new exports to a regional bucket but leave consumers and the 90-day retention requirement on the multi-region bucket indefinitely."
+        },
+        {
+          "id": "d",
+          "text": "Change only the storage class to Archive, without checking retrieval use or adding the required expiration behavior."
+        },
+        {
+          "id": "a",
+          "text": "Confirm the intended bucket location and storage class, then add lifecycle behavior that matches retention requirements."
+        },
+        {
+          "id": "b",
+          "text": "Add a 30-day deletion rule immediately because shorter retention reduces cost, without confirming the 90-day business requirement."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A bucket is a policy boundary as well as an object container."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The right review ties location, storage class, and lifecycle to how the data is used. Deleting data is unsafe, choosing a location blindly can hurt latency or compliance, and retained objects still have cost and governance impact. See [Google Cloud buckets documentation](https://cloud.google.com/storage/docs/buckets)."
     },
     {
-      "id": "q2",
+      "id": "signed-urls-q2",
       "type": "single",
-      "scenario": "`devpolaris-orders-receipts-prod` is a bucket name. What does that name help humans see?",
+      "scenario": "Northstar Finance runs `invoices-api` and `tax-worker` in Google Cloud under separate service accounts. The worker continuously reads one private receipt prefix, access must be revocable centrally within minutes, and no browser or external client needs delegated access. The proposal has `invoices-api` mint signed URLs every hour. Which design should the review prefer?",
       "options": [
-        { "id": "a", "text": "System, purpose, and environment." },
-        { "id": "b", "text": "Every object is public." },
-        { "id": "c", "text": "The bucket is a relational table." },
-        { "id": "d", "text": "No lifecycle rules are needed." }
+        {
+          "id": "a",
+          "text": "Whether direct IAM between the service accounts is simpler and safer for service-to-service access than recurring signed URLs."
+        },
+        {
+          "id": "b",
+          "text": "Keep recurring signed URLs but extend each expiry to thirty days so the internal tax service rarely needs a new URL."
+        },
+        {
+          "id": "c",
+          "text": "Proxy every receipt through `invoices-api` using its storage identity, even though the requirement calls for continuous direct service-to-service reads."
+        },
+        {
+          "id": "d",
+          "text": "Grant the tax service permission to sign URLs for the invoices identity, even though it only needs to read a controlled receipt prefix."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A good bucket name makes ownership and purpose visible."
+      "correct": [
+        "a"
+      ],
+      "explanation": "For internal workloads, IAM often gives a clearer service-to-service access model. Long-lived signed URLs weaken expiry, public buckets are not justified by internal use, and the signer or caller identity is still important evidence. See [Google Cloud signed urls documentation](https://cloud.google.com/storage/docs/access-control/signed-urls)."
+    },
+    {
+      "id": "versioning-q1",
+      "type": "single",
+      "scenario": "A batch job overwrote orders/daily.csv with an empty file at 02:13 UTC. The bucket had object versioning enabled before the job ran. What recovery path should responders evaluate?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Copy the empty live generation to a new object name, then delete all noncurrent generations to avoid future ambiguity."
+        },
+        {
+          "id": "c",
+          "text": "Enable soft delete now and restore the object from the new soft-delete window, even though the overwrite happened before that control was enabled."
+        },
+        {
+          "id": "d",
+          "text": "Restore from the latest scheduled bucket export without first checking whether the retained object generation is newer."
+        },
+        {
+          "id": "a",
+          "text": "Find the previous generation of orders/daily.csv and restore or copy it according to the runbook."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Object versioning keeps noncurrent generations that can be used for recovery. Renaming the bucket is unrelated, disabling versioning does not magically restore the file, and the claim that old generations cannot exist is wrong when versioning was enabled. See [Google Cloud object versioning documentation](https://cloud.google.com/storage/docs/object-versioning)."
+    },
+    {
+      "id": "versioning-q5",
+      "type": "multiple",
+      "scenario": "A cleanup job deleted `exports/finance/close-2026-06.csv` from `northstar-finance-prod`. Responders must select the correct recoverable generation without violating a retention policy or allowing the lifecycle job to remove it during recovery. Which two evidence items must the incident record capture before restoration?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The lifecycle rule configuration after responders temporarily disable it, without recording the configuration that applied when deletion occurred."
+        },
+        {
+          "id": "a",
+          "text": "The object name plus generation or version details for the candidate restore point."
+        },
+        {
+          "id": "b",
+          "text": "The bucket's versioning, soft delete, lifecycle, and retention state at the time of deletion."
+        },
+        {
+          "id": "c",
+          "text": "The latest live object metadata from a similarly named staging bucket, used as a substitute when the deleted production generation cannot be identified."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The exact production object generation identifies the candidate recovery point, while the controls active at deletion determine whether that generation remains recoverable and whether restoration is permitted. Capturing only a post-change lifecycle configuration loses incident evidence. A staging object is not a proven copy of the deleted production data. See [Google Cloud object versioning documentation](https://cloud.google.com/storage/docs/object-versioning)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which bucket-level decisions matter?",
+      "type": "single",
+      "scenario": "A support tool needs read access to receipt objects in orders-receipts-prod. The proposal enables per-object ACLs because one engineer used them years ago. What should the reviewer prefer for a modern baseline?",
       "options": [
-        { "id": "a", "text": "Location." },
-        { "id": "b", "text": "Access model." },
-        { "id": "c", "text": "Lifecycle policy." },
-        { "id": "d", "text": "The SQL schema for order rows." }
+        {
+          "id": "c",
+          "text": "Grant the support tool project-level Storage Admin so it can read receipts and repair any future object ACL drift."
+        },
+        {
+          "id": "d",
+          "text": "Keep per-object ACLs but add an upload hook that copies the previous object's ACL to each new receipt."
+        },
+        {
+          "id": "a",
+          "text": "Use IAM at the bucket or narrower supported resource boundary and keep access review centralized."
+        },
+        {
+          "id": "b",
+          "text": "Add object ACLs manually to every current PDF and trust future uploads to match."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Bucket choices shape object storage behavior and policy."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud Storage IAM gives a reviewable access model for buckets and objects. Manual object ACLs are easy to drift, public buckets are the wrong answer for private receipts, and container images are not a storage location for customer documents. See [Google Cloud IAM documentation](https://cloud.google.com/storage/docs/access-control/iam)."
+    },
+    {
+      "id": "signed-urls-q4",
+      "type": "single",
+      "scenario": "CI currently downloads a service account key file so it can sign Cloud Storage URLs for release artifacts. Security wants to remove the long-lived key. Which direction is best to investigate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use service account impersonation or another keyless signing flow supported by the platform instead of storing a downloaded private key in CI."
+        },
+        {
+          "id": "b",
+          "text": "Keep the downloaded key in an encrypted CI secret and rotate it quarterly, because encryption removes the long-lived credential boundary."
+        },
+        {
+          "id": "c",
+          "text": "Commit the public and private key pair to a restricted infrastructure repository so releases can be reproduced by any maintainer."
+        },
+        {
+          "id": "d",
+          "text": "Make release artifacts publicly readable and remove URL signing, even though the distribution requirement is time-limited access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The strong direction removes the long-lived private key from CI while keeping controlled signing. A private repository is still a poor key store, extra copies increase leak risk, and public access changes the security model. See [Google Cloud signed urls documentation](https://cloud.google.com/storage/docs/access-control/signed-urls)."
+    },
+    {
+      "id": "versioning-q4",
+      "type": "single",
+      "scenario": "Legal asks for a 7-year deletion hold on audit exports. A teammate proposes enabling versioning and letting admins delete old generations whenever they want. What is missing?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Generate seven-year signed URLs for each export, because URL expiry also prevents object deletion by administrators."
+        },
+        {
+          "id": "a",
+          "text": "A retention policy or lock-style control that matches the legal deletion requirement, not just recoverable generations."
+        },
+        {
+          "id": "b",
+          "text": "Enable object versioning alone and rely on administrators not to delete noncurrent generations during the seven-year period."
+        },
+        {
+          "id": "c",
+          "text": "Add a lifecycle rule that deletes old generations after one year, because lifecycle configuration counts as a legal hold."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Versioning helps recover changes, but legal retention needs retention controls that prevent premature deletion. Bucket name length, signed URLs, and Cloud Run revision tags do not enforce a 7-year object hold. See [Google Cloud bucket lock documentation](https://cloud.google.com/storage/docs/bucket-lock)."
     }
   ]
 }

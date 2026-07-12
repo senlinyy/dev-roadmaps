@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Terraform already created two Linux VMs. The next pull request must install nginx, write `/etc/nginx/nginx.conf`, and keep a systemd service running inside those VMs. Which tool owns this change best?",
+      "scenario": "Terraform already creates the orders platform EC2 instances, load balancer, security groups, and DNS records. A new release must install Nginx, render `/etc/nginx/conf.d/orders-api.conf`, keep `orders-api` running, and repeat the same host configuration in staging and production. Which ownership split gives the clearest reviewed workflow?",
       "options": [
         {
-          "id": "a",
-          "text": "Ansible, because the change configures packages, files, and services inside existing machines."
+          "id": "d",
+          "text": "Extend Terraform provisioners to install packages and rewrite service files during every infrastructure apply."
         },
         {
           "id": "b",
-          "text": "Terraform, because every line inside a Linux VM should be managed as a cloud resource."
+          "text": "Keep the host changes as an approved SSH runbook because the fleet is small and Terraform already creates it."
         },
         {
           "id": "c",
-          "text": "Manual SSH, because service configuration is too small to review as code."
+          "text": "Keep cloud resources in Terraform and use Ansible for repeatable package, file, and service configuration inside the instances."
+        },
+        {
+          "id": "a",
+          "text": "Use Ansible for both host configuration and EC2 lifecycle so one tool owns the whole release."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Terraform remains responsible for long-lived cloud resources, while Ansible is the stronger fit for repeatable ordered configuration inside existing hosts. Terraform provisioners can bootstrap exceptional cases but are a weak recurring configuration boundary. Manual SSH creates drift, and making Ansible own EC2 lifecycle would blur the reviewed ownership already established in Terraform. See [Ansible playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A GitHub Actions job runs `ansible-playbook` for three private Linux servers. The servers do not run a permanent Ansible daemon, but each server is reachable over SSH and has a usable Python interpreter. Which statement best describes the two sides of this run?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Each managed server is a control node because it executes an Ansible module locally."
+        },
+        {
+          "id": "c",
+          "text": "The inventory is the control node because it contains the host connection addresses."
+        },
+        {
+          "id": "b",
+          "text": "The CI runner is the control node, and the servers are managed nodes reached for the duration of the tasks."
         },
         {
           "id": "d",
-          "text": "DNS, because nginx receives web traffic."
+          "text": "The run is agent-based because Python is installed on each managed server."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The CI runner launches Ansible and is therefore the control node. The servers are managed nodes. Using SSH and a remote interpreter during a task does not create a permanent Ansible agent. Inventory describes targets but does not execute the run. See [Ansible architecture](https://docs.ansible.com/projects/ansible/latest/getting_started/basic_concepts.html)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The production inventory groups `web-01` and `web-02` under `web`, while staging has `web-stg-01` in the same group name. The playbook uses `hosts: web`. The team wants the first production run to touch only `web-01`. What is the safest interpretation of these controls?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Rename the production group for every canary so the playbook has a unique host pattern."
+        },
+        {
+          "id": "a",
+          "text": "Change the playbook to contain the production IP address so it cannot select staging."
+        },
+        {
+          "id": "c",
+          "text": "Put `web-01` in a separate play because inventory cannot narrow an existing host group."
+        },
+        {
+          "id": "d",
+          "text": "Select the production inventory and add a runtime limit for `web-01`, keeping host mapping separate from playbook logic."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The inventory chooses which environment supplies the `web` hosts, and a limit narrows that resolved target set to the canary. Hardcoding an IP or continuously renaming groups mixes environment data into reusable playbook logic. A separate play is unnecessary for a runtime scope decision. See [Ansible inventory patterns](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A package task reports `changed` on its first run and `ok` on its second run. A neighboring shell task reports `changed` every time even when the target is already configured. Which review comment best addresses the evidence?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Treat repeated `changed` as proof that Ansible is repairing drift successfully."
+        },
+        {
+          "id": "d",
+          "text": "Disable the play recap because status differences are expected between module types."
+        },
+        {
+          "id": "b",
+          "text": "Replace both tasks with shell commands so every run reports the same status."
+        },
+        {
+          "id": "a",
+          "text": "Keep the package task and give the command task an explicit completion guard or change condition so repeat runs settle."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Terraform is a good fit for infrastructure objects. Ansible is the better fit for repeatable operating system configuration inside existing machines."
+      "explanation": "The package module shows useful idempotent behavior: it changes once and then reports the desired state as already present. A command needs a guard such as `creates` or a carefully designed `changed_when` rule when repeat execution should be quiet. Replacing structured modules or hiding the recap would remove evidence rather than fix the unstable task. See [Ansible command module attributes](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/command_module.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A production run reaches `web-01`, but the Nginx service task fails. The recap is:\n\n```console\nweb-01 : ok=6 changed=1 unreachable=0 failed=1\nweb-02 : ok=7 changed=1 unreachable=0 failed=0\n```\n\nWhat should the operator inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The SSH route to both hosts, because any nonzero failure count means the connection failed."
+        },
+        {
+          "id": "b",
+          "text": "The production inventory, because `changed=1` proves that `web-01` resolved to the wrong address."
+        },
+        {
+          "id": "d",
+          "text": "The Vault password source, because service failures are normally caused by secret decryption."
+        },
+        {
+          "id": "c",
+          "text": "The failed task result for `web-01` and the rendered service configuration, because Ansible connected before task logic failed."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "`unreachable=0` shows that the connection path worked. The nonzero `failed` count points to task execution, so the operator should read that task's message and validate the affected configuration on `web-01`. SSH or Vault investigation would only be justified by supporting evidence. See [Ansible playbook error handling](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A pull request changes the orders Nginx template. The team wants service activity only when the rendered file changes and wants several notifying tasks to cause at most one reload for each host. Which two design choices support that behavior?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Define the reload as a handler, allowing duplicate notifications to be coalesced before it runs."
+        },
+        {
+          "id": "a",
+          "text": "Run the service reload as an unconditional task after every template operation."
+        },
+        {
+          "id": "b",
+          "text": "Notify a named reload handler from tasks that can change the relevant configuration."
+        },
+        {
+          "id": "c",
+          "text": "Store the reload command in inventory variables so each host executes it during inventory loading."
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "A change-aware task notifies a named handler, and Ansible coalesces repeated notifications so that handler normally runs once for the host. An unconditional task reloads even when nothing changed. Inventory supplies host data; it does not execute service actions. See [Ansible handlers](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "The orders team is preparing its first production run from reviewed Git content. The target is two web servers, and the change updates a template that will reload Nginx. Which sequence creates the strongest evidence with the smallest initial blast radius?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect the production inventory, test connection and privilege, run syntax and supported check/diff validation, apply to one limited host, verify it, then widen."
+        },
+        {
+          "id": "c",
+          "text": "Run check mode against both hosts and treat a clean preview as proof that the real service reload will succeed."
+        },
+        {
+          "id": "d",
+          "text": "SSH to one host manually, make the change, and run Ansible later only to document the result."
+        },
+        {
+          "id": "b",
+          "text": "Apply to both hosts first, then use the recap to decide whether inventory and privilege were configured correctly."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The strongest sequence validates targets and access, previews what supported modules can show, limits the real change to a canary, verifies service behavior, and only then widens. A broad first apply has unnecessary risk. Check mode is useful but cannot prove every runtime effect, and a manual change bypasses the reviewed automation path. See [Ansible check and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)."
     }
   ]
 }

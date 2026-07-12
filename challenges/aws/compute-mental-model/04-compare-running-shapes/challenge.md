@@ -1,6 +1,6 @@
 ---
 title: "Compare Running Shapes"
-sectionSlug: sample-compute-map
+sectionSlug: choosing-with-the-workload-in-front-of-you
 order: 4
 ---
 

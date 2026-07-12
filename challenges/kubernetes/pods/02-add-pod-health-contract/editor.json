@@ -1,0 +1,23 @@
+{
+  "language": "yaml",
+  "filename": "pod.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: orders-api\n  namespace: production\n  labels:\n    app: orders-api\nspec:\n  containers:\n    - name: api\n      image: ghcr.io/devpolaris/orders-api:2026.07.11\n      ports:\n        - containerPort: 8080\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "containers", 0, "startupProbe", "httpGet", "path"], "equals": "/startup", "label": "startup path" },
+      { "path": ["spec", "containers", 0, "startupProbe", "httpGet", "port"], "equals": 8080, "label": "startup port" },
+      { "path": ["spec", "containers", 0, "startupProbe", "periodSeconds"], "equals": 5, "label": "startup period" },
+      { "path": ["spec", "containers", 0, "startupProbe", "failureThreshold"], "equals": 24, "label": "startup failure threshold" },
+      { "path": ["spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/ready", "label": "readiness path" },
+      { "path": ["spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": 8080, "label": "readiness port" },
+      { "path": ["spec", "containers", 0, "readinessProbe", "periodSeconds"], "equals": 5, "label": "readiness period" },
+      { "path": ["spec", "containers", 0, "readinessProbe", "failureThreshold"], "equals": 3, "label": "readiness failure threshold" },
+      { "path": ["spec", "containers", 0, "livenessProbe", "httpGet", "path"], "equals": "/live", "label": "liveness path" },
+      { "path": ["spec", "containers", 0, "livenessProbe", "httpGet", "port"], "equals": 8080, "label": "liveness port" },
+      { "path": ["spec", "containers", 0, "livenessProbe", "periodSeconds"], "equals": 10, "label": "liveness period" },
+      { "path": ["spec", "containers", 0, "livenessProbe", "failureThreshold"], "equals": 3, "label": "liveness failure threshold" }
+    ]
+  }
+}

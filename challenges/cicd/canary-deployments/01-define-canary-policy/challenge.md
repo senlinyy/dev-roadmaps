@@ -1,6 +1,6 @@
 ---
 title: "Define the Canary Policy"
-sectionSlug: choosing-the-first-slice
+sectionSlug: traffic-weights
 order: 1
 ---
 

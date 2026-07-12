@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An app setting points to payment-webhook-signing-key:latest. A rotation adds version 3 and breaks a small percentage of traffic. What evidence is missing if the ticket only says latest?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Log only a checksum of the value and assume it identifies the Secret Manager version and consuming Cloud Run revision."
+        },
+        {
+          "id": "a",
+          "text": "The exact version resolved during the rollout and which app revision consumed it."
+        },
+        {
+          "id": "b",
+          "text": "Record the stable secret name and rollout timestamp, then assume latest resolved consistently across every instance."
+        },
+        {
+          "id": "c",
+          "text": "Record the Cloud Run revision but omit the resolved secret version because revision identity alone proves the payload."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Using latest can be convenient but review still needs the resolved version and consuming app revision. Console color, image size, and billing account name do not show which payload snapshot caused the break. See [Google Cloud access secret version documentation](https://cloud.google.com/secret-manager/docs/access-secret-version)."
+    },
+    {
+      "id": "grant-secret-access-q1",
+      "type": "single",
+      "scenario": "Cloud Run service payment-webhook needs to read only secret payment-webhook-signing-key. The proposed IAM grant is roles/owner on project payments-prod. What should the access review request?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Grant Secret Accessor to the runtime service account at project scope, allowing it to read every current and future secret in `payments-prod`."
+        },
+        {
+          "id": "c",
+          "text": "Grant Secret Manager Admin so the app can rotate and destroy any secret during startup."
+        },
+        {
+          "id": "d",
+          "text": "Grant Secret Accessor to the deployment service account because it creates the Cloud Run revision that later reads the secret."
+        },
+        {
+          "id": "a",
+          "text": "Grant the runtime service account roles/secretmanager.secretAccessor on the single required secret where possible."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The runtime needs payload access to one secret, so Secret Accessor on that secret is the narrow fit. Project Owner and Secret Manager Admin are much broader, and public Secret Accessor would expose the payload. See [Google Cloud access control documentation](https://cloud.google.com/secret-manager/docs/access-control)."
+    },
+    {
+      "id": "plan-rotation-evidence-q3",
+      "type": "single",
+      "scenario": "An app uses alias current for payment-webhook-signing-key. During rotation, current is repointed to version 8. Some instances still accept requests signed with version 7 for ten minutes. What should the runbook make explicit?",
+      "options": [
+        {
+          "id": "c",
+          "text": "That moving the alias proves every warm instance has reloaded version 8, so version 7 can be disabled before telemetry confirms adoption."
+        },
+        {
+          "id": "d",
+          "text": "That the alias should point to both versions during overlap, without recording which version each application revision resolves."
+        },
+        {
+          "id": "a",
+          "text": "How aliases, accepted provider keys, app rollout timing, and rollback window interact during overlap."
+        },
+        {
+          "id": "b",
+          "text": "That aliases remove the need to know version numbers during incidents."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Aliases can simplify references, but the runbook still needs version, provider overlap, rollout, and rollback evidence. Aliases do not eliminate version awareness, immediate destruction removes rollback, and logging payloads leaks the secret. See [Google Cloud access secret version documentation](https://cloud.google.com/secret-manager/docs/access-secret-version)."
+    },
+    {
+      "id": "plan-rotation-evidence-q4",
+      "type": "multiple",
+      "scenario": "Secret version 8 is serving the new payment key, while version 7 remains available for a 30-minute provider overlap and rollback window. Which two checks should pass before the team disables or destroys version 7?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The on-call engineer remembers seeing one successful request after version 8 was added."
+        },
+        {
+          "id": "d",
+          "text": "The team removes version identifiers from the ticket so later responders cannot accidentally select the old value."
+        },
+        {
+          "id": "a",
+          "text": "Production telemetry shows the intended application revision is successfully reading and using version 8."
+        },
+        {
+          "id": "b",
+          "text": "The provider and rollback plan no longer require version 7, and the audit record preserves the version transition."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Old material should remain until the new runtime path is proven and the external overlap or rollback need has ended. Memory is weak evidence, and deleting audit context makes future diagnosis harder. See [Secret Manager rotation guidance](https://cloud.google.com/secret-manager/docs/rotation-recommendations)."
+    },
     {
       "id": "q1",
       "type": "single",
-      "scenario": "`orders-db-url` exists in Secret Manager. Version 3 contains the current database connection string. Which part is usually the dangerous payload?",
+      "scenario": "The payment service uses secret payment-webhook-signing-key. Version 1 contains the old provider key and version 2 contains the new provider key. What should the release record name?",
       "options": [
-        { "id": "a", "text": "The secret version payload." },
-        { "id": "b", "text": "The public fact that a secret named `orders-db-url` exists." },
-        { "id": "c", "text": "The module title." },
-        { "id": "d", "text": "The billing account name only." }
+        {
+          "id": "d",
+          "text": "Record the Cloud Run service URL and rollout timestamp, assuming they identify the secret payload used by every instance."
+        },
+        {
+          "id": "a",
+          "text": "The stable secret name and the exact version the runtime used, without printing the payload."
+        },
+        {
+          "id": "b",
+          "text": "Record the stable secret name and assume its versions are interchangeable during the rotation."
+        },
+        {
+          "id": "c",
+          "text": "The plaintext old and new keys, so rollback is convenient."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The secret name is the stable container. The version stores the sensitive value."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The secret name identifies the stable resource and the version identifies the exact payload snapshot. Secret name alone is ambiguous during rotation, plaintext keys should not enter release records, and a service URL does not prove which secret version was used. See [Google Cloud add secret version documentation](https://cloud.google.com/secret-manager/docs/add-secret-version)."
     },
     {
-      "id": "q2",
+      "id": "grant-secret-access-q3",
       "type": "single",
-      "scenario": "The team wants to rotate the database URL without changing every reference in app code. Which Secret Manager feature helps?",
+      "scenario": "The app still gets permission denied after Secret Accessor was granted to deployer@payments-prod. The Cloud Run service runs as payment-webhook@payments-prod. What is the likely issue?",
       "options": [
-        { "id": "a", "text": "Add a new secret version under the same secret name." },
-        { "id": "b", "text": "Paste the new URL into a ticket." },
-        { "id": "c", "text": "Rename the production project for every rotation." },
-        { "id": "d", "text": "Grant Owner to the runtime service account." }
+        {
+          "id": "b",
+          "text": "Extend the deployer grant to the project because the deployment principal can pass its own permissions to the running container."
+        },
+        {
+          "id": "c",
+          "text": "Grant Secret Accessor to the Cloud Run service resource because the runtime service account is not the caller for secret access."
+        },
+        {
+          "id": "d",
+          "text": "Change the secret alias from latest to current because an alias update also grants the missing runtime permission."
+        },
+        {
+          "id": "a",
+          "text": "The grant was given to the deployer principal, not the runtime service account that reads the secret."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Versions let the secret name remain stable while the stored value changes."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The caller that accesses the secret is the runtime service account, so granting the deployer does not fix runtime reads. Service accounts can be principals, Cloud Run can use Secret Manager with the right identity, and matching names are not required. See [Google Cloud access control documentation](https://cloud.google.com/secret-manager/docs/access-control)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which statements about secrets and versions are correct?",
+      "id": "plan-rotation-evidence-q1",
+      "type": "single",
+      "scenario": "The payment provider issues a new webhook signing key. The team adds Secret Manager version 5, then immediately disables version 4 before the new Cloud Run revision receives traffic. What is the main rollout risk?",
       "options": [
-        { "id": "a", "text": "A secret is the named container." },
-        { "id": "b", "text": "A secret version stores a value." },
-        { "id": "c", "text": "Old versions can be disabled or destroyed as part of rotation." },
-        { "id": "d", "text": "Every engineer should read the payload to prove the secret exists." }
+        {
+          "id": "a",
+          "text": "The running app may still depend on version 4, so disabling it before verifying the new runtime path can break traffic."
+        },
+        {
+          "id": "b",
+          "text": "Adding version 5 deletes version 4 by default, so the disable step has no effect."
+        },
+        {
+          "id": "c",
+          "text": "Cloud Run cannot consume Secret Manager versions, so rotation is unrelated to rollout."
+        },
+        {
+          "id": "d",
+          "text": "The provider key should be stored in source control until all traffic moves."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Secret review should use metadata and access evidence, not broad payload exposure."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A safe rotation verifies which app revision reads which version before disabling rollback material. Version 5 does not automatically delete version 4, Cloud Run can consume secrets through runtime configuration, and source control is the wrong place for the key. See [Google Cloud rotation recommendations documentation](https://cloud.google.com/secret-manager/docs/rotation-recommendations)."
     }
   ]
 }

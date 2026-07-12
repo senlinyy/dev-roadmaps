@@ -1,6 +1,6 @@
 ---
 title: "Hunt Down Large Files"
-sectionSlug: the-disk-full-triage-runbook
+sectionSlug: a-disk-full-runbook
 order: 3
 ---
 

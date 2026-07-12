@@ -1,7 +1,6 @@
 ---
-title: "Choose The Image"
-sectionSlug: images
+title: "Compute Engine"
 order: 1
 ---
 
-Practice treating VM images as the server starting point. The questions focus on reproducibility, custom images, and avoiding snowflake instances.
+Review production scenarios covering VM-shaped responsibility: images, disks, zones, startup, process management, service accounts, networking, logs, and patching.

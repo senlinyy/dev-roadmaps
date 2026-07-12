@@ -1,7 +1,6 @@
 ---
-title: "Identify The Resource"
-sectionSlug: project-ids
+title: "Resources, Names, and Labels"
 order: 1
 ---
 
-Practice finding the exact project and resource before changing production. The questions separate friendly names from stronger resource evidence.
+Review production scenarios covering using project IDs, names, labels, tags, and resource paths to identify exact GCP resources before changing them.

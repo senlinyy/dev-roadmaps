@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "`devpolaris-orders-api` needs to store this checkout state:\n\n```text\norders(id, customer_id, status, created_at)\norder_items(order_id, sku, quantity, unit_price_cents)\npayments(order_id, provider_reference, status)\n```\n\nSupport often asks for paid orders by customer and failed payment attempts by provider. What is the best first database fit?",
-      "options": [
-        { "id": "a", "text": "RDS PostgreSQL, because the records have relationships, constraints, joins, and transaction needs." },
-        { "id": "b", "text": "S3, because each order can be written as one JSON object under an order id key." },
-        { "id": "c", "text": "EBS, because an attached disk gives the database more direct control over files." },
-        { "id": "d", "text": "DynamoDB without defined access patterns, because checkout data may grow over time." }
-      ],
-      "correct": ["a"],
-      "explanation": "The model is relational because the relationships between orders, items, and payments matter. RDS gives the team SQL queries, constraints, and transactions for that shape. S3 or an attached disk would store bytes, but they would not naturally protect the business rules."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A test migration creates `order_items.order_id references orders(id)`. Later a bad insert tries to create an item for `order_id=ord_missing`. What value does the foreign key provide?",
-      "options": [
-        { "id": "a", "text": "It prevents a line item from floating around without a real order row." },
-        { "id": "b", "text": "It uploads the missing order JSON file to S3 automatically." },
-        { "id": "c", "text": "It makes all future support queries run against a read replica." },
-        { "id": "d", "text": "It stores the receipt PDF beside the line item row." }
-      ],
-      "correct": ["a"],
-      "explanation": "A foreign key is a database rule that keeps related rows honest. It blocks impossible states such as an item that points to no order. It does not create missing data or handle file storage."
-    },
-    {
-      "id": "q3",
-      "type": "single",
-      "scenario": "Checkout starts a transaction that creates one order, three item rows, and one payment row. The second item insert fails because `quantity` is invalid. What should the app want from the database?",
-      "options": [
-        { "id": "a", "text": "Roll back the whole group so the customer does not see a partial order." },
-        { "id": "b", "text": "Commit the order row and payment row, then let support add the missing item later." },
-        { "id": "c", "text": "Write the failed item to S3 as a recovery object and keep the rest committed." },
-        { "id": "d", "text": "Retry only the failed item in DynamoDB because item rows are small key-value records." }
-      ],
-      "correct": ["a"],
-      "explanation": "A checkout transaction should leave the order story consistent. If one required write fails, rolling back the group is safer than exposing half an order. S3 or DynamoDB do not replace the transaction boundary for these related SQL rows."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "A senior engineer reviews whether order state belongs in RDS. Which evidence supports that choice?",
-      "options": [
-        { "id": "a", "text": "The app needs joins between orders, payments, and order items." },
-        { "id": "b", "text": "Several writes must succeed or fail together during checkout." },
-        { "id": "c", "text": "Support and finance ask new questions by customer, status, date, and payment reference." },
-        { "id": "d", "text": "The receipt PDF is a large file, so the order row should contain the PDF bytes." }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Joins, transactions, and flexible questions are strong relational signals. The PDF option is tempting because receipts belong to orders, but the file bytes are object-shaped data. Store the receipt in S3 and keep the pointer and ownership in the database."
-    },
     {
       "id": "q5",
       "type": "single",
       "scenario": "A receipt download request starts by checking:\n\n```text\norders.id=ord_1042\norders.customer_id=cus_77\norders.receipt_object_key=receipts/2026/05/ord_1042.pdf\nsignedInCustomer=cus_77\n```\n\nWhy is this RDS check still useful if the PDF bytes live in S3?",
       "options": [
-        { "id": "a", "text": "The database owns the business relationship and authorization decision before the app reads the S3 object." },
-        { "id": "b", "text": "RDS can stream the S3 object faster after the key is found." },
-        { "id": "c", "text": "The S3 key proves customer ownership without checking order records." },
-        { "id": "d", "text": "The database check uploads a backup copy of the receipt to DynamoDB." }
+        {
+          "id": "b",
+          "text": "The S3 key prefix is sufficient proof of ownership, so the application can skip the order lookup."
+        },
+        {
+          "id": "a",
+          "text": "The database owns the business relationship and authorization decision before the app reads the S3 object."
+        },
+        {
+          "id": "c",
+          "text": "The S3 object's content type establishes which signed-in customer may download it."
+        },
+        {
+          "id": "d",
+          "text": "The receipt object's ACL should replace the application's customer-to-order authorization check."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "S3 is a good home for the file bytes, but it does not know the product ownership rule by itself. RDS can prove which customer owns the order and which object key belongs to it. That split keeps authorization and file storage clear."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The relational order record connects the signed-in customer to the receipt object key, so the application can authorize the business relationship before issuing an S3 read or presigned URL. A key prefix, content type, or object ACL does not replace that application-level ownership decision.\n\nLearn more in [Amazon RDS DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.html)."
+    },
+    {
+      "id": "q-check-the-connection-path-1",
+      "type": "single",
+      "scenario": "A new ECS task revision fails readiness:\n\n```text\nloading database secret secretId=orders/prod/postgres\ndatabase endpoint host=orders-prod.xxxxxx.us-east-1.rds.amazonaws.com port=5432 database=orders\nreadiness failed error=connect ETIMEDOUT 10.42.18.91:5432\n```\n\nWhat should the team inspect first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Rotate the database credentials first because the client reports a timeout rather than an authentication rejection."
+        },
+        {
+          "id": "c",
+          "text": "Inspect credentials first because an expired password can cause the client to wait until its connection timeout."
+        },
+        {
+          "id": "a",
+          "text": "The network path to RDS, especially RDS status, subnet placement, and security group rules."
+        },
+        {
+          "id": "d",
+          "text": "Increase database capacity first because a connection timeout is sufficient evidence of saturation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`ETIMEDOUT` means the app had a host and port but did not complete the connection. That points first to routing, subnet placement, security groups, or database availability. A wrong password would usually produce a different error after the database answered.\n\nLearn more in [Amazon RDS security groups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html)."
+    },
+    {
+      "id": "q-operate-rds-safely-3",
+      "type": "single",
+      "scenario": "During a DevPolaris release investigation, an engineer queries the production schema-migration table and finds an entry for `202605021030 add_payment_failure_code` with an applied timestamp. What does this database evidence establish?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The migration completed every intended DDL operation successfully and no partial schema state remains."
+        },
+        {
+          "id": "c",
+          "text": "The currently running application revision is compatible with the resulting schema."
+        },
+        {
+          "id": "a",
+          "text": "The migration framework recorded that migration as applied in the queried database."
+        },
+        {
+          "id": "d",
+          "text": "Each read replica has replayed the migration and is ready for application traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The row proves that the migration framework recorded this version as applied in the queried database. It does not by itself prove each DDL statement's resulting shape, application compatibility, or replica replay state. Those require schema inspection, application verification, and replica evidence.\n\nLearn more in [Amazon RDS DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.html)."
+    },
+    {
+      "id": "q-check-the-connection-path-4",
+      "type": "multiple",
+      "scenario": "The team writes a connection checklist for `devpolaris-orders-api` after a failed ECS rollout. The service reads secret `/devpolaris/orders-api/prod/database-url`, connects to RDS instance `devpolaris-orders-prod`, and should reach PostgreSQL only from security group `sg-orders-api`. Which checks belong in the checklist?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The secret has the field names and endpoint the app expects."
+        },
+        {
+          "id": "d",
+          "text": "The S3 bucket policy allows finance to read `exports/daily/*`."
+        },
+        {
+          "id": "a",
+          "text": "The task role can read the specific Secrets Manager secret."
+        },
+        {
+          "id": "c",
+          "text": "The RDS security group allows PostgreSQL from the ECS service security group."
+        },
+        {
+          "id": "e",
+          "text": "A successful TCP connection is enough to prove credentials, database name, and schema compatibility."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The database path includes secret access, secret contents, endpoint, network rules, and database authentication. The finance S3 policy may be important for exports, but it does not prove an ECS task can connect to RDS. Keeping the layers separate makes incidents much calmer.\n\nLearn more in [Amazon RDS security groups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html)."
+    },
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` needs to store this checkout state:\n\n```text\norders(id, customer_id, status, created_at)\norder_items(order_id, sku, quantity, unit_price_cents)\npayments(order_id, provider_reference, status)\n```\n\nSupport often asks for paid orders by customer and failed payment attempts by provider. What is the best first database fit?",
+      "options": [
+        {
+          "id": "b",
+          "text": "S3, because each order can be written as one JSON object under an order id key."
+        },
+        {
+          "id": "a",
+          "text": "RDS PostgreSQL, because the records have relationships, constraints, joins, and transaction needs."
+        },
+        {
+          "id": "c",
+          "text": "EBS, because an attached disk gives the database more direct control over files."
+        },
+        {
+          "id": "d",
+          "text": "DynamoDB without defined access patterns, because checkout data may grow over time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The model is relational because the relationships between orders, items, and payments matter. RDS gives the team SQL queries, constraints, and transactions for that shape. S3 or an attached disk would store bytes, but they would not naturally protect the business rules.\n\nLearn more in [Amazon RDS DB instances](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.html)."
+    },
+    {
+      "id": "q-check-the-connection-path-5",
+      "type": "single",
+      "scenario": "After scaling from 2 to 18 ECS tasks, checkout errors increase. Metrics show:\n\nDatabaseConnections is 540 of max 600. AppPoolMaxPerTask is 30. Readiness is intermittent timeout.\n\nWhat is the most useful first conclusion?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase `max_connections` first so the existing per-task pool can remain unchanged as task count grows."
+        },
+        {
+          "id": "c",
+          "text": "Scale the database immediately because rising connections and latency prove storage throughput is exhausted."
+        },
+        {
+          "id": "d",
+          "text": "Inspect long-running queries only, leaving the aggregate pool limit unchanged across 18 tasks."
+        },
+        {
+          "id": "a",
+          "text": "The total possible app connections grew with task count, so pool sizing or RDS Proxy should be reviewed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Each task has its own pool, so scaling task count can multiply database connections quickly. Pool limits, task count, and possibly RDS Proxy are the right review topics. Moving writes to a replica or S3 would avoid the real issue and break the data model.\n\nLearn more in [Using Amazon RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html)."
+    },
+    {
+      "id": "q-operate-rds-safely-5",
+      "type": "single",
+      "scenario": "A bad release at 09:36 UTC marks many pending orders as cancelled. The team restores RDS to a new instance named `orders-prod-restore-20260502-093500`. The app still points to:\n\n```text\nDATABASE_HOST=orders-prod.cluster-c8r2.example.us-east-1.rds.amazonaws.com\n```\n\nWhy does the app still show bad statuses?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The restore created a separate target, and the app has not been repaired from it or deliberately pointed at it."
+        },
+        {
+          "id": "b",
+          "text": "Point production at the restored endpoint as soon as RDS reports `available`, then validate business data under live traffic."
+        },
+        {
+          "id": "c",
+          "text": "Use point-in-time recovery directly against the production instance so endpoint and security groups remain unchanged."
+        },
+        {
+          "id": "d",
+          "text": "Promote the restored instance as soon as it is available because successful restore status proves application consistency."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An RDS point-in-time restore creates a new DB instance, so recovery is not finished when the restore completes. The team must validate the restored target and decide whether to repair production from it or cut over intentionally. The existing app config still points at the old database.\n\nLearn more in [Amazon RDS backups and point-in-time recovery](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)."
     }
   ]
 }

@@ -9,5 +9,3 @@ pub fn describe(text: &str) -> String {
     }
 }
 ~~~
-
-Both branches return an owned String, and the vector helper can collect those descriptions.

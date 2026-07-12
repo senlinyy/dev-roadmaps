@@ -1,6 +1,6 @@
 ---
 title: "Install a Missing System Dependency"
-sectionSlug: the-operational-spine-the-missing-dependency
+sectionSlug: installing-system-dependencies
 order: 1
 ---
 

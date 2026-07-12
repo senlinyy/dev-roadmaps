@@ -1,6 +1,6 @@
 ---
 title: "Reading Permission Strings"
-sectionSlug: reading-ls--l-output
+sectionSlug: read-long-listings-without-guessing
 order: 1
 ---
 

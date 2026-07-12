@@ -1,8 +1,6 @@
 ---
-title: "Read The Container App Shape"
-sectionSlug: what-is-container-apps
+title: "Container Apps"
 order: 1
-description: "Connect image, environment, ingress, scale, and revision concepts."
 ---
 
-Connect image, environment, ingress, scale, and revision concepts.
+Use the scenario evidence to choose the best Container Apps decision.

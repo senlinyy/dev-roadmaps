@@ -4,67 +4,93 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The orders service needs a new invoice bucket that should be created with the service environment, tagged by the service team, updated through pull requests, and eventually deleted when the service retires. Which Terraform block shape fits best?",
+      "scenario": "The orders team needs a new production invoice bucket. Its root module must create it, apply ownership tags, enable related controls, and remove it only through a reviewed retirement change. Which Terraform design expresses that lifecycle responsibility?",
       "options": [
-        { "id": "a", "text": "A resource, because this root module owns the bucket lifecycle." },
-        { "id": "b", "text": "A data source, because S3 buckets are always shared infrastructure." },
-        { "id": "c", "text": "A provider block, because providers create all resources automatically." },
-        { "id": "d", "text": "An output only, because outputs create infrastructure after apply." }
+        { "id": "a", "text": "Declare the bucket as a managed resource in the orders production root module." },
+        { "id": "b", "text": "Read the bucket through a data source before it exists, then treat the lookup as lifecycle ownership." },
+        { "id": "c", "text": "Copy the planned bucket name into locals and let an external script create it after apply." },
+        { "id": "d", "text": "Publish the name as an output without declaring which configuration owns the real bucket." }
       ],
       "correct": ["a"],
-      "explanation": "A service-owned bucket should be a resource because Terraform will create, update, track, and eventually remove it through state. A data source only reads something that already exists. Providers configure API access, and outputs print values rather than creating objects."
+      "explanation": "A resource block gives this root module lifecycle ownership: create, update, replace, and destroy actions can appear in its plans and state. A lookup reads existing provider data but does not create the object. Locals and outputs move values inside Terraform without assigning lifecycle ownership. See [Terraform resources](https://developer.hashicorp.com/terraform/language/resources)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The platform team already owns a shared log bucket named `dp-platform-shared-logs-prod`. The orders service needs its ARN for an IAM policy, but the service must not create or destroy that bucket. What should the orders root module use?",
+      "scenario": "The platform root module already owns `dp-platform-shared-logs-prod`. The orders root module needs its ARN for an IAM policy, but must not change the bucket's tags, retention, or deletion lifecycle. Which boundary is clearest?",
       "options": [
-        { "id": "a", "text": "A data source that reads the existing shared bucket." },
-        { "id": "b", "text": "A new `aws_s3_bucket` resource with the same bucket name." },
-        { "id": "c", "text": "A provider alias named after the bucket." },
-        { "id": "d", "text": "A variable with no validation and no lookup, because shared objects should never appear in plans." }
+        { "id": "b", "text": "Declare the shared bucket as a second resource in the orders root so both teams can converge it." },
+        { "id": "a", "text": "Read the platform-owned bucket through a lookup or published output, then manage only the orders-owned IAM policy." },
+        { "id": "c", "text": "Import the bucket into both states so each root can manage the attributes it cares about." },
+        { "id": "d", "text": "Hardcode the ARN in every policy and stop checking which stack owns the bucket." }
       ],
       "correct": ["a"],
-      "explanation": "The service needs information about an existing object owned elsewhere, so a data source is the right fit. Declaring a resource with the same name would claim lifecycle ownership and can create dangerous plan behavior. A provider alias changes provider configuration, not ownership."
+      "explanation": "Ownership should remain with one stack. The consumer can read a provider lookup or an explicit published value and manage its own dependent policy. Declaring or importing the same object into two states creates competing ownership, while copied ARNs weaken traceability and drift handling."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A teammate writes this review note: `Use data.aws_caller_identity.current because the AWS account already exists and we only need its ID for naming and tags.` Is the note sound?",
+      "scenario": "A provider reads the current AWS account ID for naming and tags. A reviewer says the lookup should be a resource because the AWS account is important infrastructure. What is the best response?",
       "options": [
-        { "id": "a", "text": "Yes. The current account is existing context selected by credentials, so Terraform should read it rather than manage it." },
-        { "id": "b", "text": "No. Any value used in a name must come from a resource." },
-        { "id": "c", "text": "No. Data sources are only for remote state files, not provider facts." },
-        { "id": "d", "text": "No. Reading the account ID means Terraform will delete the account during destroy." }
+        { "id": "b", "text": "Use a resource because operational importance determines whether Terraform owns an object." },
+        { "id": "c", "text": "Import the account into state before any resource can reference the account ID." },
+        { "id": "a", "text": "Keep it read-only because this root needs account context but does not own the AWS account lifecycle." },
+        { "id": "d", "text": "Replace the lookup with a variable because provider-returned context cannot participate in references." }
       ],
       "correct": ["a"],
-      "explanation": "The current caller identity is read-only provider context. It is useful for names, tags, and review evidence, and using it does not mean Terraform owns the AWS account. Values in resource arguments can come from data sources when the relationship is read-only."
+      "explanation": "The deciding question is lifecycle ownership, not importance. The configuration reads account context supplied by the provider and does not create or retire the AWS account. A variable could carry copied context, but it would not make the account managed or improve provider evidence."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "The service team is reviewing these Terraform design comments. Which comments are correct?",
+      "scenario": "The orders root module manages its IAM role, reads a platform-owned VPC, and creates a security group in that VPC. Which two design comments preserve clear ownership and dependency information?",
       "options": [
-        { "id": "a", "text": "Use a resource for the service-specific IAM role that this root module creates and updates." },
-        { "id": "b", "text": "Use a data source for an existing VPC owned by the platform networking module." },
-        { "id": "c", "text": "Use references between resources instead of copying the same bucket name into every dependent block." },
-        { "id": "d", "text": "Use a data source when you want Terraform to create a missing object for you." }
+        { "id": "a", "text": "Keep the IAM role and security group as managed resources because this root owns their lifecycle." },
+        { "id": "c", "text": "Declare the VPC as a resource too so a reference can create an implicit dependency." },
+        { "id": "b", "text": "Reference the VPC lookup result from the security group instead of copying the VPC ID into another literal." },
+        { "id": "d", "text": "Duplicate the VPC ID in the resource and output so reviewers can compare two independent values." }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Service-owned objects belong in resources, while shared existing objects are usually read through data sources. References tell Terraform about relationships and avoid copied strings. A data source reads existing information and normally fails if the object is missing, so it does not create the object for you."
+      "correct": ["a", "b"],
+      "explanation": "The root should manage objects it owns and read the shared VPC without claiming its lifecycle. Referencing the lookup result passes the provider ID and records the data flow. Redeclaring the VPC creates ownership conflict, while duplicate literals can drift and do not improve the graph."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A plan unexpectedly shows this action after someone changed an existing shared DNS zone from a data source to a resource:\n\n```text\n  # aws_route53_zone.platform will be created\n  + resource \"aws_route53_zone\" \"platform\" {\n      + name = \"devpolaris.example\"\n    }\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n```\n\nWhat is the best interpretation?",
+      "scenario": "A pull request changes a shared DNS zone from a lookup to this block:\n\n```hcl\nresource \"aws_route53_zone\" \"platform\" {\n  name = \"devpolaris.example\"\n}\n```\n\nThe plan says `1 to add`. The platform team already owns the real zone. What is the strongest review conclusion?",
       "options": [
-        { "id": "a", "text": "Terraform is now trying to own a zone this module was supposed to read, so the change should be challenged." },
-        { "id": "b", "text": "The plan is safer because resources never affect existing shared infrastructure." },
-        { "id": "c", "text": "This proves the data source was broken because data sources should show creates." },
-        { "id": "d", "text": "The zone will be read only because the name matches an existing platform object." }
+        { "id": "b", "text": "The matching zone name makes the resource an automatic read-only reference to the existing object." },
+        { "id": "c", "text": "The create is harmless because a resource cannot affect objects that another Terraform state manages." },
+        { "id": "d", "text": "The plan proves the existing zone was absent from AWS when Terraform refreshed state." },
+        { "id": "a", "text": "The orders root is now proposing lifecycle ownership and creation, so the change conflicts with the stated shared-resource boundary." }
       ],
       "correct": ["a"],
-      "explanation": "Changing from data source to resource changes the ownership meaning. Terraform now plans to create and track a Route 53 zone in this root module. The matching name does not make it read-only, and data sources do not show create actions."
+      "explanation": "The block and create action mean this root intends to create and track a zone. Matching a real name does not turn a resource into a lookup or safely adopt the existing zone. The plan alone does not prove the provider account contains no zone, and duplicate ownership remains unsafe."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A refactor renames `aws_s3_bucket.orders_exports` to `aws_s3_bucket.exports`. The configured bucket name is unchanged, but the plan proposes one destroy and one create. Which change best preserves the existing ownership binding?",
+      "options": [
+        { "id": "a", "text": "Add a `moved` block from the old resource address to the new address, then confirm the replacement disappears from the plan." },
+        { "id": "b", "text": "Keep both resource blocks for one apply so Terraform can discover they refer to the same bucket." },
+        { "id": "c", "text": "Add a data source for the bucket and use it to reconcile the two resource addresses automatically." },
+        { "id": "d", "text": "Change the provider region so the new address is planned independently from the old state entry." }
+      ],
+      "correct": ["a"],
+      "explanation": "State maps the real object to its Terraform address. A `moved` block records the refactor so Terraform can preserve that binding. Two resources would claim the same object, a lookup does not move state ownership, and changing provider context creates a different risk. See [Terraform moved blocks](https://developer.hashicorp.com/terraform/language/block/moved)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "The root manages `aws_s3_bucket.orders_invoices`, but its versioning resource uses `bucket = \"dp-orders-invoices-prod\"`. A rename proposal updates the bucket resource but misses this literal. Which review change most directly prevents that drift?",
+      "options": [
+        { "id": "a", "text": "Reference `aws_s3_bucket.orders_invoices.id` from the versioning resource." },
+        { "id": "b", "text": "Move the literal into a local with a different name and update it during every rename." },
+        { "id": "c", "text": "Add a comment beside both literals stating that reviewers must keep them equal." },
+        { "id": "d", "text": "Read the managed bucket through a data source and let the versioning resource depend on both declarations." }
+      ],
+      "correct": ["a"],
+      "explanation": "A direct resource attribute reference passes the provider ID and gives Terraform dependency information. A local can reduce repeated text but still permits an independent value source, comments cannot enforce consistency, and reading an object already managed in the same root adds an unnecessary second path. See [Terraform references](https://developer.hashicorp.com/terraform/language/expressions/references)."
     }
   ]
 }

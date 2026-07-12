@@ -1,5 +1,5 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
@@ -12,131 +12,184 @@
         },
         {
           "id": "b",
-          "text": "Database connection settings, because backend dependency failures can sometimes appear as gateway errors."
+          "text": "The compute runtime and revision health, because a broken backend process can make the entry service mark targets unhealthy."
         },
         {
           "id": "c",
-          "text": "Application export storage, because failed file downloads are also user-facing errors."
+          "text": "The DNS and TLS records for the hostname, because certificate or name-resolution drift can interrupt the request before application code runs."
         },
         {
           "id": "d",
-          "text": "Quota and scale settings, because exhausted capacity can sometimes affect whether backends stay healthy."
+          "text": "The database connection path, because a downstream dependency outage is a common reason for customer-visible failures."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A 502 before app logs points to traffic entry, routing, or backend health. The database can cause downstream errors, but the evidence says the request may not be reaching the app."
+      "explanation": "A 502 before the application logs is strongest evidence against the public entry, routing, or backend-health path. The compute runtime is the closest distractor because an unhealthy backend can cause the entry service to emit 502, but the first service area to inspect is still the entry layer that is surfacing the failure and judging backend health. DNS or TLS issues usually prevent the request from reaching an HTTP 502 state, and the database is farther down the path. See [Microsoft Learn: Technology Choices Compute Decision Tree](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/compute-decision-tree)."
     },
     {
-      "id": "q2",
+      "id": "02-choose-public-entry-q5",
       "type": "single",
-      "scenario": "The team wants to run a containerized Node.js API without managing VM patching as the first learning path. They need revisions, logs, environment settings, and simple scale rules. Which Azure service family is the closest fit?",
+      "scenario": "A service map review only says `public endpoint exists`. The on-call record cannot show where DNS points, where TLS terminates, or where backend health is checked. What should the map add?",
       "options": [
         {
-          "id": "a",
-          "text": "Azure Container Apps or a similar managed container hosting service."
-        },
-        {
           "id": "b",
-          "text": "Azure DNS, because DNS runs containers when records point at them."
+          "text": "All candidate Azure entry services considered during design, including the alternatives that were not deployed."
         },
         {
           "id": "c",
-          "text": "Azure Blob Storage, because containers and storage containers are the same runtime concept."
+          "text": "Only the compute service, because entry behavior is implied by where code runs."
+        },
+        {
+          "id": "a",
+          "text": "The named public entry service and the traffic job it owns: DNS target, TLS, routing, WAF, backend health, or API policy as applicable."
         },
         {
           "id": "d",
-          "text": "Azure Cost Management, because budgets can start and stop application processes."
+          "text": "Only the region, because region choice proves the public path."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The job is managed application runtime for a container. DNS, Blob Storage, and Cost Management are real services, but they do not run the backend process."
+      "explanation": "The map should make the mechanism visible. Naming the entry service and its traffic job tells the team where to inspect health, certificates, routing, and policy. See [Microsoft Learn: Technology Choices Load Balancing Overview](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/load-balancing-overview)."
     },
     {
-      "id": "q3",
+      "id": "03-map-the-orders-api-q1",
       "type": "single",
-      "scenario": "Checkout needs to store orders, line items, payment state, and customer references with consistency rules. Which data service family should be on the first map?",
+      "scenario": "The first service map for `devpolaris-orders-api` must be useful in a production review, but the team is still early. The reviewer asks for a map that helps someone debug traffic, runtime, data, secrets, artifacts, and signals without turning into a full Azure catalog. Which map is the best first version?",
       "options": [
         {
-          "id": "a",
-          "text": "Azure SQL Database or another relational database service, because the data needs relationships, constraints, and transactions."
+          "id": "b",
+          "text": "A map that includes required services and several likely future services in one diagram, even if the future services are not on today's request path."
         },
         {
-          "id": "b",
-          "text": "Blob Storage, if the team treats each order as an immutable receipt file and keeps query needs somewhere else."
+          "id": "a",
+          "text": "A small map that names traffic entry, compute, database, secrets, image registry, and telemetry, with owner and environment tags."
         },
         {
           "id": "c",
-          "text": "Azure Cosmos DB, if the team can model the access patterns as key-based reads and writes instead of relational joins."
+          "text": "A map focused on compute and database first, with secrets and telemetry left as follow-up notes after launch."
         },
         {
           "id": "d",
-          "text": "Service Bus, if checkout writes are accepted asynchronously and another worker owns the durable order record."
+          "text": "A list of Azure product names grouped by portal category, with the job of each service explained in a separate document."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Relational order data usually needs consistency, relationships, and transactions. Blob Storage is useful for file-like data, and Monitor is for operational signals, not the primary order system of record."
+      "explanation": "A useful first map is small but operational. It covers the request path, runtime, data, secrets, images, and signals without becoming a product catalog. See [Microsoft Learn: Architecture Guide](https://learn.microsoft.com/en-us/azure/architecture/guide/)."
     },
     {
-      "id": "q4",
+      "id": "03-map-the-orders-api-q2",
       "type": "multiple",
-      "scenario": "A service map review finds three blank rows after an incident: private secret access, runtime evidence, and container image origin. The team wants to fill the rows with Azure services that match the job, not just familiar product names. Which pairings are reasonable first choices?",
+      "scenario": "A startup is preparing the first production architecture for `devpolaris-orders-api`. The approved design exposes an HTTP API through a managed public entry service and runs the container on a managed Azure compute service. Database and object-storage choices have not been approved, and Kubernetes is not part of the current design. Which two rows belong in the production map now?",
       "options": [
         {
           "id": "a",
-          "text": "Private secrets: Key Vault."
-        },
-        {
-          "id": "b",
-          "text": "Runtime evidence: Azure Monitor, Log Analytics, or Application Insights."
-        },
-        {
-          "id": "c",
-          "text": "Container images: Azure Container Registry."
+          "text": "Public entry: Front Door, Application Gateway, or another HTTP entry service used by the app."
         },
         {
           "id": "d",
-          "text": "Public HTTPS entry: Azure SQL Database."
+          "text": "Kubernetes cluster: include it now because the team might use Kubernetes later, even though this API is currently planned for a managed container service."
+        },
+        {
+          "id": "b",
+          "text": "Compute: Container Apps, App Service, or another runtime for the API."
+        },
+        {
+          "id": "c",
+          "text": "Private data: Azure SQL Database for order records and Blob Storage for export files if the app uses both."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "Key Vault, Monitor or Application Insights, and Container Registry match the named jobs. Azure SQL is a data service, not the public HTTPS entry point."
+      "explanation": "The public entry and compute rows must stay because they are confirmed parts of the request path. The data row is not yet defensible: it says to include both Azure SQL and Blob Storage only if the application uses both, but the review evidence has not established either dependency. A Kubernetes cluster based on a possible future choice would also make the current map misleading. See [Microsoft Learn: Azure Architecture Guide](https://learn.microsoft.com/en-us/azure/architecture/guide/)."
     },
     {
-      "id": "q5",
+      "id": "03-map-the-orders-api-q3",
       "type": "single",
-      "scenario": "The app fails only when reading `PAYMENT_API_KEY`. The logs show `Forbidden` from Key Vault, and the managed identity name in production is `mi-orders-prod`. Which map row should the team inspect first?",
+      "scenario": "The map says `API can read secrets`, but it does not name the identity doing the read. During a staging test, secret reads work from one app but fail from another app using the same Key Vault. What is the main gap?",
       "options": [
         {
-          "id": "a",
-          "text": "Identity and secrets: whether `mi-orders-prod` has the right Key Vault access."
-        },
-        {
           "id": "b",
-          "text": "Public DNS: whether the customer hostname points at the right endpoint."
+          "text": "The map is missing which secret name or Key Vault reference each app uses, because one app might be reading a different secret from the same vault."
         },
         {
           "id": "c",
-          "text": "Blob lifecycle: whether exported files expire too early."
+          "text": "The map is missing whether the vault uses RBAC or access policies, because authorization mode alone should determine which app can read the secret."
         },
         {
           "id": "d",
-          "text": "Region price: whether the service is running in the cheapest region."
+          "text": "The map is missing the private endpoint and DNS path to the vault, because apps that share one vault should otherwise have identical authorization results."
+        },
+        {
+          "id": "a",
+          "text": "The map is missing the caller identity and permission path, such as the managed identity and Key Vault access scope."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The evidence names Key Vault and a managed identity. This is an identity and secret-access problem before it is a DNS, storage, or cost problem."
+      "explanation": "Secret access depends on who is calling and what permission path that caller has, so the missing identity and access path are the key gap. The closest distractor is missing the exact secret reference, because different apps can fail on different secrets, but the scenario already says the map never named the identity that reads any secret. Vault authorization mode and private networking matter too, yet neither replaces caller identity in the access decision. See [Microsoft Learn: Architecture Guide](https://learn.microsoft.com/en-us/azure/architecture/guide/)."
+    },
+    {
+      "id": "05-debug-with-the-service-map-q2",
+      "type": "single",
+      "scenario": "A new revision is deployed, but Container Apps keeps running the previous revision. The image reference in the revision says `acrdevpolaris.azurecr.io/orders-api:1.8.4`, while the registry only has tags `1.8.3` and `latest`. What should the team check first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The artifact and deployment path: whether the expected image tag or digest exists in Azure Container Registry and is referenced by the revision."
+        },
+        {
+          "id": "b",
+          "text": "The revision rollout status and image-pull events on Container Apps, because a valid image reference can still fail during revision activation."
+        },
+        {
+          "id": "c",
+          "text": "The deployment pipeline output that computed the image reference, because the release may have pushed one tag while the revision was updated with another."
+        },
+        {
+          "id": "d",
+          "text": "The revision traffic assignment, because the new image might exist and be healthy while traffic still points at the previous revision."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to the image artifact path. Before debugging runtime code, confirm the expected image exists and the revision points at it. See [Microsoft Learn: Azure Monitor Overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview)."
+    },
+    {
+      "id": "06-choose-simplicity-control-and-ownership-q5",
+      "type": "single",
+      "scenario": "A production map has every possible Azure service the team might use someday. It includes services not deployed, services not on the request path, and owners marked as `TBD`. What is the main risk?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The map sends responders into unverified design branches, which can slow triage even if one future dependency eventually becomes real."
+        },
+        {
+          "id": "c",
+          "text": "The map makes handoffs harder because reviewers have to separate confirmed production dependencies from speculative future services before they can trust any path on the diagram."
+        },
+        {
+          "id": "a",
+          "text": "The map becomes harder to use during incidents because it mixes current evidence with future guesses and unclear ownership."
+        },
+        {
+          "id": "d",
+          "text": "The map can hide the actual request path because equally prominent future branches distract from the services that own today's traffic, runtime, data, and signals."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An operations map should describe the system responders can verify today, with clear ownership and a real request path. The closest distractor is that extra future branches can slow triage, but answer `a` is stronger because it captures both the evidence problem and the ownership problem in one review finding. The other options describe real review friction, yet they are narrower consequences of the broader issue in answer `a`. See [Microsoft Learn: Technology Choices Compute Decision Tree](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/compute-decision-tree)."
     }
   ]
 }

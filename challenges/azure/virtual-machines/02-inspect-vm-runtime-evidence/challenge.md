@@ -1,6 +1,6 @@
 ---
 title: "Inspect VM Runtime Evidence"
-sectionSlug: patching-and-logs
+sectionSlug: runtime-evidence
 order: 2
 description: "Use Azure CLI evidence to verify the VM shape, power state, identity, network, and instance health."
 ---

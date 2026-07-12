@@ -1,70 +1,194 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "Cost Explorer shows `Unallocated` spend growing. A resource tag sample has this pattern:\n\n```text\nECS service: Service=devpolaris-orders-api Environment=prod Team=platform Component=api\nRDS database: Service missing Environment=prod Team=platform Component=database\nS3 bucket: Service=devpolaris-orders-api Environment missing Component=storage\nLog group: no cost allocation tags visible\n```\n\nWhat should improve first?",
-      "options": [
-        { "id": "a", "text": "Consistent workload and environment tagging so costs can be grouped by service, owner, and component." },
-        { "id": "b", "text": "Immediate ECS downsizing, because missing tags prove compute is oversized." },
-        { "id": "c", "text": "Removing all component tags, because fewer labels make Cost Explorer more precise." },
-        { "id": "d", "text": "Ignoring unallocated spend until the monthly bill is final." }
-      ],
-      "correct": ["a"],
-      "explanation": "You cannot tune what you cannot see. Missing or inactive cost allocation tags make the service cost look incomplete and unowned. Consistent tags turn one large bill into responsible engineering questions."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A Cost Explorer view is filtered to `Service=devpolaris-orders-api` and `Environment=prod`:\n\n```text\nMonth: 2026-04\nTotal: 100 units, up from 74\nRDS database: 31 units, up 6\nECS API tasks: 22 units, up 2\nCloudWatch Logs: 18 units, up 14\nLambda and SQS workers: 13 units, up 8\nS3 receipts and exports: 11 units, up 5\n```\n\nWhat is the safest first investigation?",
+      "scenario": "A Cost Explorer view is filtered to `Service=devpolaris-orders-api` and `Environment=prod`:\n\nMonth is 2026-04. Total is 100 units, up from 74. RDS database is 31 units, up 6. ECS API tasks is 22 units, up 2. CloudWatch Logs is 18 units, up 14. Lambda and SQS workers is 13 units, up 8. S3 receipts and exports is 11 units, up 5.\n\nWhat is the safest first investigation?",
       "options": [
-        { "id": "a", "text": "Investigate log volume, worker retries, S3 export behavior, and nearby releases before resizing RDS." },
-        { "id": "b", "text": "Resize RDS first because it is the largest line, even though it did not move most." },
-        { "id": "c", "text": "Cut ECS desired count because API task cost is always the cause of service spend." },
-        { "id": "d", "text": "Treat the increase as impossible to explain because Cost Explorer only shows totals." }
+        {
+          "id": "b",
+          "text": "Investigate the RDS increase first because it remains the largest absolute component after the release."
+        },
+        {
+          "id": "c",
+          "text": "Investigate Lambda and SQS first because their percentage growth is largest, before correlating logs or S3."
+        },
+        {
+          "id": "a",
+          "text": "Investigate log volume, worker retries, S3 export behavior, and nearby releases before resizing RDS."
+        },
+        {
+          "id": "d",
+          "text": "Investigate only the worker line because it has the largest percentage increase, treating Logs and S3 as downstream billing noise."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The largest line is not automatically the first target. Logs, workers, and S3 changed sharply, so they deserve the first diagnosis. Cost Explorer shows where spend moved; service logs, queue metrics, and release notes explain why."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The largest line is not automatically the first target. Logs, workers, and S3 changed sharply, so they deserve the first diagnosis. Cost Explorer shows where spend moved; service logs, queue metrics, and release notes explain why.\n\nLearn more in [Analyzing costs with Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)."
     },
     {
-      "id": "q3",
+      "id": "q-investigate-spend-jumps-2",
       "type": "single",
-      "scenario": "AWS Budgets sends this alert:\n\n```text\nBudget: prod-orders-monthly\nScope: Service=devpolaris-orders-api, Environment=prod\nCurrent month: 63 units used\nForecast: 112 units\nLargest movement: CloudWatch Logs and Lambda workers\nOwner: platform\n```\n\nWhat is the right interpretation?",
+      "scenario": "After the monthly export release, CloudWatch Logs ingestion and worker runtime costs rise while order volume stays flat. The same job appears repeatedly in the worker log group:\n\n```log\n2026-04-19T02:14:11Z ERROR service=devpolaris-orders-worker job=monthly-export order_id=ord_4418 error=ExportPayloadTooLarge retry=7 payload_bytes=1832044\n2026-04-19T02:14:14Z ERROR service=devpolaris-orders-worker job=monthly-export order_id=ord_4418 error=ExportPayloadTooLarge retry=8 payload_bytes=1832044\n```\n\nWhich explanation should the team test first?",
       "options": [
-        { "id": "a", "text": "The budget caught drift and should start an investigation into the moving layers." },
-        { "id": "b", "text": "The budget proves production is down, so rollback the API immediately." },
-        { "id": "c", "text": "The budget automatically reduces spend once the forecast crosses the threshold." },
-        { "id": "d", "text": "The budget should be account-wide only, because service-scoped budgets hide useful detail." }
+        {
+          "id": "b",
+          "text": "The worker duration increased, but log ingestion is unrelated because repeated messages have the same fields."
+        },
+        {
+          "id": "c",
+          "text": "The payload-size failure is increasing Lambda duration while SQS prevents repeated processing cost."
+        },
+        {
+          "id": "d",
+          "text": "The retry loop is multiplying compute and log ingestion, so the team should bound retries and stop logging full payloads."
+        },
+        {
+          "id": "a",
+          "text": "The worker is retrying failed work and logging too much data, increasing both worker activity and log ingestion."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A budget alert is an early warning, not a fix or a root cause. This one is useful because it has service scope, owner, and the largest moving layers. Engineers still need to diagnose logs and workers before acting."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "Which tags or tag habits help make `devpolaris-orders-api` spend visible?",
-      "options": [
-        { "id": "a", "text": "`Service=devpolaris-orders-api`, so resources can be grouped by workload." },
-        { "id": "b", "text": "`Environment=prod`, so production spend is separate from staging and development." },
-        { "id": "c", "text": "`Component=api`, `Component=database`, or `Component=worker`, so one service can be broken into layers." },
-        { "id": "d", "text": "Adding tags only after a surprise bill and never activating them for cost allocation." }
+      "correct": [
+        "a"
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Good tags match how the team operates and reviews ownership. Service, environment, team, and component tags make cost questions more specific. Tags also need to be available in billing reports before they help Cost Explorer."
+      "explanation": "The log explains two moving cost lines at once: worker retries and CloudWatch Logs ingestion. The payload size and retry count make the waste concrete. The next step is to control the retry loop and fix the export behavior.\n\nLearn more in [CloudWatch Logs concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A monthly cost snapshot ends with these findings:\n\n```text\nworker retries rose after release 2026-04.18\nlog volume jumped in the same window\nS3 temporary exports did not expire\nRDS remains large but only rose slightly\nECS API is steady\n```\n\nWhich decision style matches the article?",
+      "scenario": "DevPolaris normally spends about 3,000 units per month on the orders workload. Finance wants an early warning when forecast spend exceeds 3,600 units, but engineering must still investigate the responsible service, release, and usage pattern before changing capacity. Which approach best turns that requirement into an operating control?",
       "options": [
-        { "id": "a", "text": "Make targeted decisions for the moving layers, then review RDS separately over a representative period." },
-        { "id": "b", "text": "Cut every layer immediately because all cost increases have the same cause." },
-        { "id": "c", "text": "Ignore worker retries because a healthy checkout API means background work cannot waste money." },
-        { "id": "d", "text": "Delete S3 exports without checking retention or support requirements." }
+        {
+          "id": "a",
+          "text": "Create an owned AWS Budget with forecast and actual thresholds, route notifications to the responsible team, and link the response to tagged Cost Explorer views and release evidence."
+        },
+        {
+          "id": "b",
+          "text": "Set a hard account spending limit at 3,600 units that automatically stops production resources when the forecast crosses the threshold."
+        },
+        {
+          "id": "c",
+          "text": "Create an alarm on the largest current RDS line item because the largest service will also explain any future forecast increase."
+        },
+        {
+          "id": "d",
+          "text": "Wait for the final monthly invoice so credits, refunds, and delayed usage cannot create an early false signal."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A useful snapshot turns cost movement into specific decisions. The changed layers deserve investigation first, while RDS right-sizing needs its own evidence window. This avoids blame and avoids unsafe cuts."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A budget is an early attention mechanism, not a root-cause diagnosis or an automatic license to stop production. Owned forecast and actual thresholds can trigger investigation while tags, Cost Explorer, release history, and workload evidence explain the movement. A single RDS alarm cannot represent every cost driver, and waiting for the invoice removes the chance to act during the month.\n\nLearn more in [AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)."
+    },
+    {
+      "id": "q-investigate-spend-jumps-4",
+      "type": "single",
+      "scenario": "Daily spend rises immediately after release `2026-04.18`, but total monthly service cost is too coarse to identify the cause. The release changed worker concurrency, payload logging, and temporary export handling. Which investigation plan gives the team the strongest evidence before it changes capacity?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use daily cost by service and usage type around the release, then correlate the changed components with traffic, retries, queue age, log volume, and S3 prefix growth in the same window."
+        },
+        {
+          "id": "d",
+          "text": "Compare the current monthly total by AWS service with last month, then reduce the largest service immediately."
+        },
+        {
+          "id": "a",
+          "text": "Inspect only the release diff because temporal proximity proves that every changed setting contributed equally to the increase."
+        },
+        {
+          "id": "c",
+          "text": "Take one current utilization snapshot for each resource and ignore release timing so the analysis is not biased by the deployment."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The plan combines cost granularity, timing, the release boundary, and operational evidence from every changed component. A monthly total or untimed snapshot cannot isolate the movement, while changing production before collecting evidence destroys the baseline and may cut the wrong layer.\n\nLearn more in [Analyzing costs with Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)."
+    },
+    {
+      "id": "q-investigate-spend-jumps-1",
+      "type": "single",
+      "scenario": "Cost Explorer daily view shows:\n\n```text\nScope: Service=devpolaris-orders-api, Environment=prod\nDay     ECS API  RDS   Logs    Lambda/SQS  S3     Notes\nApr 16  normal   high  normal  normal      normal\nApr 17  normal   high  normal  normal      normal\nApr 18  normal   high  rising  rising      rising  release 2026-04.18\nApr 19  normal   high  high    high        rising\nApr 20  normal   high  high    high        high\n```\n\nWhere should the team look first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Start with RDS because its absolute spend is highest, then check whether the release changed query volume."
+        },
+        {
+          "id": "a",
+          "text": "At the release behavior that changed logs, workers, and S3, not at shrinking steady ECS API tasks."
+        },
+        {
+          "id": "c",
+          "text": "Rollback release `2026-04.18` immediately because temporal correlation proves the release caused each changed service charge."
+        },
+        {
+          "id": "d",
+          "text": "Start with S3 lifecycle because storage cost is cumulative and therefore explains the immediate Logs increase."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The movement started in logs, Lambda or SQS, and S3 near a release. ECS stayed normal, and RDS was high but steady. A safe investigation follows the moving layers first.\n\nLearn more in [Analyzing costs with Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)."
+    },
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Cost Explorer shows `Unallocated` spend growing. A resource tag sample has this pattern:\n\nECS service is Service=devpolaris-orders-api Environment=prod Team=platform Component=api. RDS database is Service missing Environment=prod Team=platform Component=database. S3 bucket is Service=devpolaris-orders-api Environment missing Component=storage. Log group is no cost allocation tags visible.\n\nWhat should improve first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Group untagged resources by generated service names and postpone activating cost allocation tags until next quarter."
+        },
+        {
+          "id": "c",
+          "text": "Apply missing tags to resources and assume historical Cost Explorer data will be retroactively reallocated."
+        },
+        {
+          "id": "d",
+          "text": "Use service-native names as the permanent allocation model because tag coverage will never be complete."
+        },
+        {
+          "id": "a",
+          "text": "Consistent workload and environment tagging so costs can be grouped by service, owner, and component."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "You cannot tune what you cannot see. Missing or inactive cost allocation tags make the service cost look incomplete and unowned. Consistent tags turn one large bill into responsible engineering questions.\n\nLearn more in [Activating user-defined cost allocation tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/activating-tags.html)."
+    },
+    {
+      "id": "q-investigate-spend-jumps-5",
+      "type": "single",
+      "scenario": "DevPolaris traced a cost increase to workers repeatedly processing oversized exports, logging full payloads, and creating temporary S3 objects. The incident proposal reduces worker concurrency, stops full-payload logging while preserving error context, keeps messages queued during the payload-splitting fix, and reviews temporary-object lifecycle only after retention requirements are confirmed. Why is this safer than cutting API capacity?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It controls the retry-driven worker, log, and storage costs while preserving API capacity, queued work, and enough evidence to repair the failure."
+        },
+        {
+          "id": "b",
+          "text": "It reduces API capacity along with worker concurrency so every workload component contributes to the cost target."
+        },
+        {
+          "id": "c",
+          "text": "It purges the queue after reducing concurrency so backlog cannot create cost when the worker resumes."
+        },
+        {
+          "id": "d",
+          "text": "It disables worker error logging during the incident so CloudWatch ingestion stops before the payload problem is fixed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The proposal targets the components that moved together: retrying workers, oversized log events, and temporary exports. It preserves the checkout serving layer, queued business work, and enough failure context to fix the payload path. Cutting API capacity, purging the queue, or disabling error evidence would reduce a number by creating unrelated customer or recovery risk.\n\nLearn more in [Analyzing costs with Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)."
     }
   ]
 }

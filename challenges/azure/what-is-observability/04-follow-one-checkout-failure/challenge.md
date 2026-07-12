@@ -1,6 +1,6 @@
 ---
 title: "Follow One Checkout Failure"
-sectionSlug: traces
+sectionSlug: correlation-across-one-request
 order: 4
 ---
 

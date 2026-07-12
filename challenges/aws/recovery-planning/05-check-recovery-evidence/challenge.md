@@ -1,6 +1,6 @@
 ---
 title: "Check Recovery Evidence"
-sectionSlug: backups
+sectionSlug: backups-and-restore-targets
 order: 5
 ---
 

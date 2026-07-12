@@ -1,7 +1,6 @@
 ---
-title: "Connect Resources To A Workspace"
-sectionSlug: diagnostic-settings
+title: "Logs and Workspaces"
 order: 1
 ---
 
-This step checks observability judgment for `devpolaris-orders-api`. Use the scenario details to choose the safest operating answer.
+Use the scenarios to apply the linked article's guidance on diagnostic routing, workspace design, KQL framing, and log quality.

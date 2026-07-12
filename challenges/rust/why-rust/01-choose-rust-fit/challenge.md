@@ -1,6 +1,5 @@
 ---
-title: "Choose Rust Fit"
-sectionSlug: "the-problem"
+title: "What Is Rust"
 order: 1
 ---
-Knowledge check for deciding when Rust is solving a real pressure point instead of just being a new language to try.
+Use workload evidence, compiler diagnostics, ownership contracts, and explicit failure models to decide where Rust adds practical value.

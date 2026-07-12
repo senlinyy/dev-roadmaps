@@ -44,5 +44,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   tags   = local.common_tags
 }
 ```
-
-The resource now consumes named decisions instead of repeating naming and tag logic inline.

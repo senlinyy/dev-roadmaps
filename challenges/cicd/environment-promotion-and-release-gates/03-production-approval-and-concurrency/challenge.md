@@ -1,6 +1,6 @@
 ---
 title: "Gate Production Deployment"
-sectionSlug: manual-approval-without-manual-deploys
+sectionSlug: quality-gates
 order: 3
 ---
 

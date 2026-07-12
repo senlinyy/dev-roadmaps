@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "`orders.devpolaris.com` resolves to an old load balancer address. Which layer is wrong first?",
-      "options": [
-        { "id": "a", "text": "The DNS record for the public name." },
-        { "id": "b", "text": "The database password." },
-        { "id": "c", "text": "The Cloud Run container port only." },
-        { "id": "d", "text": "The IAM role title." }
-      ],
-      "correct": ["a"],
-      "explanation": "DNS gives the name an answer. If the answer points to the wrong entry, traffic starts in the wrong place."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A DNS record points to the intended load balancer. What has DNS not proven yet?",
+      "scenario": "The approved path for orders.example.com is Cloud DNS to an external HTTPS load balancer, Cloud Armor, a serverless NEG, and Cloud Run. A proposed DNS record instead sends users to the default run.app hostname. What is the primary concern?",
       "options": [
-        { "id": "a", "text": "That the certificate, route, backend, and service health are correct." },
-        { "id": "b", "text": "That the name has an answer." },
-        { "id": "c", "text": "That clients can find the next destination." },
-        { "id": "d", "text": "That a record exists." }
+        {
+          "id": "b",
+          "text": "The default hostname will still traverse the load balancer because both names resolve inside Google Cloud."
+        },
+        {
+          "id": "c",
+          "text": "A serverless NEG cannot target Cloud Run, so DNS must point directly to the service."
+        },
+        {
+          "id": "d",
+          "text": "The custom domain should use a CNAME to the run.app hostname and rely on Cloud Armor at the service."
+        },
+        {
+          "id": "a",
+          "text": "The custom domain can bypass the load balancer certificate, WAF policy, URL map, and backend controls."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "DNS only maps the name to the next destination. The rest of the entry path still needs review."
+      "correct": [
+        "a"
+      ],
+      "explanation": "DNS selects the entry target. Pointing at the default service hostname skips the load balancer path and its controls; Google Cloud ownership does not merge the paths, and serverless NEGs are designed to connect load balancers to Cloud Run. See [serverless NEG documentation](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which DNS details help with rollout and rollback?",
+      "id": "https-q5",
+      "type": "single",
+      "scenario": "DNS resolves orders.example.com to the load balancer IP and TCP 443 connects, but the browser receives a certificate for another hostname. The Cloud Run backend is healthy. Which part of the public entry path should the team inspect first?",
       "options": [
-        { "id": "a", "text": "The zone that owns the name." },
-        { "id": "b", "text": "The target the record points to." },
-        { "id": "c", "text": "The TTL that affects caching." },
-        { "id": "d", "text": "The database table count." }
+        {
+          "id": "d",
+          "text": "The URL map path rule, because path routing chooses the certificate used in the TLS handshake."
+        },
+        {
+          "id": "a",
+          "text": "The load balancer frontend certificate and its association with orders.example.com."
+        },
+        {
+          "id": "b",
+          "text": "Cloud Run ingress, because ingress selects the certificate presented before the request reaches the backend."
+        },
+        {
+          "id": "c",
+          "text": "The serverless NEG health state, because an unhealthy NEG changes the TLS certificate hostname."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Ownership, target, and TTL are the DNS details that shape public entry changes."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The hostname mismatch occurs during TLS at the load balancer frontend, before URL-map routing or backend invocation. Cloud Run ingress and serverless NEG state affect later stages and do not select the certificate presented for the custom domain. See [Google-managed certificate documentation](https://cloud.google.com/load-balancing/docs/ssl-certificates/google-managed-certs)."
+    },
+    {
+      "id": "serverless-backends-q5",
+      "type": "single",
+      "scenario": "A rollback points the URL map from orders-v2 to the previous Cloud Run service orders-v1. The old service still exists, but it now allows only internal ingress and has no matching invoker binding for the load balancer path. What must the rollback check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Backend reachability, Cloud Run ingress and IAM, URL-map routing, and frontend readiness for the rollback target."
+        },
+        {
+          "id": "b",
+          "text": "Route traffic as soon as the old service name resolves in inventory, then diagnose authorization after customers return."
+        },
+        {
+          "id": "c",
+          "text": "Treat the previous image in Artifact Registry as proof that the deployed service still accepts the load balancer path."
+        },
+        {
+          "id": "d",
+          "text": "Treat unchanged public DNS as complete rollback evidence even though the backend attachment and authorization changed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A rollback target is useful only if the complete request path can reach and invoke it. Inventory, image existence, and unchanged DNS do not prove that the old service accepts traffic through the configured backend. See [external Application Load Balancer documentation](https://cloud.google.com/load-balancing/docs/https)."
+    },
+    {
+      "id": "serverless-backends-q3",
+      "type": "multiple",
+      "scenario": "Before launch, the team must prove the full orders.example.com path rather than only showing that the Cloud Run service exists. Which three evidence items establish the public serverless route?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The backend service uses the expected serverless NEG and the Cloud Run ingress and IAM settings permit that path."
+        },
+        {
+          "id": "d",
+          "text": "The Cloud Run display name matches the product name, without checking DNS, TLS, routing, or authorization."
+        },
+        {
+          "id": "e",
+          "text": "The Cloud Run service URL succeeds for an administrator, without testing the custom hostname or load balancer path."
+        },
+        {
+          "id": "a",
+          "text": "The DNS answer points to the approved load balancer IP or hostname."
+        },
+        {
+          "id": "b",
+          "text": "The frontend certificate and URL map match the requested host and path."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A verified path needs evidence at DNS, TLS and routing, backend attachment, ingress, and authorization. A friendly service name identifies neither the public frontend nor the controls between it and the revision. See [serverless NEG documentation](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A DNS cutover changes orders.example.com from load balancer IP 203.0.113.10 to 203.0.113.20 with a 300-second TTL. Ten minutes later, one corporate resolver still returns the old address while public resolvers return the new one. What should the incident lead do first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Replace the new load balancer backend because every stale DNS answer proves backend health has failed."
+        },
+        {
+          "id": "c",
+          "text": "Lower the DNS TTL to zero after the cutover and assume existing resolver caches are immediately cleared."
+        },
+        {
+          "id": "d",
+          "text": "Change the Cloud Run service name so recursive resolvers request a new backend."
+        },
+        {
+          "id": "a",
+          "text": "Compare authoritative and recursive DNS answers, resolver cache state, and TTL timing before changing the healthy load balancer."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The split DNS evidence points to resolver caching or propagation, so authoritative answers and TTL timing should be checked first. Backend replacement does not clear caches, a later TTL change does not retroactively erase cached records, and service names are below the DNS resolution layer. See [Cloud DNS overview](https://cloud.google.com/dns/docs/overview)."
+    },
+    {
+      "id": "https-q4",
+      "type": "single",
+      "scenario": "The TLS handshake for orders.example.com succeeds and the backend responds normally at /health, but requests to /checkout return the load balancer default 404. Which configuration should the reviewer inspect?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The DNS A record, because DNS chooses a different load balancer backend for each HTTP path."
+        },
+        {
+          "id": "a",
+          "text": "The URL map host and path matchers that should route /checkout to the orders backend."
+        },
+        {
+          "id": "b",
+          "text": "The certificate validity period, because a path-specific 404 is a TLS negotiation failure."
+        },
+        {
+          "id": "c",
+          "text": "The Cloud Run container port, because the same backend can be healthy only for one URL path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Successful TLS and a healthy backend narrow the failure to HTTP routing. URL maps select a backend by host and path; certificate validity, container port, and DNS do not create a path-specific default 404. See [URL map documentation](https://cloud.google.com/load-balancing/docs/url-map)."
+    },
+    {
+      "id": "serverless-backends-q2",
+      "type": "single",
+      "scenario": "DNS, TLS, and URL-map checks pass, and the serverless NEG targets the expected Cloud Run service. Requests now return HTTP 403 after the invoker policy was tightened. Which boundary is failing?",
+      "options": [
+        {
+          "id": "c",
+          "text": "TLS certificate validation, because certificate failures are returned as an authenticated HTTP 403."
+        },
+        {
+          "id": "d",
+          "text": "URL-map path selection, because an unmatched path generally reaches Cloud Run and returns an IAM denial."
+        },
+        {
+          "id": "a",
+          "text": "Cloud Run invocation authorization for the principal used by the load balancer path or caller."
+        },
+        {
+          "id": "b",
+          "text": "DNS resolution, because a 403 means the custom domain did not resolve to the load balancer."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The request reached Cloud Run and was denied after the policy change, so invoker authorization is the relevant boundary. DNS and TLS failures occur before an HTTP application response, while an unmatched URL-map route does not prove a Cloud Run IAM denial. See [Cloud Run authentication documentation](https://cloud.google.com/run/docs/authenticating/public)."
     }
   ]
 }

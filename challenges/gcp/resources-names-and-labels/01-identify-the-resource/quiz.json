@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q4",
       "type": "single",
-      "scenario": "An alert mentions `orders`, and the engineer finds a Cloud Run service with a similar name in `devpolaris-orders-staging`. Production is `devpolaris-orders-prod`. What should happen before any change?",
+      "scenario": "A production runbook tells an operator to update projects/pay-prod/instances/db1, but the Cloud SQL API expects a service-specific instance name and the ticket omits the API context and region. What risk should the reviewer flag?",
       "options": [
-        { "id": "a", "text": "Confirm the project ID, resource type, location, and exact resource path for the production target." },
-        { "id": "b", "text": "Change the staging service because the name is close enough." },
-        { "id": "c", "text": "Ignore the project because names are globally unique for every GCP service." },
-        { "id": "d", "text": "Change the billing account, because billing account names identify Cloud Run services." }
+        {
+          "id": "b",
+          "text": "Use the partial path after setting the active project and region in the CLI, assuming every API accepts the same resource-name shape."
+        },
+        {
+          "id": "c",
+          "text": "Add project and region labels to the ticket, but keep the service-specific resource type and instance identifier implicit."
+        },
+        {
+          "id": "d",
+          "text": "Use the console URL as the canonical API identifier, even though UI routes and API resource names have different contracts."
+        },
+        {
+          "id": "a",
+          "text": "The incomplete name can fail validation or identify the wrong resource shape because full resource names are service-specific."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A friendly name is not enough. Project, type, location, and strong identifier make the target exact."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resource names follow the owning API schema, so a partial generic path is not reliable evidence for a production change. Shell context, labels, and display names do not fill service-specific identifiers. See [Google API resource-name guidance](https://cloud.google.com/apis/design/resource_names)."
     },
     {
-      "id": "q2",
+      "id": "use-labels-correctly-q5",
       "type": "single",
-      "scenario": "A service account email is `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com`. What does the email reveal immediately?",
+      "scenario": "Northstar Retail's cleanup job selects Compute Engine instances labeled `env=dev`. The preview includes `orders-db-2`, which serves sustained production traffic but retained the wrong label after migration. Before approving deletion, the change board requires proof of exact identity, ownership, usage, and recoverability. Which evidence set meets that requirement?",
       "options": [
-        { "id": "a", "text": "The service account's home project ID is visible in the email." },
-        { "id": "b", "text": "The service account has Owner on every project." },
-        { "id": "c", "text": "The Cloud Run service must be global." },
-        { "id": "d", "text": "The billing account is disabled." }
+        {
+          "id": "d",
+          "text": "A second label-based inventory result plus the migration ticket, without checking live usage, owner, or recovery evidence."
+        },
+        {
+          "id": "a",
+          "text": "The full resource identity, project and location, accountable owner, recent usage, and a verified recovery path."
+        },
+        {
+          "id": "b",
+          "text": "A second run of the same label selector, because repeated metadata results confirm the environment."
+        },
+        {
+          "id": "c",
+          "text": "A corrected `env=dev` label and a 24-hour wait, without resolving the contradictory production traffic evidence."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Service account emails include the project ID. Permissions still need IAM evidence, but the home project is visible."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A label is useful inventory metadata but is not enough to authorize destruction, especially when other evidence contradicts it. Repeating the selector, renaming, or moving the resource does not establish ownership, use, or recoverability. See [Google Cloud label documentation](https://cloud.google.com/resource-manager/docs/labels-overview)."
     },
     {
-      "id": "q3",
+      "id": "copy-strong-evidence-q5",
+      "type": "single",
+      "scenario": "A deletion request includes the full resource name, project, location, owner label, recent access logs, and a tested restore plan. Which final governance check remains necessary?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the evidence points to the intended environment and that the approver is accountable for that resource scope."
+        },
+        {
+          "id": "b",
+          "text": "Confirm the resource name is short enough for an operator to retype without copying it."
+        },
+        {
+          "id": "c",
+          "text": "Confirm the label keys use the same capitalization as the product dashboard."
+        },
+        {
+          "id": "d",
+          "text": "Confirm the console search result is ranked first when the display name is entered."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Strong technical evidence still needs scope and authority: the team must prove it is changing the intended environment and that the approver owns the decision. Typing convenience, capitalization, and search ranking do not authorize deletion. See [project IAM documentation](https://cloud.google.com/resource-manager/docs/access-control-proj)."
+    },
+    {
+      "id": "copy-strong-evidence-q2",
       "type": "multiple",
-      "scenario": "Which fields make a Cloud Run service target safer to review?",
+      "scenario": "A change board receives two similarly named VM targets from different projects and zones. Which three details make the evidence bundle precise enough to identify the intended production resource?",
       "options": [
-        { "id": "a", "text": "Project ID." },
-        { "id": "b", "text": "Region." },
-        { "id": "c", "text": "Service name or resource path." },
-        { "id": "d", "text": "Only the word `orders` from a search result." }
+        {
+          "id": "c",
+          "text": "Owner and environment labels or governed tags that corroborate the identity."
+        },
+        {
+          "id": "d",
+          "text": "The shortest display name, because concise names are less likely to be duplicated."
+        },
+        {
+          "id": "e",
+          "text": "The first console search result for the shared display name, without project, zone, or resource-type evidence."
+        },
+        {
+          "id": "a",
+          "text": "The project ID or number and relevant folder or organization context."
+        },
+        {
+          "id": "b",
+          "text": "The resource type, full name, and region or zone."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The target should be exact enough for another engineer to find the same resource. A loose search word is not enough."
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Project and hierarchy, service-specific identity and location, plus corroborating metadata make the target reviewable. A display name can be reused or mistyped and cannot replace the resource identity. See [Google Cloud resource hierarchy documentation](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Northstar Payments schedules a database parameter update using only labels `env=prod` and `team=payments`. Inventory returns multiple Cloud SQL and Compute Engine resources across three projects, while the change is authorized for one production database. What must the operator obtain before applying it?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Treat the label pair as a unique API address because labels are enforced identifiers."
+        },
+        {
+          "id": "c",
+          "text": "Choose the first matching console result because all label matches represent the same resource."
+        },
+        {
+          "id": "d",
+          "text": "Grant the operator a broader role so the label selector can update every matching resource."
+        },
+        {
+          "id": "a",
+          "text": "Use labels to narrow inventory, but require the exact project and full resource identity before applying the change."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Labels help discovery but do not uniquely address an API resource. The operator still needs the exact project and resource name; search order and broader permission increase the chance and blast radius of a wrong-target change. See [Google Cloud label documentation](https://cloud.google.com/resource-manager/docs/labels-overview)."
+    },
+    {
+      "id": "use-labels-correctly-q4",
+      "type": "single",
+      "scenario": "A network team wants only approved projects to attach workloads to a shared VPC. A proposal enforces approval by checking a free-form label named network-approved. Which distinction matters?",
+      "options": [
+        {
+          "id": "d",
+          "text": "A resource display name is stronger than IAM for deciding whether a project may attach."
+        },
+        {
+          "id": "a",
+          "text": "Labels are inventory metadata; access enforcement should use supported IAM, organization policy, firewall policy, or governed tags."
+        },
+        {
+          "id": "b",
+          "text": "Labels become authorization controls when the key contains the word approved."
+        },
+        {
+          "id": "c",
+          "text": "A billing export can reject network attachments when it sees an unexpected label value."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Free-form labels do not grant or deny network actions. Governed access belongs in policy systems designed for enforcement, while labels remain useful for inventory and cost reporting. See [Google Cloud tags overview](https://cloud.google.com/resource-manager/docs/tags/tags-overview)."
+    },
+    {
+      "id": "copy-strong-evidence-q3",
+      "type": "single",
+      "scenario": "During a failed export incident, Northstar Support receives a ticket naming bucket `customer-exports`. Inventory finds similar bucket references in staging and production projects, and the two buckets have different retention policies. The responder must restore service without changing the wrong compliance boundary. What should happen next?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Choose the bucket whose env label looks newest, without checking the project or policy."
+        },
+        {
+          "id": "d",
+          "text": "Choose the geographically nearest bucket because location proves application ownership."
+        },
+        {
+          "id": "a",
+          "text": "Pause and confirm the project, globally unique bucket name, policy state, and owner before changing either target."
+        },
+        {
+          "id": "b",
+          "text": "Apply the change to both buckets so the intended target is guaranteed to be included."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Similar names are not enough for a production change. Project context, exact bucket identity, policy state, and ownership prevent a wrong-target action; changing both or guessing from metadata expands the incident. See [Cloud Storage bucket documentation](https://cloud.google.com/storage/docs/buckets)."
     }
   ]
 }

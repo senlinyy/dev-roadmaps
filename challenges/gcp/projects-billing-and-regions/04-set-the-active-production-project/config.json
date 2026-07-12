@@ -1,0 +1,48 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "gcp"
+  ],
+  "cloud": {
+    "gcp": {
+      "projectId": "dp-orders-dev",
+      "region": "us-central1",
+      "projects": [
+        {
+          "projectId": "dp-orders-dev",
+          "name": "Orders Development",
+          "billingAccount": "billing-devpolaris"
+        },
+        {
+          "projectId": "dp-orders-prod",
+          "name": "Orders Production",
+          "billingAccount": "billing-devpolaris"
+        }
+      ],
+      "storageBuckets": [],
+      "bigQueryDatasets": []
+    }
+  },
+  "grader": {
+    "strategy": "cloud-state",
+    "expectedCloud": {
+      "gcp": {
+        "projectId": "dp-orders-prod"
+      }
+    },
+    "requireCommands": [
+      "gcloud"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

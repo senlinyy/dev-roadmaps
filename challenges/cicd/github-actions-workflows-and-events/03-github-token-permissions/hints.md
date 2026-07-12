@@ -1,1 +1,1 @@
-The `permissions` block uses scope names from the GitHub API (like `contents`, `pull-requests`, `packages`, `issues`). Each scope can be set to `read`, `write`, or `none`. Think about what the job actually needs to do: it reads code and writes to pull requests.
+Scope the token at the smallest level that still lets the job do its work. This job reads repository contents and writes PR feedback; it does not need broad repository write access.

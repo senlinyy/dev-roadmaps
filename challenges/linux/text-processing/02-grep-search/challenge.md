@@ -1,6 +1,6 @@
 ---
 title: "Searching with grep"
-sectionSlug: searching-with-grep
+sectionSlug: search-with-grep
 order: 2
 ---
 

@@ -25,6 +25,3 @@ final_state:
   verified_by: Maya
   verified_at: 2026-04-30T21:15:00Z
 ```
-
-This is the difference between "looks good" and release evidence. The final state tells the next engineer exactly what production is running.
-

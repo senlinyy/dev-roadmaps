@@ -1,6 +1,6 @@
 ---
 title: "Changing Permissions with chmod"
-sectionSlug: numeric-octal-notation
+sectionSlug: change-permissions-with-chmod
 order: 2
 ---
 

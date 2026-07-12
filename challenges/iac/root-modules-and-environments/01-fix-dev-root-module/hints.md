@@ -1,1 +1,1 @@
-Edit `envs/dev/main.tf`. The module variable file is there for context so the input names are visible.
+The environment root should decide values and call the module. Leave reusable resource implementation inside the shared module.

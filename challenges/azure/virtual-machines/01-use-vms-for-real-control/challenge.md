@@ -1,8 +1,6 @@
 ---
-title: "Use VMs For Real Control"
-sectionSlug: what-is-a-vm
+title: "Virtual Machines"
 order: 1
-description: "Decide when a VM is justified instead of a managed runtime."
 ---
 
-Decide when a VM is justified instead of a managed runtime.
+Answer the scenarios using the linked article's Azure VM operating guidance.

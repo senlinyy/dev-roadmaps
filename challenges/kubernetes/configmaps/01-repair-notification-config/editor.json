@@ -1,0 +1,18 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-configmap.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notification-api-config\n  namespace: customer-notifications\n  labels:\n    app.kubernetes.io/name: notification-api\n    app.kubernetes.io/component: configuration\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "ConfigMap API version" },
+      { "path": ["kind"], "equals": "ConfigMap", "label": "ConfigMap kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api-config", "label": "ConfigMap name" },
+      { "path": ["metadata", "namespace"], "equals": "customer-notifications", "label": "workload namespace" },
+      { "path": ["data", "LOG_LEVEL"], "equals": "info", "label": "production log level" },
+      { "path": ["data", "EMAIL_PROVIDER_URL"], "equals": "http://email-gateway.customer-notifications.svc.cluster.local:8080", "label": "email provider URL" },
+      { "path": ["data", "REQUEST_TIMEOUT_MS"], "equals": "2500", "label": "request timeout string" }
+    ]
+  }
+}

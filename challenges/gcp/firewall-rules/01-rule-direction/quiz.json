@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q5",
       "type": "single",
-      "scenario": "An admin VPN should be allowed to SSH into a bastion VM on TCP 22. Which direction should the rule use on the bastion target?",
+      "scenario": "A teammate proposes mirrored rules for every allowed request: ingress on the API for TCP 8080 and ingress on the web tier for every ephemeral response port. What should the network review say?",
       "options": [
-        { "id": "a", "text": "Ingress." },
-        { "id": "b", "text": "Egress." },
-        { "id": "c", "text": "Billing." },
-        { "id": "d", "text": "DNS only." }
+        {
+          "id": "d",
+          "text": "Create a second ingress rule on the web tier for the operating system's ephemeral port range, treating each response as a new inbound flow."
+        },
+        {
+          "id": "a",
+          "text": "GCP firewall rules are stateful, so return traffic for an allowed connection does not need mirrored ingress rules for ephemeral response ports."
+        },
+        {
+          "id": "b",
+          "text": "Add egress rules for the backend ephemeral range on both tiers, assuming return packets are evaluated as unrelated outbound connections."
+        },
+        {
+          "id": "c",
+          "text": "Mirror the client ephemeral range as ingress on the caller, even though the traffic is a response to an accepted stateful connection."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The bastion is receiving a new connection, so the target-side rule is ingress."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Google Cloud firewall rules track accepted connections and allow matching return traffic, so ephemeral mirrored ingress rules are not needed. The distractors either misunderstand stateful behavior, open the web tier broadly, or invent a protocol-only limitation. See [VPC firewall rule behavior](https://cloud.google.com/firewall/docs/firewalls)."
     },
     {
-      "id": "q2",
+      "id": "priority-q1",
       "type": "single",
-      "scenario": "A worker VM must call a third-party HTTPS API, and outbound traffic is restricted. Which direction is relevant for the worker rule?",
+      "scenario": "Two matching ingress rules apply to API VMs. Rule deny-api-internet has priority 100 and denies 0.0.0.0/0 to TCP 8080. Rule allow-health-checks has priority 800 and allows health-check ranges to TCP 8080. A health check is denied. Why?",
       "options": [
-        { "id": "a", "text": "Egress from the worker target to the API destination." },
-        { "id": "b", "text": "Ingress to the worker from the API." },
-        { "id": "c", "text": "Project inheritance." },
-        { "id": "d", "text": "A DNS TXT record." }
+        {
+          "id": "b",
+          "text": "Allow rules generally lose to deny rules, even when the allow has a lower number."
+        },
+        {
+          "id": "c",
+          "text": "Health checks cannot use firewall rules in Google Cloud."
+        },
+        {
+          "id": "d",
+          "text": "The API VM tag is ignored because priority is greater than 500."
+        },
+        {
+          "id": "a",
+          "text": "The lower priority number wins, so the broad deny at 100 matches before the allow at 800."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The worker starts the outbound connection, so its restricted outbound path is an egress question."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Priority 100 has higher precedence than priority 800, so the broad matching deny wins. Deny does not win regardless of priority, health checks still need allowed paths, and target selectors are not disabled by a priority threshold. See [VPC firewall rule priority](https://cloud.google.com/firewall/docs/firewalls#priority_order_for_firewall_rules)."
+    },
+    {
+      "id": "targets-q5",
+      "type": "single",
+      "scenario": "The security team adds a service-account-targeted rule for API VMs, but one replacement VM starts with the default Compute Engine service account. Traffic to that VM is denied. What is the likely cause?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The replacement should still match because the managed instance group name, not the attached service account, determines service-account targets."
+        },
+        {
+          "id": "d",
+          "text": "The replacement should match through its API network tag, even though the rule targets only the workload service account."
+        },
+        {
+          "id": "a",
+          "text": "The replacement VM does not match the target service account, so the rule does not apply to it."
+        },
+        {
+          "id": "b",
+          "text": "The target service account is resolved only when the rule is created, so replacement VMs require a duplicate rule with the new instance ID."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The rule applies only to instances using the targeted service account. Replacement itself does not break the rule, a managed instance group name or unrelated network tag cannot satisfy a service-account target, and the target is evaluated for each replacement VM. See [Firewall rule targets](https://cloud.google.com/firewall/docs/firewalls#targets)."
+    },
+    {
+      "id": "targets-q4",
+      "type": "multiple",
+      "scenario": "Northstar Payments is adding TCP 8443 access from its external Application Load Balancer proxies to a managed instance group. The VPC also contains admin and batch VMs that must not receive this traffic, and the security reviewer must be able to verify exactly which packets and workloads the rule permits. Which two facts belong in the production change request?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The destination subnet CIDR, used as the only target even though it also contains admin and batch VMs."
+        },
+        {
+          "id": "a",
+          "text": "The exact workload target, such as the API service account or approved network tag."
+        },
+        {
+          "id": "b",
+          "text": "The allowed source, protocol, and port that match the application path."
+        },
+        {
+          "id": "c",
+          "text": "The load balancer forwarding-rule IP, used as the source instead of the documented proxy source ranges."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The request must identify the intended backend workloads and the source, protocol, and port for the load balancer path. Targeting the whole subnet would also expose unrelated VMs. The forwarding-rule frontend IP is not the source seen by the backends, so it cannot replace the documented proxy ranges. See [VPC firewall rule components](https://cloud.google.com/firewall/docs/firewalls#firewall_rule_components)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which details help decide firewall direction?",
+      "type": "single",
+      "scenario": "Northstar Payments is moving its API behind a Google Cloud external Application Load Balancer. The backend VMs should accept TCP 443 only from the documented proxy ranges, but the proposed ingress rule allows `0.0.0.0/0`. Which change most directly restores the intended trust boundary?",
       "options": [
-        { "id": "a", "text": "Which resource is the target of the rule." },
-        { "id": "b", "text": "Who starts the connection." },
-        { "id": "c", "text": "Whether the packet is entering or leaving the target." },
-        { "id": "d", "text": "The color of the Cloud Console graph." }
+        {
+          "id": "d",
+          "text": "Keep the broad source range but add a higher-priority deny for non-proxy addresses, accepting two overlapping rules instead of narrowing the allow."
+        },
+        {
+          "id": "a",
+          "text": "The source range is too broad for the backend target and should be narrowed to the expected caller path."
+        },
+        {
+          "id": "b",
+          "text": "Change the rule to source tag `load-balancer`, even though Google-managed proxy traffic is identified by documented source ranges rather than that VM tag."
+        },
+        {
+          "id": "c",
+          "text": "Move the allow to egress on the backend because the HTTPS response leaves the VM after the proxy initiates the connection."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Direction is about packet flow relative to the target resource."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The issue is an overly broad ingress source for a private backend. TCP 443 is valid, HTTPS requests still arrive as ingress to the backend target, and machine type does not narrow a firewall source. See [load balancer firewall requirements](https://cloud.google.com/load-balancing/docs/firewall-rules)."
+    },
+    {
+      "id": "priority-q2",
+      "type": "single",
+      "scenario": "Northstar Payments has an ingress allow rule for TCP 8443 whose priority was omitted, so it uses the default. During containment, the network team adds a deny rule at priority 900 for the same source, target, and port and needs to know whether the deny will take effect immediately. Which rule is evaluated first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The allow wins because it was created first."
+        },
+        {
+          "id": "c",
+          "text": "Both rules are ignored because matching rules must use unique names."
+        },
+        {
+          "id": "d",
+          "text": "The newest rule wins because firewall priority follows creation time."
+        },
+        {
+          "id": "a",
+          "text": "The deny at 900 wins because an unspecified rule priority defaults to 1000."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rules without explicit priority default to 1000, so the deny at 900 has higher precedence. Creation order and rule name uniqueness do not decide the matching action, and newest rule is not the priority model. See [the firewall rule create reference](https://cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/create)."
+    },
+    {
+      "id": "targets-q1",
+      "type": "single",
+      "scenario": "A firewall rule should apply only to API VMs running with service account api-prod@learn-prod. New API instances are created by a managed instance group. Which target style fits production review best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Target the API VM service account so replacement instances keep the rule when they use the same workload identity."
+        },
+        {
+          "id": "b",
+          "text": "Apply the rule to all instances in the VPC because target scoping creates more work."
+        },
+        {
+          "id": "c",
+          "text": "Target the developer group that deployed the instance template."
+        },
+        {
+          "id": "d",
+          "text": "Target the subnet, because GCP firewall rules attach directly to subnets only."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Service account targeting ties the rule to the workload identity and survives instance replacement when the identity is preserved. Applying to all instances is too broad, developer groups are IAM principals rather than VM targets, and GCP firewall rules target instances rather than attaching directly to a subnet. See [Firewall rule targets by service account](https://cloud.google.com/firewall/docs/firewalls#service-accounts-vs-tags)."
     }
   ]
 }

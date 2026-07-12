@@ -1,8 +1,6 @@
 ---
-title: "Handle Blue-Green Failure Modes"
-sectionSlug: failure-modes-to-watch
+title: "Blue-Green Deployments"
 order: 3
 ---
 
-Knowledge check covering test listener mistakes, target group switches, traffic rollback, data compatibility, and when blue-green is a better fit than rolling.
-
+Review a blue-green release from artifact validation through traffic switching, data compatibility, fast revert, and cleanup.

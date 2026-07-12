@@ -1,6 +1,6 @@
 ---
 title: "Search First Useful Error"
-sectionSlug: first-useful-error
+sectionSlug: logs-insights-query-language
 order: 4
 ---
 

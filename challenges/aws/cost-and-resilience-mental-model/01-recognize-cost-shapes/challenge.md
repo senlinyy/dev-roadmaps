@@ -1,7 +1,6 @@
 ---
-title: "Recognize Cost Shapes"
-sectionSlug: cost-shapes
+title: "What Is Cost and Resilience"
 order: 1
 ---
 
-Use the cost evidence to identify whether the team is looking at direct, hidden, idle, growth, or recovery cost. The goal is to name the shape before deciding whether a resource is waste or protection.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

@@ -1,6 +1,6 @@
 ---
 title: "Inspect Observability Resources"
-sectionSlug: azure-map
+sectionSlug: azure-monitor-as-the-evidence-hub
 order: 2
 ---
 

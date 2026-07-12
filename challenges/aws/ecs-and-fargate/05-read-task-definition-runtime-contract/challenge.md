@@ -1,6 +1,6 @@
 ---
 title: "Read Task Definition Runtime Contract"
-sectionSlug: task-definitions
+sectionSlug: the-task-definition-contract
 order: 5
 ---
 

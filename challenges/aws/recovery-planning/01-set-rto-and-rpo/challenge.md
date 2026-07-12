@@ -1,7 +1,6 @@
 ---
-title: "Set RTO and RPO"
-sectionSlug: rto-and-rpo
+title: "Recovery Planning"
 order: 1
 ---
 
-Use the incident timelines to decide what the recovery time and data-loss targets really mean. The questions focus on RTO, RPO, restore points, and the cost of making targets believable.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

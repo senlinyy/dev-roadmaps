@@ -1,1 +1,1 @@
-Declare data sources in `data.tf`, then replace the copied account and region values in `locals.tf` with references to those data sources.
+Data sources read provider facts for this run. Replace copied context values with references to the data source results.

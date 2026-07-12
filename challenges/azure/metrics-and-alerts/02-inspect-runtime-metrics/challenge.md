@@ -1,6 +1,6 @@
 ---
 title: "Inspect Runtime Metrics"
-sectionSlug: platform-metrics
+sectionSlug: platform-metrics-custom-metrics-and-dimensions
 order: 2
 ---
 

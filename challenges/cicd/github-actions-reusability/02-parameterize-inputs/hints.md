@@ -1,1 +1,1 @@
-Action inputs are declared in a top-level `inputs` block. Each input has a `description` and optionally `required` and `default` values. Inside the steps, you reference an input using `${{ inputs.<name> }}`. Think about what value in the steps should stop being hardcoded.
+Declare the version as action metadata, not as a workflow environment variable. Then use the input expression from the setup step so callers can override the default without editing the action itself.

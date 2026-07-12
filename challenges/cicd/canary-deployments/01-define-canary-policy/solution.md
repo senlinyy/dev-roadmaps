@@ -11,6 +11,3 @@ canary:
 promotion:
   keep_previous_task_set: true
 ```
-
-The policy makes the first production move small and observable. Splitting metrics by release keeps the stable traffic from hiding a bad canary.
-

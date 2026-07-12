@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "During a checkout incident, support gives you one failed response header: `x-request-id: req_73H2`. The CloudWatch log search returns:\n\n```text\n09:42:18 ERROR service=devpolaris-orders-api request_id=req_73H2 route=POST /v1/orders step=rds.insert_order error_name=ConnectionTimeout message=database connection timed out\n```\n\nWhich signal answered the team's immediate question?",
-      "options": [
-        { "id": "a", "text": "Logs, because they name what happened for one request and include the failing step." },
-        { "id": "b", "text": "Metrics, because a single log line proves the whole service error rate." },
-        { "id": "c", "text": "Traces, because the log line alone shows every timed span in the request path." },
-        { "id": "d", "text": "Alarms, because the error line is the notification rule that woke the team." }
-      ],
-      "correct": ["a"],
-      "explanation": "Logs are the best fit when you need the exact event and request context. This log names the service, route, request ID, step, and error, which is enough to choose the next area to inspect. It does not by itself show rates, full timing, or alarm policy."
-    },
     {
       "id": "q2",
       "type": "single",
       "scenario": "A teammate asks whether checkout failures are isolated or becoming a service-wide problem. The dashboard has this 5-minute view:\n\n```text\ntime    requests/min  target_5xx  p95_latency_ms\n09:30   118           0           210\n09:35   122           1           225\n09:40   120           19          940\n09:45   119           37          1320\n```\n\nWhich signal should drive the first answer?",
       "options": [
-        { "id": "a", "text": "Metrics, because the table shows how often errors and latency changed over time." },
-        { "id": "b", "text": "One ECS task log stream, because one line is enough to estimate the fleet error rate." },
-        { "id": "c", "text": "A trace sample only, because one sampled request always represents all customers." },
-        { "id": "d", "text": "A budget alert, because cost movement is the direct measure of customer failures." }
+        {
+          "id": "b",
+          "text": "One ECS task log stream, because one line is enough to estimate the fleet error rate."
+        },
+        {
+          "id": "a",
+          "text": "Metrics, because the table shows how often errors and latency changed over time."
+        },
+        {
+          "id": "c",
+          "text": "A trace sample first, because it can show one slow path but not the whole service-wide rate."
+        },
+        {
+          "id": "d",
+          "text": "A budget alert, because cost movement is the direct measure of customer failures."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Metrics are built for questions about volume, rate, latency, and change over time. The table shows a clear shape: errors and latency rose while request count stayed normal. A log or trace can explain details after the metric points to the pattern."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Metrics are built for questions about volume, rate, latency, and change over time. The table shows a clear shape: errors and latency rose while request count stayed normal. A log or trace can explain details after the metric points to the pattern.\n\nLearn more in [CloudWatch metrics concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html)."
+    },
+    {
+      "id": "q-read-checkout-evidence-1",
+      "type": "single",
+      "scenario": "Checkout failures begin minutes after a release. The on-call engineer correlates the deployment record with service and database signals:\n\n```text\n09:38 deployment started\n09:40 replacement ECS targets became healthy\n09:41 ALB target response time increased\n09:42 checkout 5xx alarm entered ALARM\n09:42 RDS connections increased\n```\n\nWhich next investigation best tests whether the release increased database pressure?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Assume the alarm means the load balancer is the root cause and replace it."
+        },
+        {
+          "id": "c",
+          "text": "Check receipt-email Lambda logs later if evidence shows the order reached the side-job step."
+        },
+        {
+          "id": "a",
+          "text": "Inspect the orders API error logs around 09:41 to 09:42 and compare them with database signals."
+        },
+        {
+          "id": "d",
+          "text": "Compare deploy timing after the first app and database clues, instead of treating it as unrelated by default."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The dashboard gives timing and shape, not a full cause. RDS connections rose near the user-facing symptom, so the next useful move is to read app logs in that window and compare with database evidence. Replacing infrastructure or jumping to Lambda is premature.\n\nLearn more in [CloudWatch Logs concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html)."
+    },
+    {
+      "id": "q-improve-signal-quality-3",
+      "type": "single",
+      "scenario": "The DevPolaris on-call team receives the same CPU page each weekday at 09:00. It remains in ALARM for one minute, clears without intervention, and has shown no customer impact for 28 days. The alarm has no owner, first dashboard, or defined response, so engineers have started ignoring it. What should the team do to make this signal trustworthy?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Raise the threshold until the alarm pages less often, without changing the evaluation window or runbook."
+        },
+        {
+          "id": "c",
+          "text": "Move the CPU chart to a dashboard and remove paging without defining what service-health signal should replace it."
+        },
+        {
+          "id": "a",
+          "text": "Review the signal, threshold, owner, and action path so the alarm earns trust again."
+        },
+        {
+          "id": "d",
+          "text": "Add latency to the same one-minute condition but leave ownership and the first response undefined."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Noisy alarms train people to ignore real risk. The fix is not automatically deletion; first review whether the metric, threshold, duration, owner, and response path match user impact. A trusted alarm should make the first human question easier.\n\nLearn more in [CloudWatch alarms](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html)."
+    },
+    {
+      "id": "q-read-checkout-evidence-4",
+      "type": "multiple",
+      "scenario": "The team is building a short incident note for a checkout failure at 09:42. The alarm named checkout 5xx, the log group is `/ecs/devpolaris-orders-api`, and the request ID is `req_42fail`. Which pieces of evidence are useful and scoped?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The request ID and first useful error from `/ecs/devpolaris-orders-api`."
+        },
+        {
+          "id": "d",
+          "text": "A month-old cost chart with no deploy, request, or dependency context."
+        },
+        {
+          "id": "a",
+          "text": "The alarm name, state, and time window for the checkout 5xx symptom."
+        },
+        {
+          "id": "c",
+          "text": "A trace or timing view showing which checkout step waited."
+        },
+        {
+          "id": "e",
+          "text": "Use a single trace as proof of fleet-wide database saturation without checking aggregate metrics."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "Good evidence stays close to the symptom, time window, and request path. Alarm, log, and trace details help another engineer follow the reasoning. An unrelated old cost chart adds noise during this diagnosis.\n\nLearn more in [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html)."
     },
     {
       "id": "q3",
       "type": "single",
       "scenario": "One checkout succeeded, but the customer waited too long. The trace view says:\n\n```text\nPOST /v1/orders               1860 ms\n  validate cart                  7 ms\n  authorize payment             64 ms\n  insert order in RDS         1690 ms\n  write receipt to S3           38 ms\n  build response                 6 ms\n```\n\nWhich signal is doing the most useful work here?",
       "options": [
-        { "id": "a", "text": "Traces, because they show where one request spent its time." },
-        { "id": "b", "text": "Alarms, because the span list is a threshold notification." },
-        { "id": "c", "text": "Cost tags, because they show which team owns the slow span." },
-        { "id": "d", "text": "Log retention, because retention alone explains the delay." }
+        {
+          "id": "b",
+          "text": "Alarms, because the span list is a threshold notification."
+        },
+        {
+          "id": "a",
+          "text": "Traces, because they show where one request spent its time."
+        },
+        {
+          "id": "c",
+          "text": "Cost tags, because they show which team owns the slow span."
+        },
+        {
+          "id": "d",
+          "text": "Log retention, because retention alone explains the delay."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A trace is a timed path for one request. It points the investigation toward the RDS insert because that span consumed most of the request time. The team still needs logs and metrics to explain why RDS was slow."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A trace is a timed path for one request. It points the investigation toward the RDS insert because that span consumed most of the request time. The team still needs logs and metrics to explain why RDS was slow.\n\nLearn more in [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html)."
     },
     {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "The on-call engineer is writing a first-response note for `devpolaris-orders-api`. Which signal-to-question pairings are sound?",
-      "options": [
-        { "id": "a", "text": "Logs answer: what happened to this request?" },
-        { "id": "b", "text": "Metrics answer: how often or how much is this happening?" },
-        { "id": "c", "text": "Traces answer: where did this request spend time across steps?" },
-        { "id": "d", "text": "Alarms answer: what is the exact stack trace for every failed request?" }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The first three pairings match the article's mental model. Alarms are attention rules over signals; they do not replace logs or traces for detailed request evidence. A good alarm points the human to the right dashboard and log group."
-    },
-    {
-      "id": "q5",
+      "id": "q-read-checkout-evidence-2",
       "type": "single",
-      "scenario": "CloudWatch sends this notification:\n\n```text\nALARM: devpolaris-orders-api-checkout-5xx\nstate: ALARM\nreason: HTTP 5xx responses for POST /v1/orders were above threshold for 10 minutes\nfirst view: orders API dashboard\nfirst logs: /ecs/devpolaris-orders-api\n```\n\nWhat is the best interpretation?",
+      "scenario": "The log and trace for the same request agree:\n\nLog is request_id=req_9KLM step=rds.insert_order error_name=ConnectionTimeout. Trace is POST /v1/orders 5020 ms, rds.insert_order 4930 ms. Metrics is RDS connections rose before 5xx.\n\nWhat is the strongest next conclusion?",
       "options": [
-        { "id": "a", "text": "The alarm tells a human to look, then the dashboard and logs help diagnose." },
-        { "id": "b", "text": "The alarm has already proven the root cause is RDS." },
-        { "id": "c", "text": "The alarm replaces the need for request IDs in application logs." },
-        { "id": "d", "text": "The alarm should be ignored until a customer opens a ticket." }
+        {
+          "id": "b",
+          "text": "Escalate directly to an RDS failover because the aligned request trace and connection rise prove an instance-wide failure."
+        },
+        {
+          "id": "c",
+          "text": "Check receipt writes after confirming affected requests reached that step, because a later side effect may be unrelated to the initial timeout."
+        },
+        {
+          "id": "d",
+          "text": "Start with ECS CPU because normal aggregate CPU is still compatible with a subset of tasks or dependencies failing."
+        },
+        {
+          "id": "a",
+          "text": "The database path deserves first attention because several signals point there."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "An alarm is a shoulder tap, not a complete diagnosis. This alarm gives a symptom, time window, and first places to inspect. The team still needs metrics, logs, and possibly traces to understand the failure."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Agreement across signals is powerful. The log names the failing step, the trace shows most time in that step, and the metrics show pressure in the same window. That does not prove the final fix, but it gives a strong first investigation path.\n\nLearn more in [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html)."
+    },
+    {
+      "id": "q-improve-signal-quality-1",
+      "type": "single",
+      "scenario": "After a difficult payment bug, the team adds this normal production log:\n\n```text\nDEBUG route=POST /v1/orders request_id=req_A12 body={customerEmail=buyer@example.com, paymentToken=tok_live_...} message=full payload accepted\n```\n\nWhat is the best review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep safe structured fields, but remove sensitive values and full request bodies from normal logs."
+        },
+        {
+          "id": "b",
+          "text": "Retain customer email but remove the payment token, because contact data is less sensitive than payment credentials."
+        },
+        {
+          "id": "c",
+          "text": "Move complete failed payloads to a restricted long-retention log group so future incidents preserve maximum context."
+        },
+        {
+          "id": "d",
+          "text": "Hash request and trace identifiers independently in each service, preventing cross-service correlation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The log should retain safe correlation and diagnostic fields such as route, request ID, operation, outcome, and error category. Customer email, payment tokens, and complete request bodies add exposure without being necessary for routine diagnosis. Independently hashing correlation IDs also breaks the cross-service request story.\n\nLearn more in [CloudWatch Logs data protection](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html)."
     }
   ]
 }

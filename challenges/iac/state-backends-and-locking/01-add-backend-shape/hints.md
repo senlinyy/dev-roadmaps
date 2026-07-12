@@ -1,1 +1,1 @@
-Backend configuration belongs in the `terraform` block in `main.tf`. Keep the bucket resource in its own file.
+The backend block is read during initialization. It should identify the state location, while credentials come from the runner or environment.

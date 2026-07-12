@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "filename": "deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/customer-notification/notification-api:2026.06.14-2\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "Deployment API version" },
+      { "path": ["kind"], "equals": "Deployment", "label": "Deployment kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api", "label": "Deployment name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications", "label": "notifications namespace" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "API container" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/notification-api:2026.06.14-2", "label": "release image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "cpu"], "equals": "300m", "label": "CPU request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "memory"], "equals": "384Mi", "label": "memory request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "cpu"], "equals": "1", "label": "CPU limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "memory"], "equals": "768Mi", "label": "memory limit" }
+    ]
+  }
+}

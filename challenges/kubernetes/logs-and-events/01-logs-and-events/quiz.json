@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "logs-events-scope-q1",
+      "type": "single",
+      "scenario": "A rollout of `devpolaris-orders-api` leaves the Deployment at `2/3` available. The object inventory shows one new ReplicaSet with one Pod in `CrashLoopBackOff`, while the older ReplicaSet still has two ready Pods. An engineer proposes opening logs from the first Pod returned by an unfiltered namespace query. What is the best next step?",
+      "options": [
+        { "id": "a", "text": "Read logs from one of the ready old Pods because it currently carries production traffic." },
+        { "id": "b", "text": "Target the failing Pod from the new ReplicaSet, then inspect its named application container and related events." },
+        { "id": "c", "text": "Delete the new ReplicaSet so the Deployment immediately forgets the failed rollout evidence." },
+        { "id": "d", "text": "Inspect cluster events without an object target because all namespace events are equally relevant to this Pod." }
+      ],
+      "correct": ["b"],
+      "explanation": "The failing Pod in the new ReplicaSet is the object that explains the rollout deficit, so its application container and events provide focused evidence. A healthy old Pod describes the serving revision, an unfiltered event stream adds noise, and deleting the ReplicaSet destroys useful evidence before the cause is known."
+    },
+    {
+      "id": "logs-events-previous-q2",
+      "type": "single",
+      "scenario": "The `api` container has restarted five times. A current log request returns no lines because the container is between short startup attempts. Pod status is `CrashLoopBackOff`, and the team needs the error emitted by the last terminated instance. Which evidence should they retrieve?",
+      "options": [
+        { "id": "a", "text": "Deployment logs, because controllers combine output from every terminated container instance." },
+        { "id": "b", "text": "Only current Pod logs with a larger tail, because restart history is merged into the active stream." },
+        { "id": "c", "text": "Node events, because application output is copied into every kubelet event." },
+        { "id": "d", "text": "Previous logs for the Pod's `api` container, because they expose output from the prior crashed instance." }
+      ],
+      "correct": ["d"],
+      "explanation": "Previous container logs preserve the prior terminated instance and are the right source during a restart loop. A larger current tail cannot recover an earlier stream, controllers do not aggregate container logs, and events describe Kubernetes decisions rather than copying application output."
+    },
+    {
+      "id": "logs-events-empty-q3",
+      "type": "single",
+      "scenario": "The orders API has no application log output. Pod inspection shows:\n\n```text\nState:          Waiting\n  Reason:       CreateContainerConfigError\nEvents:\n  Warning  Failed  Error: secret \"orders-prod-env\" not found\n```\n\nWhat is the most accurate diagnosis?",
+      "options": [
+        { "id": "a", "text": "Kubelet could not complete container setup because the referenced Secret was absent, so the process may never have started logging." },
+        { "id": "b", "text": "The application started successfully but its stdout collector dropped every line after startup." },
+        { "id": "c", "text": "The scheduler rejected the Pod because the namespace had no node with enough CPU." },
+        { "id": "d", "text": "The image ran and failed its readiness probe, which caused Kubernetes to erase the application logs." }
+      ],
+      "correct": ["a"],
+      "explanation": "`CreateContainerConfigError` plus the missing Secret event shows a platform-side setup failure before normal process execution. There is no evidence of successful startup, resource scheduling failure, or readiness failure, and Kubernetes does not erase logs merely because readiness fails."
+    },
+    {
+      "id": "logs-events-timeline-q4",
+      "type": "single",
+      "scenario": "An incident note contains these facts: rollout started at `09:38`, a missing Secret event appeared at `09:39`, previous logs reported `POSTGRES_URL is required` at `09:40`, the Secret was restored at `09:44`, and the Deployment reached `3/3` available at `09:46`. Which final statement best joins the application and platform stories?",
+      "options": [
+        { "id": "a", "text": "The rollout failed because Kubernetes could not pull the image, and restoring the Secret only happened near the same time as recovery." },
+        { "id": "b", "text": "The application had an unrelated database outage, while the Secret event can be ignored because events do not describe container setup." },
+        { "id": "c", "text": "The application failed startup because `POSTGRES_URL` was missing, Kubernetes reported the absent Secret source, and restoring it preceded controller-level recovery." },
+        { "id": "d", "text": "The Deployment reached `3/3`, which proves the earlier application error and Kubernetes event were both false alarms." }
+      ],
+      "correct": ["c"],
+      "explanation": "The application named the missing setting, the event named the absent Secret that should provide it, and rollout recovery followed restoration. Image pulling and a separate database outage are not supported by the evidence, while later availability does not invalidate the earlier timeline."
+    },
+    {
+      "id": "logs-events-habits-q5",
+      "type": "multiple",
+      "scenario": "A team is revising production logging after a startup incident. They want logs that can be collected from containers, correlated during an investigation, and shared without leaking credentials. Which two changes best meet that goal?",
+      "options": [
+        { "id": "a", "text": "Write structured records to stdout or stderr with service, environment, operation, status, and a request or trace identifier." },
+        { "id": "b", "text": "Include the full database connection string in each startup failure so responders can test the same secret." },
+        { "id": "c", "text": "Write only to a file inside the container because the node runtime collects internal files more reliably than standard streams." },
+        { "id": "d", "text": "Copy important event lines and timestamps into the incident record before event retention removes them." }
+      ],
+      "correct": ["a", "d"],
+      "explanation": "Structured standard-stream logs give collectors useful service and correlation fields, and copying important events preserves short-lived platform evidence. Secret values must stay out of logs, and container-local files are not the production collection habit taught by the article."
+    }
+  ]
+}

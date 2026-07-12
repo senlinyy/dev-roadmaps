@@ -1,1 +1,1 @@
-Look at the indentation. In YAML, indentation defines hierarchy. `steps` must be indented under the job name (`test`), not at the same level as `test`. Every job also needs a `runs-on` key to tell GitHub which VM image to provision.
+YAML indentation defines ownership. A workflow owns jobs, a job owns its runner choice, and that job owns its steps. Move the command list under a named job instead of making it a sibling of the job map.

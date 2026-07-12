@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
       "scenario": "At 10:20 UTC, the team discovers a bad release started corrupting order statuses at 10:12 UTC. The business says: `checkout must be safe for customers again within 30 minutes.` Which target is this?",
       "options": [
-        { "id": "a", "text": "RTO, because it describes how long recovery may take before the impact is unacceptable." },
-        { "id": "b", "text": "RPO, because it describes how much data may be missing after restore." },
-        { "id": "c", "text": "Retention, because it describes how long logs stay in CloudWatch." },
-        { "id": "d", "text": "Desired count, because it describes how many ECS tasks should run." }
+        {
+          "id": "b",
+          "text": "RPO, because it describes how much data may be missing after restore."
+        },
+        {
+          "id": "a",
+          "text": "RTO, because it describes how long recovery may take before the impact is unacceptable."
+        },
+        {
+          "id": "c",
+          "text": "Retention, because it describes how long logs stay in CloudWatch."
+        },
+        {
+          "id": "d",
+          "text": "Desired count, because it describes how many ECS tasks should run."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "RTO is the recovery time objective. It answers how quickly a usable service path should come back. It does not say which restore point to use or how much data loss is acceptable."
+      "correct": [
+        "a"
+      ],
+      "explanation": "RTO is the recovery time objective. It answers how quickly a usable service path should come back. It does not say which restore point to use or how much data loss is acceptable.\n\nLearn more in [AWS disaster recovery options](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html)."
     },
     {
-      "id": "q2",
+      "id": "q-choose-recovery-strategy-2",
       "type": "single",
-      "scenario": "For the same incident, the business says: `after recovery, we can reconcile a few minutes of accepted orders, but we cannot lose an hour.` Which target is this?",
+      "scenario": "DevPolaris must restore checkout within 30 minutes and lose no more than a few minutes of accepted orders after a regional failure. In the recovery Region, networking, secrets, images, task definitions, alarms, and replicated data are maintained continuously. The ECS service and workers remain scaled to zero until an incident, when the team starts capacity, validates checkout, and shifts traffic. Which disaster recovery strategy most closely matches this design?",
       "options": [
-        { "id": "a", "text": "RPO, because it describes acceptable data loss or data freshness after recovery." },
-        { "id": "b", "text": "RTO, because it describes how fast the app process starts." },
-        { "id": "c", "text": "ALB idle timeout, because it controls customer data loss." },
-        { "id": "d", "text": "CPU reservation, because it controls how fresh restored rows are." }
+        {
+          "id": "b",
+          "text": "Backup and restore, because no recovery pieces exist until the incident."
+        },
+        {
+          "id": "c",
+          "text": "Warm standby, because a small full stack is already handling reduced traffic."
+        },
+        {
+          "id": "a",
+          "text": "Pilot light, because the core path is ready while app compute starts and scales during recovery."
+        },
+        {
+          "id": "d",
+          "text": "Multi-site active/active, because both Regions are already serving customer writes."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "RPO is about the recovery point and how much recent data the business can afford to lose or re-create. It is separate from how long recovery takes. A fast restore to old data can have good RTO and poor RPO."
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is pilot light: important data and core infrastructure are ready, but application compute is switched off or scaled to zero until recovery. The RTO must include scaling, validation, and traffic movement.\n\nLearn more in [AWS disaster recovery options](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html)."
     },
     {
-      "id": "q3",
+      "id": "q-restore-a-usable-system-3",
       "type": "single",
-      "scenario": "The only confirmed backup is a nightly snapshot from 02:00 UTC. The bad write starts at 10:12 UTC, and the business accepts at most 5 minutes of order data loss.",
+      "scenario": "Validation output for a side restore says:\n\n```text\ntarget: orders-prod-restore-20260502-101100\nsample corrupted order has expected previous total\nlatest valid order before restore time exists\nbad write pattern absent\ndatabase security group allows review access only\ndecision: use restored database as repair source, not direct traffic target yet\n```\n\nWhy is that decision reasonable?",
       "options": [
-        { "id": "a", "text": "The backup schedule probably cannot meet the RPO for accepted orders." },
-        { "id": "b", "text": "The RTO is automatically met because any backup exists." },
-        { "id": "c", "text": "The RPO is automatically zero because the snapshot is from the same day." },
-        { "id": "d", "text": "Backups are unrelated to data loss once the app is rolled back." }
+        {
+          "id": "b",
+          "text": "Side restores should be avoided because they add another copy to reconcile."
+        },
+        {
+          "id": "c",
+          "text": "Production should cut over after one sample order passes, then check broader cases under live traffic."
+        },
+        {
+          "id": "a",
+          "text": "The restore is useful evidence, but direct cutover could lose valid orders created after the restore time."
+        },
+        {
+          "id": "d",
+          "text": "Validation is unnecessary because the security group is restricted."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A nightly snapshot may be far too old for a 5-minute RPO. The team may need point-in-time recovery, repair from side restore, or other data protection. Backup existence is not the same as meeting the target."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A side restore can be the clean reference for repair without becoming the live database. If good orders were created after the restore point, direct cutover may lose them. The team must choose repair or cutover based on data correctness and business impact.\n\nLearn more in [Amazon RDS backups and point-in-time recovery](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)."
     },
     {
-      "id": "q4",
+      "id": "q-practice-resilience-drills-4",
       "type": "multiple",
-      "scenario": "Which statements are true for the orders recovery plan?",
+      "scenario": "The team restored the orders stack into an isolated environment and must decide what evidence makes the exercise operationally credible. Which outcomes should a useful restore drill measure for `devpolaris-orders-api`?",
       "options": [
-        { "id": "a", "text": "RTO depends on restore speed, validation, app config, traffic switch, and people who can run the steps." },
-        { "id": "b", "text": "RPO depends on backup frequency, point-in-time restore capability, and how much valid data can be reconciled." },
-        { "id": "c", "text": "Restore point choice can remove bad writes but may also exclude good orders created later." },
-        { "id": "d", "text": "RTO and RPO become guaranteed as soon as they are written in a document." }
+        {
+          "id": "b",
+          "text": "Whether the restored service used the intended database, table, bucket, and secret references."
+        },
+        {
+          "id": "d",
+          "text": "Record elapsed recovery time but omit decision points and failed checks because the final validation passed."
+        },
+        {
+          "id": "a",
+          "text": "How long restore, config update, ECS health, and validation took."
+        },
+        {
+          "id": "c",
+          "text": "Whether sample reads, blocked writes, logs, and cleanup behaved as expected."
+        },
+        {
+          "id": "e",
+          "text": "Measure only infrastructure restore completion, not whether users can complete the critical business transaction."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "RTO and RPO are promises that need tested systems and practiced people behind them. Restore point choice is a data decision, not only an AWS action. A document alone does not make the targets real."
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "A drill should prove both speed and correctness. It should show the app really used the restored target, validation passed, and cleanup happened. Documentation matters because recovery must be repeatable under pressure.\n\nLearn more in [AWS disaster recovery options](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html)."
     },
     {
-      "id": "q5",
+      "id": "q-practice-resilience-drills-2",
       "type": "single",
-      "scenario": "A proposal sets `RTO: 5 minutes` and `RPO: near zero` for every internal and customer-facing path. There is no extra budget, no automation plan, and no restore drill evidence.",
+      "scenario": "A bad release writes negative order totals. The database report shows:\n\n```text\nminute                  negative_totals  changed_orders\n2026-05-02 10:10 UTC    0                42\n2026-05-02 10:11 UTC    0                39\n2026-05-02 10:12 UTC    7                45\n2026-05-02 10:13 UTC    18               51\n2026-05-02 10:14 UTC    26               58\n```\n\nWhat recovery risk must the team handle?",
       "options": [
-        { "id": "a", "text": "Ask what cost, automation, backup, validation, and staffing changes would make those targets believable." },
-        { "id": "b", "text": "Accept the targets because lower numbers always make recovery cheaper." },
-        { "id": "c", "text": "Remove backups because aggressive targets mean the team will not need them." },
-        { "id": "d", "text": "Use the same target for every workload even if the business impact differs." }
+        {
+          "id": "b",
+          "text": "Restoring to the newest point is best without checking whether corruption had started."
+        },
+        {
+          "id": "a",
+          "text": "Restoring to 10:11 removes bad writes but may exclude valid orders created after that time."
+        },
+        {
+          "id": "c",
+          "text": "No restore is needed because the app stayed online."
+        },
+        {
+          "id": "d",
+          "text": "Remove the whole bad window instead of comparing clean and corrupted records."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Tighter targets usually cost more and require more preparation. Some paths deserve strong targets, but every target should match business value and tested capability. Otherwise the numbers are wishes."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Restore point choice is a data tradeoff. A clean point before corruption may also miss later good writes. The team may need a side restore, comparison, repair plan, and reconciliation rather than a blind cutover.\n\nLearn more in [Amazon RDS backups and point-in-time recovery](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)."
+    },
+    {
+      "id": "q-map-recovery-needs-5",
+      "type": "single",
+      "scenario": "A restore report says:\n\n```text\nrestoredResource=orders-prod-restore-20260502-093500.c9n4.example.us-east-1.rds.amazonaws.com\nvalidation=sample order ord_01HVZK8W93S6 status=pending\ncurrentAppConfig DATABASE_HOST=orders-prod.cluster-c8r2.example.us-east-1.rds.amazonaws.com\n```\n\nWhat should the team decide before declaring recovery done?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Retain the restored environment until evidence, ownership, and cleanup approval are complete."
+        },
+        {
+          "id": "c",
+          "text": "Delete the restored database after application smoke tests but before reconciling data freshness against the RPO."
+        },
+        {
+          "id": "d",
+          "text": "Keep the environment indefinitely as a standby even though the recovery strategy and cost model do not require it."
+        },
+        {
+          "id": "a",
+          "text": "Whether to repair production from the restored DB or deliberately cut over app config after validation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A restored resource is only useful after the team decides how it will be used. The app still points at the old database, so the data path has not changed. Recovery includes validation, repair or cutover, and a plan for the old and restored resources.\n\nLearn more in [Amazon RDS backups and point-in-time recovery](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)."
+    },
+    {
+      "id": "q-choose-backup-controls-5",
+      "type": "single",
+      "scenario": "A worker status record says:\n\n```text\nlocalPath=/mnt/orders-worker/tmp/exports/2026-05-02/orders.csv\nuploadTarget=s3://devpolaris-orders-prod-objects/exports/daily/2026/05/02/orders.csv\nstatus=upload_failed\nerror=AccessDenied\n```\n\nWhat backup or retention decision matters before cleanup?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not delete the local worker file until the durable S3 target is confirmed or the file is recoverable or regeneratable."
+        },
+        {
+          "id": "b",
+          "text": "Keep the local artifact as the accepted backup and retry cloud upload during the next scheduled backup window."
+        },
+        {
+          "id": "c",
+          "text": "Treat the failed upload as acceptable if the job can recreate the file from the current database state."
+        },
+        {
+          "id": "d",
+          "text": "Mark the backup complete because local disk is durable for the lifetime of the running worker."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The local worker file may be the only copy while upload is failing. Cleanup should wait until the S3 object is confirmed or the data can be regenerated safely. Deleting first can turn a permission issue into data loss.\n\nLearn more in [Amazon S3 lifecycle management](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)."
     }
   ]
 }

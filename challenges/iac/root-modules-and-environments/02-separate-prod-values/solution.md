@@ -24,5 +24,3 @@ deletion_protection = true
 invoice_bucket_name = "dp-orders-invoices-prod"
 export_bucket_name  = "dp-orders-exports-prod"
 ```
-
-The module wiring stays in main.tf; the values file only supplies production data.

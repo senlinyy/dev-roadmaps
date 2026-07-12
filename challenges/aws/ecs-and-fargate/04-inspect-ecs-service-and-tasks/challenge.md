@@ -1,6 +1,6 @@
 ---
 title: "Inspect ECS Service And Tasks"
-sectionSlug: services
+sectionSlug: services-desired-counts-and-fargate-tasks
 order: 4
 ---
 

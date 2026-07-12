@@ -1,6 +1,6 @@
 ---
 title: "Parameter Expansion and Functions"
-sectionSlug: parameter-expansion-and-readonly
+sectionSlug: functions-trap-and-cleanup
 order: 6
 ---
 

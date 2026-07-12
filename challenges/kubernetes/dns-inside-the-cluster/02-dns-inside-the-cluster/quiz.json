@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "cross-namespace-name-q1",
+      "type": "single",
+      "scenario": "A `checkout-web` Pod runs in namespace `checkout`. Its configuration uses the short name `orders-api`, but the only `orders-api` Service lives in namespace `orders`. The Pod resolver search list begins with `checkout.svc.cluster.local`, and the lookup returns `NXDOMAIN`. Which configuration change most directly targets the intended Service?",
+      "options": [
+        { "id": "a", "text": "Replace the name with the current IP of one orders Pod so DNS is no longer involved." },
+        { "id": "b", "text": "Use `orders-api.orders`, or the full Service name, so the destination namespace is explicit." },
+        { "id": "c", "text": "Use `orders-api.checkout` because DNS always resolves Services from the caller namespace." },
+        { "id": "d", "text": "Append the CoreDNS Service IP as an HTTP port because namespace qualification happens after connection." }
+      ],
+      "correct": ["b"],
+      "explanation": "The namespace-qualified name directs lookup to the Service in `orders`. A Pod IP is temporary, `orders-api.checkout` names the wrong namespace, and the DNS server address is not an application HTTP destination or port."
+    },
+    {
+      "id": "resolver-baseline-q2",
+      "type": "single",
+      "scenario": "Every cluster Service lookup from one `checkout-web` Pod times out, including `kubernetes.default`. The Pod's `/etc/resolv.conf` names `10.96.0.10`, but another application namespace resolves cluster names normally. Which evidence should the team collect next from the failing caller path?",
+      "options": [
+        { "id": "a", "text": "The current Pod IPs for orders-api, because a baseline DNS timeout is caused by backend Pod replacement." },
+        { "id": "b", "text": "The public DNS records for the company domain, because CoreDNS forwards all Service names to public resolvers." },
+        { "id": "c", "text": "The orders-api container image tag, because DNS records are generated from image metadata." },
+        { "id": "d", "text": "The caller resolver settings, kube-dns Service and ready endpoints, CoreDNS health and logs, and any egress policy affecting port 53." }
+      ],
+      "correct": ["d"],
+      "explanation": "Failure of the baseline Service name points to the caller's shared cluster DNS path. Resolver configuration, kube-dns, CoreDNS readiness and logs, and DNS egress policy test that path. Backend Pod IPs, public company records, and image tags do not explain why `kubernetes.default` times out."
+    },
+    {
+      "id": "empty-endpoints-q3",
+      "type": "single",
+      "scenario": "From `checkout`, `orders-api.orders` resolves to `10.96.42.18`. The Service exists with that ClusterIP, but its EndpointSlice contains no ready addresses. A request to the Service times out. What is the most useful next focus?",
+      "options": [
+        { "id": "a", "text": "Inspect the Service selector, Pod labels, readiness, and Deployment status because DNS has already returned the intended Service address." },
+        { "id": "b", "text": "Restart CoreDNS because any empty EndpointSlice means the DNS record was generated from stale Pod data." },
+        { "id": "c", "text": "Change the application to use the CoreDNS Pod IP because it can forward HTTP directly to ready backends." },
+        { "id": "d", "text": "Add the cluster domain to the URL because a short name cannot resolve to a ClusterIP successfully." }
+      ],
+      "correct": ["a"],
+      "explanation": "The successful lookup proves the Service name resolved. An empty ready backend list shifts the investigation to selection, labels, readiness, and workload status. CoreDNS does not proxy HTTP, and adding the full domain does not create Service endpoints."
+    },
+    {
+      "id": "headless-discovery-q4",
+      "type": "single",
+      "scenario": "An orders database StatefulSet has members `orders-db-0`, `orders-db-1`, and `orders-db-2`. The database software must discover individual members instead of receiving one virtual Service IP. Which Service design matches that requirement?",
+      "options": [
+        { "id": "a", "text": "A NodePort Service, because each StatefulSet member receives a different node port in DNS." },
+        { "id": "b", "text": "A LoadBalancer Service, because its external address expands into one record per database Pod." },
+        { "id": "c", "text": "A headless Service with `clusterIP: None`, so DNS can return backend member addresses and support stable StatefulSet member names." },
+        { "id": "d", "text": "A normal ClusterIP Service with no selector, because the virtual IP automatically encodes every Pod hostname." }
+      ],
+      "correct": ["c"],
+      "explanation": "A headless Service publishes backend addresses directly and fits peer discovery with StatefulSet member names. NodePort changes node-level exposure, LoadBalancer creates an infrastructure entry address, and a normal ClusterIP provides one virtual Service address rather than individual member discovery."
+    },
+    {
+      "id": "dns-proof-boundaries-q5",
+      "type": "multiple",
+      "scenario": "A release check from the real `checkout-web` caller resolves `orders-api.orders` to the expected Service ClusterIP. The subsequent HTTP request still times out. Which two statements correctly define what the DNS result proves and where investigation can move next?",
+      "options": [
+        { "id": "a", "text": "The lookup proves that every selected orders Pod is ready and serving the correct application port." },
+        { "id": "b", "text": "The lookup proves that this caller can turn the intended Service name into an address." },
+        { "id": "c", "text": "The lookup proves that NetworkPolicy allows the later TCP connection to the application." },
+        { "id": "d", "text": "The timeout can still come from EndpointSlices, readiness, policy, Service targetPort, the network path, or the application listener." }
+      ],
+      "correct": ["b", "d"],
+      "explanation": "DNS success proves name resolution from that caller, not backend readiness or application connectivity. EndpointSlices, readiness, policy, target port, the network path, and the listener remain separate gates that can explain the timeout."
+    }
+  ]
+}

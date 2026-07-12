@@ -4,5 +4,3 @@ pub fn score() -> i32 {
     base + 5
 }
 ~~~
-
-Without the semicolon, base + 5 is the function's final expression and returns 15.

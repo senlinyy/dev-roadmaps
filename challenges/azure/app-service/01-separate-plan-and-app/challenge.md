@@ -1,8 +1,6 @@
 ---
-title: "Separate Plan And App"
-sectionSlug: app-service-plan
+title: "App Service"
 order: 1
-description: "Read the difference between compute capacity and the web app resource."
 ---
 
-Read the difference between compute capacity and the web app resource.
+Use the scenarios to choose the most defensible App Service answer.

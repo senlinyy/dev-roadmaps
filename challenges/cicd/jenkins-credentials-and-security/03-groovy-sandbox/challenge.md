@@ -1,7 +1,6 @@
 ---
-title: "Groovy Sandbox and Script Approval"
-sectionSlug: the-groovy-sandbox-and-script-approval
+title: "Credentials and Security"
 order: 3
 ---
 
-Each scenario tests how the Groovy sandbox and script approval interact. Pick the most accurate answer.
+Apply credential scope, masking limits, sandbox review, branch trust, agent isolation, and federated identity to deployment scenarios.

@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Customers need a public HTTPS path to reach `devpolaris-orders-api`. Which service family should the team inspect first?",
+      "scenario": "Northstar Retail is preparing `orders-web` for launch. Users enter through Cloud DNS and an external HTTPS load balancer, Cloud Run processes checkout, Cloud SQL stores orders, Secret Manager supplies the payment credential, and Cloud Logging carries incident evidence. The current diagram names those products but does not show how one checkout crosses them, so reviewers cannot verify trust or failure boundaries. What revision would make the map operationally useful?",
       "options": [
-        { "id": "a", "text": "Traffic entry: DNS, TLS, routing, load balancing, and backend health." },
-        { "id": "b", "text": "Artifact storage, because container repositories serve customer HTTP requests." },
-        { "id": "c", "text": "Billing only, because invoices route traffic." },
-        { "id": "d", "text": "Labels only, because labels terminate TLS." }
+        {
+          "id": "b",
+          "text": "Keep the product list as-is because naming managed services is enough to explain the production path."
+        },
+        {
+          "id": "c",
+          "text": "Group the six products by owning team and add project IDs, but leave the request, data, identity, and telemetry relationships implicit."
+        },
+        {
+          "id": "d",
+          "text": "Add arrows only between DNS, the load balancer, and Cloud Run, leaving secret access, durable writes, and operational signals outside the reviewed path."
+        },
+        {
+          "id": "a",
+          "text": "Draw the user request from DNS and HTTPS entry through the Cloud Run service, then show where the request reads secrets, writes state, and emits telemetry."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Public entry is a traffic job. DNS, TLS, routing, and backend health need to be considered before the exact service mix is chosen."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service map should show how traffic, compute, data, identity, and operations connect in the real request path. Grouping or partially connecting products still omits dependencies and evidence boundaries needed for review. See [Google Cloud system design guidance](https://cloud.google.com/architecture/framework/system-design)."
     },
     {
-      "id": "q2",
+      "id": "choose-compute-and-state-q2",
       "type": "single",
-      "scenario": "The app needs private configuration and a database password should not live in the container image. Which family is most relevant first?",
+      "scenario": "Northstar Retail serves checkout traffic from an always-on VM. Finance wants a 12-minute reconciliation job to run after midnight and write a report object, but checkout must not share the job's CPU spikes or failure boundary. How should the service map represent the new workload?",
       "options": [
-        { "id": "a", "text": "Identity and secrets: IAM, service accounts, and Secret Manager." },
-        { "id": "b", "text": "Global DNS only." },
-        { "id": "c", "text": "Cloud Storage object prefixes only." },
-        { "id": "d", "text": "Regions and zones only." }
+        {
+          "id": "d",
+          "text": "Move the reconciliation job to a second always-on VM and write the report to Cloud Storage, accepting a separately patched host for a 12-minute daily task."
+        },
+        {
+          "id": "a",
+          "text": "Separate the serving compute from the scheduled work and show where the report object lands, so scaling and failure signals do not mix."
+        },
+        {
+          "id": "b",
+          "text": "Keep the job on the serving VM but isolate it with a cron schedule, assuming shared host failure will not affect checkout traffic."
+        },
+        {
+          "id": "c",
+          "text": "Move the scheduled job into the checkout service process and reserve one instance overnight, while keeping job and request failure signals combined."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Private config is an access and secrets problem. Secret Manager stores secrets, and IAM/service accounts decide who can read them."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct review separates compute shapes and makes durable state explicit. Combining everything on one VM can couple failures, container memory loses the report, and logs are evidence streams rather than object storage. Cloud Run jobs provide a bounded execution model for scheduled container work. See [Cloud Run jobs](https://cloud.google.com/run/docs/create-jobs)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which mappings follow the job-first approach?",
+      "id": "debug-with-the-map-q1",
+      "type": "single",
+      "scenario": "checkout-api starts returning 500s after a secret rotation. The service map names Cloud Run, service account orders-api-prod, Secret Manager secret stripe-key, and Cloud Logging. What is the best first evidence set?",
       "options": [
-        { "id": "a", "text": "Run containerized backend -> Cloud Run." },
-        { "id": "b", "text": "Store relational orders -> Cloud SQL." },
-        { "id": "c", "text": "Keep request evidence -> Cloud Logging and Cloud Monitoring." },
-        { "id": "d", "text": "Pick service names first, then invent app needs later." }
+        {
+          "id": "a",
+          "text": "Cloud Run revision logs, the runtime service account, the Secret Manager access decision, and the current secret version metadata."
+        },
+        {
+          "id": "b",
+          "text": "Start from the Git commit and deploy record, assuming the deployed code also proves runtime identity and secret access."
+        },
+        {
+          "id": "c",
+          "text": "Start from the database CPU chart and resize Cloud SQL before checking whether the rotated secret reached the revision."
+        },
+        {
+          "id": "d",
+          "text": "Compare the previous and current image digests first, without checking which secret version and runtime principal the failing revision actually used."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The foundation map starts with app jobs. Service names become useful when they answer a real need."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The mapped failure path crosses compute, identity, secret access, and logs, so those are the first evidence points. Commit text alone misses runtime state, database CPU does not explain a secret rotation, and redeploying before evidence can destroy useful clues. See [managing access to Secret Manager secrets](https://cloud.google.com/secret-manager/docs/manage-access-to-secrets)."
+    },
+    {
+      "id": "debug-with-the-map-q4",
+      "type": "multiple",
+      "scenario": "Northstar Retail is handing a checkout incident from the application team to the cloud platform team. Requests to `orders.example.com` reach the load balancer but fail before Cloud Run reads `stripe-key`; staging is healthy, and both environments contain similarly named services. Which two details from the service map make the handoff reproducible in production?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The product-level architecture diagram and the deployment commit, without the production project or resource identifiers."
+        },
+        {
+          "id": "d",
+          "text": "The current error count grouped by HTTP status, without identifying which load balancer, revision, or secret access produced it."
+        },
+        {
+          "id": "a",
+          "text": "The exact resource names and projects touched along the failing request path."
+        },
+        {
+          "id": "b",
+          "text": "The observed signal for each touched service, such as log error, denied permission, or backend health state."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "A reproducible handoff pairs exact production resources and projects with the observed state at each boundary. The architecture and commit provide context but do not distinguish production from staging. Aggregated status counts lack the resource attribution needed to replay the failing path. See [Google Cloud operational excellence guidance](https://cloud.google.com/architecture/framework/operational-excellence)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a certificate change, customers reach the homepage but checkout calls return 502s. The service map shows Cloud DNS, the HTTPS load balancer, a serverless NEG, Cloud Run, and Cloud SQL. Where should triage start?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Resize Cloud SQL first because an HTTP 502 after a certificate change most often indicates database connection exhaustion."
+        },
+        {
+          "id": "c",
+          "text": "Roll back the application image before checking the load balancer backend, because entry-path changes cannot affect a healthy revision."
+        },
+        {
+          "id": "d",
+          "text": "Verify DNS and certificate status, then skip the URL map and serverless NEG because the homepage proves every backend path is attached correctly."
+        },
+        {
+          "id": "a",
+          "text": "Follow the mapped traffic chain from DNS and the load balancer backend to the Cloud Run revision before changing database settings."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom changed at the entry path, so the map should guide triage through DNS, load balancing, backend attachment, and the Cloud Run target first. A database resize is an unsupported guess, bypassing the load balancer changes the architecture, and isolated dashboard checks lose the request flow. See [serverless network endpoint groups](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)."
+    },
+    {
+      "id": "choose-compute-and-state-q1",
+      "type": "single",
+      "scenario": "Northstar Retail is migrating `orders-api`, a stateless HTTPS container that should scale down overnight. The service requires transactional relationships across order rows and durable storage for generated invoice PDFs. The platform team wants managed services matched to each workload and data shape. Which service combination best fits?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Cloud Run for the API, Firestore for relational order rows, and a Persistent Disk attached to one revision for invoice PDFs."
+        },
+        {
+          "id": "a",
+          "text": "Cloud Run for the container, Cloud SQL for order rows, and Cloud Storage for invoice PDFs."
+        },
+        {
+          "id": "b",
+          "text": "Compute Engine with local disk for the API, order rows, and invoice PDFs."
+        },
+        {
+          "id": "c",
+          "text": "BigQuery for live order transactions and Cloud Functions for all user traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud Run matches the stateless container, Cloud SQL matches transactional relational state, and Cloud Storage matches durable objects. Local VM disk couples state to replaceable compute, Firestore does not provide the relational model described, and Pub/Sub transports messages rather than replacing compute and storage. See [Google Cloud products and services](https://cloud.google.com/products)."
+    },
+    {
+      "id": "debug-with-the-map-q5",
+      "type": "single",
+      "scenario": "The mobile app gets 403 from a receipt download URL. The map shows the URL is generated by orders-api, points to Cloud Storage, and is signed by a service account. What should the map help you avoid?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Looking at Cloud Storage because signed URLs bypass every storage control."
+        },
+        {
+          "id": "d",
+          "text": "Recording the signer identity because service accounts are not part of request flow."
+        },
+        {
+          "id": "a",
+          "text": "Changing project-wide IAM before checking the object name, signed URL expiry, HTTP method, and signer identity."
+        },
+        {
+          "id": "b",
+          "text": "Checking the signed URL because download failures are generally caused by mobile client code."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The map narrows the check to the object path, URL constraints, and signer before broad IAM changes. Mobile code may be involved but is not proven, signed URLs still depend on storage and signing rules, and the service account is central evidence. See [Cloud Storage signed URLs](https://cloud.google.com/storage/docs/access-control/signed-urls)."
     }
   ]
 }

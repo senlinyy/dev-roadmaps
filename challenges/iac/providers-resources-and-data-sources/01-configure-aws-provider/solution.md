@@ -21,5 +21,3 @@ provider "aws" {
   }
 }
 ```
-
-The requirement chooses the provider package, while the provider block configures the AWS region and shared tags for this root module.

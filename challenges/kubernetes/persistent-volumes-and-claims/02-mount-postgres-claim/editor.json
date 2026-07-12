@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-pod.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: notification-postgres\n  namespace: customer-notifications\nspec:\n  containers:\n    - name: postgres\n      image: postgres:16\n      env:\n        - name: PGDATA\n          value: /var/lib/postgresql/data\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["metadata", "namespace"], "equals": "customer-notifications", "label": "application namespace" },
+      { "path": ["spec", "containers", 0, "name"], "equals": "postgres", "label": "PostgreSQL container" },
+      { "path": ["spec", "containers", 0, "image"], "equals": "postgres:16", "label": "approved image" },
+      { "path": ["spec", "volumes"], "containsObject": { "name": "postgres-data", "persistentVolumeClaim": { "claimName": "notification-postgres-data" } }, "label": "PVC-backed Pod volume" },
+      { "path": ["spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "postgres-data", "mountPath": "/var/lib/postgresql/data" }, "label": "database data mount" }
+    ]
+  }
+}

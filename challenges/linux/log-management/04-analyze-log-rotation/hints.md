@@ -1,1 +1,1 @@
-Use `cat /etc/logrotate.d/nginx` to read the config. Look for `rotate` (how many old copies to keep), `daily`/`weekly` (rotation frequency), and `compress` (whether old logs are gzipped). Then `cat /etc/logrotate.d/myapp` and compare: what directives are missing? Finally, `ls /var/log/nginx/` shows the naming pattern.
+The policy tells you what should happen. The rotated filenames tell you what has already happened.

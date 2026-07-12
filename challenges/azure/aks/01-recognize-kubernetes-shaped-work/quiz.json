@@ -1,88 +1,194 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A team has one containerized HTTP API, simple public ingress, and no existing Kubernetes tooling. They mainly want Azure to run the image and scale it. Which answer fits the article best?",
+      "scenario": "A six-person product team is moving one stateless orders API from a VM to Azure. The API has no sidecars, custom scheduler requirements, Kubernetes policies, or dependency on Helm operators. The team has no Kubernetes on-call experience and wants Azure to handle routine platform operations. Which recommendation best fits these requirements?",
       "options": [
         {
           "id": "a",
-          "text": "Start with AKS because every container eventually needs Kubernetes."
+          "text": "Deploy the API to Azure Container Apps and revisit AKS if the workload later requires Kubernetes APIs or cluster-level controls."
         },
         {
           "id": "b",
-          "text": "Consider Container Apps first because the workload needs a managed container runtime, not necessarily a Kubernetes platform."
+          "text": "Deploy the API to AKS Automatic so the team gains Kubernetes compatibility while Azure manages most cluster operations."
         },
         {
           "id": "c",
-          "text": "Use a VM because containers cannot run without direct server access."
+          "text": "Deploy the API to AKS Standard with one system node pool so the team can control upgrades and networking from the first release."
         },
         {
           "id": "d",
-          "text": "Use Functions because every HTTP API should become event-triggered code."
+          "text": "Deploy the API to App Service on a custom container plan and add an AKS cluster only for ingress routing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Container Apps satisfies the stated container hosting need without giving this small team a Kubernetes platform to own. AKS Automatic reduces AKS administration, but the scenario provides no Kubernetes requirement that justifies introducing the cluster. AKS Standard adds still more responsibility, and App Service does not require a separate AKS cluster for ingress. See [Microsoft Learn: Compare Azure container options](https://learn.microsoft.com/en-us/azure/container-apps/compare-options)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A platform team already operates Kubernetes across several business units. A new Azure workload needs custom node pools, private VNet placement, GPU workers, controlled upgrade waves, and the team's existing Helm and policy tooling. The team accepts responsibility for node capacity and cluster operations. Which hosting choice best matches the requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use Azure Container Apps because KEDA support provides the same node pool and cluster policy controls."
+        },
+        {
+          "id": "c",
+          "text": "Use AKS Automatic because it is intended for workloads that require complete control of node provisioning."
+        },
+        {
+          "id": "b",
+          "text": "Use AKS Standard because the team requires Kubernetes tooling and explicit control over nodes, networking, and upgrades."
+        },
+        {
+          "id": "d",
+          "text": "Use App Service Environment because it exposes the Kubernetes API and supports Helm policy controllers."
         }
       ],
       "correct": [
         "b"
       ],
-      "explanation": "AKS fits when Kubernetes itself is the operating model. One simple container often fits a smaller managed container service first."
-    },
-    {
-      "id": "q2",
-      "type": "multiple",
-      "scenario": "Which signs make AKS a more reasonable choice?",
-      "options": [
-        {
-          "id": "a",
-          "text": "The organization already standardizes deployments around Kubernetes manifests, Helm charts, and shared ingress controllers."
-        },
-        {
-          "id": "b",
-          "text": "The platform team needs node pools with different VM sizes or isolation rules for different workloads."
-        },
-        {
-          "id": "c",
-          "text": "The team wants fewer concepts than Container Apps for a single service."
-        },
-        {
-          "id": "d",
-          "text": "Developers need Kubernetes services, deployments, pods, and policy to be the shared control layer."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "d"
-      ],
-      "explanation": "AKS is useful when Kubernetes gives the organization shared platform leverage. It is not the smaller option for one simple container."
+      "explanation": "AKS Standard fits a mature Kubernetes team that needs explicit node pool, network, and upgrade choices. AKS Automatic is a managed Kubernetes option, but its stronger defaults are not the closest fit when complete infrastructure control is required. Container Apps and App Service Environment do not expose the Kubernetes platform surface described in the scenario. See [Microsoft Learn: AKS Automatic](https://learn.microsoft.com/en-us/azure/aks/intro-aks-automatic)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A teammate says AKS is fully managed, so the team will not need to understand Kubernetes objects. What is the best response?",
+      "scenario": "An AKS deployment creates three Ready pods for orders-api, but the ClusterIP service has no endpoints. The Deployment labels each pod with app: orders-api, while the Service selector is app: order-api. DNS for the service resolves normally. What change should the engineer make first?",
       "options": [
         {
-          "id": "a",
-          "text": "Correct. Azure hides pods, services, node pools, and deployments."
+          "id": "b",
+          "text": "Change the Service from ClusterIP to LoadBalancer so Azure creates backend endpoints."
         },
         {
-          "id": "b",
-          "text": "Mostly wrong. Azure manages much of the control plane, but the team still operates Kubernetes workloads and cluster choices."
+          "id": "a",
+          "text": "Change the Service selector to app: orders-api so it selects the existing Ready pods."
         },
         {
           "id": "c",
-          "text": "Correct if the app uses an external load balancer."
+          "text": "Increase the Deployment replica count so Kubernetes can discover at least one matching pod."
         },
         {
           "id": "d",
-          "text": "Wrong only for Windows containers."
+          "text": "Add an Ingress resource so the Service receives an external address and populates its endpoints."
         }
       ],
       "correct": [
-        "b"
+        "a"
       ],
-      "explanation": "AKS is managed Kubernetes, not a managed application runtime that hides Kubernetes from the team."
+      "explanation": "A Service builds its endpoint set from pods that match its selector, so correcting the label mismatch directly repairs the missing link. Changing the service type or adding ingress changes exposure, not pod selection. More replicas with the same nonmatching label would still produce no endpoints. See [Kubernetes documentation: Services and selectors](https://kubernetes.io/docs/concepts/services-networking/service/)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An AKS cluster exposes shop.example.com through an ingress controller. The orders and users services both have healthy endpoints. The company wants /orders routed to orders-api and /users routed to users-api while sharing one public hostname and TLS policy. Which configuration should the platform team add?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Create a LoadBalancer service for every pod replica and configure the public DNS record with all pod addresses."
+        },
+        {
+          "id": "c",
+          "text": "Create separate namespaces for the two applications and rely on namespace names as HTTP path rules."
+        },
+        {
+          "id": "d",
+          "text": "Create one PersistentVolumeClaim shared by both services and store the desired paths in volume metadata."
+        },
+        {
+          "id": "a",
+          "text": "Create an Ingress or Gateway routing resource with path rules that target the two ClusterIP services."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Ingress or Gateway resources express host and path routing to stable Kubernetes services, allowing the routes to share a public entry point and TLS policy. Per-pod load balancers bypass normal service discovery and do not centralize routing. Namespaces and volumes do not define HTTP routes. See [Microsoft Learn: Managed NGINX ingress with the application routing add-on](https://learn.microsoft.com/en-us/azure/aks/app-routing)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A retail AKS cluster runs latency-sensitive APIs and retryable CPU-heavy batch jobs on the same user node pool. During month-end processing, batch pods consume the available CPU and API pods remain Pending. The company wants independent scaling and does not want batch capacity to host customer-facing APIs. Which design best meets the requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Create separate API and batch node pools, then use labels, taints, tolerations, and affinity to enforce placement."
+        },
+        {
+          "id": "b",
+          "text": "Keep one node pool, place the workloads in separate namespaces, and configure a ResourceQuota for each namespace."
+        },
+        {
+          "id": "c",
+          "text": "Keep one node pool, add a second ingress controller for the batch namespace, and scale both workloads together."
+        },
+        {
+          "id": "d",
+          "text": "Create separate Deployments in the same node pool and rely on replica counts to reserve CPU for the APIs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Separate node pools provide independently scalable capacity, while scheduling controls keep each workload on the intended pool. Namespaces and quotas can govern aggregate resource use but do not create separate worker capacity or guarantee the required placement. Ingress and replica counts do not isolate node resources. See [Microsoft Learn: Use multiple node pools in AKS](https://learn.microsoft.com/en-us/azure/aks/use-multiple-node-pools)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "The orders-api pods in AKS must read one secret from Azure Key Vault. A security review prohibits client secrets in Kubernetes Secrets and requires each workload to receive only its own Azure permissions. The cluster has Microsoft Entra Workload ID enabled. Which solution should the team implement?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Grant the kubelet managed identity access to Key Vault and let every pod on the node reuse the kubelet token."
+        },
+        {
+          "id": "c",
+          "text": "Store a service principal secret in a namespace-scoped Kubernetes Secret and rotate it during each AKS upgrade."
+        },
+        {
+          "id": "a",
+          "text": "Create a Kubernetes service account federated with a user-assigned managed identity, assign that identity the required Key Vault role, and run the pods with the service account."
+        },
+        {
+          "id": "d",
+          "text": "Assign the Key Vault role to the ingress controller identity because all application traffic enters through ingress."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Workload Identity federates a Kubernetes service account with a managed identity, so the pod can obtain Microsoft Entra tokens without a stored client secret and permissions can be scoped to that workload. The kubelet and ingress identities serve different components and should not become shared application credentials. A stored service principal secret violates the requirement. See [Microsoft Learn: Deploy and configure workload identity on AKS](https://learn.microsoft.com/en-us/azure/aks/workload-identity-deploy-cluster)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A production AKS readiness review finds that the application has resource requests and readiness probes, but no team owns cluster upgrades, no maintenance window is defined, and all three API replicas can be scheduled on one node. The service has a 99.9 percent availability target. What should the reviewer require before launch?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Enable the cluster autoscaler because adding nodes automatically covers upgrades, ownership, and replica placement."
+        },
+        {
+          "id": "a",
+          "text": "Define cluster ownership and upgrade procedures, configure a maintenance approach, and spread replicas across failure domains before accepting production traffic."
+        },
+        {
+          "id": "c",
+          "text": "Increase each pod's CPU limit because larger limits prevent simultaneous disruption during node maintenance."
+        },
+        {
+          "id": "d",
+          "text": "Move the API to the system node pool because Azure protects system nodes from application and upgrade failures."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The review exposes operating and availability gaps, so the launch plan needs named ownership, controlled maintenance, and workload spreading. Autoscaling addresses capacity, not accountability or disruption placement. CPU limits do not provide failure-domain resilience, and production applications should not be moved onto the system pool as a substitute for sound design. See [Microsoft Learn: AKS operator best practices](https://learn.microsoft.com/en-us/azure/aks/best-practices)."
     }
   ]
 }

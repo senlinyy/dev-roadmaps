@@ -1,61 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q4",
       "type": "single",
-      "scenario": "The Container App `ca-devpolaris-orders-prod` is running, but the team cannot find runtime logs in `law-devpolaris-prod`. Which Azure configuration should they check before changing application code?",
+      "scenario": "A checkout failed at 09:42 UTC, and the team expects Container App and Application Gateway records in `law-devpolaris-prod`. Security wants one central workspace, while app teams want workspace-level access separation. What design choice should be reviewed?",
       "options": [
         {
           "id": "a",
-          "text": "Diagnostic settings on the Container App that send console and system logs to the workspace."
+          "text": "Workspace topology, access model, retention, and cross-team query needs."
         },
         {
           "id": "b",
-          "text": "The SQL database retention policy, because database backup settings control app logs."
+          "text": "Application Gateway and Container App diagnostic settings only, because workspace layout can be revisited after both services are already sending logs somewhere."
         },
         {
           "id": "c",
-          "text": "The action group, because alert receivers decide which logs are collected."
+          "text": "A workspace naming convention first, because teams can derive access boundaries and query patterns from names later."
         },
         {
           "id": "d",
-          "text": "The storage lifecycle policy, because log search depends on blob tiering."
+          "text": "A rule that each application team keeps detailed logs locally and forwards only summary events into the shared workspace."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Diagnostic settings decide which resource logs and metrics leave a resource and arrive in the workspace. Application code may be fine even when collection is missing."
+      "explanation": "Workspace design is a governance choice about query boundaries, access, retention, and who needs to join evidence across teams. The closest distractor is local-only detailed logs because it preserves some data, but it breaks the article's central route-to-workspace model for incident investigation. DNS and Key Vault do not address workspace topology. Official docs: [Log Analytics workspace overview](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-analytics-workspace-overview)."
     },
     {
-      "id": "q2",
-      "type": "multiple",
-      "scenario": "A production workspace review needs to explain cost and search behavior for `law-devpolaris-prod`. Which details belong in the review?",
+      "id": "q5",
+      "type": "single",
+      "scenario": "A payments platform sends verbose production debug logs to `law-devpolaris-prod` and retains them for 180 days. Workspace cost doubles, but responders must preserve enough history and fields for fraud investigations. Which action best balances investigation value and cost?",
       "options": [
         {
-          "id": "a",
-          "text": "Workspace retention in days."
-        },
-        {
           "id": "b",
-          "text": "Which tables are used for app logs, resource logs, requests, dependencies, and exceptions."
+          "text": "Cut retention to the shortest allowed period immediately and leave the current verbose ingestion pattern unchanged."
         },
         {
           "id": "c",
-          "text": "Daily quota or ingestion limit if the team uses one."
+          "text": "Keep the 180-day retention unchanged and look for savings only by reducing dashboard refreshes and workbook usage."
+        },
+        {
+          "id": "a",
+          "text": "Investigation needs, retention, sampling or filtering, and ingestion cost."
         },
         {
           "id": "d",
-          "text": "The exact screen size of the dashboard where the logs are viewed."
+          "text": "Disable all production debug logs at once without checking which fields fraud investigations still require."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article treats retention and ingestion choices as tradeoffs that only make sense alongside investigation value and cost. The closest distractor is the minimum-retention answer because cutting retention often does save money, but the scenario explicitly says fraud investigations still need enough history and fields to work. Maximum retention and dashboard count are not disciplined cost decisions either. Official docs: [Log Analytics workspace overview](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-analytics-workspace-overview)."
+    },
+    {
+      "id": "03-ask-better-log-questions-q1",
+      "type": "single",
+      "scenario": "A checkout failed at 09:42 UTC, and the team expects Container App and Application Gateway records in `law-devpolaris-prod`. A responder asks, \"Why is checkout broken?\" and runs an all-time query across every table. What is a better first log question?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Query total error counts by hour across the whole workspace so the team can confirm something changed before checking route or dependency details."
+        },
+        {
+          "id": "a",
+          "text": "Query recent checkout errors by route, dependency, and operation ID."
+        },
+        {
+          "id": "c",
+          "text": "Query the full retention window for any row that mentions checkout so nothing relevant is filtered out too early."
+        },
+        {
+          "id": "d",
+          "text": "Query only the newest Application Gateway row for the checkout hostname and infer the downstream failure from that single record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A useful first KQL question narrows by time, route, and correlation context instead of asking the workspace for everything. The closest distractor is the full-retention scan because broad searches feel thorough, but the article emphasizes starting with a tight incident window so the signal is interpretable. Listing workspace names or returning one newest line does not test the failure path. Official docs: [Kusto query language overview](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/)."
+    },
+    {
+      "id": "03-ask-better-log-questions-q2",
+      "type": "multiple",
+      "scenario": "At 09:42 UTC, one checkout crosses Application Gateway and a Container App before failing. The incident team needs to join records for that request across both services and limit the query to the failure window. Which two fields are essential starting points?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A narrow timestamp window around 09:42 UTC."
+        },
+        {
+          "id": "d",
+          "text": "Caller IP address and user agent."
+        },
+        {
+          "id": "b",
+          "text": "Operation or correlation ID."
+        },
+        {
+          "id": "c",
+          "text": "Service name, route, dependency, and result code."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "Retention, tables, and quota affect how long evidence stays searchable and how much it costs. Dashboard screen size does not change log ingestion or retention."
+      "explanation": "To trace one request across services, the team first needs the incident time window and the correlation key that ties rows together. The closest distractor is the service and route bundle because those columns are useful investigative dimensions, but they do not replace the explicit request identifier needed to join multiple records for the same failure. Caller IP and user agent can add context, yet they are weaker starting keys for one request than time plus correlation. Official docs: [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "03-ask-better-log-questions-q3",
+      "type": "single",
+      "scenario": "A checkout failed at 09:42 UTC, and the team expects Container App and Application Gateway records in `law-devpolaris-prod`. Logs show many 500s, but no operation ID or dependency name. What is the observability gap?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The system has too many metrics."
+        },
+        {
+          "id": "c",
+          "text": "The DNS zone is too large."
+        },
+        {
+          "id": "d",
+          "text": "The App Service plan is named incorrectly."
+        },
+        {
+          "id": "a",
+          "text": "The logs lack correlation and dependency context needed to follow a request."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Without correlation identifiers and dependency context, the team cannot follow one request across the parts of the system that handled it. The closest distractor is the metrics option because metrics do help with symptoms and trends, but they do not restore the missing per-request traceability the scenario needs. DNS size and plan names are unrelated. Official docs: [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "03-ask-better-log-questions-q4",
+      "type": "single",
+      "scenario": "A checkout failed at 09:42 UTC, and the team expects Container App and Application Gateway records in `law-devpolaris-prod`. A query compares today's error count with no baseline. Why is the result hard to interpret?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A count needs a baseline or expected range before it proves behavior changed."
+        },
+        {
+          "id": "b",
+          "text": "The count is enough by itself because any nonzero error total means the service behavior changed materially."
+        },
+        {
+          "id": "c",
+          "text": "The count cannot be interpreted until every raw row is exported somewhere else for offline review."
+        },
+        {
+          "id": "d",
+          "text": "The count only becomes meaningful if the workspace retention setting changed on the same day as the incident."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A raw count is hard to interpret until it is compared with an expected range or prior period. The closest distractor is the raw-rows argument because individual rows are useful for debugging, but the scenario is specifically about deciding whether today's error count represents changed behavior. Exporting logs elsewhere does not create the missing baseline. Official docs: [Kusto query language overview](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/)."
+    },
+    {
+      "id": "03-ask-better-log-questions-q5",
+      "type": "single",
+      "scenario": "A checkout service writes payment-decline events to `law-devpolaris-prod`, including card fragments and unfiltered request headers. Responders need diagnostic reasons and correlation IDs, but security policy forbids retaining payment data in application logs. Which logging change best satisfies both needs?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Move full headers and card fragments into a separate verbose log stream that only security administrators can query."
+        },
+        {
+          "id": "c",
+          "text": "Hash the card fragment but keep complete request headers and body content for every decline so no diagnostic field is lost."
+        },
+        {
+          "id": "a",
+          "text": "Logs should include diagnostic context without leaking sensitive data."
+        },
+        {
+          "id": "d",
+          "text": "Strip all identifiers from payment-decline logs, including correlation IDs and reason codes, so no sensitive value can remain."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Good application logs preserve the identifiers and reasons needed for diagnosis without copying sensitive payment data into the workspace. The closest distractor is the more-data argument because richer logs can speed investigations, but the article frames access, retention, and cost around evidence the team is actually allowed to keep. Log Analytics stores what you send it; it does not sanitize a bad logging design for you. Official docs: [Log Analytics workspace overview](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/log-analytics-workspace-overview)."
     }
   ]
 }

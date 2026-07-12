@@ -1,14 +1,15 @@
 ---
 title: "Configure the AWS Provider"
-sectionSlug: provider-configuration
+sectionSlug: the-first-managed-object
 order: 1
 ---
 
-Complete the AWS provider setup in `main.tf`.
+The first managed object needs a provider setup that reviewers can trust. Complete the AWS provider requirement and region configuration before resource code depends on it.
 
-Requirements:
+Your job:
 
-1. **Required provider source:** `hashicorp/aws`.
-2. **Version constraint:** `~> 5.0`.
-3. **Provider region:** `eu-west-2`.
-4. **Default tags:** `project = "devpolaris-orders"`, `managed_by = "terraform"`.
+1. **Declare the AWS provider package** from the HashiCorp namespace with a reviewed version constraint.
+2. **Configure the provider region** for the production orders stack.
+3. **Apply the default project tags** that should follow resources managed by this root.
+
+The grader checks the provider requirement and provider configuration in HCL.

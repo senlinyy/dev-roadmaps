@@ -23,5 +23,3 @@ server {
     }
 }
 ```
-
-The task now renders a reviewed template and asks nginx to validate the candidate config before it becomes active.

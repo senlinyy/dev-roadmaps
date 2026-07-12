@@ -1,6 +1,6 @@
 ---
 title: "Follow Artifact To Service Evidence"
-sectionSlug: artifacts
+sectionSlug: artifact-the-exact-package
 order: 4
 ---
 

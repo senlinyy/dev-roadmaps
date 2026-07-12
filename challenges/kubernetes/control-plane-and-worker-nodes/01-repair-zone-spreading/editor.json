@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "notification-api.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications-prod\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: notification-api\n  template:\n    metadata:\n      labels:\n        app: notification-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/devpolaris/notification-api:1.8.0\n          ports:\n            - name: http\n              containerPort: 3000\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "Deployment API version" },
+      { "path": ["kind"], "equals": "Deployment", "label": "Deployment kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api", "label": "Deployment name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications-prod", "label": "production namespace" },
+      { "path": ["spec", "replicas"], "equals": 2, "label": "replica count" },
+      { "path": ["spec", "template", "spec", "topologySpreadConstraints", 0, "maxSkew"], "equals": 1, "label": "maximum zone skew" },
+      { "path": ["spec", "template", "spec", "topologySpreadConstraints", 0, "topologyKey"], "equals": "topology.kubernetes.io/zone", "label": "zone topology key" },
+      { "path": ["spec", "template", "spec", "topologySpreadConstraints", 0, "whenUnsatisfiable"], "equals": "ScheduleAnyway", "label": "flexible scheduling policy" },
+      { "path": ["spec", "template", "spec", "topologySpreadConstraints", 0, "labelSelector", "matchLabels", "app"], "equals": "notification-api", "label": "spread label selector" }
+    ]
+  }
+}

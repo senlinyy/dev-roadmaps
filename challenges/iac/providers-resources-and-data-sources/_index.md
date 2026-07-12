@@ -1,5 +1,5 @@
 ---
-title: "Providers, Resources, and Data Sources"
+title: "Resources"
 description: "Practice provider setup, managed resources, read-only data sources, and ownership decisions."
 articleId: article-iac-terraform-config-resources
 difficulty: easy

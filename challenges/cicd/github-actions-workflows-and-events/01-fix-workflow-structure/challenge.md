@@ -1,6 +1,6 @@
 ---
 title: "Fix the Workflow Structure"
-sectionSlug: anatomy-of-a-workflow
+sectionSlug: workflows-jobs-and-steps
 order: 1
 ---
 

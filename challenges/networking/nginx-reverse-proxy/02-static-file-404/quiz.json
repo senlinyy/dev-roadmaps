@@ -4,198 +4,224 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A docs SPA works at `/`, but a pasted deep link returns 404:\n\n```nginx\nserver {\n    root /var/www/docs;\n    index index.html;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\n```\n\nThe file `/var/www/docs/index.html` exists. Which `try_files` line fixes client-side routes while preserving real file checks?",
+      "scenario": "A single Nginx process hosts `app.example.com` and `admin.example.com`. A request for `https://app.example.com/api/orders` reaches the machine. Which matching sequence determines its handler?",
       "options": [
         {
           "id": "a",
-          "text": "`try_files $uri $uri/ /index.html;`"
+          "text": "Nginx selects the shortest location first, then asks DNS which server block owns the app process"
         },
         {
           "id": "b",
-          "text": "`try_files /guides/getting-started =404;`"
+          "text": "Nginx selects a server block from the listener and requested hostname, then selects the most appropriate location for `/api/orders` inside that site"
         },
         {
           "id": "c",
-          "text": "`try_files $host $uri =404;`"
+          "text": "Nginx sends every request to the default app server before reading the Host header or request path"
         },
         {
           "id": "d",
-          "text": "`try_files $uri =403;`"
+          "text": "The firewall selects the Nginx location block from the destination port and rewrites the HTTP path"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "A SPA deep link is not a real file on disk. The article shows `try_files $uri $uri/ /index.html;` so Nginx serves real assets first, then falls back to the SPA shell."
+      "explanation": "Nginx first chooses the virtual server using listener and hostname information, then chooses a location based on the request URI. DNS and firewalls get traffic to Nginx but do not select its internal location blocks. The [Nginx request processing guide](https://nginx.org/en/docs/http/request_processing.html) explains server and location selection."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The access log shows:\n\n```text\nGET /guides/getting-started HTTP/2 404\nGET /assets/app.8f31.js HTTP/2 200\nGET / HTTP/2 200\n```\n\nThe config uses `root /var/www/docs`, and `/var/www/docs/index.html` exists. Why is changing `root` the wrong primary fix?",
+      "scenario": "A React site serves `/` and `/assets/app.js`, but refreshing `/dashboard/settings` returns 404. The file `/var/www/app/index.html` exists and is readable. Which location block best preserves real assets and supports client-side routes?",
       "options": [
         {
           "id": "a",
-          "text": "The webroot already serves the SPA shell and assets; the missing behavior is falling back unknown paths to `/index.html`"
+          "text": "`location / { try_files /index.html; }`, which replaces every asset request with the SPA shell"
         },
         {
           "id": "b",
-          "text": "The `root` directive controls browser history, so moving it always fixes deep links"
+          "text": "`location / { proxy_pass http://127.0.0.1:3000; }`, because static files must always pass through the app"
         },
         {
           "id": "c",
-          "text": "The asset request succeeded only because Nginx ignored the `root` directive"
+          "text": "`location / { try_files $host $uri =403; }`, which maps the requested hostname to a file path"
         },
         {
           "id": "d",
-          "text": "A SPA cannot use an `index.html` file, so the root must point to JavaScript directly"
+          "text": "`location / { try_files $uri $uri/ /index.html; }`, which serves real paths first and falls back to the SPA shell"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "The evidence proves the current root can serve `/` and assets. The 404 happens because `/guides/getting-started` is a client-side route, not a file path, so `try_files` needs the index fallback."
+      "explanation": "The desired order is exact file, directory, then `index.html` fallback. Serving the shell unconditionally can hide missing assets, while proxying all static traffic wastes the web server separation. Hostnames are not filesystem paths. The [Nginx `try_files` documentation](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files) defines this lookup behavior."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A teammate proposes this shortcut for a SPA:\n\n```nginx\nlocation / {\n    try_files /index.html;\n}\n```\n\nWhat problem does this introduce compared with the article's pattern?",
+      "scenario": "The public API exposes `/api/users`, but the backend router defines `/users`. The upstream log shows it receives `/api/users` from this config:\n\n```nginx\nlocation /api/ {\n    proxy_pass http://127.0.0.1:3000;\n}\n```\n\nWhich change aligns the forwarded URI with the backend router?",
       "options": [
         {
           "id": "a",
-          "text": "It skips checking `$uri` and `$uri/`, so real assets and directories can be hidden behind the SPA shell"
+          "text": "Use `proxy_pass http://127.0.0.1:3000/;` so Nginx replaces the matched `/api/` prefix with `/`"
         },
         {
           "id": "b",
-          "text": "It is required because SPAs must serve `index.html` for every asset request"
+          "text": "Move the API into `try_files` so missing upstream routes fall back to `index.html`"
         },
         {
           "id": "c",
-          "text": "It changes the TCP port from 80 to 443"
+          "text": "Change the public path to `/users` because Nginx cannot rewrite location prefixes"
         },
         {
           "id": "d",
-          "text": "It disables Nginx config validation"
+          "text": "Add `index users` because the index directive controls the path sent to a proxied app"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The article's order matters: try the requested file, then a directory, then fallback. Serving `/index.html` unconditionally can mask missing assets and break static file delivery."
+      "explanation": "With a URI part in `proxy_pass`, here the trailing `/`, Nginx replaces the matching location prefix. `/api/users` therefore becomes `/users`. A SPA fallback would hide API errors, and `index` applies to directory file serving. The [official `proxy_pass` reference](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass) documents URI replacement."
     },
     {
       "id": "q4",
-      "type": "multiple",
-      "scenario": "A static-site review contains this Nginx block:\n\n```nginx\nserver {\n    listen 80;\n    server_name docs.example.com;\n    root /var/www/docs;\n    index index.html;\n\n    location / {\n        try_files $uri $uri/ /index.html;\n    }\n}\n```\n\nWhich comments are accurate?",
+      "type": "single",
+      "scenario": "After moving an app behind Nginx, every audit log shows client IP `127.0.0.1`, rate limiting groups all users together, and generated redirects point to `http://127.0.0.1:3000`. Which correction best addresses all three symptoms?",
       "options": [
         {
           "id": "a",
-          "text": "`root` maps URL paths to files under `/var/www/docs`"
+          "text": "Expose the app port publicly so clients bypass Nginx and provide their own forwarding headers"
         },
         {
           "id": "b",
-          "text": "`index index.html` tells Nginx what to serve for directory requests such as `/`"
+          "text": "Lower the DNS TTL so the app sees the public hostname on its next resolver lookup"
         },
         {
           "id": "c",
-          "text": "`try_files` checks the exact file first, then a directory, then the SPA fallback"
+          "text": "Forward Host, client IP chain, and original scheme headers, then configure the app to trust only the intended proxy path"
         },
         {
           "id": "d",
-          "text": "This config means the backend application server will receive every static asset request"
-        },
-        {
-          "id": "e",
-          "text": "After editing this file, `nginx -t` should pass before reloading Nginx"
+          "text": "Replace `proxy_pass` with a static root because forwarded context applies only to file responses"
         }
       ],
       "correct": [
-        "a",
-        "b",
-        "c",
-        "e"
+        "c"
       ],
-      "explanation": "The static file section explains `root`, `index`, `try_files`, and the habit of testing config before reload. This block serves static files directly; it does not proxy every asset to an app server."
+      "explanation": "`Host`, `X-Real-IP`, `X-Forwarded-For`, and `X-Forwarded-Proto` preserve the public request context. The app must trust the controlled proxy path because direct clients can spoof these headers if the backend is exposed. DNS does not repair HTTP context, and bypassing Nginx weakens the boundary. The [Nginx proxy header documentation](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header) covers forwarded fields."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "After fixing `try_files`, the homepage returns 403 and the Nginx error log says:\n\n```text\nopen() \"/var/www/docs/index.html\" failed (13: Permission denied)\n```\n\nWhich finding best matches the article's static file deployment warning?",
+      "scenario": "A new HTTPS server block points `ssl_certificate` at `cert.pem`, which contains only the leaf certificate. Some browsers work, but clean webhook clients report `unable to get local issuer certificate`. Which deployment change is appropriate?",
       "options": [
         {
           "id": "a",
-          "text": "Nginx cannot read the files as its worker user, so ownership or permissions for `/var/www/docs` need correction"
+          "text": "Point `ssl_certificate` at the full chain file, protect the matching private key, test with `nginx -t`, reload, and verify the public certificate"
         },
         {
           "id": "b",
-          "text": "The SPA fallback is wrong because all permission errors require `=404`"
+          "text": "Put the private key inside the certificate file sent to clients so they can validate ownership directly"
         },
         {
           "id": "c",
-          "text": "The backend app is down because a 403 always means `proxy_pass` failed"
+          "text": "Remove SNI support so every hostname receives the same leaf certificate and cached intermediates"
         },
         {
           "id": "d",
-          "text": "The DNS record is stale because Nginx resolved the wrong hostname"
+          "text": "Proxy HTTPS to the app before Nginx reads the certificate because upstream status determines trust"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The article warns that Nginx must be able to read static files, commonly owned by `www-data` on Debian or Ubuntu. A permission-denied log line is not solved by changing SPA routing."
+      "explanation": "Clients need the leaf and required intermediates, while the private key must remain secret on the server. The config should be tested before reload and verified from outside. SNI chooses the right virtual host, and upstream HTTP status occurs after public TLS succeeds. The [Nginx HTTPS guide](https://nginx.org/en/docs/http/configuring_https_servers.html) covers certificate chains and SNI."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "A deploy script edits the docs site config and immediately runs `systemctl restart nginx`. The new config contains a typo. Which safer deployment habit from the article should replace this?",
+      "scenario": "A retailer scales its checkout application from one process to three behind an Nginx round-robin upstream. All three health checks pass, but users lose authenticated sessions when consecutive requests reach different processes. Sessions must survive process restarts and future scaling events. Which design change best meets that requirement?",
       "options": [
         {
           "id": "a",
-          "text": "Run `nginx -t` first, then reload Nginx only after the config test succeeds"
+          "text": "Use IP-based affinity so most users return to one process, while leaving session data only in that process memory"
         },
         {
           "id": "b",
-          "text": "Restart without testing because Nginx silently fixes syntax errors"
+          "text": "Store sessions in shared state such as Redis, a database, or signed cookies so any healthy backend can serve the next request"
         },
         {
           "id": "c",
-          "text": "Delete the old config before testing so Nginx has fewer files to parse"
+          "text": "Reduce the upstream to one process so in-memory sessions work, accepting that scaling and process failure remain unavailable"
         },
         {
           "id": "d",
-          "text": "Use `curl` against the backend app because static configs are not parsed by `nginx -t`"
+          "text": "Configure longer passive health-failure timers so a restarted process recovers its previous in-memory sessions"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "The article recommends testing with `nginx -t` before applying changes. A reload with a valid config avoids taking a working server down because of a syntax error."
+      "explanation": "Shared or client-contained session state lets any healthy process serve the next request and preserves the scaling requirement. Affinity can reduce cross-process movement but does not survive process loss. Returning to one process abandons resilience and scale, while health timers cannot restore volatile memory. [The Nginx load balancing guide](https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/) explains upstream distribution."
     },
     {
       "id": "q7",
       "type": "single",
-      "scenario": "A combined Nginx config has an API proxy and a SPA fallback:\n\n```nginx\nlocation /api/ {\n    proxy_pass http://localhost:3000;\n}\n\nlocation / {\n    root /var/www/example/dist;\n    try_files $uri $uri/ /index.html;\n}\n```\n\nWhy is this structure better than placing the SPA fallback in the `/api/` location?",
+      "scenario": "The public endpoint returns `502 Bad Gateway`. Nginx logs:\n\n```text\nconnect() failed (111: Connection refused) while connecting to upstream,\nupstream: \"http://127.0.0.1:3000/api/health\"\n```\n\n`nginx -t` succeeds and Nginx owns ports `80` and `443`. Which next check is most direct?",
       "options": [
         {
           "id": "a",
-          "text": "API requests should be forwarded to the app, while non-API paths can fall back to the SPA shell"
+          "text": "Query the public DNS nameservers because 502 proves the client never reached Nginx"
         },
         {
           "id": "b",
-          "text": "The SPA fallback must handle `/api/` first so backend routes are never called"
+          "text": "Raise `proxy_read_timeout` because a refused connection needs more time to establish"
         },
         {
           "id": "c",
-          "text": "Nginx can serve static files only when every location uses `proxy_pass`"
+          "text": "Inspect the app process and test `127.0.0.1:3000` locally because Nginx could not connect to the configured upstream listener"
         },
         {
           "id": "d",
-          "text": "The `root` directive applies only to TCP port numbers"
+          "text": "Change the SPA fallback because `index.html` controls whether the app process binds its port"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "The article's combined pattern separates static assets and API routes. Nginx should serve the SPA for browser routes, while `/api/` remains dynamic traffic for the backend."
+      "explanation": "The response and log prove the request reached Nginx, which then received a refusal from the configured backend address. Verify that the app is running and listening where `proxy_pass` expects. A timeout increase cannot fix an immediate refusal, and DNS or SPA routing is not the failed handoff. The [Nginx reverse proxy guide](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/) describes upstream communication."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "A release changes Nginx routing, adds a WebSocket endpoint, and keeps a server-sent event stream. Which review comments are correct? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restart Nginx before testing the config so the new process can report syntax errors"
+        },
+        {
+          "id": "b",
+          "text": "Run `nginx -t` before reload and verify both a local upstream URL and the public hostname afterward"
+        },
+        {
+          "id": "c",
+          "text": "Proxy WebSockets with HTTP/1.1 plus the Upgrade and Connection headers expected by the upstream"
+        },
+        {
+          "id": "d",
+          "text": "Enable response buffering for the event stream so each event reaches the browser only after the connection closes"
+        },
+        {
+          "id": "e",
+          "text": "Disable proxy buffering and caching for the live event route when the application expects chunks to reach clients promptly"
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "A safe rollout validates syntax before reload and tests both sides of the proxy. WebSocket upgrades need the appropriate HTTP/1.1 upgrade headers, while live event streams often need buffering and caching disabled. Restarting first risks downtime, and buffering a stream until close defeats the live behavior. The [Nginx proxy module reference](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) covers upgrade headers and buffering controls."
     }
   ]
 }

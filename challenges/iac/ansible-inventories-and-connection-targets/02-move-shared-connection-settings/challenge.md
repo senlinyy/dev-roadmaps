@@ -1,6 +1,6 @@
 ---
 title: "Move Shared Connection Settings"
-sectionSlug: "variables-belong-near-the-scope-they-describe"
+sectionSlug: inventory-names-and-connection-addresses
 order: 2
 ---
 

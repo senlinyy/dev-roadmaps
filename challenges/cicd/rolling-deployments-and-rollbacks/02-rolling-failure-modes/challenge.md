@@ -1,8 +1,6 @@
 ---
-title: "Diagnose Rolling Failure Modes"
-sectionSlug: failure-modes-during-a-rollout
+title: "Rolling Deployments"
 order: 2
 ---
 
-Knowledge check covering readiness failures, slow new tasks, wrong task definitions, mixed old and new versions, and data rollback limits.
-
+Apply the article's capacity, readiness, compatibility, stop-rule, and rollback guidance to one production rollout.

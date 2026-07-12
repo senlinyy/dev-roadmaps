@@ -1,6 +1,6 @@
 ---
 title: "Record the Rollback Target"
-sectionSlug: rolling-back-to-the-previous-task-definition
+sectionSlug: automation-and-stop-rules
 order: 3
 ---
 

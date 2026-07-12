@@ -18,5 +18,3 @@ ansible_user: ubuntu
 ansible_become: true
 orders_environment: prod
 ```
-
-The host map stays focused on host identity, while shared connection settings live at group scope.

@@ -1,14 +1,15 @@
 ---
 title: "Write the Adoption Resource"
-sectionSlug: resource-block-first
+sectionSlug: importing-an-existing-object
 order: 1
 ---
 
-Describe the existing invoice bucket in `main.tf` before import.
+An invoice bucket already exists outside Terraform. Before anyone imports it, the pull request needs a resource block that describes the object Terraform is about to adopt.
 
-Requirements:
+Your job:
 
-1. **Resource:** `aws_s3_bucket.orders_invoices`.
-2. **Bucket:** `dp-orders-invoices-prod`.
-3. **Tags:** `service = "orders-api"`, `environment = "prod"`, `owner = "platform"`.
-4. **Do not add** an `import` block in this step.
+1. **Describe the existing bucket** named `dp-orders-invoices-prod` as the managed orders invoice bucket.
+2. **Capture the ownership tags** from the release brief: service `orders-api`, environment `prod`, and owner `platform`.
+3. **Keep this step focused on configuration** so the import mapping can be reviewed separately.
+
+The grader checks the HCL resource shape, not a Terraform CLI run.

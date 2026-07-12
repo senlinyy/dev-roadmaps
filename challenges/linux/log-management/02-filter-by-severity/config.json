@@ -3,14 +3,15 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/severity-reference.txt": {
+    "/var/log": { "type": "dir" },
+    "/var/log/syslog": {
       "type": "file",
-      "content": "Syslog Severity Levels\n======================\n0  Emergency     System is unusable\n1  Alert         Immediate action required\n2  Critical      Critical conditions\n3  Error         Error conditions\n4  Warning       Warning conditions\n5  Notice        Normal but significant\n6  Informational Informational messages\n7  Debug         Debug-level messages\n"
+      "content": "Jul 05 10:01:00 checkout-vm orders-api[2810]: INFO release v42 started\nJul 05 10:02:14 checkout-vm orders-api[2810]: WARN queue lag 4500ms on payments\nJul 05 10:03:41 checkout-vm orders-api[2810]: ERROR payment provider returned 503 request_id=req-2290\nJul 05 10:04:02 checkout-vm kernel: INFO eth0 link is up\nJul 05 10:05:10 checkout-vm orders-worker[2844]: CRIT retry budget exhausted for provider stripe request_id=req-2290\n"
     },
     "/var/log/app": { "type": "dir" },
-    "/var/log/app/application.log": {
+    "/var/log/app/orders-api.log": {
       "type": "file",
-      "content": "2025-01-15 08:00:12 INFO  [web.server] Server started on port 8080\n2025-01-15 08:00:13 INFO  [db.pool] Connection pool initialized: 10 connections\n2025-01-15 08:05:30 INFO  [web.router] GET /api/users 200 (12ms)\n2025-01-15 08:12:44 WARNING [db.pool] Connection pool usage at 80% (8/10)\n2025-01-15 08:15:02 INFO  [web.router] POST /api/auth 200 (45ms)\n2025-01-15 08:30:18 ERROR [db.query] Query timeout after 30s: SELECT * FROM analytics WHERE date > '2025-01-01'\n2025-01-15 08:30:19 WARNING [db.pool] Connection pool usage at 90% (9/10)\n2025-01-15 09:00:01 INFO  [scheduler] Running daily cleanup task\n2025-01-15 09:15:33 WARNING [disk.monitor] Disk usage on /var/data reached 75%\n2025-01-15 09:45:10 ERROR [auth.service] Failed login attempt for user admin from 192.168.1.55\n2025-01-15 10:00:05 INFO  [web.router] GET /api/health 200 (2ms)\n2025-01-15 10:22:41 CRITICAL [db.pool] All database connections exhausted, requests queuing\n2025-01-15 10:22:42 ERROR [web.server] Request timeout: 5 requests dropped\n2025-01-15 10:30:00 WARNING [disk.monitor] Disk usage on /var/data reached 85%\n2025-01-15 10:35:12 CRITICAL [system.watchdog] Service health check failed 3 consecutive times\n"
+      "content": "2026-07-05T10:01:00Z level=info event=release_started version=v42\n2026-07-05T10:02:14Z level=warn event=queue_lag duration_ms=4500 queue=payments\n2026-07-05T10:03:41Z level=error event=provider_503 request_id=req-2290 provider=stripe\n2026-07-05T10:05:10Z level=critical event=retry_budget_exhausted request_id=req-2290 provider=stripe\n"
     }
   },
   "grader": {
@@ -18,13 +19,12 @@
     "source": "all-stdout",
     "loose": true,
     "expected": [
-      "Query timeout after 30s",
-      "Failed login attempt for user admin",
-      "Request timeout: 5 requests dropped",
-      "All database connections exhausted",
-      "Service health check failed 3 consecutive times",
-      "4"
+      "WARN queue lag",
+      "ERROR payment provider returned 503",
+      "CRIT retry budget exhausted",
+      "level=critical",
+      "req-2290"
     ],
-    "requireCommands": ["grep", "cat"]
+    "requireCommands": ["cat", "grep"]
   }
 }

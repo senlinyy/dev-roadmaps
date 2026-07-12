@@ -1,10 +1,10 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q2",
       "type": "single",
-      "scenario": "The team needs regional HTTP routing for `orders.devpolaris.com`, TLS termination, path-based rules, and backend health probes. Which service fits best?",
+      "scenario": "A product team is building `orders.devpolaris.com` for one Azure region. The service needs HTTPS termination, host and path based routing to multiple backend pools, and health probes that stop sending traffic to an unhealthy regional backend. The backend workloads live in private subnets inside the VNet. Which public entry service is the most common fit for that regional web job?",
       "options": [
         {
           "id": "a",
@@ -12,77 +12,184 @@
         },
         {
           "id": "b",
+          "text": "Azure Front Door."
+        },
+        {
+          "id": "c",
           "text": "Azure Load Balancer."
         },
         {
-          "id": "c",
-          "text": "Azure SQL Database."
-        },
-        {
           "id": "d",
-          "text": "Private DNS zone only."
+          "text": "Azure Traffic Manager."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Application Gateway is the regional layer 7 option for HTTP routing, TLS termination, and backend health checks."
+      "explanation": "Application Gateway is Azure's regional layer 7 web gateway for host or path routing, backend health, and HTTPS handling. The closest distractor is Front Door because it is also a layer 7 entry service, but the scenario asks for the common fit for one regional private backend layout rather than a global edge front end. See [Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview)."
     },
     {
-      "id": "q2",
-      "type": "single",
-      "scenario": "The team needs a global edge entry for users in multiple regions and wants traffic routed to the closest healthy origin. Which service fits best?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Front Door."
-        },
-        {
-          "id": "b",
-          "text": "A private endpoint."
-        },
-        {
-          "id": "c",
-          "text": "A route table."
-        },
-        {
-          "id": "d",
-          "text": "A managed identity."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Front Door is the global HTTP edge entry pattern. Private endpoints, route tables, and identities solve different problems."
-    },
-    {
-      "id": "q3",
+      "id": "03-reason-about-layer-4-and-layer-7-q3",
       "type": "multiple",
-      "scenario": "Which statements are true about health probes?",
+      "scenario": "The retailer wants `orders.devpolaris.com` to terminate TLS, send `/orders/*` and `/users/*` to different backends, and remove unhealthy HTTP origins before customers feel the outage. Security may add a WAF later, but the approved requirement today is about routing and health, not inspection policy. Which two capabilities already prove the design needs a layer 7 entry point?",
       "options": [
         {
           "id": "a",
-          "text": "They help keep unhealthy backends out of rotation."
-        },
-        {
-          "id": "b",
-          "text": "They prove every user action works."
+          "text": "Host or path based routing."
         },
         {
           "id": "c",
-          "text": "They should hit a path that reflects whether the backend can serve traffic."
+          "text": "TCP or UDP pass through to one backend pool without interpreting the HTTP request."
+        },
+        {
+          "id": "b",
+          "text": "TLS termination with HTTP health probe behavior."
         },
         {
           "id": "d",
-          "text": "They can fail even when the VM or container process is running."
+          "text": "DNS based failover that answers with another endpoint name when one region is unavailable."
         }
       ],
       "correct": [
         "a",
-        "c",
-        "d"
+        "b"
       ],
-      "explanation": "Health probes are operating signals, not full end-to-end tests. A running process can still fail the probe path."
+      "explanation": "Host or path routing and HTTP aware probe behavior both require an entry point that understands the web request, not just the transport port. The closest distractor is DNS based failover because it is still a public entry design choice, but it does not inspect the HTTP request or decide backend health at the application path level. See [Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview)."
+    },
+    {
+      "id": "04-place-tls-and-health-checks-q3",
+      "type": "single",
+      "scenario": "Application Gateway is probing `/` on the Orders API, but a recent authentication change means the app now returns `302` on `/` and still returns `200` on `/healthz`. Users only reach the backend through the gateway, and backend membership has started flapping even though the app instances themselves are healthy. What should be updated first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Only the backend pool membership, because probe path changes do not affect health if the gateway can still reach the same instances."
+        },
+        {
+          "id": "c",
+          "text": "Only the listener certificate, because backend health flapping after an auth change usually means the client facing TLS chain expired."
+        },
+        {
+          "id": "a",
+          "text": "The probe path or the application's explicit health endpoint contract."
+        },
+        {
+          "id": "d",
+          "text": "Only the WAF policy, because redirects on the backend root path usually mean the edge inspection mode changed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The entry service is testing the wrong path for the current app contract, so the probe or the health endpoint expectation must be aligned first. The closest distractor is the backend pool membership because operators often review pool targets first, but the specific new evidence here is that `/` and `/healthz` now behave differently after the auth change. See [Application Gateway health probes](https://learn.microsoft.com/en-us/azure/application-gateway/application-gateway-probe-overview)."
+    },
+    {
+      "id": "04-place-tls-and-health-checks-q4",
+      "type": "single",
+      "scenario": "Browsers connect to `orders.devpolaris.com` through Azure Front Door. Front Door terminates client TLS at the edge, then forwards traffic to an Application Gateway origin over HTTPS. A backend VM also has its own certificate installed. During a browser trust incident, which certificate path matters to the browser first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The Application Gateway origin certificate, because Front Door reuses the origin TLS certificate for the browser session it terminates."
+        },
+        {
+          "id": "a",
+          "text": "The Front Door custom domain certificate presented at the browser facing edge."
+        },
+        {
+          "id": "c",
+          "text": "The backend VM certificate, because the browser ultimately trusts the certificate on the server that generates the HTML response."
+        },
+        {
+          "id": "d",
+          "text": "Any valid certificate bound anywhere in the chain, because once Front Door is in front the browser accepts whichever downstream certificate is newest."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The browser validates the certificate on the hop where its TLS session terminates, which in this design is the Front Door edge. The closest distractor is the backend VM certificate because origin TLS still matters for the next hop, but it is not the first certificate the browser evaluates when Front Door terminates the client connection. See [Azure Front Door overview](https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview)."
+    },
+    {
+      "id": "05-read-the-public-name-q2",
+      "type": "single",
+      "scenario": "The approved design says `orders.devpolaris.com` should enter through Front Door so the team can use the edge WAF and one global public path. During review, the DNS zone shows an A record pointing directly to a regional public IP on the old gateway instead of a CNAME to the Front Door hostname. What should the reviewer flag?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The zone should use a CNAME to the Front Door hostname instead of a direct regional A record if the design expects traffic to enter through Front Door."
+        },
+        {
+          "id": "c",
+          "text": "The record should stay an A record but point to the Application Gateway public IP only after Front Door validates the custom domain."
+        },
+        {
+          "id": "d",
+          "text": "The hostname can use either A or CNAME as long as the TLS certificate matches, because record type does not affect whether the request enters through Front Door."
+        },
+        {
+          "id": "a",
+          "text": "The hostname may bypass the intended Front Door edge path and its related controls."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A direct regional A record can send traffic around the intended Front Door layer, which defeats the design that centralizes edge routing and WAF policy there. The closest distractor is the CNAME guidance because it points toward the right DNS shape, but the core review issue is the architectural bypass of Front Door rather than the record syntax alone. See [Azure Front Door domains](https://learn.microsoft.com/en-us/azure/frontdoor/domain)."
+    },
+    {
+      "id": "07-reason-about-record-types-and-ttl-q1",
+      "type": "single",
+      "scenario": "A cutover plan changes the `orders.devpolaris.com` CNAME from `old.azurefd.net` to `new.azurefd.net`. The DNS record set still has a TTL of 3600 seconds because the team forgot to lower it before the change window. What does that TTL imply for the cutover?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Some recursive resolvers may keep sending users to the old target for up to about an hour after the change."
+        },
+        {
+          "id": "b",
+          "text": "Resolvers that have not cached the old answer can use the new CNAME immediately, while others may keep the old target until their cached TTL expires."
+        },
+        {
+          "id": "c",
+          "text": "Authoritative DNS servers will refuse the new record for one hour after the update, because the previous TTL must age out on the zone before the new answer becomes valid."
+        },
+        {
+          "id": "d",
+          "text": "Recursive resolvers should recheck the record every hour even if they just fetched it, so the cutover will complete exactly on the next hourly boundary."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TTL is a cache lifetime, so some resolvers may legally keep the old answer until that cache expires. The closest distractor is the statement that uncached resolvers can use the new record immediately, because that is true for some clients, but the operational implication the team cares about is that cached resolvers may still send traffic to the old target for up to about an hour. See [Azure DNS zones and records overview](https://learn.microsoft.com/en-us/azure/dns/dns-zones-records)."
+    },
+    {
+      "id": "08-fix-public-name-failures-q2",
+      "type": "single",
+      "scenario": "Users resolve `orders.devpolaris.com` correctly and complete the TLS handshake, but Application Gateway returns `502` for every request. Front Door routing looks normal, and the incident starts right after a backend deployment. Which layer should the team investigate next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Front Door WAF policy only, because a `502` after successful TLS usually means the edge blocked the request before it reached the regional gateway."
+        },
+        {
+          "id": "c",
+          "text": "The browser certificate chain only, because an origin deployment that causes `502` is most often a delayed client trust problem."
+        },
+        {
+          "id": "a",
+          "text": "Application Gateway backend health, backend settings, and regional routing to the origin pool."
+        },
+        {
+          "id": "d",
+          "text": "The application deployment and origin health path only at the VM or app level, because once Front Door is healthy the Application Gateway backend settings are no longer part of the failure surface."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Once DNS and the browser facing TLS step are proven, a `502` from Application Gateway points the team toward backend health and regional gateway configuration. The closest distractor is the idea that only the app deployment matters, but the backend app and the gateway's own backend settings, probes, and origin pool configuration jointly determine whether Application Gateway returns `502`. See [Application Gateway overview](https://learn.microsoft.com/en-us/azure/application-gateway/overview)."
     }
   ]
 }

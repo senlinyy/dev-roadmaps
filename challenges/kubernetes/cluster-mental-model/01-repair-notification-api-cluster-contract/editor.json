@@ -1,0 +1,28 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications-prod\n  labels:\n    app.kubernetes.io/part-of: notification-platform\nspec:\n  replicas: 3\n  template:\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/devpolaris/notification-api:1.7.0\n          ports:\n            - name: http\n              containerPort: 3000\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "Deployment API version" },
+      { "path": ["kind"], "equals": "Deployment", "label": "Deployment kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api", "label": "Deployment name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications-prod", "label": "production namespace" },
+      { "path": ["spec", "replicas"], "equals": 3, "label": "desired replica count" },
+      { "path": ["spec", "selector", "matchLabels", "app"], "equals": "notification-api", "label": "selector application label" },
+      { "path": ["spec", "selector", "matchLabels", "component"], "equals": "api", "label": "selector component label" },
+      { "path": ["spec", "template", "metadata", "labels", "app"], "equals": "notification-api", "label": "Pod application label" },
+      { "path": ["spec", "template", "metadata", "labels", "component"], "equals": "api", "label": "Pod component label" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "API container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/notification-api:1.7.0", "label": "approved API image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/ready", "label": "readiness path" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": "http", "label": "named readiness port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "cpu"], "equals": "250m", "label": "CPU request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "memory"], "equals": "256Mi", "label": "memory request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "cpu"], "equals": "1", "label": "CPU limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "memory"], "equals": "512Mi", "label": "memory limit" }
+    ]
+  }
+}

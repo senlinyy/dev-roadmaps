@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-statefulset.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: notification-postgres\n  namespace: notifications\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "StatefulSet API version" },
+      { "path": ["kind"], "equals": "StatefulSet", "label": "StatefulSet kind" },
+      { "path": ["metadata", "name"], "equals": "notification-postgres", "label": "StatefulSet name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications", "label": "notifications namespace" },
+      { "path": ["spec", "serviceName"], "equals": "notification-postgres", "label": "headless Service name" },
+      { "path": ["spec", "replicas"], "equals": 1, "label": "replica count" },
+      { "path": ["spec", "selector", "matchLabels", "app.kubernetes.io/name"], "equals": "notification-postgres", "label": "selector label" },
+      { "path": ["spec", "template", "metadata", "labels", "app.kubernetes.io/name"], "equals": "notification-postgres", "label": "Pod template label" },
+      { "path": ["spec", "volumeClaimTemplates"], "containsObject": { "metadata": { "name": "data" }, "spec": { "accessModes": ["ReadWriteOncePod"], "storageClassName": "fast-ssd", "resources": { "requests": { "storage": "20Gi" } } } }, "label": "ordinal data claim template" }
+    ]
+  }
+}

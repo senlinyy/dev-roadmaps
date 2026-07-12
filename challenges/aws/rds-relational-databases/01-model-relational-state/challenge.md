@@ -1,7 +1,6 @@
 ---
-title: "Model Relational State"
-sectionSlug: relational-shape
+title: "Relational Databases with RDS and Aurora"
 order: 1
 ---
 
-The checkout team is reviewing where order records, payment rows, and receipt pointers should live. Use the transaction and query evidence to decide what belongs in RDS.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

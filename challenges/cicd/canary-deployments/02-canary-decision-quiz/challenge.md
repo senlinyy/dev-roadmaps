@@ -1,8 +1,6 @@
 ---
-title: "Make Canary Decisions"
-sectionSlug: watching-the-canary
+title: "Canary Deployments"
 order: 2
 ---
 
-Knowledge check covering first-slice choices, canary-vs-stable comparison, aggregate metrics, promotion, rollback, and sticky user behavior.
-
+Use release-split evidence, traffic controls, business signals, and failure actions to decide whether a canary should advance.

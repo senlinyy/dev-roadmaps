@@ -1,7 +1,6 @@
 ---
-title: "Read The Resource Identity"
-sectionSlug: resource-ids
+title: "Resources, IDs, and Tags"
 order: 1
 ---
 
-Knowledge check on separating friendly names, tags, and Azure resource IDs when all three appear in the same production story.
+Answer the scenarios using the linked article's Azure resource identity and safety guidance.

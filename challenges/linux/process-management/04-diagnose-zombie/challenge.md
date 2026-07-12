@@ -1,6 +1,6 @@
 ---
 title: "Diagnose a Zombie Process"
-sectionSlug: failure-modes-zombies-orphans-runaways-and-the-oom-killer
+sectionSlug: worked-failure-diagnoses
 order: 4
 ---
 

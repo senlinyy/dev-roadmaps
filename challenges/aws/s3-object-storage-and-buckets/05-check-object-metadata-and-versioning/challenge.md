@@ -1,6 +1,6 @@
 ---
 title: "Check Object Metadata And Versioning"
-sectionSlug: versioning
+sectionSlug: versioning-and-lifecycle
 order: 5
 ---
 

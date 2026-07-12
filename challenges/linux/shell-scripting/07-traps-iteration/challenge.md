@@ -1,6 +1,6 @@
 ---
 title: "Traps and Safe File Iteration"
-sectionSlug: safe-file-iteration-with-null-delimiters
+sectionSlug: loops-and-safe-file-handling
 order: 7
 ---
 

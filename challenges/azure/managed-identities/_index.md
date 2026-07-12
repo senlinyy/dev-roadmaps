@@ -1,5 +1,5 @@
 ---
-title: "Managed Identities"
+title: "Workload Identities, Service Principals, And Managed Identities"
 description: "Practice using managed identities for workload access, inspecting runtime identity evidence, and separating identity from permission."
 articleId: article-cloud-providers-azure-identity-security-managed-identities-and-workload-access
 articleSlug: managed-identities

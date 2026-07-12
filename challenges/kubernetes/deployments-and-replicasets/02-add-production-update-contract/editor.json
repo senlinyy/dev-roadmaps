@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-api\n      app.kubernetes.io/component: api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-api\n        app.kubernetes.io/component: api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/customer-notification/notification-api:2026.06.14-1\n          ports:\n            - name: http\n              containerPort: 8080\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "strategy", "type"], "equals": "RollingUpdate", "label": "rolling update strategy" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxSurge"], "equals": 1, "label": "one surge Pod" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxUnavailable"], "equals": 0, "label": "zero unavailable Pods" },
+      { "path": ["spec", "progressDeadlineSeconds"], "equals": 300, "label": "progress deadline" },
+      { "path": ["spec", "revisionHistoryLimit"], "equals": 5, "label": "revision history limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "cpu"], "equals": "300m", "label": "CPU request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "requests", "memory"], "equals": "384Mi", "label": "memory request" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "cpu"], "equals": "1", "label": "CPU limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "resources", "limits", "memory"], "equals": "768Mi", "label": "memory limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/health/ready", "label": "readiness path" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": "http", "label": "readiness port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "periodSeconds"], "equals": 5, "label": "readiness period" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "failureThreshold"], "equals": 3, "label": "readiness failure threshold" }
+    ]
+  }
+}

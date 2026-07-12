@@ -1,57 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "02-match-failure-shapes-q1",
       "type": "single",
-      "scenario": "A monthly review shows this row:\n\n```text\nResource: asp-devpolaris-orders-prod\nPattern: App Service plan runs all month, even during quiet hours\nKnown reason: production checkout needs at least one ready runtime\n```\n\nWhich cost shape is most visible?",
+      "scenario": "The Orders platform still runs one legacy worker on a single VM. The worker writes its live state to the VM's local filesystem, and no second instance is ready to take over. During the architecture review, the host fails and the workload disappears until the VM is rebuilt. What failure shape should the team name explicitly?",
       "options": [
-        { "id": "a", "text": "Always-on capacity, because the plan reserves runtime whether traffic is high or low." },
-        { "id": "b", "text": "Only stored data, because App Service plans charge only for files saved by the app." },
-        { "id": "c", "text": "Only data movement, because all app cost must come from outbound traffic." },
-        { "id": "d", "text": "A safety copy, because every running web app is a backup." }
+        {
+          "id": "a",
+          "text": "Single-instance compute failure combined with local-state loss risk."
+        },
+        {
+          "id": "b",
+          "text": "A DNS caching problem, because a single VM outage mainly shows up as stale name resolution."
+        },
+        {
+          "id": "c",
+          "text": "Budget alert noise, because the real issue is that the VM was too expensive to keep running."
+        },
+        {
+          "id": "d",
+          "text": "A Key Vault soft-delete gap, because local files are a form of secret retention."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "An App Service plan is capacity the team keeps ready. It may be the right choice, but the review should connect that steady cost to traffic, availability, and scaling promises."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure is a single runtime instance with state tied to that instance, so both availability and recoverability are weak. The closest distractor is the budget option because cost may have driven the design, but the incident described is still a failure-shape problem, not a billing alert problem. DNS and Key Vault do not match the evidence. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
     },
     {
-      "id": "q2",
+      "id": "02-match-failure-shapes-q2",
       "type": "single",
-      "scenario": "After release `2026-05-16.2`, Application Insights ingestion rises much faster than request traffic. Normal checkout now writes this message on every request:\n\n```text\nDEBUG route=POST /orders payloadBytes=18421 message=request body accepted\n```\n\nWhich cost shape should the team discuss first?",
+      "scenario": "Receipt PDFs live in Azure Blob Storage with zone-redundant storage enabled. During a maintenance script run, an operator deletes the wrong container. The team expected the extra copies to protect it. Which failure shape still remains after that storage choice?",
       "options": [
-        { "id": "a", "text": "Usage-based work, because noisy telemetry creates more ingestion and processing around normal traffic." },
-        { "id": "b", "text": "Safety copies, because every debug payload is a restore point." },
-        { "id": "c", "text": "Data movement only, because log ingestion is always internet egress." },
-        { "id": "d", "text": "Always-on SQL capacity, because every log line resizes the database tier." }
+        {
+          "id": "b",
+          "text": "Zone failure, because zone-redundant storage only protects reads, not writes or deletes."
+        },
+        {
+          "id": "c",
+          "text": "Regional outage, because zone-redundant storage automatically converts deletes into cross-region durability events."
+        },
+        {
+          "id": "a",
+          "text": "Operator deletion or overwrite, which needs versioning, soft delete, or backups rather than only live redundancy."
+        },
+        {
+          "id": "d",
+          "text": "Transient network partition, because the deleted container will return once storage replication catches up."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Usage-based cost can spike when the application does extra work. A verbose debug line can multiply observability cost without adding enough diagnostic value."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The missing protection is against deletion of the current state, not against infrastructure loss of a healthy current state. Zone failure is the closest distractor because ZRS is designed for that problem, but it does not preserve an older version after a mistaken delete. Regional or transient network options also miss the actual incident. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup) and [Microsoft Learn: Blob soft delete](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview)."
     },
     {
-      "id": "q3",
-      "type": "single",
-      "scenario": "Blob versioning is enabled for receipt files. Storage cost grows steadily even though the number of current receipts looks normal.",
-      "options": [
-        { "id": "a", "text": "Stored data and safety copies, because old versions are retained to support recovery." },
-        { "id": "b", "text": "Only idle compute, because old blob versions are running servers." },
-        { "id": "c", "text": "Only database capacity, because Blob Storage cannot keep old object state." },
-        { "id": "d", "text": "Only budget notification cost, because versions are alert messages." }
-      ],
-      "correct": ["a"],
-      "explanation": "Blob versions are retained data. They may be useful protection against overwrite or delete, but they still consume storage and need a retention policy."
-    },
-    {
-      "id": "q4",
+      "id": "02-match-failure-shapes-q3",
       "type": "multiple",
-      "scenario": "Which cost-shape pairings are reasonable for `devpolaris-orders-api`?",
+      "scenario": "The review covers two specific risks only: first, one legacy worker runs on a single VM; second, operators can accidentally delete stored customer documents. The business has not approved any multi-region recovery target yet. Which two control families directly address the stated risks?",
       "options": [
-        { "id": "a", "text": "Stored data: Azure SQL size, Blob receipts, retained logs, and backup storage grow over time." },
-        { "id": "b", "text": "Safety copies: backups, soft delete, blob versions, and restore targets kept for recovery." },
-        { "id": "c", "text": "Data movement: cross-region replication or outbound traffic can add cost to the service path." },
-        { "id": "d", "text": "Always-on capacity: a deleted test database that no one can identify is automatically a healthy production promise." }
+        {
+          "id": "a",
+          "text": "Single-instance compute protection, such as another instance, a standby path, or moving the workload to a managed platform that can survive one host failure."
+        },
+        {
+          "id": "c",
+          "text": "Regional disaster recovery, such as cross-region failover and secondary-region compute."
+        },
+        {
+          "id": "b",
+          "text": "Deletion recovery controls, such as versioning, soft delete, backups, and tested restore steps."
+        },
+        {
+          "id": "d",
+          "text": "Permanent monitoring reduction, because lower telemetry volume is the main fix for both failure shapes."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Stored data, safety copies, and data movement are real Azure cost shapes. Unowned leftovers can cost money too, but ownership and purpose are missing, so they are not a healthy example of intentional capacity."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The review names only host failure and accidental deletion, so the right controls are compute resilience for the worker and deletion recovery for the documents. Regional disaster recovery is the closest distractor because it is an important resilience family, but the scenario explicitly says that target is not part of this review. Monitoring cuts do not solve either failure shape. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
+    },
+    {
+      "id": "02-match-failure-shapes-q4",
+      "type": "single",
+      "scenario": "The Orders API uses zone-redundant infrastructure, and management points to that checkbox as proof that the service is resilient. The runbook has never tested whether configuration, DNS, identity, secrets, and downstream dependencies still work after a failover event. Which gap should the architect identify?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Zone redundancy already proves failover, so the only remaining task is to shorten the incident review template."
+        },
+        {
+          "id": "a",
+          "text": "Infrastructure redundancy does not prove end-to-end application recovery."
+        },
+        {
+          "id": "c",
+          "text": "Failover testing matters only for on-premises systems because Azure services validate application recovery automatically."
+        },
+        {
+          "id": "d",
+          "text": "Application recovery is mainly a naming problem, because DNS labels reveal whether a service is resilient."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The design still lacks proof that the whole application path can recover, not just the infrastructure tier. The closest distractor is the claim that zone redundancy proves failover by itself, because that is exactly the mistaken assumption the scenario describes. Azure does not automatically validate your application's dependency and configuration path. See [Microsoft Learn: Restore testing in Azure Backup](https://learn.microsoft.com/en-us/azure/backup/backup-azure-restore-validation)."
+    },
+    {
+      "id": "02-match-failure-shapes-q5",
+      "type": "single",
+      "scenario": "A queue backlog grows because one worker version crashes on a rare message shape. Most messages are fine, but the same payload keeps returning to the active queue and blocks useful work. Which resilience evidence will help the review most?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Immediate scale-out only, because more workers always clear a backlog faster than fixing message isolation."
+        },
+        {
+          "id": "c",
+          "text": "Longer retry loops on the active queue, because repeated retries prove the queue is resilient."
+        },
+        {
+          "id": "d",
+          "text": "Deleting the failing message immediately, because preserving the payload would only slow recovery."
+        },
+        {
+          "id": "a",
+          "text": "Retry policy, poison-message handling, backlog metrics, and the runbook for isolating or replaying failed work."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The key evidence is whether the system can isolate one bad message and keep the workflow moving while preserving recovery data. Immediate scale-out is the closest distractor because it can help with healthy load, but it does not solve a poison message that crashes every worker. More retries and deleting the payload both weaken diagnosis or recovery. See [Microsoft Learn: Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview)."
+    },
+    {
+      "id": "03-review-the-tradeoff-q3",
+      "type": "single",
+      "scenario": "The finance lead asks whether the Log Analytics retention period can be cut from 90 days to 30 days. The security team says some incident and audit investigations begin weeks after the customer impact ended. What risk should the architecture review make explicit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Long-window incident and audit investigations may lose needed evidence."
+        },
+        {
+          "id": "b",
+          "text": "Shorter retention mainly changes dashboard colors, not the evidence available to responders."
+        },
+        {
+          "id": "c",
+          "text": "Shorter retention increases data durability because Azure rewrites old log records into safer storage."
+        },
+        {
+          "id": "d",
+          "text": "Alerts become more accurate when the workspace stores less historical data."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Retention is a cost decision tied directly to how far back investigators can look. The closest distractor is the dashboard-color option because visual clutter is real, but the bigger impact is loss of evidence for late investigations. Shorter retention does not improve durability or alert accuracy. See [Microsoft Learn: Manage usage and costs with Azure Monitor Logs](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/cost-logs)."
+    },
+    {
+      "id": "03-review-the-tradeoff-q5",
+      "type": "single",
+      "scenario": "A proposed cost change removes warm standby compute and replaces it with a cheaper cold rebuild process. The monthly bill drops, but the expected restore time for the checkout workflow grows from 30 minutes to 12 hours. What must be explicit in the approval record?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Only the engineer who found the savings, because architecture tradeoffs do not need business sign-off once the bill is lower."
+        },
+        {
+          "id": "c",
+          "text": "A DNS rollback note, because DNS is the only production setting that changes when restore time increases."
+        },
+        {
+          "id": "a",
+          "text": "The new recovery-time target and who accepted that business impact."
+        },
+        {
+          "id": "d",
+          "text": "The dashboard theme used during the review, because visible warnings are the main proof of resilience acceptance."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If the recovery promise changes, the record has to show the new target and the person or group that accepted the longer outage risk. The closest distractor is the DNS note because some recoveries do involve DNS, but the business decision here is about RTO, not a specific routing step. Engineer credit and dashboard styling do not approve a resilience tradeoff. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
     }
   ]
 }

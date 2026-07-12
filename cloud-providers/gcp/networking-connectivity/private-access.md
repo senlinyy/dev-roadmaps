@@ -1,7 +1,7 @@
 ---
 title: "Private Access to Managed Services"
 description: "Compare Private Google Access, Private Services Access, and Private Service Connect for private access to Google APIs, Cloud SQL, and producer services."
-overview: "Private access in Google Cloud has three common shapes: a subnet setting for Google APIs, a peering-style connection for managed service networks, and local private endpoints for APIs or producer services. This article separates those shapes so database access, API access, DNS, routing, IAM, and service setup stay clear."
+overview: "Private access in Google Cloud has separate shapes for Google APIs, managed service producer networks, and local private endpoints. The walkthrough keeps DNS, routes, IAM, and service setup separate so each failure has evidence."
 tags: ["gcp", "private-access", "cloud-sql", "private-service-connect"]
 order: 5
 id: article-cloud-providers-gcp-networking-connectivity-private-access-managed-services
@@ -14,213 +14,254 @@ aliases:
 
 ## Table of Contents
 
-1. [Private Access to Managed Services](#private-access-to-managed-services)
-2. [Private Google Access for Google APIs](#private-google-access-for-google-apis)
-3. [Private Services Access for Cloud SQL Private IP](#private-services-access-for-cloud-sql-private-ip)
-4. [Private Service Connect for Endpoints](#private-service-connect-for-endpoints)
-5. [DNS, Routes, IAM, and Service Setup](#dns-routes-iam-and-service-setup)
-6. [gcloud and Terraform Setup Shapes](#gcloud-and-terraform-setup-shapes)
-7. [Verification Runbook](#verification-runbook)
-8. [Choosing the Right Pattern](#choosing-the-right-pattern)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [Why Private Access Exists](#why-private-access-exists)
+2. [The Private Access Split](#the-private-access-split)
+3. [Private Google Access](#private-google-access)
+4. [Private Services Access](#private-services-access)
+5. [Private Service Connect](#private-service-connect)
+6. [DNS, Routes, IAM, and Service Setup](#dns-routes-iam-and-service-setup)
+7. [Commands and Terraform Shapes](#commands-and-terraform-shapes)
+8. [Verification Runbook](#verification-runbook)
+9. [Choosing the Right Pattern](#choosing-the-right-pattern)
+10. [References](#references)
 
-## Private Access to Managed Services
-<!-- section-summary: Private access starts by identifying the kind of destination: a Google API, a managed service network, or a producer endpoint. -->
+## Why Private Access Exists
+<!-- section-summary: A private workload often needs managed services without relying on public internet paths. -->
 
-Private access means a workload reaches a managed service through **private Google Cloud networking paths** instead of depending on a public external address on the workload. The workload might be a VM with only an internal IP address, a Cloud Run service using VPC egress, or a GKE Pod in a private cluster. The destination might be Cloud Storage, Secret Manager, Cloud SQL, Memorystore, or a service published by another team.
+A private workload often needs managed services without relying on public internet paths. A VM, GKE Pod, or Cloud Run service may run with only private addresses, while the application still needs Google APIs, a managed database, a cache, or a service published by another team.
 
-The first helpful split is the destination type. **Google APIs** are service endpoints such as `storage.googleapis.com` and `secretmanager.googleapis.com` that run on Google's production infrastructure. **VPC-hosted managed services** are services such as Cloud SQL, Filestore, and Memorystore where the service has private addresses in a producer VPC network. **Producer services** are services exposed by Google, another team, or a partner through a private endpoint or service attachment.
+Use a learning platform again. A report worker in subnet `apps-us-central1` has no external IP address. It needs to read files from Cloud Storage, fetch a Secret Manager value, connect to a Cloud SQL PostgreSQL instance through private IP, and call a fraud-scoring service published by the data platform team.
 
-Here is the production story we will keep using. An order-processing VM named `orders-worker-1` sits in subnet `apps-us-central1` with no external IP address. It needs three private paths: it reads objects from Cloud Storage, fetches database passwords from Secret Manager, connects to a Cloud SQL MySQL instance through private IP, and later calls a fraud-scoring service published by the data platform team. All four calls are "private access" in a casual conversation, but they use different Google Cloud features.
+The beginner trap is assuming "private" means one switch. It does not. Reading Secret Manager, connecting to Cloud SQL private IP, and calling a producer service through a local endpoint are three different jobs. They may all avoid a public VM IP address, yet they use different routing, DNS, IAM, and service setup.
 
-| Workload need | Best starting feature | What it gives you |
+Think of the worker as sitting inside a private office. It still needs three kinds of private calls: a call to Google API front desks, a call to a managed database room, and a call to another team's published service desk. The office being private is only the starting point; each destination still needs the correct door.
+
+Those needs sound similar because they all use the word private. In Google Cloud, they use different features. Treating them as one feature creates bad debugging: a Secret Manager IAM error, a Cloud SQL private IP route problem, and a Private Service Connect DNS issue can all show up as "the private call failed."
+
+## The Private Access Split
+<!-- section-summary: The right private access pattern follows the destination type. -->
+
+The first decision is the destination type. Google APIs, VPC-hosted managed services, and producer services use different private access patterns.
+
+A simple picture helps: "private access" is not one door. It is three different doors for three different destinations. One door leads to Google APIs such as Cloud Storage and Secret Manager. One door leads to managed services that live behind private IPs, such as Cloud SQL. One door leads to a private endpoint for a service published by another team or another Google API path.
+
+The names sound similar, so beginners often try to debug them as one thing. That creates confusion. A VM failing to read Secret Manager may have a healthy network path and a missing IAM role. A Cloud SQL timeout may involve Private Services Access and producer routes. A PSC endpoint with the wrong DNS record can send the app to the wrong IP before IAM is even relevant.
+
+| Workload need | GCP pattern | What it gives you |
 |---|---|---|
-| A private VM calls Cloud Storage or Secret Manager APIs | **Private Google Access** | Subnet-level access from internal-IP VMs to Google APIs and services |
-| An app connects to Cloud SQL through private IP | **Private Services Access** | A private connection between your VPC and a service producer VPC network |
-| An app calls Google APIs through an internal endpoint or calls a published producer service | **Private Service Connect** | A local internal endpoint or backend that forwards to a supported API or service |
+| A private VM calls Cloud Storage, Secret Manager, Pub/Sub, or Artifact Registry APIs | **Private Google Access** | Subnet-level access from internal-IP VMs to Google APIs and services |
+| An app connects to Cloud SQL, Filestore, Memorystore, or another producer-network managed service through private IP | **Private Services Access** | A private connection between your VPC and a service producer VPC |
+| An app uses a local private endpoint for Google APIs or a producer service | **Private Service Connect** | A consumer-side private endpoint that forwards to a supported API or published service |
 
-Google Cloud lists these options separately because they solve different problems. Private Google Access is about **API reachability from private clients**. Private Services Access is about **private addressing for VPC-hosted managed services**. Private Service Connect is about **service-oriented endpoints** where the consumer uses a local private IP and the producer exposes only the service.
+Keep these patterns separate during operations. Private Google Access is a subnet and Google API reachability feature. Private Services Access is a peering-style producer network connection. Private Service Connect is an endpoint and service publishing pattern. The next sections define them in that order.
 
-Now that we have the three names on the table, start with the simplest production pain: a VM has no external IP address, but the application still needs Google APIs.
+For AWS readers, the anchors are useful after the GCP split is clear. Private Google Access overlaps with the idea of private access to AWS service APIs through gateway or interface endpoints. Private Services Access often appears in managed database private-IP designs and service-managed network paths. Private Service Connect is the closest GCP anchor to PrivateLink-style endpoint access, especially for producers that publish one service to consumers.
 
-## Private Google Access for Google APIs
-<!-- section-summary: Private Google Access lets internal-IP VMs in an enabled subnet call Google APIs such as Cloud Storage and Secret Manager. -->
+## Private Google Access
+<!-- section-summary: Private Google Access lets internal-IP VMs in an enabled subnet reach Google APIs and services. -->
 
-**Private Google Access** is a subnet setting that lets VM instances with only internal IP addresses reach Google APIs and services. It applies by subnet, so a VM in an enabled subnet can call supported Google APIs while a VM in a different disabled subnet cannot use that same path. A VM with an external IP address already has another way to reach Google APIs, so Private Google Access matters most for private VMs.
+**Private Google Access** is a subnet setting. It lets VM instances with only internal IP addresses reach supported Google APIs and services. It is most relevant for VMs with no external IP address that still need API endpoints such as `storage.googleapis.com` or `secretmanager.googleapis.com`.
 
-In the `orders-worker-1` example, the VM has no external IP address because the platform team wants batch workers to stay off the public internet. The application still needs to download order export files from Cloud Storage and read `projects/prod/secrets/db-password` from Secret Manager. Those requests go to Google API hostnames, not to a private address inside your subnet. Private Google Access gives that internal-IP VM a supported path to those APIs.
-
-Private Google Access has three separate pieces in real deployments. The first piece is the **subnet setting**. The subnet that contains the VM network interface must have Private Google Access enabled. The second piece is **DNS**. Many teams keep the normal `googleapis.com` names, while stricter environments use private Google API domains such as `private.googleapis.com` or `restricted.googleapis.com` with Cloud DNS records. The third piece is **routing and firewall egress**. The VPC still needs a route for the Google API VIPs, and egress firewall policy must allow the traffic.
+In the learning platform, `report-worker-1` has no external IP address. The application needs to read exported course files from Cloud Storage and access one Secret Manager secret. Private Google Access gives the VM a supported network path to those Google APIs from its subnet.
 
 ![A generated infographic showing an internal VM using a subnet Private Google Access setting to reach Google API hostnames while IAM still controls the API action.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-private-access-managed-services/private-google-access.png)
-*Private Google Access gives the network path to Google APIs, while the VM service account still needs IAM permission for each API action.*
+*Private Google Access provides API reachability from an enabled subnet, while IAM still controls each API action.*
 
-There is a common beginner trap here. Private Google Access handles network reachability to APIs while IAM still grants application permission. The VM calls Cloud Storage or Secret Manager using a service account. That service account needs IAM permissions such as `storage.objects.get` for the bucket or `secretmanager.versions.access` for the secret. Private access answers "can packets reach the API endpoint?" IAM answers "may this identity perform the API action?"
+Private Google Access has three practical pieces:
 
-In production, teams often test this in layers. The first evidence is the VM network interface: it should have only an internal IP address and should sit in the intended subnet. The second evidence is the subnet setting for Private Google Access. The third evidence is DNS resolution for the API name. The fourth evidence is egress firewall policy. The final evidence is the actual API call using the VM service account. A network failure and an IAM failure can both look like "the app cannot read the secret," so separating the layers saves time.
+| Piece | What to check |
+|---|---|
+| Subnet setting | The VM's subnet has Private Google Access enabled |
+| DNS and route behavior | API names resolve to the intended Google API VIP path |
+| IAM and service policy | The VM service account has permission for the API action |
 
-Cloud Storage and Secret Manager are API-style destinations. Cloud SQL private IP has a different shape because the database instance lives behind a service producer network.
+Network reachability and API authorization stay separate. If the worker reaches Secret Manager and receives `PERMISSION_DENIED`, the private network path may be healthy while IAM or a service perimeter blocks the action. If the worker cannot reach the API endpoint at all, check the subnet setting, DNS, route, and egress firewall policy.
 
-## Private Services Access for Cloud SQL Private IP
-<!-- section-summary: Private Services Access creates a private connection to a service producer VPC, which is the pattern behind Cloud SQL private IP. -->
+This VM example teaches the cleanest version of the pattern. Cloud Run and GKE can also need private access to Google APIs, and each path includes its own egress choices first. A Cloud Run service may need Direct VPC egress or a Serverless VPC Access connector before the team checks Private Google Access, DNS, and IAM. A GKE Pod may use node subnet settings, Pod ranges, Workload Identity, and DNS. Write down the client shape first: VM, Cloud Run, or GKE. Then inspect the matching egress path and API access controls.
 
-**Private Services Access**, often shortened to PSA, is a private connection between your VPC network and a VPC network owned by Google or a third-party service producer. The connection uses **VPC Network Peering** under the hood. Your workloads use internal IP addresses to reach the managed service, and the traffic stays within Google's network rather than using the public internet.
+## Private Services Access
+<!-- section-summary: Private Services Access creates a private connection to a service producer VPC, which supports managed service private IPs such as Cloud SQL. -->
 
-Cloud SQL private IP is the most familiar example. When the team creates `orders-mysql-prod` with private IP, Cloud SQL places the database engine in a Cloud SQL VPC managed by Google. Private Services Access connects the application VPC to that producer network so `orders-worker-1` can connect to the database private address.
+**Private Services Access**, often shortened to PSA, creates a private connection between your VPC network and a VPC network owned by a Google or third-party service producer. It uses VPC Network Peering underneath. Your workloads use internal IP addresses to reach managed services that live in the producer network.
 
-Private Services Access requires an **allocated IP range**. This is a block of private address space reserved in your VPC for the service producer to use. Google Cloud recommends planning this range carefully because it must avoid overlaps with current subnets, future subnets, peered VPC ranges, VPN routes, Interconnect routes, and Network Connectivity Center spokes that share route information. A small range can work for a lab, but production teams usually reserve enough room for future managed services.
+Cloud SQL private IP is the common beginner example. The report worker connects to `learn-postgres-prod` through a private address. Cloud SQL runs in a Google-managed producer network, and PSA connects the application VPC to that producer network so the private address is reachable.
 
 ![A generated infographic showing an allocated producer range, private services connection, and database private address.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-private-access-managed-services/private-services-access.png)
-*Private Services Access reserves address space for managed service producer networks before services such as Cloud SQL receive private IPs.*
+*Private Services Access reserves address space for managed service producer networks before services receive private IPs.*
 
-The setup has a clear order. A network admin enables the Service Networking API, reserves an internal allocated range for service networking, creates the private connection to `servicenetworking.googleapis.com`, and then creates or updates the managed service instance to use private IP. For Cloud SQL, an existing instance can be configured for private IP, but changing the connected network or enabling private IP can restart the instance and cause a short downtime window, so teams usually plan this as a maintenance change.
+PSA requires an **allocated IP range**. This is private address space reserved in your VPC for the service producer. The range must avoid overlap with your subnets, future subnets, peered networks, VPN routes, Interconnect routes, and any route exchange through Network Connectivity Center.
 
-Private Services Access also has important reachability boundaries. The path uses non-transitive VPC Network Peering, so a second VPC peered to your application VPC lacks inherited access to the Cloud SQL private IP path through your VPC. That shows up often after a company adds a separate analytics VPC and expects it to reach the same database. The better design is to plan the database access network intentionally, use a supported multi-VPC pattern, or use a service-specific connection option where available.
+The setup order is important. Enable the Service Networking API, reserve the allocated range, create the private services connection, and then create or update the managed service to use private IP. For Cloud SQL, enabling or changing private IP settings can affect the instance, so teams plan the change through a maintenance window if needed.
 
-The database connection still has non-network controls. Cloud SQL still has users, passwords or IAM database authentication depending on engine and setup, SSL/TLS settings, and application-level connection limits. Firewall rules in the consumer VPC must allow egress from the workload to the database private IP and port, and the database service itself still decides whether the client can authenticate. Private Services Access gives the private path while Cloud SQL remains a managed service.
+PSA is not transitive peering. If another VPC is peered to your application VPC, it does not automatically inherit access through your private services connection. That is one reason service-level endpoint patterns such as Private Service Connect are attractive for many consumer networks that need access without broad route sharing.
 
-Private Services Access fits database-style managed services. The next pattern fits situations where you want a local endpoint in your VPC that represents an API or producer service.
+## Private Service Connect
+<!-- section-summary: Private Service Connect gives a consumer VPC a local private endpoint for supported APIs or producer services. -->
 
-## Private Service Connect for Endpoints
-<!-- section-summary: Private Service Connect gives consumers local internal endpoints for supported Google APIs and published producer services. -->
+**Private Service Connect**, or PSC, lets a consumer access a service privately through an endpoint in the consumer VPC. The consumer gets a local internal IP address. Google Cloud forwards traffic from that endpoint to a supported Google API, a Google managed service, or a producer service published through a service attachment.
 
-**Private Service Connect**, usually shortened to PSC, lets a consumer access a managed service privately from inside a VPC network. The consumer can use an internal IP address in its own VPC, and Google Cloud forwards traffic to a supported Google API, a Google managed service, or a published service from another producer. The producer keeps its network separate, and the consumer gets a local target that is easy to place in DNS and firewall policy.
+For Google APIs, PSC can provide an internal endpoint for API access. The network team can create a private endpoint address and pair it with DNS so applications call the expected API names through the endpoint.
 
-For Google APIs, PSC can create an endpoint so `orders-worker-1` sends requests to an internal IP address instead of the public API endpoint address for names such as `storage.googleapis.com`. This gives the network team more explicit endpoint control. It can help when a company wants a known internal destination for API calls, centralized DNS records, and firewall rules that mention a private endpoint address.
-
-For producer services, PSC solves a different problem. Imagine the data platform team publishes a fraud-scoring service from its own project. The orders team should call only that service, not peer entire VPC networks or receive broad route visibility into the data platform network. With PSC, the producer publishes a service attachment, and the consumer creates an endpoint in the consumer VPC. The orders app calls a local private IP such as `10.20.30.25`, and Google Cloud forwards the connection to the producer service.
+For producer services, PSC gives service-level connectivity. Imagine the data platform team publishes `fraud-score.internal.example.com` from a separate producer project. The learning platform should call that one service without receiving route visibility into the whole data platform VPC. PSC lets the producer publish a service attachment and the consumer create an endpoint in the consumer VPC.
 
 ![A generated infographic showing a consumer VPC private endpoint, DNS record, and producer service path for Private Service Connect.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-private-access-managed-services/private-service-connect.png)
-*Private Service Connect gives the consumer a local private endpoint while the producer exposes only the service, not the whole network.*
+*Private Service Connect gives the consumer a local private endpoint while the producer exposes a service rather than a whole network.*
 
-Private Service Connect is useful when teams want **service-level connectivity** instead of broad network connectivity. The consumer can grant applications access to a specific endpoint. The producer can publish a service without sharing all subnet routes. This reduces the address planning pressure that appears with peering, especially when two networks have overlapping or messy IP ranges.
-
-PSC still needs supporting configuration. The endpoint is a forwarding rule with an internal address, so the consumer project needs permissions to create internal addresses and forwarding rules. DNS records must point the application hostname at the endpoint. Egress firewall policy must allow traffic to the endpoint. For PSC endpoints to Google APIs, Google Cloud also documents prerequisites such as enabling required APIs and using Private Google Access for VMs without external IP addresses when they access Google APIs through an endpoint.
-
-At this point we have three private access tools. The painful bugs usually happen between the tools, where DNS, routing, IAM, and service-specific setup get mixed together.
+PSC still needs surrounding configuration. The consumer project needs permissions to create internal addresses and forwarding rules. DNS should point the application hostname at the endpoint. Egress firewall policy must allow traffic to the endpoint address. The producer service must be healthy and accept the consumer connection according to its publishing policy.
 
 ## DNS, Routes, IAM, and Service Setup
-<!-- section-summary: Private access designs work best when DNS, routing, IAM, and service configuration are treated as separate checks. -->
+<!-- section-summary: Private access designs need separate checks for DNS, routes, firewall, IAM, and service configuration. -->
 
-Private access designs break down cleanly when each layer has its own job. **DNS** decides which IP address an application tries to reach. **Routes** decide the next hop for that destination. **Firewall rules** decide whether the packet may leave or enter a resource. **IAM** decides whether the caller may perform a Google API action. **Service-specific settings** decide whether the managed service accepts the connection.
+**DNS** decides which IP address the application tries to reach. Private Google Access may use normal `googleapis.com` names, `private.googleapis.com`, or `restricted.googleapis.com` depending on the environment. PSC usually needs DNS records that point the service name at the endpoint IP. Cloud SQL private IP may use direct private addresses, connection names, or connector behavior depending on the client.
 
-For Private Google Access, DNS often decides whether API calls use normal `googleapis.com` answers, `private.googleapis.com`, or `restricted.googleapis.com`. A VM can sit in a subnet with Private Google Access enabled and still fail if custom DNS sends `storage.googleapis.com` somewhere unexpected. In stricter environments, `restricted.googleapis.com` is often paired with VPC Service Controls, but the exact domain choice needs to match the APIs the application uses.
+**Routes** decide the next hop for the destination IP. Private Google Access needs a valid path to the Google API VIPs. Private Services Access adds peering routes for the producer range. PSC uses the endpoint address inside the consumer VPC.
 
-For Private Services Access, DNS may be boring for Cloud SQL if the app connects to the private IP directly or uses a connection name with a connector. The important parts are the allocated range, the private connection, the Cloud SQL private IP setting, the peering routes, and the database port. If the route exists but the app receives `Access denied for user`, the network path may be fine and the database authentication layer needs attention.
+**Firewall rules** decide whether the source workload can send packets to the destination. A private VM may need egress to Google API VIPs, a Cloud SQL private address, or a PSC endpoint address. In a restricted environment, broad implied egress may be replaced with narrow allow rules.
 
-For Private Service Connect, DNS is usually part of the design. The endpoint has an internal IP address, but production applications should call a stable service name. That name might be `storage.googleapis.com` through a PSC API endpoint pattern, or it might be `fraud.internal.example.com` for a producer service. The DNS record should live where the client can resolve it, which can mean a Cloud DNS private zone attached to the right VPC network.
+**IAM** decides whether the caller may perform a Google API action. Private Google Access does not grant permission to read a bucket or secret. PSC to Google APIs also leaves API permissions intact. Service accounts, roles, service perimeters, and resource policies remain part of the request.
 
-IAM deserves its own separate check. A service account attached to `orders-worker-1` might have permission to call Secret Manager but lack permission to read the Cloud Storage bucket. Private access leaves those API permissions intact. In fact, private networks often make IAM more important because teams remove public paths and expect identity to carry the final authorization decision.
+**Service setup** decides whether the managed service accepts the connection. Cloud SQL needs private IP configured on the selected network, database users or IAM database authentication, SSL settings where required, and connection limits. A producer PSC service needs a healthy backend and accepted consumer connection.
 
-Service setup also stays separate. Cloud SQL private IP requires the Cloud SQL instance to use the selected network. PSC for Google APIs requires the endpoint and related APIs to exist. A published PSC service requires producer acceptance settings and a healthy producer backend. Treating every failure as "networking" creates long debugging loops. Treating each layer as evidence gives the team a faster path.
+Keeping these layers separate makes incidents faster. A route can be correct while IAM blocks Secret Manager. DNS can point to the wrong endpoint while Cloud SQL is healthy. A producer service can reject the consumer while the PSC forwarding rule exists.
 
-## gcloud and Terraform Setup Shapes
-<!-- section-summary: Private access setup is clearer when each pattern has its own command shape, Terraform resource shape, and verification target. -->
+A practical incident review can walk through failed requests like this:
 
-Now turn the three private access patterns into real setup shapes. We will use `prod-shared-vpc` in project `net-prod-host`, subnet `apps-us-central1`, and workload project `app-orders-prod`. The exact project split can change, but the resource relationships stay the same.
+| Failed request | Symptom | What the symptom says |
+|---|---|---|
+| Report worker calls Secret Manager | `Permission 'secretmanager.versions.access' denied` | DNS, route, and firewall were good enough to reach the API control plane; IAM or service perimeter policy blocked the action |
+| API connects to Cloud SQL private IP | TCP timeout to `10.80.4.7:5432` | The client had a destination address, so check Private Services Access peering routes, egress firewall, database private IP setup, and database-side limits |
+| Worker calls a PSC endpoint for Google APIs | `secretmanager.googleapis.com` resolves to a public IP or an old private IP | DNS is sending the client away from the intended PSC endpoint before route or IAM checks can help |
 
-For **Private Google Access**, the subnet setting is the first control. This enables internal-IP VMs in the subnet to reach Google APIs and services through the supported private path:
+Here is the same review as a layer map:
+
+| Layer | Secret Manager failure | Cloud SQL failure | PSC to Google APIs failure |
+|---|---|---|---|
+| DNS | `secretmanager.googleapis.com` should resolve to the intended private or PSC path | Client may use a direct private IP, a Cloud SQL connector, or a configured private address | Default API names or `SERVICE-ENDPOINT.p.googleapis.com` names must resolve to the PSC endpoint IP |
+| Route | Source subnet needs a path to the Google API VIP or PSC endpoint | VPC needs the Private Services Access peering route to the producer range | Source VPC needs a local route to the endpoint address |
+| Firewall | Egress TCP `443` must be allowed | Egress TCP `5432` from API to database private IP must be allowed | Egress TCP `443` to the endpoint IP must be allowed |
+| IAM | Caller needs `secretmanager.versions.access` through a role such as Secret Manager Secret Accessor | Database auth uses database users, IAM database auth, or connector identity depending on the client | Caller still needs permission for the Google API action |
+| Service setup | Secret Manager API and the target secret version must exist | Cloud SQL needs private IP on the selected network and a healthy instance | PSC forwarding rule, endpoint DNS, API enablement, and supported API bundle must line up |
+
+The important habit is to name the first failing layer with evidence. A `403` from Secret Manager is an authorization failure after network reachability. A Cloud SQL timeout is usually lower in the stack. A DNS answer that points away from the endpoint should be fixed before the team changes firewall rules.
+
+## Commands and Terraform Shapes
+<!-- section-summary: Each private access pattern has a different setup shape and verification target. -->
+
+The examples use host project `net-learn-prod`, VPC `learn-shared-vpc`, subnet `apps-us-central1`, and workload project `app-learn-prod`. The exact names can change, but the resource relationships stay the same.
+
+For **Private Google Access**, enable the subnet setting and verify it:
 
 ```bash
 gcloud compute networks subnets update apps-us-central1 \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --region=us-central1 \
   --enable-private-ip-google-access
 
 gcloud compute networks subnets describe apps-us-central1 \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --region=us-central1 \
-  --format='value(privateIpGoogleAccess)'
+  --format='yaml(name,privateIpGoogleAccess,ipCidrRange)'
 ```
 
-The update command mutates the subnet, so it belongs in an infrastructure review. The describe command is the read-only check. Healthy output is simply:
+Important fields:
 
-```console
-True
+- `--enable-private-ip-google-access` enables API reachability for internal-IP VMs in that subnet.
+- The describe command should be used as evidence before changing application code.
+- The source VM still needs IAM permission for each API action.
+
+Healthy output:
+
+```yaml
+name: apps-us-central1
+privateIpGoogleAccess: true
+ipCidrRange: 10.40.10.0/24
 ```
 
-If the output is `False`, private VMs in that subnet still lack this Google API path. If the API call then fails with `PERMISSION_DENIED`, keep the network check separate and inspect the VM service account IAM binding for that specific API.
-
-The same setting in Terraform lives on the subnetwork:
+Terraform shape:
 
 ```hcl
 resource "google_compute_subnetwork" "apps_us_central1" {
   project                  = var.host_project_id
   name                     = "apps-us-central1"
   region                   = "us-central1"
-  ip_cidr_range            = "10.20.10.0/24"
-  network                  = google_compute_network.prod_shared.id
+  ip_cidr_range            = "10.40.10.0/24"
+  network                  = google_compute_network.learn_shared.id
   private_ip_google_access = true
 }
 ```
 
-For **Private Services Access**, the network team reserves a producer range, creates the private service connection, and then the database team creates Cloud SQL with private IP on that network:
+For **Private Services Access**, reserve a producer range and connect it to Service Networking:
 
 ```bash
 gcloud services enable servicenetworking.googleapis.com \
-  --project=net-prod-host
+  --project=net-learn-prod
 
-gcloud compute addresses create google-managed-services-prod \
-  --project=net-prod-host \
+gcloud compute addresses create google-managed-services-learn \
+  --project=net-learn-prod \
   --global \
   --purpose=VPC_PEERING \
   --prefix-length=16 \
   --description="Peering range for Google managed services" \
-  --network=prod-shared-vpc
+  --network=learn-shared-vpc
 
 gcloud services vpc-peerings connect \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --service=servicenetworking.googleapis.com \
-  --ranges=google-managed-services-prod \
-  --network=prod-shared-vpc
+  --ranges=google-managed-services-learn \
+  --network=learn-shared-vpc
 
 gcloud services vpc-peerings list \
-  --project=net-prod-host \
-  --network=prod-shared-vpc
+  --project=net-learn-prod \
+  --network=learn-shared-vpc
 ```
 
-The important fields are `--purpose=VPC_PEERING`, `--prefix-length=16`, and `--network=prod-shared-vpc` on the allocated range. The private connection command binds that reserved range to `servicenetworking.googleapis.com`. Healthy peering output should show an active connection and the reserved range name:
+Important fields:
+
+- `--purpose=VPC_PEERING` marks the range for producer peering.
+- `--prefix-length=16` reserves enough room for managed service producer addresses in this example.
+- `--service=servicenetworking.googleapis.com` creates the private services connection.
+
+Healthy output:
 
 ```console
-NETWORK          PEERING                 RESERVED_PEERING_RANGES     STATE
-prod-shared-vpc  servicenetworking-googleapis-com  google-managed-services-prod  ACTIVE
+NETWORK           PEERING                          RESERVED_PEERING_RANGES       STATE
+learn-shared-vpc  servicenetworking-googleapis-com  google-managed-services-learn  ACTIVE
 ```
 
-The matching Terraform shape makes the allocated range and private service connection reviewable:
+Terraform shape:
 
 ```hcl
 resource "google_compute_global_address" "private_services_range" {
   project       = var.host_project_id
-  name          = "google-managed-services-prod"
+  name          = "google-managed-services-learn"
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = 16
-  network       = google_compute_network.prod_shared.id
+  network       = google_compute_network.learn_shared.id
 }
 
 resource "google_service_networking_connection" "private_services" {
-  network                 = google_compute_network.prod_shared.id
+  network                 = google_compute_network.learn_shared.id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_services_range.name]
 }
 ```
 
-Cloud SQL private IP then points at that VPC network. In Terraform, the database resource usually depends on the private service connection so the address path exists before the instance asks for a private address:
+Cloud SQL private IP then points at that network:
 
 ```hcl
-resource "google_sql_database_instance" "orders_mysql" {
+resource "google_sql_database_instance" "learn_postgres" {
   project          = var.app_project_id
-  name             = "orders-mysql-prod"
+  name             = "learn-postgres-prod"
   region           = "us-central1"
-  database_version = "MYSQL_8_0"
+  database_version = "POSTGRES_16"
 
   settings {
     tier = "db-custom-2-8192"
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.prod_shared.id
+      private_network = google_compute_network.learn_shared.id
     }
   }
 
@@ -228,124 +269,207 @@ resource "google_sql_database_instance" "orders_mysql" {
 }
 ```
 
-For **Private Service Connect to Google APIs**, the consumer creates a global internal address and a global forwarding rule that targets a supported API bundle. The `all-apis` bundle gives access to supported Google APIs, while `vpc-sc` restricts the endpoint to APIs that support VPC Service Controls:
+For **Private Service Connect to Google APIs**, create a private endpoint address and forwarding rule:
 
 ```bash
 gcloud compute addresses create psc-googleapis \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
   --purpose=PRIVATE_SERVICE_CONNECT \
-  --addresses=10.20.30.25 \
-  --network=prod-shared-vpc
+  --addresses=10.40.30.25 \
+  --network=learn-shared-vpc
 
 gcloud compute forwarding-rules create psc-googleapis \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
-  --network=prod-shared-vpc \
+  --network=learn-shared-vpc \
   --address=psc-googleapis \
   --target-google-apis-bundle=all-apis
 
 gcloud compute forwarding-rules describe psc-googleapis \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
-  --format='yaml(IPAddress,target,network)'
+  --format='yaml(name,IPAddress,target,network)'
 ```
 
-The address command reserves the endpoint IP inside the consumer VPC. The forwarding rule command makes that IP forward to the supported Google API bundle. Healthy output should show the private endpoint address and the target bundle:
+Important fields:
+
+- `--purpose=PRIVATE_SERVICE_CONNECT` reserves the address for PSC.
+- `--target-google-apis-bundle=all-apis` forwards the endpoint to supported Google APIs.
+- DNS must point the intended API names or service names at the endpoint pattern your design uses.
+
+Healthy output:
 
 ```yaml
-IPAddress: 10.20.30.25
-network: https://www.googleapis.com/compute/v1/projects/net-prod-host/global/networks/prod-shared-vpc
+IPAddress: 10.40.30.25
+name: psc-googleapis
+network: https://www.googleapis.com/compute/v1/projects/net-learn-prod/global/networks/learn-shared-vpc
 target: all-apis
 ```
 
-A Terraform-managed PSC endpoint uses the same two-resource shape when the provider version supports the target bundle field:
+The endpoint is only half of PSC to Google APIs. The client also needs DNS that resolves the API hostname to the endpoint IP. For clients that keep using default Google API names such as `secretmanager.googleapis.com`, create a private `googleapis.com` zone and point the zone apex at the endpoint. The wildcard CNAME then sends service hostnames to that same endpoint address:
+
+```bash
+gcloud dns managed-zones create googleapis-private \
+  --project=net-learn-prod \
+  --description="Private DNS for PSC to Google APIs" \
+  --dns-name=googleapis.com. \
+  --visibility=private \
+  --networks=learn-shared-vpc
+
+gcloud dns record-sets transaction start \
+  --project=net-learn-prod \
+  --zone=googleapis-private
+
+gcloud dns record-sets transaction add 10.40.30.25 \
+  --project=net-learn-prod \
+  --zone=googleapis-private \
+  --name=googleapis.com. \
+  --type=A \
+  --ttl=300
+
+gcloud dns record-sets transaction add googleapis.com. \
+  --project=net-learn-prod \
+  --zone=googleapis-private \
+  --name="*.googleapis.com." \
+  --type=CNAME \
+  --ttl=300
+
+gcloud dns record-sets transaction execute \
+  --project=net-learn-prod \
+  --zone=googleapis-private
+```
+
+Important fields:
+
+- `--dns-name=googleapis.com.` creates a private zone for the default API domain.
+- The `A` record points the zone name at the PSC endpoint IP `10.40.30.25`.
+- The wildcard `CNAME` sends names such as `secretmanager.googleapis.com` to the zone apex.
+- The zone must attach to the VPC where the source workloads resolve names.
+
+Terraform shape:
 
 ```hcl
-resource "google_compute_global_address" "psc_googleapis" {
-  project      = var.host_project_id
-  name         = "psc-googleapis"
-  address_type = "INTERNAL"
-  purpose      = "PRIVATE_SERVICE_CONNECT"
-  address      = "10.20.30.25"
-  network      = google_compute_network.prod_shared.id
+resource "google_dns_managed_zone" "googleapis_private" {
+  project     = var.host_project_id
+  name        = "googleapis-private"
+  dns_name    = "googleapis.com."
+  visibility  = "private"
+  description = "Private DNS for PSC to Google APIs"
+
+  private_visibility_config {
+    networks {
+      network_url = google_compute_network.learn_shared.id
+    }
+  }
 }
 
-resource "google_compute_global_forwarding_rule" "psc_googleapis" {
-  project               = var.host_project_id
-  name                  = "psc-googleapis"
-  network               = google_compute_network.prod_shared.id
-  ip_address            = google_compute_global_address.psc_googleapis.id
-  target                = "all-apis"
-  load_balancing_scheme = ""
+resource "google_dns_record_set" "googleapis_apex" {
+  project      = var.host_project_id
+  managed_zone = google_dns_managed_zone.googleapis_private.name
+  name         = "googleapis.com."
+  type         = "A"
+  ttl          = 300
+  rrdatas      = ["10.40.30.25"]
+}
+
+resource "google_dns_record_set" "googleapis_wildcard" {
+  project      = var.host_project_id
+  managed_zone = google_dns_managed_zone.googleapis_private.name
+  name         = "*.googleapis.com."
+  type         = "CNAME"
+  ttl          = 300
+  rrdatas      = ["googleapis.com."]
 }
 ```
 
-DNS still needs its own review. Some PSC API endpoint designs use automatically created `p.googleapis.com` names. Others create private Cloud DNS records for the API names the application already uses. The setup choice should be written down with the endpoint, because a private endpoint without the matching DNS answer leaves applications calling the old destination.
+After DNS is in place, the verification target is simple: from a VM or workload path that uses the shared VPC resolver, `secretmanager.googleapis.com` should answer with `10.40.30.25`. Then a Secret Manager API call should either succeed or return an IAM/service error, not a public-routing surprise.
 
 ## Verification Runbook
-<!-- section-summary: Private access debugging checks subnet settings, DNS answers, routes, firewall egress, producer connections, IAM, and service-specific acceptance separately. -->
+<!-- section-summary: Private access debugging checks source, DNS, routes, firewall, IAM, and service-specific setup in order. -->
 
-Private access incidents get easier when the team checks each layer in order. Start with the source resource. Confirm the VM, Cloud Run service, or GKE workload uses the expected VPC path and source IP. Then check the destination type, because the command set changes by pattern.
+For Private Google Access, verify the subnet setting and then inspect API errors:
 
-For Private Google Access, verify the subnet setting, DNS answer, egress path, and IAM permission:
+The runbook should follow the destination type first. A Secret Manager failure uses the subnet and Google API path before the IAM check. A Cloud SQL private IP failure uses the private services connection, route, firewall, and database settings. A PSC endpoint failure uses endpoint DNS and the forwarding rule. Jumping straight to IAM or firewall for every private failure wastes time because each pattern has a different first layer.
+
+The goal is to collect one clear fact at each layer before changing anything. A DNS answer, route list, subnet setting, firewall log, IAM policy check, and service health check are all stronger than guessing from an application timeout.
 
 ```bash
 gcloud compute networks subnets describe apps-us-central1 \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --region=us-central1 \
   --format='yaml(name,privateIpGoogleAccess,ipCidrRange)'
+
+dig storage.googleapis.com A
+
+gcloud storage buckets list \
+  --project=app-learn-prod \
+  --format='table(name,location)'
 
 gcloud logging read \
   'protoPayload.serviceName="secretmanager.googleapis.com"
    severity>=ERROR' \
-  --project=app-orders-prod \
+  --project=app-learn-prod \
   --limit=20 \
   --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.status.message)'
 ```
 
-Example output separates the subnet setting from IAM or service policy. The first command proves Private Google Access is enabled. The second command can show that the network path reached Secret Manager, but the identity or service perimeter rejected the API action:
+Example output:
 
 ```yaml
 name: apps-us-central1
 privateIpGoogleAccess: true
-ipCidrRange: 10.20.10.0/24
+ipCidrRange: 10.40.10.0/24
 ```
 
 ```console
-TIMESTAMP              PRINCIPAL_EMAIL                                           STATUS_MESSAGE
-2026-06-14T09:12:41Z   orders-worker@app-orders-prod.iam.gserviceaccount.com     Permission 'secretmanager.versions.access' denied
+;; ANSWER SECTION:
+storage.googleapis.com. 300 IN A 199.36.153.8
+storage.googleapis.com. 300 IN A 199.36.153.9
+storage.googleapis.com. 300 IN A 199.36.153.10
+storage.googleapis.com. 300 IN A 199.36.153.11
 ```
 
-That second row is not a VPC failure. It means the caller reached the API control plane and needs IAM or service perimeter review.
+```console
+NAME                    LOCATION
+learn-export-prod-us    US
+learn-reporting-prod    US
+```
 
-For Private Services Access, verify the allocated range, peering connection, Cloud SQL private address, and database authentication:
+```console
+TIMESTAMP              PRINCIPAL_EMAIL                                         STATUS_MESSAGE
+2026-06-14T09:12:41Z   report-worker@app-learn-prod.iam.gserviceaccount.com    Permission 'secretmanager.versions.access' denied
+```
+
+Interpret the checks in order. `privateIpGoogleAccess: true` proves the subnet setting is enabled for internal-IP VMs. The DNS answer should match the Google API VIP path your design uses. The successful Cloud Storage list proves the VM can reach a Google API and pass IAM for that API action. The Secret Manager denial points at IAM or service perimeter review, because the request reached the API control plane and received an authorization decision.
+
+For Private Services Access, verify the allocated range, peering connection, Cloud SQL private address, and database settings:
 
 ```bash
 gcloud compute addresses list \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
   --filter='purpose=VPC_PEERING' \
   --format='table(name,address,prefixLength,status)'
 
 gcloud services vpc-peerings list \
-  --project=net-prod-host \
-  --network=prod-shared-vpc
+  --project=net-learn-prod \
+  --network=learn-shared-vpc
 
-gcloud sql instances describe orders-mysql-prod \
-  --project=app-orders-prod \
+gcloud sql instances describe learn-postgres-prod \
+  --project=app-learn-prod \
   --format='yaml(name,region,ipAddresses,settings.ipConfiguration)'
 ```
 
-Healthy output should show a reserved internal range, active service networking peering, and a Cloud SQL private address. A database login error after this point belongs to database users, SSL settings, connection limits, or IAM database authentication, depending on the engine and setup:
+Healthy output should show a reserved range, active peering, and a private database address:
 
 ```console
 NAME                            ADDRESS     PREFIX_LENGTH  STATUS
-google-managed-services-prod    10.80.0.0   16             RESERVED
+google-managed-services-learn   10.80.0.0   16             RESERVED
 ```
 
 ```yaml
-name: orders-mysql-prod
+name: learn-postgres-prod
 region: us-central1
 ipAddresses:
 - ipAddress: 10.80.4.7
@@ -353,97 +477,74 @@ ipAddresses:
 settings:
   ipConfiguration:
     ipv4Enabled: false
-    privateNetwork: projects/net-prod-host/global/networks/prod-shared-vpc
+    privateNetwork: projects/net-learn-prod/global/networks/learn-shared-vpc
 ```
 
-For Private Service Connect, verify the endpoint address, forwarding rule target, DNS answer, and egress firewall rule:
+For Private Service Connect, verify the endpoint, DNS answer, and egress firewall:
 
 ```bash
 gcloud compute forwarding-rules list \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
   --filter='target:(all-apis OR vpc-sc)' \
   --format='table(name,IPAddress,target,network)'
 
 gcloud compute forwarding-rules describe psc-googleapis \
-  --project=net-prod-host \
+  --project=net-learn-prod \
   --global \
   --format=yaml
+
+dig secretmanager.googleapis.com A
+
+gcloud compute firewall-rules list \
+  --project=net-learn-prod \
+  --filter='network~learn-shared-vpc AND direction=EGRESS' \
+  --format='table(name,priority,disabled,allowed[].map().firewall_rule().list(),denied[].map().firewall_rule().list(),destinationRanges.list(),targetServiceAccounts.list())'
 ```
 
-The list output should show the endpoint and target bundle. The describe output should show the same IP that DNS returns for the application hostname or API endpoint pattern:
+Healthy output:
 
 ```console
 NAME            IP_ADDRESS    TARGET    NETWORK
-psc-googleapis  10.20.30.25   all-apis  prod-shared-vpc
+psc-googleapis  10.40.30.25   all-apis  learn-shared-vpc
 ```
 
-```yaml
-IPAddress: 10.20.30.25
-name: psc-googleapis
-network: projects/net-prod-host/global/networks/prod-shared-vpc
-target: all-apis
+```console
+;; ANSWER SECTION:
+secretmanager.googleapis.com. 300 IN CNAME googleapis.com.
+googleapis.com.               300 IN A     10.40.30.25
 ```
 
-If DNS resolves to a public IP while the PSC endpoint exists, fix DNS before changing routes. If DNS resolves to the endpoint but traffic times out, check egress firewall policy and endpoint status next.
+```console
+NAME                         PRIORITY  DISABLED  ALLOW    DENY  DESTINATION_RANGES  TARGET_SERVICE_ACCOUNTS
+allow-apps-to-psc-googleapis 710       False     tcp:443        10.40.30.25/32      report-worker@app-learn-prod.iam.gserviceaccount.com
+deny-apps-egress-all         65000     False              all   0.0.0.0/0           report-worker@app-learn-prod.iam.gserviceaccount.com
+```
 
-Connectivity Tests can help when the source and destination are supported endpoints. For Cloud SQL and other managed services, the test can show the customer-side VPC path and firewall evidence even when the producer-side service internals stay hidden. VPC Flow Logs help answer whether packets left the subnet, and service logs answer whether the managed service accepted the connection.
-
-The most common private access mistake is mixing layers. A Secret Manager call can fail because the subnet lacks Private Google Access, because DNS points at the wrong VIP, because egress firewall rules block the path, because the service account lacks `secretmanager.versions.access`, or because VPC Service Controls denies the request. The word "private" describes the network path, and the final successful request still needs DNS, routes, firewall, IAM, and service policy to agree.
-
-That separation gives us a practical selection guide.
+If DNS resolves to an old public address while the PSC endpoint exists, fix DNS before changing routes. If DNS resolves to the endpoint and traffic times out, check egress firewall policy and endpoint state next.
 
 ## Choosing the Right Pattern
-<!-- section-summary: The right private access option follows the destination type and the amount of endpoint control the team needs. -->
+<!-- section-summary: The destination type tells you which private access pattern to inspect first. -->
 
-The destination gives the first clue. If the workload calls Google APIs such as Cloud Storage, Secret Manager, Pub/Sub, or Artifact Registry from a VM that has only an internal IP address, **Private Google Access** is usually the first design to understand. It is a subnet setting, and it pairs with DNS and routes for Google API VIPs.
-
-If the workload connects to Cloud SQL, Memorystore, Filestore, AlloyDB, or another supported VPC-hosted managed service through private IP, **Private Services Access** is often involved. The key design task is reserving a non-overlapping allocated range and creating the private service connection before the service needs addresses from that range.
-
-If the workload should call a private endpoint in its own VPC that represents Google APIs or a producer service, **Private Service Connect** is the pattern to study. It works well when teams want a local IP endpoint, service-level exposure, producer-consumer separation, or a cleaner alternative to broad network peering.
+The destination gives the first clue. If a private VM needs `storage.googleapis.com` or `secretmanager.googleapis.com`, inspect Private Google Access, DNS for Google APIs, egress firewall policy, and IAM. If the app needs Cloud SQL private IP, inspect Private Services Access, allocated producer ranges, peering state, database private IP, and database authentication. If the consumer needs a local endpoint for Google APIs or one producer service, inspect Private Service Connect, endpoint state, DNS, egress firewall, and producer acceptance.
 
 | Question | Usually points toward | Reason |
 |---|---|---|
-| Does an internal-IP VM need `storage.googleapis.com` or `secretmanager.googleapis.com`? | **Private Google Access** | The destination is a Google API on Google's production infrastructure |
-| Does the app need Cloud SQL private IP? | **Private Services Access** | Cloud SQL private IP uses private service access internally |
-| Does the consumer need an internal endpoint for Google APIs? | **Private Service Connect** | PSC endpoints can forward API requests to Google APIs |
-| Does another team want to publish one service without sharing its whole VPC? | **Private Service Connect** | The producer publishes a service attachment and the consumer creates an endpoint |
-| Does the issue mention overlapping CIDR ranges or non-transitive peering? | **Private Service Connect or redesign** | Endpoint-based access avoids some broad peering constraints |
+| Does an internal-IP VM need Google APIs? | Private Google Access | The destination is a Google API endpoint |
+| Does the app need Cloud SQL private IP? | Private Services Access | Cloud SQL private IP uses a service producer network pattern |
+| Does the consumer need an internal endpoint for Google APIs? | Private Service Connect | PSC can provide consumer-side private API endpoints |
+| Does another team publish one private service? | Private Service Connect | PSC exposes a service without broad VPC route sharing |
+| Do overlapping CIDR ranges make peering painful? | Private Service Connect or redesign | Endpoint-based access reduces broad routing pressure |
 
-One production environment can use all three. The orders VM can use Private Google Access for Secret Manager, Private Services Access for Cloud SQL private IP, and Private Service Connect for the fraud service. That is normal. The practical goal is matching each feature to the destination and keeping each layer easy to test.
+One environment can use all three patterns. The report worker can use Private Google Access for Secret Manager, Private Services Access for Cloud SQL private IP, and Private Service Connect for the fraud-scoring service. The safe operating habit is to write down which destination uses which pattern and then test the matching evidence.
 
-One full request path ties the pieces together.
+## References
 
-## Putting It All Together
-<!-- section-summary: A real private app often uses all three patterns, with each one serving a different destination. -->
-
-After the network team finishes the design, `orders-worker-1` runs without an external IP address in subnet `apps-us-central1`. Private Google Access is enabled on that subnet. The VM service account has permission to read a Cloud Storage bucket and access one Secret Manager secret. DNS and routes send Google API traffic through the approved Google API path. That covers API calls.
-
-The same app connects to `orders-mysql-prod` through Cloud SQL private IP. The VPC has an allocated service networking range, a private services connection, and a Cloud SQL instance configured for private IP on that network. Firewall egress allows TCP 3306 to the database private address, and the database user still has to authenticate correctly. That covers the managed database path.
-
-The fraud-scoring call uses Private Service Connect. The data platform team publishes the service. The orders project creates a PSC endpoint with an internal IP address and a private DNS record for the application hostname. The app calls the local endpoint, and Google Cloud forwards the connection to the producer service without exposing the producer VPC as a general routing domain. That covers service-to-service private connectivity.
-
-The final review should point back to the three visuals above: API calls need the subnet and IAM evidence, database private IP needs the producer range and private services connection, and producer-service calls need the local PSC endpoint plus DNS.
-
-Private access is much easier to operate when the team writes down which destination uses which pattern. "Private" by itself is too broad. "Cloud SQL uses Private Services Access, Google APIs use Private Google Access, and the fraud service uses Private Service Connect" gives the on-call engineer something concrete to verify.
-
-## What's Next
-<!-- section-summary: The next article moves from private service access to shared networks, hybrid links, and a practical troubleshooting ladder. -->
-
-Private access solves how one workload reaches managed services and APIs. Large GCP environments add another layer: many teams share the same network foundation, and some traffic crosses VPNs, Interconnect, or other routed paths.
-
-The next article covers Shared VPC, hybrid connectivity, and troubleshooting. It explains host projects, service projects, subnet delegation, Cloud VPN, Cloud Interconnect, Cloud Router, Network Connectivity Center, and a practical ladder for proving where a connection fails.
-
----
-
-**References**
-
-- [Private access options for services](https://docs.cloud.google.com/vpc/docs/private-access-options) - Compares private connectivity options for Google APIs, VPC-hosted services, and serverless access patterns.
+- [Private access options for services](https://docs.cloud.google.com/vpc/docs/private-access-options) - Compares private connectivity options for Google APIs, VPC-hosted services, serverless workloads, and producer services.
 - [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access) - Explains subnet-level access from internal-IP VMs to Google APIs and services.
-- [Configure Private Google Access](https://docs.cloud.google.com/vpc/docs/configure-private-google-access) - Shows the current subnet update command, verification command, DNS options, and Terraform subnetwork setting.
+- [Configure Private Google Access](https://docs.cloud.google.com/vpc/docs/configure-private-google-access) - Shows subnet update commands, verification commands, DNS options, and Terraform subnetwork settings.
 - [Private services access](https://docs.cloud.google.com/vpc/docs/private-services-access) - Defines private services access, service producer networks, VPC Network Peering, and supported services.
 - [Configure private services access](https://docs.cloud.google.com/vpc/docs/configure-private-services-access) - Documents allocated ranges, private connections, permissions, and setup prerequisites.
 - [Private Service Connect](https://docs.cloud.google.com/vpc/docs/private-service-connect) - Describes PSC endpoints, backends, producer services, and service-oriented private access.
-- [Access Google APIs through endpoints](https://docs.cloud.google.com/vpc/docs/configure-private-service-connect-apis) - Documents Private Service Connect endpoints for Google APIs, DNS requirements, API enablement, and endpoint prerequisites.
-- [Cloud SQL private IP](https://docs.cloud.google.com/sql/docs/mysql/private-ip) - Explains Cloud SQL private IP, private services access, VPC peering behavior, and private IP limitations.
-- [Terraform Registry: google_compute_global_forwarding_rule](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_global_forwarding_rule) - Defines the Terraform forwarding rule shape used by Private Service Connect endpoints for Google API bundles.
+- [Access Google APIs through endpoints](https://docs.cloud.google.com/vpc/docs/configure-private-service-connect-apis) - Documents PSC endpoints for Google APIs, DNS requirements, API enablement, and endpoint prerequisites.
+- [Cloud SQL private IP](https://docs.cloud.google.com/sql/docs/postgres/private-ip) - Explains Cloud SQL private IP, private services access, VPC peering behavior, and private IP considerations.

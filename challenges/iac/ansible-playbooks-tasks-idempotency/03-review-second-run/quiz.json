@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A playbook installed packages and files on the first run. Which second-run recap is the healthiest idempotency signal?",
+      "scenario": "A canary play installs Nginx, creates `/etc/orders-api`, renders a template, and starts the service. The first run changes four tasks. The immediate second run reports:\n\n```console\norders-web-01 : ok=8 changed=0 unreachable=0 failed=0\n```\n\nWhat does this evidence support?",
       "options": [
         {
-          "id": "a",
-          "text": "`ok=6 changed=0 unreachable=0 failed=0`."
-        },
-        {
-          "id": "b",
-          "text": "`ok=6 changed=6 unreachable=0 failed=0` every time."
-        },
-        {
           "id": "c",
-          "text": "`ok=0 changed=0 unreachable=1 failed=0`."
+          "text": "Ansible skipped the host because a healthy repeat run never executes modules."
         },
         {
           "id": "d",
-          "text": "`ok=6 changed=0 unreachable=0 failed=1`."
+          "text": "Rollback is unnecessary because the playbook is now proven harmless."
+        },
+        {
+          "id": "a",
+          "text": "The public application path is healthy because no Ansible task changed."
+        },
+        {
+          "id": "b",
+          "text": "The tasks that ran found the managed host already matching their requested state."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A reached host with `changed=0` and no failures is useful evidence that the managed tasks settled. It does not prove load balancer health, show that tasks were skipped, or replace rollback and service verification. See [Ansible playbook behavior](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A template task notifies `Restart orders API` on every run. The only unstable input is this managed comment:\n\n```jinja2\n# rendered_at={{ ansible_date_time.iso8601 }}\n```\n\nWhich change restores a meaningful second-run signal?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Replace the template with a shell command so content comparison no longer appears in the recap."
+        },
+        {
+          "id": "c",
+          "text": "Move the restart into an unconditional task after the template."
+        },
+        {
+          "id": "d",
+          "text": "Remove the moving timestamp from desired configuration or store release metadata in an intentionally versioned place."
+        },
+        {
+          "id": "a",
+          "text": "Add `changed_when: false` to the template task but keep rendering the moving timestamp."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "A timestamp changes the rendered bytes on every run, so the template truthfully reports change and repeatedly notifies its handler. Hiding status or switching tools leaves the side effect intact, while an unconditional restart makes it worse. See the [template module](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The release must run `/opt/orders-api/bin/migrate --version 2026.07.09` only until it creates `/var/lib/orders-api/migrations/2026.07.09.done`. Which task shape gives Ansible the clearest lasting-state evidence?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Run it every time but set `changed_when: false` so the recap remains quiet."
+        },
+        {
+          "id": "d",
+          "text": "Move it to a handler because handlers cannot execute more than once across different runs."
+        },
+        {
+          "id": "c",
+          "text": "Use the command module with `creates` pointing at the release marker."
+        },
+        {
+          "id": "a",
+          "text": "Run the command in a loop and stop after its output changes."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "`creates` lets the command run only while its durable completion marker is absent. A loop has no stable contract, and `changed_when: false` would hide repeated execution. Handlers coalesce notifications within a play but do not remember earlier playbook runs. See [ansible.builtin.command](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/command_module.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A validation CLI returns `0` when configuration is valid and nonzero when invalid. It never modifies the host. The current Ansible task reports `changed` whenever validation succeeds. What status rules best match the tool contract?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Set `failed_when: false` so validation output cannot stop the deployment."
+        },
+        {
+          "id": "d",
+          "text": "Search for the word `valid` in friendly output and ignore the return code."
+        },
+        {
+          "id": "a",
+          "text": "Register the result, set `changed_when: false`, and fail when the documented return code is nonzero."
+        },
+        {
+          "id": "c",
+          "text": "Report changed on code `0` because a successful command always changes the host."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A clean repeat run should usually show the host reachable, no failures, and no changes when state already matches."
+      "explanation": "A read-only check should report `ok`, while its documented nonzero return code should fail the task. Disabling failure removes the gate, and treating execution as change makes the recap noisy. A stable return-code contract is safer than loosely matching human text. See [defining changed and failed status](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A task appends `ORDERS_API_PORT=8080` to `/etc/default/orders-api` with `>>`. The second run adds a duplicate line, so the developer adds `changed_when: false`. What is the best review response?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use a state-aware file module that replaces or ensures the one intended setting instead of hiding repeated mutation."
+        },
+        {
+          "id": "d",
+          "text": "Run the append twice per deployment so repeated runs have a consistent line count."
+        },
+        {
+          "id": "c",
+          "text": "Add `failed_when: false` as well so duplicate lines cannot block later tasks."
+        },
+        {
+          "id": "a",
+          "text": "Keep the task because a clean recap is the main goal of idempotency."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Idempotency is about the final host state, not just the displayed status. A module such as `lineinfile` can ensure one reviewed setting. `changed_when: false` leaves the duplicate side effect in place, and suppressing failures or adding more appends makes the state less trustworthy. See [ansible.builtin.lineinfile](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/lineinfile_module.html)."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A second canary run still reports changes even though package and file inputs are unchanged. Which two findings most directly explain repeated side effects without new desired state?",
+      "options": [
+        {
+          "id": "c",
+          "text": "A service task uses `state: restarted` during every playbook run."
+        },
+        {
+          "id": "b",
+          "text": "A file task ensures a directory has a stable owner, group, and mode that already match."
+        },
+        {
+          "id": "a",
+          "text": "A package task uses `state: present`, and the requested version is already installed on the host."
+        },
+        {
+          "id": "d",
+          "text": "A raw command has no `creates`, `removes`, or truthful `changed_when` evidence."
+        }
+      ],
+      "correct": [
+        "c",
+        "d"
+      ],
+      "explanation": "An unconditional restart creates a side effect on every run, and an unguarded raw command lacks evidence that the desired state already exists. A `state: present` package task with the package installed and a state-aware directory task whose metadata already matches should both settle to `ok`, so neither explains this repeat-run noise."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "The canary playbook is idempotent, but a newly pinned application release returns HTTP 500 after deployment. The previous release variable is known and the rollback procedure is tested. What should the team do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Widen the rollout because a clean second run proves the desired release is correct."
+        },
+        {
+          "id": "b",
+          "text": "Set every task to `changed_when: false` so the failed release produces quieter evidence."
+        },
+        {
+          "id": "d",
+          "text": "Repair the canary manually over SSH and leave the repository at the failing desired state."
+        },
+        {
+          "id": "c",
+          "text": "Restore the previous release value, rerun the same playbook against the canary, and verify service behavior before any wider action."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Idempotency can faithfully converge on a bad desired state. The controlled response is to restore the reviewed previous value, use the same narrow automation path, and verify the service. Widening or hiding status ignores user impact, while a manual repair creates drift from the repository. See the [ansible-playbook CLI reference](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)."
     }
   ]
 }

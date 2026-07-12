@@ -1,18 +1,132 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A log search shows:\n\n```text\nSTART RequestId: b8e74218-9d2e-4a97-91df\nINFO orderId=ord_1042 messageId=5a6f4b79 requestId=b8e74218-9d2e-4a97-91df action=send_receipt\nEND RequestId: b8e74218-9d2e-4a97-91df\n```\n\nWhy is the request ID useful?",
+      "options": [
+        {
+          "id": "b",
+          "text": "It is a stable idempotency key for the business event, so retries will receive the same Lambda request ID."
+        },
+        {
+          "id": "a",
+          "text": "It links one Lambda invocation to its logs, which helps the team follow one event through one run."
+        },
+        {
+          "id": "c",
+          "text": "It correlates separate retry invocations automatically, even when each retry receives a new request ID."
+        },
+        {
+          "id": "d",
+          "text": "It identifies the warm execution environment, so later invocations in the same environment share the value."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The Lambda request ID identifies one invocation and appears in the platform start and end records plus application logs. A retried message receives another invocation ID, so the business message or idempotency key is still required across retries. The request ID does not identify a warm environment or control routing.\n\nLearn more in [Lambda context object](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-context.html)."
+    },
+    {
+      "id": "q-choose-triggers-and-retries-3",
+      "type": "single",
+      "scenario": "DevPolaris receipt messages are being delivered more than once during worker retries. The team needs a design that preserves at-least-once processing without sending duplicate receipts.\n\nMessageId is 8b6d4a25. OrderId is ord_1042. ApproximateReceiveCount is 3. Last worker log is provider accepted email, then function timed out before recording success.\n\nWhat should the worker design protect against?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use an idempotency key tied to the business event and make the side effect safe when the same message is delivered again."
+        },
+        {
+          "id": "c",
+          "text": "Raise memory and timeout to reduce overlap, while leaving duplicate side effects to downstream reconciliation."
+        },
+        {
+          "id": "a",
+          "text": "Duplicate real-world effects, by checking and recording a stable idempotency key such as receipt:ord_1042."
+        },
+        {
+          "id": "d",
+          "text": "Set reserved concurrency to one so duplicate deliveries cannot occur for the function."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "At-least-once delivery means the same job can be attempted again. If the first attempt sent the email but timed out before recording success, the retry must not send a second receipt. Idempotency turns repeated attempts into one business effect.\n\nLearn more in [Lambda asynchronous error handling](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-error-handling.html)."
+    },
+    {
+      "id": "q-diagnose-fit-and-failure-1",
+      "type": "single",
+      "scenario": "The export Lambda logs:\n\n```text\nSTART RequestId: 8f0f0a20\nINFO exportId=exp_7732 action=generate_export start\nERROR Task timed out after 3.00 seconds\nREPORT Duration: 3000.00 ms Billed Duration: 3000 ms Memory Size: 256 MB Max Memory Used: 182 MB Status: timeout\n```\n\nWhat is the best first response?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Reduce the SQS batch size without checking whether one record can still exceed the function and downstream timeouts."
+        },
+        {
+          "id": "c",
+          "text": "Increase the timeout because the batch can complete if each record keeps its current processing time."
+        },
+        {
+          "id": "a",
+          "text": "Investigate the work duration, batch size, downstream client timeouts, and whether the job fits the function timeout."
+        },
+        {
+          "id": "d",
+          "text": "Move the unchanged job to a persistent worker before measuring which part of the batch consumes the current timeout."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The REPORT line gives a timeout diagnosis and memory clue. The next step is to understand why this unit of work cannot finish in time. Raising timeout may be part of a fix, but it should not be the only thought.\n\nLearn more in [AWS Lambda concepts](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)."
+    },
+    {
+      "id": "q-diagnose-fit-and-failure-4",
+      "type": "multiple",
+      "scenario": "A DevPolaris Lambda consumer is increasing downstream throttling during an incident. The on-call engineer must choose controls that reduce pressure without losing queued work.\n\nRequestId is 0ad7729e. MessageId is 5a6f4b79. OrderId is ord_1042. REPORT Duration is 2988 ms Max Memory Used: 251 MB of 256 MB. Error is provider timeout after receipt send accepted.\n\nWhich checks belong in a calm diagnostic path?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Read the first error line and the REPORT line for duration, memory, and timeout clues."
+        },
+        {
+          "id": "d",
+          "text": "Start by changing timeout, memory, and permissions together so one of them works."
+        },
+        {
+          "id": "a",
+          "text": "Find the event identifier and request ID in the log group."
+        },
+        {
+          "id": "c",
+          "text": "Check whether the trigger sent the event shape the handler expects."
+        },
+        {
+          "id": "e",
+          "text": "Increase reserved concurrency during the incident even though the downstream dependency is already throttling requests."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The useful path is evidence first. IDs connect attempts, REPORT lines show runtime pressure, and event shape explains parsing failures. Changing several settings at once makes it harder to know what actually fixed the issue.\n\nLearn more in [CloudWatch Logs concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html)."
+    },
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A receipt Lambda was tested with a direct object:\n\n{ \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\", \"total\": \"49.00\" }\n\nProduction sends this event instead:\nRecords[0].messageId: 5a6f4b79\nRecords[0].body: {\"orderId\":\"ord_1042\",\"email\":\"maya@example.com\",\"total\":\"49.00\"}\neventSource: aws:sqs\n\nThe handler fails with `Cannot read properties of undefined (reading body)`. What should be fixed first?",
+      "scenario": "A developer tested the DevPolaris receipt Lambda with a hand-written event, but production invokes it through an AWS event source with a different envelope.\n\n{ \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\", \"total\": \"49.00\" }\n\nProduction sends this event instead: Records[0].messageId is 5a6f4b79. Records[0].body is {\"orderId\":\"ord_1042\",\"email\":\"maya@example.com\",\"total\":\"49.00\"}. EventSource is aws:sqs.\n\nThe handler fails with `Cannot read properties of undefined (reading body)`. What should be fixed first?",
       "options": [
+        {
+          "id": "b",
+          "text": "Inspect an ALB listener first, because the team may be confusing this worker with the HTTP API path."
+        },
         {
           "id": "a",
           "text": "Update the handler tests and parsing logic to use the real SQS Records shape."
-        },
-        {
-          "id": "b",
-          "text": "Attach an ALB target group because Lambda needs port 3000 to parse SQS events."
         },
         {
           "id": "c",
@@ -20,123 +134,67 @@
         },
         {
           "id": "d",
-          "text": "Increase the function timeout because event shape errors are always slow queries."
+          "text": "Tune the timeout first, because the failure appears during invocation and longer runs may expose more logs."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The failure is a contract mismatch between the trigger event and the handler. SQS delivers Records, and the body must be parsed from each record. Timeout and port changes would not fix code that expects the wrong input shape."
+      "explanation": "The failure is a contract mismatch between the trigger event and the handler. SQS delivers Records, and the body must be parsed from each record. Timeout and port changes would not fix code that expects the wrong input shape.\n\nLearn more in [Lambda event source mappings](https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventsourcemapping.html)."
     },
     {
-      "id": "q2",
+      "id": "q-choose-triggers-and-retries-5",
       "type": "single",
-      "scenario": "A log search shows:\n\nSTART RequestId: b8e74218-9d2e-4a97-91df\nINFO orderId=ord_1042 messageId=5a6f4b79 requestId=b8e74218-9d2e-4a97-91df action=send_receipt\nEND RequestId: b8e74218-9d2e-4a97-91df\n\nWhy is the request ID useful?",
+      "scenario": "DevPolaris publishes receipt-worker Lambda version `18` and moves the `prod` alias from version `17` to version `18`. After five percent of production traffic reaches version `18`, error rate rises while version `17` remains healthy. The team needs an immediate rollback that does not rebuild code or change event-source configuration. What should the release captain do?",
       "options": [
         {
           "id": "a",
-          "text": "It links one Lambda invocation to its logs, which helps the team follow one event through one run."
+          "text": "Point the `prod` alias back to version `17`, verify invocation and error metrics, and preserve version `18` evidence for diagnosis."
         },
         {
           "id": "b",
-          "text": "It proves the function has two warm execution environments ready for the next event."
+          "text": "Delete version `18` first so Lambda automatically routes the alias to the previous published version."
         },
         {
           "id": "c",
-          "text": "It replaces the message ID, so idempotency is no longer needed."
+          "text": "Change the function's unpublished `$LATEST` code because aliases always follow the newest uploaded package."
         },
         {
           "id": "d",
-          "text": "It tells the ALB which private task IP should receive traffic."
+          "text": "Recreate the SQS event source mapping against version `17` while leaving the `prod` alias on version `18`."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The context request ID is a tracing clue for one invocation. It helps connect START, app logs, END, and REPORT lines. It does not replace business identifiers or idempotency keys, because retries can still deliver the same work again."
+      "explanation": "Published versions are immutable release targets, and an alias is the stable pointer that can move between them. Returning `prod` to known-good version `17` restores the previous runtime target without rebuilding or rewiring the event source. Deleting a version does not provide automatic alias rollback, and changing `$LATEST` does not change a versioned alias.\n\nLearn more in [Lambda aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)."
     },
     {
-      "id": "q3",
+      "id": "q-diagnose-fit-and-failure-2",
       "type": "single",
-      "scenario": "The receipt provider returns 503. The handler catches the error, logs it, and returns `{ \"processed\": 1 }`.\n\nSQS event source metrics after the run:\nLambda invocation result: success\nApproximateReceiveCount: 1\nmessage visible again: no\n\nWhat is the main problem?",
+      "scenario": "A DevPolaris receipt Lambda receives an SQS message successfully but fails when it calls Amazon SES. The AWS error names the function's assumed execution role, the denied action `ses:SendEmail`, and the SES identity `orders.devpolaris.com`. Which permission path should the engineer inspect first?",
       "options": [
         {
           "id": "a",
-          "text": "The handler is reporting success even though the receipt was not sent, so the queue can treat the message as complete."
+          "text": "The Lambda execution role policy and the specific SES identity permission."
         },
         {
           "id": "b",
-          "text": "The function needs a public IP address because SQS messages cannot be retried privately."
+          "text": "The Lambda function resource policy, which controls who may invoke the function rather than what it may call."
         },
         {
           "id": "c",
-          "text": "The message body should include the database password so the provider can retry."
+          "text": "The SES sending quota, because quota exhaustion is returned as an IAM authorization denial."
         },
         {
           "id": "d",
-          "text": "The ALB health check path is too strict for receipt events."
+          "text": "The SQS visibility timeout, because a longer timeout grants the consumer permission to call SES."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A handler should be honest about failure. If the work did not happen, throwing lets the event source apply its retry behavior. Swallowing the error can lose the message or make operations believe the side effect succeeded."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "A new teammate is reviewing Lambda basics for the receipt worker:\n\ntrigger: SQS queue orders-background-prod\nhandler: async function(event, context)\nidempotency key: receipt:ord_1042\nlog fields: messageId, orderId, context.awsRequestId\n\nWhich statements are correct?",
-      "options": [
-        {
-          "id": "a",
-          "text": "The event shape depends on the trigger, so tests should use an SQS-shaped sample for this worker."
-        },
-        {
-          "id": "b",
-          "text": "The context request ID is useful for connecting logs from one invocation."
-        },
-        {
-          "id": "c",
-          "text": "Throwing an error tells Lambda the invocation failed, which affects retry behavior for the event source."
-        },
-        {
-          "id": "d",
-          "text": "A successful handler return proves the receipt email was safe to send twice."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c"
-      ],
-      "explanation": "The trigger, handler input, and invocation result form the contract. Good logs include stable IDs from both AWS and the business event. Idempotency is still needed because a successful or retried event can be seen again in real systems."
-    },
-    {
-      "id": "q5",
-      "type": "single",
-      "scenario": "The team proposes moving the whole checkout API into one Lambda handler. Current API evidence says:\n\npackage: existing container image\ntraffic: steady weekday HTTP traffic\nruntime: listens on port 3000 behind ALB\nside work: receipt email and exports are event-shaped\n\nWhich split best follows the article?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Keep the main API as a service-shaped runtime and use Lambda for the event-shaped side jobs."
-        },
-        {
-          "id": "b",
-          "text": "Move every part to Lambda because side jobs are event-shaped."
-        },
-        {
-          "id": "c",
-          "text": "Move every part to EC2 because Lambda cannot read queue messages."
-        },
-        {
-          "id": "d",
-          "text": "Remove the queue so receipt emails happen before checkout returns."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The main API and the side jobs have different shapes. The checkout API is a long-running service, while receipt and export jobs can run per event. Splitting the workloads keeps each compute choice honest."
+      "explanation": "The function was invoked and SES denied the AWS API action performed by its execution-role session. That makes the execution role's `ses:SendEmail` resource scope the first permission check. A function resource policy controls invocation, while SES quota or SQS timing problems do not appear as this IAM denial tuple.\n\nLearn more in [Lambda execution roles](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html)."
     }
   ]
 }

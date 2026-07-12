@@ -40,5 +40,3 @@ variable "replica_count" {
   type = number
 }
 ```
-
-The root module points at the shared child module and supplies values that clearly belong to development.

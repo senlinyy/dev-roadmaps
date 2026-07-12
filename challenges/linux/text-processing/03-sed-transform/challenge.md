@@ -1,6 +1,6 @@
 ---
 title: "Transforming with sed"
-sectionSlug: transforming-with-sed
+sectionSlug: transform-lines-with-sed
 order: 4
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Guardrails, Temporary Access, and Audit Evidence"
-description: "Use GCP IAM guardrails, just-in-time production access, Cloud Audit Logs, and Terraform review habits to keep sensitive access narrow and explainable."
-overview: "This final GCP identity and security article follows a checkout production incident through folder-level review, deny policies, principal access boundaries, IAM Recommender, Privileged Access Manager, Cloud Audit Logs, break-glass access, and Terraform review habits."
+description: "Use GCP IAM guardrails, time-limited access, recommendations, Privileged Access Manager, and Cloud Audit Logs to keep production access limited and reviewable."
+overview: "Production incidents create access pressure. A safe GCP access path gives the right person limited access for the incident, records the reason and approval, and leaves evidence for review after the incident ends."
 tags: ["gcp", "iam", "guardrails", "audit"]
 order: 4
 id: article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence
@@ -15,126 +15,62 @@ aliases:
 
 ## Table of Contents
 
-1. [The Production Access Problem](#the-production-access-problem)
-2. [Review Access at Organization and Folder Level](#review-access-at-organization-and-folder-level)
-3. [Deny Policies for Hard Guardrails](#deny-policies-for-hard-guardrails)
-4. [Principal Access Boundary Policies](#principal-access-boundary-policies)
-5. [IAM Recommender for Excessive Permissions](#iam-recommender-for-excessive-permissions)
-6. [Privileged Access Manager for Temporary Access](#privileged-access-manager-for-temporary-access)
-7. [Cloud Audit Logs as Evidence](#cloud-audit-logs-as-evidence)
-8. [Break-Glass Access](#break-glass-access)
-9. [Terraform Review Habits for IAM Changes](#terraform-review-habits-for-iam-changes)
-10. [Access Review Cadence](#access-review-cadence)
-11. [Putting It All Together](#putting-it-all-together)
+1. [Production Access Under Pressure](#production-access-under-pressure)
+2. [Guardrail: The Access Safety Boundary](#guardrail-the-access-safety-boundary)
+3. [Temporary Access: Limited Help for a Real Incident](#temporary-access-limited-help-for-a-real-incident)
+4. [Audit Evidence: Proof After the Incident](#audit-evidence-proof-after-the-incident)
+5. [IAM Deny: Blocking Dangerous Permissions](#iam-deny-blocking-dangerous-permissions)
+6. [Principal Access Boundary: Keeping Principals in Their Area](#principal-access-boundary-keeping-principals-in-their-area)
+7. [IAM Recommender: Finding Excessive Access](#iam-recommender-finding-excessive-access)
+8. [Privileged Access Manager: Managed Just-in-Time Access](#privileged-access-manager-managed-just-in-time-access)
+9. [Cloud Audit Logs: Reading the Evidence Trail](#cloud-audit-logs-reading-the-evidence-trail)
+10. [How AWS Readers Can Map the Ideas](#how-aws-readers-can-map-the-ideas)
+11. [Putting the Review Together](#putting-the-review-together)
+12. [References](#references)
 
-## The Production Access Problem
-<!-- section-summary: Production access should answer why access is needed, who approved it, how long it lasts, and what evidence proves what happened. -->
+## Production Access Under Pressure
+<!-- section-summary: Incident access needs a narrow reason, a short duration, approval, cleanup, and evidence. -->
 
-The earlier articles in this module covered the main access building blocks. IAM explains how Google Cloud connects a **principal**, a **role**, and a **resource scope**. Service accounts explain how applications and automation get their own identity. Secret Manager explains how sensitive runtime values stay behind an API boundary with IAM and audit logging.
+Production access is hardest under pressure. Imagine a payment incident in a retail platform. Customers can reach checkout, card authorization succeeds at the provider, and the app still marks some orders as failed. The on-call developer Maya needs to inspect Cloud Run revision settings, application logs, and recent IAM changes in the `checkout-prod` project.
 
-This article picks up the part that usually shows up during real operations: someone needs production access during pressure. A checkout service starts failing after a payment provider change. Customers can browse the store, add items to a cart, and reach the payment page, but every fifth payment attempt returns a generic error. The on-call developer, Maya, needs to inspect production logs and Cloud Run revision details for the `checkout-prod` project.
+The risky move is a broad permanent grant because the incident feels urgent. That grant may stay in place long after the incident, and the next review has to guess why it exists. The safer move is to give Maya only the access needed for this incident, keep the duration short, record approval, and collect evidence showing what changed and what Maya viewed.
 
-The risky answer would be to add Maya to a broad production admin group and promise to remove the access later. That kind of access sticks around after the incident, and the next access review has to guess why it exists. The safer answer records the reason up front, grants only the roles needed for the investigation, gives the access a fixed end time, and leaves audit evidence showing what Maya actually did.
+The pressure is the real teaching point. A team under incident stress can accidentally turn a two-hour need into a long-lived production role. A broad grant may solve the immediate support problem, yet it also creates a future access problem that nobody remembers approving. A good temporary-access path keeps speed and control together.
 
-So the structure for the rest of the article is simple. First, we look at inherited access across the organization and folders, because production access often comes from a parent scope. Then we add guardrails that block dangerous actions. After that, we use recommendations to find roles that are too broad, use Privileged Access Manager for short-lived elevation, and read Cloud Audit Logs as the evidence trail. Finally, we keep break-glass and Terraform review habits clear, because those are the places where emergency access can quietly turn into permanent access.
+Think of it as a visitor badge for production. Maya needs to enter a specific area for a specific reason, the badge expires, and the front desk keeps a record. The badge is useful because it helps the work happen without turning the visitor into a permanent building administrator.
 
-## Review Access at Organization and Folder Level
-<!-- section-summary: Parent-scope IAM grants flow down into projects, so production reviews need to start above the project. -->
-
-Google Cloud resources live in a **resource hierarchy**. At the top, an organization represents the company. Under that, folders usually group environments, teams, business units, or platforms. Projects sit under folders and hold most of the actual resources, such as Cloud Run services, Secret Manager secrets, logs, buckets, and databases.
-
-IAM access inherits down that hierarchy. If a group receives `roles/viewer` on the `Production` folder, that group receives viewer permissions across the projects inside that folder. If a platform admin group receives `roles/resourcemanager.projectIamAdmin` at the organization level, that group can affect IAM across many folders and projects. The project page alone can miss the access that came from above it.
-
-In the checkout incident, the first review question should focus on existing inherited access: "Which groups already have production visibility because of organization or folder grants?" A production folder might already grant `roles/logging.viewer` to `group:prod-readers@example.com`. If Maya belongs to that group, the team might only need temporary access to one additional role, or the team might discover that baseline visibility already covers the investigation.
-
-An access review at parent scopes usually looks for a few patterns:
-
-| Scope | Review Question | Production Risk |
-|---|---|---|
-| **Organization** | Which groups can change IAM, billing, projects, folders, or organization policy across the company? | One broad role can affect every environment. |
-| **Production folder** | Which groups inherit access into every production project? | A convenience group can quietly turn into company-wide production access. |
-| **Team folder** | Which team groups can administer projects outside their normal service area? | A service team can accidentally reach another team's data. |
-| **Project** | Which direct bindings grant access that parent scopes already grant? | Repeated bindings make reviews noisy and hide the real source of access. |
+The rest of the access design has one practical job: help the team move during the incident without turning urgency into permanent production access. Google Cloud gives you several tools for that job. Guardrails limit what access can do. Temporary access gives the on-call person a controlled window. Audit evidence proves what happened after the pressure drops.
 
 ![Production access guardrails](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/production-access-guardrails.png)
-*Production access review works best when the team can see the requester, role, scope, duration, guardrails, and evidence path together before access is granted.*
+*A production access path should connect requester, reason, approval, role, scope, duration, guardrails, and evidence.*
 
-For a beginner, the important part is the direction of inheritance. A role granted on a parent helps the principal work on descendants. A role granted on a child stays local to that child. When a role looks surprising in a production project, the source might be the project policy, the folder policy, or the organization policy.
+## Guardrail: The Access Safety Boundary
+<!-- section-summary: A guardrail is a rule or process that keeps access inside an approved safety boundary. -->
 
-In mature environments, access reviews start with the broadest scopes. Security and platform teams review organization-level and production-folder grants before they review individual projects. Product teams still review their own project-level access, but they do that after the parent-scope picture is clear. That order prevents a project owner from removing a direct binding while a wider inherited binding still grants the same access.
+A **guardrail** is a safety boundary around access. It can be technical, such as an IAM deny policy that blocks project deletion. It can be procedural, such as a requirement that production elevation needs an incident number and approval. The useful guardrail is specific enough to protect production while still letting the team do normal operational work.
 
-## Deny Policies for Hard Guardrails
-<!-- section-summary: Deny policies block selected permissions even when an allow policy grants a broad role somewhere else. -->
+In the checkout incident, Maya needs to read logs and Cloud Run configuration. A guardrail should allow that investigation path while keeping dangerous actions blocked, such as deleting the production project, creating service account keys, or changing organization-wide IAM. The team should know those lines before the incident happens.
 
-An **IAM deny policy** is a policy that blocks principals from using specific supported permissions. It attaches to an organization, folder, or project, and it inherits downward like allow policies. Deny policies are useful when a team wants to place a hard line around dangerous actions, especially actions that should remain rare even for people with broad roles.
+Good guardrails usually answer three questions:
 
-In normal IAM, an allow policy grants a role, and that role contains permissions. A deny policy adds another layer to the decision. If the deny rule matches the principal and permission, the request is blocked even when an allow binding grants a role that contains that permission. This gives platform and security teams a way to protect the organization from high-impact operations.
+| Question | Checkout example |
+|---|---|
+| Which production actions should stay rare? | Project deletion, key creation, IAM admin changes, log sink removal. |
+| Which people or workloads need normal access? | On-call engineers need log and service visibility. |
+| Which evidence must exist after access is used? | Request reason, approval, grant window, actions viewed or changed, cleanup. |
 
-Here is a practical production example. The checkout team uses many projects under the `Production` folder. Product engineers can deploy services and inspect logs through narrow roles, and a smaller platform group can manage project configuration. The security team adds a deny policy at the production folder that blocks project deletion for almost everyone, with an exception for a tightly controlled project-admin group.
+Guardrails do not replace least-privilege roles. They sit around those roles. Maya should still receive a narrow viewer role for the incident, and the folder or project can still enforce blocks around high-risk operations.
 
-That policy matters during an incident. If someone quickly grants a broad role to help debug checkout failures, the deny policy still blocks the protected action. The team can move fast on log inspection and service diagnosis while the folder-level guardrail continues to protect project deletion.
+## Temporary Access: Limited Help for a Real Incident
+<!-- section-summary: Temporary access grants a role for a fixed reason and duration instead of creating another permanent production binding. -->
 
-Deny policies work best for actions where the organization can write a simple rule. Examples include blocking deletion of production projects, blocking removal of critical logging sinks, or blocking service account key creation in sensitive folders when the organization has moved to keyless workload identity. The exact permissions must be supported by IAM deny policies, so teams normally test the rule with Policy Simulator or a non-production folder before they apply it widely.
+**Temporary access** is access granted for a specific reason and a limited time. The grant should answer who requested access, which role they need, which resource scope it covers, who approved it, the expiration time, and which incident or change record explains the request.
 
-A useful review question sounds like this: "Which actions should stay blocked even if someone accidentally receives a broad role?" That question leads to guardrails. It also keeps deny policies from turning into a giant second permission system. The goal is a small set of high-value blocks that protect production from mistakes, rushed incident changes, and stale broad roles.
+For the checkout incident, Maya might need `roles/logging.viewer` and `roles/run.viewer` on `checkout-prod` for two hours. Those roles let her search logs and inspect Cloud Run service details. They do not need to let her edit IAM, deploy a new revision, read secrets, or administer the whole project.
 
-## Principal Access Boundary Policies
-<!-- section-summary: Principal access boundaries limit the resource area where selected principals can use supported IAM permissions. -->
+Temporary access can be managed by Privileged Access Manager, which appears later in the sequence. Some teams also use an infrastructure-managed fallback for rare cases, such as a conditional IAM binding with an expiration time. The fallback should stay small and visible because manual incident grants are easy to forget.
 
-A **principal access boundary policy** controls which resources a principal is eligible to access. The allow policy still grants the actual role. The boundary limits where that granted access can be useful, based on the resources included in the boundary rules. Google Cloud applies these policies to principal sets, such as a set of workforce or workload identities.
-
-That distinction matters. A deny policy usually blocks selected permissions for selected principals. A principal access boundary keeps selected principals inside approved resource areas for supported permissions. The first shape is permission-centered. The second shape is location-centered.
-
-In a company with many folders, this helps separate teams that share a central identity system. A checkout developer group might be eligible to access resources only under the `Checkout` folder and a shared observability project. A data platform group might be eligible to access resources only under the `Data Platform` folder. Even if a role binding appears in the wrong place, the boundary helps keep the principal inside the intended part of the hierarchy for permissions that the boundary can enforce.
-
-For the checkout incident, principal access boundaries are helpful before the incident starts. Maya belongs to `group:checkout-engineers@example.com`. That group can request production debugging access, but the boundary keeps the eligible resource area focused on checkout-owned projects and shared logging infrastructure. The boundary gives security reviewers confidence that a temporary grant for checkout debugging stays inside the checkout production area.
-
-In production design, a principal access boundary policy usually has three parts:
-
-| Part | Plain Meaning | Checkout Example |
-|---|---|---|
-| **Policy rules** | The resources the principal set can access. | Checkout production projects and shared logging projects. |
-| **Policy binding** | The principal set the boundary applies to. | Checkout engineer workforce group. |
-| **Optional condition** | A filter that narrows which principals in the set receive the boundary. | Apply to service accounts, or exclude a specific security automation identity. |
-
-Principal access boundaries need careful review because multiple boundaries can interact. The team should treat them as organization-level security design rather than a quick incident fix. They are most useful when the hierarchy already separates environments and ownership clearly, because the boundary can point at the folder or project areas that match real responsibility.
-
-## IAM Recommender for Excessive Permissions
-<!-- section-summary: IAM Recommender turns permission usage data into suggestions for removing or replacing broad role grants. -->
-
-**IAM Recommender** helps find principals with excessive permissions. It reviews IAM access data and looks at permissions a principal used during the observation period, up to the most recent 90 days. Then it can recommend removing a role or replacing it with one or more narrower roles when the current grant looks broader than the observed need.
-
-This is useful because access reviews can get very human very quickly. A reviewer sees `roles/editor` on a service account and asks the owning team if it is needed. The owning team says the service is important and nobody wants to break checkout. Without evidence, the review gets stuck between security risk and outage fear.
-
-IAM Recommender gives the conversation a better starting point. It might show that a deployment service account left most permissions in a broad role unused during the observation period. It might suggest replacing a basic role with specific Cloud Run, Artifact Registry, and Logging roles. It can also surface lateral movement insights, especially when service accounts can impersonate other service accounts across projects.
-
-During the checkout incident, Recommender supports cleanup around the incident while PAM handles the temporary grant. If the team discovers that `group:checkout-engineers@example.com` already had permanent `roles/editor` on the production project, the incident should create a follow-up item. The team can use role recommendations and policy insights to replace the permanent broad role with normal read access plus PAM entitlements for rare elevation.
-
-A practical review flow looks like this:
-
-| Step | What the Reviewer Looks At | Decision |
-|---|---|---|
-| **Find broad roles** | Basic roles like Owner, Editor, Viewer, or wide predefined roles on production projects. | Prioritize the highest-risk grants. |
-| **Open recommendation evidence** | Permission usage, suggested replacement roles, and any lateral movement insight. | Decide whether the recommendation matches real operations. |
-| **Simulate or stage the change** | Policy Simulator, staging projects, or a planned rollout window. | Reduce outage risk before removing access. |
-| **Apply and watch** | Terraform change, audit logs, alerts, and application health. | Confirm the role reduction worked. |
-
-Recommender needs human review because recent usage never captures every business reason. A rare disaster recovery task might happen once a year. A service agent role might look strange but support a managed service. The best pattern is to use recommendations as evidence, add owner context, and then turn permanent broad access into narrow baseline access plus temporary elevation for rare tasks.
-
-## Privileged Access Manager for Temporary Access
-<!-- section-summary: Privileged Access Manager grants approved IAM roles for a fixed duration and removes them when the grant ends. -->
-
-**Privileged Access Manager**, usually shortened to **PAM**, manages just-in-time elevated access. Instead of giving someone a powerful production role forever, the team creates an **entitlement**. An entitlement defines who can request access, which roles can be granted, which resource receives those roles, how long the grant can last, and who must approve it.
-
-For the checkout incident, the entitlement might be named `checkout-prod-debugging`. It applies to the `checkout-prod` project. It allows eligible checkout on-call engineers to request `roles/logging.viewer` and `roles/run.viewer` for up to two hours. It requires a justification with the incident number, and it requires approval from the incident commander or production owner.
-
-Here is the production flow in normal language. Maya opens a PAM request for two hours, selects the checkout debugging entitlement, writes `INC-4821 payment failures after provider timeout change`, and submits it. The approver sees the request, checks that the access matches the incident, and approves it. PAM adds the temporary role bindings to the project IAM policy. When the grant ends, PAM removes the bindings.
-
-That flow gives the team several things at once. The access is tied to a reason. The approver is recorded. The roles are limited to the entitlement. The duration has an upper bound. The cleanup happens through the tool instead of relying on someone remembering to remove a manual IAM binding at the end of a long incident.
-
-IAM Conditions can also express time-bounded access in allow policies. A conditional binding with `request.time < timestamp("...")` grants the role only until the timestamp. PAM is usually the stronger operational fit for recurring production elevation because it adds request, approval, grant lifecycle, notification, and audit behavior around the IAM binding. Conditional bindings are still useful as a fallback or for infrastructure-managed access windows.
-
-Here is what a Terraform-managed conditional fallback can look like for a short incident grant:
+Here is a Terraform-managed fallback for log access during one incident:
 
 ```hcl
 resource "google_project_iam_member" "checkout_incident_logs" {
@@ -143,16 +79,18 @@ resource "google_project_iam_member" "checkout_incident_logs" {
   member  = "user:maya@example.com"
 
   condition {
-    title       = "inc_4821_checkout_debug"
-    description = "Temporary log access for checkout production incident INC-4821"
-    expression  = "request.time < timestamp(\"2026-06-14T19:00:00Z\")"
+    title       = "inc_4821_checkout_logs"
+    description = "Temporary log access for checkout incident INC-4821"
+    expression  = "request.time < timestamp(\"2026-07-04T18:00:00Z\")"
   }
 }
 ```
 
-This Terraform resource is consumed by the Google provider during `terraform apply`, and it creates one IAM member binding on the `checkout-prod` project. The `project`, `role`, and `member` fields answer where the grant lives, what Maya receives, and which principal receives it. The `condition` block carries the incident title, reviewer-readable description, and time limit.
+- `project`, `role`, and `member` define the temporary grant.
+- The `condition` block gives the grant a readable incident name, reason, and end time.
+- A reviewer should check that the role matches the investigation job and that the timestamp covers only the approved window.
 
-A reviewer should expect a plan like this before approving the fallback:
+A plan should show one narrow binding:
 
 ```hcl
 # google_project_iam_member.checkout_incident_logs will be created
@@ -162,49 +100,368 @@ A reviewer should expect a plan like this before approving the fallback:
     member  = "user:maya@example.com"
 
     condition {
-      title       = "inc_4821_checkout_debug"
-      description = "Temporary log access for checkout production incident INC-4821"
-      expression  = "request.time < timestamp(\"2026-06-14T19:00:00Z\")"
+      title       = "inc_4821_checkout_logs"
+      description = "Temporary log access for checkout incident INC-4821"
+      expression  = "request.time < timestamp(\"2026-07-04T18:00:00Z\")"
     }
   }
 ```
 
-The condition is the important part of this example. It makes the grant expire by time, and the title and description carry the incident evidence. If the team uses PAM for the same access, Terraform should avoid overwriting PAM-managed role bindings. Google specifically recommends using non-authoritative Terraform IAM resources when PAM also manages temporary role bindings, because authoritative resources can replace bindings that are outside Terraform state.
+- The plan should not add Owner, Editor, or broad IAM administration roles.
+- The incident ID belongs in the condition text so review evidence has context.
+- If PAM manages the same access path, Terraform should avoid overwriting PAM-managed temporary bindings.
 
-![Temporary access lifecycle](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/temporary-access-lifecycle.png)
-*Temporary access should have a lifecycle: request, approval, time-bounded grant, production investigation, automatic removal, and after-incident review.*
+After the incident, cleanup still needs evidence. A conditional binding stops granting access after the timestamp, but the binding can remain in the IAM policy until the next Terraform change removes it. Reviewers should see one of two outcomes: PAM expired and removed the grant automatically, or Terraform removed the temporary binding from the project policy.
 
-## Cloud Audit Logs as Evidence
-<!-- section-summary: Cloud Audit Logs show who performed an action, what method ran, which resource was touched, and when it happened. -->
+The Terraform cleanup plan should show the temporary binding leaving the policy:
 
-**Cloud Audit Logs** are Google Cloud's activity records for administrative actions, data access, system events, and policy denials. They help answer the production evidence questions: **who did what, where, and when**. For identity and security work, audit logs turn access from a promise into something a reviewer can inspect after the fact.
-
-In the checkout incident, the evidence needs to cover both access changes and production actions. The team wants to know who approved Maya's temporary access, when the role binding appeared, which resources Maya viewed, and when the grant ended. The audit trail should also show whether anyone changed IAM manually during the incident.
-
-Cloud Audit Logs have several categories that matter here:
-
-| Log Type | What It Shows | Checkout Example |
-|---|---|---|
-| **Admin Activity** | User-driven changes to configuration or metadata. | PAM adding and removing IAM role bindings, or someone changing a Cloud Run service. |
-| **Data Access** | Reads of configuration, metadata, or user-provided data for services where these logs are enabled. | Viewing sensitive logs or reading data from supported services. |
-| **Policy Denied** | Requests blocked by a security policy. | A broad role tried to delete a production project, but a deny policy blocked it. |
-| **System Event** | Google Cloud system actions that change configuration. | Managed service activity that changes resources without a direct user action. |
-
-A simple Logs Explorer query for incident evidence might focus on the principal, project, and time window:
-
-```logging
-resource.type="audited_resource"
-protoPayload.authenticationInfo.principalEmail="maya@example.com"
-timestamp >= "2026-06-14T16:00:00Z"
-timestamp <= "2026-06-14T19:15:00Z"
+```hcl
+# google_project_iam_member.checkout_incident_logs will be destroyed
+- resource "google_project_iam_member" "checkout_incident_logs" {
+    project = "checkout-prod"
+    role    = "roles/logging.viewer"
+    member  = "user:maya@example.com"
+  }
 ```
 
-Use this in Logs Explorer or as the filter body for `gcloud logging read` when the evidence question starts with one person and one incident window. The principal filter selects Maya's actions, and the timestamps bracket the PAM grant plus a small buffer.
+Keep the cleanup plan, apply output, and final IAM policy check with the incident evidence. Expired access and removed access are not the same review fact. Expired access says the condition no longer grants permission. Removed access says the temporary binding no longer clutters the production policy.
 
-A useful result should show the principal, service, method, resource, and timestamp:
+## Audit Evidence: Proof After the Incident
+<!-- section-summary: Audit evidence is the record that explains who requested access, who approved it, what happened, and the access end time. -->
+
+**Audit evidence** is the proof package that reviewers use after the incident. It should show why access was needed, who approved it, which roles were granted, which resources were affected, what actions happened, and the access end time.
+
+Think of audit evidence as the incident receipt. During the incident, the team cares about fixing checkout. After the incident, the team must prove the access path was controlled. A chat message alone is weak evidence. A request record, approval, IAM policy delta, Cloud Audit Log entry, and cleanup proof give reviewers something durable.
+
+Good evidence also protects the on-call engineer. If Maya followed the approved path, the records show exactly what she had, what she inspected, and that the grant ended. That matters for compliance reviews, internal learning, and future incident process improvements.
+
+For Maya's checkout incident, the evidence package should include the incident record, the temporary access request, approval, role and scope, grant start and end time, relevant IAM policy changes, Cloud Run reads, log searches, policy denials, and cleanup. The goal is not to collect every log line in the project. The goal is to prove the access story without relying on memory.
+
+| Evidence item | What it proves |
+|---|---|
+| Incident record | Why production access was needed. |
+| Access request and approval | Who asked, who approved, and which role was approved. |
+| IAM policy delta | Which binding appeared and which binding was removed or expired. |
+| Production activity logs | Which services, logs, or resources the requester touched. |
+| Policy denied logs | Whether guardrails blocked risky actions. |
+| Cleanup record | The temporary grant ended or expired as planned. |
+
+![Temporary access lifecycle](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/temporary-access-lifecycle.png)
+*A reviewable temporary access flow has request, approval, grant, investigation, removal, and evidence steps.*
+
+## IAM Deny: Blocking Dangerous Permissions
+<!-- section-summary: IAM deny policies block selected permissions even if allow policies would otherwise grant them. -->
+
+**IAM deny** uses deny policies to block selected permissions for selected principals. A deny policy attaches to an organization, folder, or project and inherits downward. If a deny rule matches the principal and permission, IAM blocks the request even if an allow policy grants a role that contains the permission.
+
+For the checkout platform, a deny policy at the production folder can block dangerous operations such as project deletion or service account key creation for most principals. That means a rushed viewer grant or an accidentally broad role still cannot cross those protected lines while the deny policy applies.
+
+Deny policies work best for clear, high-risk actions. They are a poor fit for every small access preference because the policy can turn into a second permission system that is hard to reason about. Use them for actions that should remain rare, audited, and strongly controlled across production.
+
+A small production-folder deny policy might have this shape:
 
 ```yaml
-timestamp: '2026-06-14T16:42:11.219Z'
+displayName: checkout-production-critical-action-deny
+rules:
+- denyRule:
+    deniedPrincipals:
+    - principalSet://goog/public:all
+    exceptionPrincipals:
+    - principalSet://goog/group/production-platform-admins@example.com
+    deniedPermissions:
+    - cloudresourcemanager.googleapis.com/projects.delete
+    - iam.googleapis.com/serviceAccountKeys.create
+```
+
+- `deniedPrincipals` names who is blocked. `principalSet://goog/public:all` covers everyone unless an exception matches.
+- `exceptionPrincipals` names the tightly controlled group that can still perform the protected operation.
+- `deniedPermissions` must use permissions supported by IAM deny. The policy should stay short and focused on production damage, not every normal access preference.
+
+Attach that kind of policy to the production folder, not to one project at a time, for actions that should stay blocked across all production projects:
+
+```bash
+gcloud iam policies create checkout-production-critical-action-deny \
+  --attachment-point=cloudresourcemanager.googleapis.com/folders/345678901234 \
+  --kind=denypolicies \
+  --policy-file=checkout-production-critical-action-deny.yaml
+```
+
+During the checkout incident, this blocks a risky side path. If Maya receives temporary log and Cloud Run viewer access, the deny policy has no effect on normal investigation. If someone accidentally grants her a broad role and she or a script tries to create a service account key, IAM should deny the key creation.
+
+A policy-denied audit entry gives the reviewer evidence:
+
+```yaml
+protoPayload:
+  authenticationInfo:
+    principalEmail: maya@example.com
+  serviceName: iam.googleapis.com
+  methodName: google.iam.admin.v1.CreateServiceAccountKey
+  status:
+    code: 7
+    message: Permission 'iam.serviceAccountKeys.create' denied by an IAM deny policy
+  authorizationInfo:
+  - permission: iam.serviceAccountKeys.create
+    granted: false
+resource:
+  labels:
+    project_id: checkout-prod
+```
+
+- `status.code: 7` is the permission-denied result.
+- `permission` tells the reviewer which dangerous action was blocked.
+- `principalEmail` connects the blocked request to the incident requester or automation identity.
+
+Deny policy design needs support checks. IAM deny only works for supported permissions, exceptions must be explicit enough for reviewers to understand, and propagation can take time. Test the rule against a staging folder or with Policy Simulator before applying it to production.
+
+## Principal Access Boundary: Keeping Principals in Their Area
+<!-- section-summary: Principal access boundary policies limit which resources selected principals are eligible to access. -->
+
+A **principal access boundary**, or **PAB**, limits the resources that selected principals are eligible to access for supported permissions. An allow policy still grants the role. The boundary controls where that granted access can be useful.
+
+Use a simple story before the policy syntax. Maya belongs to the checkout engineering group. Checkout engineers should be able to receive approved access in checkout production projects and the shared observability project. They should not be able to use the same kind of granted access in an unrelated payments project.
+
+An allow policy is still required. PAB does not hand out roles by itself. The allow policy answers, "Which role was granted?" The boundary answers, "Which resource area is this principal allowed to use supported permissions in?" If someone grants Maya `roles/logging.viewer` on `checkout-prod`, the boundary allows that role to work because checkout production is inside the approved area. If someone grants the same role on `payments-prod`, the boundary can make the supported permissions ineffective because that project sits outside the approved area.
+
+This helps in organizations with many teams and folders. The organization may represent production operators through a supported principal set such as a workforce identity pool group, workload identity pool group, Google Workspace domain, or Resource Manager principal set. A boundary can keep that principal set eligible only for checkout production projects and shared observability projects. If someone grants one of those principals a role in an unrelated payments project, the boundary can keep supported permissions from working outside the approved area.
+
+The important distinction is scope of control. IAM deny is often permission-centered: block this dangerous action. A principal access boundary is resource-area centered: keep this principal set inside these approved resources. Both controls need testing because each has documented support limits and propagation behavior.
+
+For the checkout group, the approved area might include one production folder and one shared observability project:
+
+```json
+[
+  {
+    "description": "Checkout-owned production projects and shared observability.",
+    "resources": [
+      "//cloudresourcemanager.googleapis.com/folders/567890123456",
+      "//cloudresourcemanager.googleapis.com/projects/checkout-observability"
+    ],
+    "effect": "ALLOW"
+  }
+]
+```
+
+Create the boundary policy at the organization level and pin the enforcement version so reviewers know which permissions the boundary can block:
+
+```bash
+gcloud iam principal-access-boundary-policies create checkout-engineering-area \
+  --organization=123456789012 \
+  --location=global \
+  --display-name="Checkout engineering approved resource area" \
+  --details-rules=checkout-engineering-area.json \
+  --details-enforcement-version=4
+```
+
+Then bind the policy to a supported checkout principal set. This example uses a workforce identity pool group for checkout engineers:
+
+```bash
+gcloud iam policy-bindings create checkout-engineering-area-binding \
+  --organization=123456789012 \
+  --location=global \
+  --policy="organizations/123456789012/locations/global/principalAccessBoundaryPolicies/checkout-engineering-area" \
+  --target-principal-set="principalSet://iam.googleapis.com/locations/global/workforcePools/corp-workforce/group/checkout-engineers@example.com" \
+  --display-name="Checkout engineering area binding"
+```
+
+The exact principal set depends on how the organization represents users, workforce pools, workload pools, domains, projects, folders, or organizations, so reviewers should record the principal set string next to the policy:
+
+```yaml
+policy: organizations/123456789012/locations/global/principalAccessBoundaryPolicies/checkout-engineering-area
+target:
+  principalSet: principalSet://iam.googleapis.com/locations/global/workforcePools/corp-workforce/group/checkout-engineers@example.com
+```
+
+- The folder resource lets the group use supported permissions inside checkout-owned production projects.
+- The shared observability project lets the group inspect central logs and dashboards during checkout incidents.
+- A role binding on an unrelated payments project should fail for supported permissions because that project is outside the eligible resource area.
+- Google groups are useful in allow and deny policies. PAB bindings use their own supported principal-set types. If checkout engineers are only a Google group today, design the PAB target at the domain, Resource Manager, workforce, or workload identity layer before rollout.
+
+Verification should prove both sides. First, list the policy and its bindings:
+
+```bash
+gcloud iam principal-access-boundary-policies describe checkout-engineering-area \
+  --organization=123456789012 \
+  --location=global \
+  --format=yaml
+```
+
+```yaml
+details:
+  enforcementVersion: '4'
+  rules:
+  - effect: ALLOW
+    resources:
+    - //cloudresourcemanager.googleapis.com/folders/567890123456
+    - //cloudresourcemanager.googleapis.com/projects/checkout-observability
+```
+
+Second, use Policy Troubleshooter for one allowed checkout resource and one unrelated resource. A useful result says the checkout project is eligible while the unrelated payments project is blocked or ineligible for the supported permission being tested.
+
+PAB has sharp support limits. It blocks only permissions covered by the policy's enforcement version, and IAM can fail closed if it cannot evaluate the boundary. New principal details can also take time to propagate. Keep the boundary simple, avoid `latest` for enforcement in production unless your team accepts changing behavior, and test the exact permissions your checkout team uses.
+
+## IAM Recommender: Finding Excessive Access
+<!-- section-summary: IAM Recommender uses access data to suggest removing or narrowing role grants that appear too broad. -->
+
+**IAM Recommender** helps find excessive access. It analyzes IAM usage data and can suggest removing a role or replacing it with narrower roles if the current grant appears broader than observed usage. It can also surface security insights that help reviewers understand risky service account or group access.
+
+For the checkout incident, Recommender is useful around the incident rather than during immediate response. If the team discovers that checkout engineers already had permanent Editor on `checkout-prod`, the follow-up should use recommendation evidence to reduce that permanent grant. A better baseline might use log viewing and service viewing, with temporary elevation available for rare changes.
+
+Recommendations still need human review. A rare disaster recovery action may not appear in the recent observation window. A managed service agent can have permissions that look strange until you connect them to the service it supports. Treat Recommender as evidence for a least-privilege review, then test or stage changes before applying them to production.
+
+List IAM recommendations for the project after the incident:
+
+```bash
+gcloud recommender recommendations list \
+  --project=checkout-prod \
+  --location=global \
+  --recommender=google.iam.policy.Recommender \
+  --format=yaml
+```
+
+A shortened recommendation might look like this:
+
+```yaml
+- name: projects/456789012345/locations/global/recommenders/google.iam.policy.Recommender/recommendations/8c0f...
+  recommenderSubtype: REPLACE_ROLE
+  description: Replace role roles/editor with narrower roles.
+  primaryImpact:
+    category: SECURITY
+  content:
+    overview:
+      member: group:checkout-engineers@example.com
+      removedRole: roles/editor
+      suggestedRoles:
+      - roles/logging.viewer
+      - roles/run.viewer
+  lastRefreshTime: '2026-07-04T03:12:28Z'
+  etag: '"9d31b3f8"'
+```
+
+- `member` names the principal that has broad access.
+- `removedRole` shows the risky permanent role.
+- `suggestedRoles` gives a starting point for the baseline role set.
+- `lastRefreshTime` reminds reviewers that the recommendation reflects an observation window, not every future rare task.
+
+A safe staging flow keeps production risk low:
+
+| Step | Checkout review action | Evidence to keep |
+|---|---|---|
+| Claim | Mark the recommendation claimed while the team reviews it. | Recommendation ID, `etag`, reviewer, incident follow-up ticket. |
+| Compare | Check recent permissions, runbooks, disaster recovery tasks, and service-agent needs. | Owner approval and any reason to keep a role. |
+| Stage | Apply the narrower roles in staging or to one low-risk production group first. | Terraform plan, Policy Simulator result, smoke-test output. |
+| Apply | Replace the broad grant and keep PAM for rare elevation. | IAM policy delta and monitoring after the change. |
+| Close | Mark the recommendation succeeded or failed with a reason. | Final Recommender state and access-review notes. |
+
+## Privileged Access Manager: Managed Just-in-Time Access
+<!-- section-summary: Privileged Access Manager provides request, approval, temporary grant, automatic removal, and audit support for elevated access. -->
+
+**Privileged Access Manager**, or **PAM**, manages just-in-time elevated access. Instead of giving a powerful role permanently, a team creates an entitlement. The entitlement defines who may request access, which roles can be granted, which resource receives those roles, how long the grant can last, and who must approve it.
+
+For checkout production, an entitlement might allow eligible on-call engineers to request `roles/logging.viewer` and `roles/run.viewer` on `checkout-prod` for up to two hours. The request requires an incident number and approval from the incident commander. PAM adds the temporary role bindings after approval and removes them after the grant ends.
+
+PAM is a stronger operational fit than a manual one-off binding for recurring production elevation because it keeps request, approval, grant lifecycle, notification, and audit behavior in one tool. Conditional IAM bindings still help as a fallback, especially for infrastructure-managed windows, yet PAM is the cleaner path for repeated human elevation.
+
+An entitlement for checkout debugging might be recorded like this:
+
+```yaml
+entitlementId: checkout-prod-debug
+scope: projects/checkout-prod
+requesters:
+- group:checkout-oncall@example.com
+approvers:
+- group:incident-commanders@example.com
+approval:
+  approvalsNeeded: 1
+maximumGrantDuration: 7200s
+privilegedAccess:
+  gcpIamAccess:
+    resource: //cloudresourcemanager.googleapis.com/projects/checkout-prod
+    roleBindings:
+    - role: roles/logging.viewer
+    - role: roles/run.viewer
+requestJustification:
+  required: true
+```
+
+- `requesters` names who can ask for the entitlement.
+- `approvers` names who can approve the request.
+- `maximumGrantDuration: 7200s` caps the grant at two hours.
+- `roleBindings` lists the IAM roles PAM grants after approval.
+- The request justification should carry the incident ID, such as `INC-4821`.
+
+Maya's flow should be easy to follow. She opens PAM, requests `checkout-prod-debug`, enters `INC-4821` and a short reason, and asks for 90 minutes. The incident commander approves. A few minutes later, the project IAM policy includes Maya on the approved roles during the grant window:
+
+```yaml
+bindings:
+- role: roles/logging.viewer
+  members:
+  - user:maya@example.com
+- role: roles/run.viewer
+  members:
+  - user:maya@example.com
+```
+
+After the grant ends, those temporary members should disappear. Terraform or other IAM automation should use additive binding resources or documented exceptions so it does not overwrite PAM-created bindings during the active grant.
+
+Audit evidence should show the PAM lifecycle and the resulting IAM use:
+
+```yaml
+timestamp: '2026-07-04T16:02:11Z'
+protoPayload:
+  serviceName: privilegedaccessmanager.googleapis.com
+  methodName: google.cloud.privilegedaccessmanager.v1.PrivilegedAccessManager.CreateGrant
+  authenticationInfo:
+    principalEmail: maya@example.com
+  requestMetadata:
+    callerIp: 198.51.100.24
+resource:
+  labels:
+    project_id: checkout-prod
+```
+
+Pair that with approval and IAM evidence:
+
+```yaml
+grant:
+  entitlement: checkout-prod-debug
+  requester: maya@example.com
+  approver: incident-commander@example.com
+  requestedDuration: 5400s
+  justification: INC-4821 checkout log review
+  state: ENDED
+```
+
+- `CreateGrant` proves who requested access.
+- The approval record proves who accepted it.
+- The IAM policy delta proves which roles appeared during the grant.
+- The final `ENDED` state and missing IAM members prove cleanup.
+
+## Cloud Audit Logs: Reading the Evidence Trail
+<!-- section-summary: Cloud Audit Logs record administrative actions, data access events, system events, and policy denials across Google Cloud resources. -->
+
+**Cloud Audit Logs** are Google Cloud records that help answer who did what, where, and at what time. For identity and security review, they connect the access request to the actual production activity. They also show IAM policy changes and policy-denied events after guardrails block a request.
+
+During the checkout incident, the team should collect logs for Maya's activity and logs for IAM policy changes in the incident window. A Logs Explorer or `gcloud logging read` filter can focus the review before the team exports a larger evidence package.
+
+```bash
+gcloud logging read \
+  'resource.type="audited_resource"
+   protoPayload.authenticationInfo.principalEmail="maya@example.com"
+   timestamp >= "2026-07-04T15:30:00Z"
+   timestamp <= "2026-07-04T18:15:00Z"' \
+  --project=checkout-prod \
+  --limit=20 \
+  --format=yaml
+```
+
+- The filter searches audited-resource entries for Maya in the incident window.
+- `--project` keeps the query focused on checkout production.
+- `--limit` keeps the first pass readable; a formal export can use a broader limit or sink.
+
+Useful output should show the caller, service, method, resource, and timestamp:
+
+```yaml
+timestamp: '2026-07-04T16:42:11.219Z'
 protoPayload:
   authenticationInfo:
     principalEmail: maya@example.com
@@ -215,165 +472,64 @@ resource:
     project_id: checkout-prod
 ```
 
-A second query can focus on IAM policy changes during the incident window:
+- `principalEmail` confirms the requester whose activity is under review.
+- `serviceName` and `methodName` show which Google Cloud API was called.
+- `resource.labels.project_id` confirms the production project involved in the event.
 
-```logging
-resource.type="project"
-protoPayload.methodName:"SetIamPolicy"
-timestamp >= "2026-06-14T16:00:00Z"
-timestamp <= "2026-06-14T19:15:00Z"
+Search IAM policy changes separately:
+
+```bash
+gcloud logging read \
+  'resource.type="project"
+   protoPayload.methodName:"SetIamPolicy"
+   timestamp >= "2026-07-04T15:30:00Z"
+   timestamp <= "2026-07-04T18:15:00Z"' \
+  --project=checkout-prod \
+  --limit=20 \
+  --format=yaml
 ```
 
-This query looks for IAM policy changes, including temporary grants and removals. A reviewer should inspect the caller, the target project, and the delta in the policy change:
-
-```yaml
-timestamp: '2026-06-14T16:21:04.771Z'
-protoPayload:
-  authenticationInfo:
-    principalEmail: privilegedaccessmanager.googleapis.com
-  methodName: SetIamPolicy
-  resourceName: projects/checkout-prod
-  serviceData:
-    policyDelta:
-      bindingDeltas:
-      - action: ADD
-        member: user:maya@example.com
-        role: roles/logging.viewer
-```
-
-Those queries are only starting points. Real investigations usually add the project ID, service name, method names, or PAM-related fields once the first results show the shape of the event. The important habit is to capture the evidence package while the incident is still fresh: request reason, approval, grant start and end time, IAM changes, production actions, and any policy denials.
+- `SetIamPolicy` finds allow-policy changes such as temporary grant creation and removal.
+- The project filter keeps the evidence tied to the incident scope.
+- Reviewers should compare the policy delta with the approved request.
 
 ![Audit evidence package](/content-assets/articles/article-cloud-providers-gcp-identity-security-guardrails-temporary-access-audit-evidence/audit-evidence-package.png)
-*An after-incident evidence package should prove approval, IAM change, production activity, policy denials, and cleanup without relying on memory.*
+*A useful evidence package connects request, approval, IAM delta, production activity, guardrail blocks, and cleanup.*
 
-Data Access audit logs deserve extra planning. Admin Activity logs are written by default and stay enabled. Data Access logs can be large and start disabled by default for many services outside BigQuery, so security teams decide which production services need them, where to route them, who can read them, and how long to retain them. A team that waits until after a sensitive incident to enable Data Access logs may have a gap in the evidence.
+Data Access audit logs need planning. Admin Activity logs are enabled by default, while Data Access logs can be large and may need explicit enablement for the services you care about. If your team needs evidence of sensitive reads, configure those logs before the incident.
 
-## Break-Glass Access
-<!-- section-summary: Break-glass access is reserved emergency access with strict protection, approval, monitoring, and after-action review. -->
+## How AWS Readers Can Map the Ideas
+<!-- section-summary: GCP guardrails map to familiar AWS controls, with different policy surfaces and evidence tools. -->
 
-**Break-glass access** is emergency access for the moment when the normal path is unavailable or too slow for the risk in front of the team. It might be needed if the identity provider is down, PAM is unavailable, a bad IAM change locked out normal administrators, or a production incident threatens customer data while the usual approval chain lacks time.
+AWS readers can map the shape of the access program to familiar tools. IAM deny policies play a role similar to strong deny statements and some SCP-style guardrails. Principal access boundaries overlap with the idea of keeping principals inside an approved resource area, while AWS permissions boundaries limit the maximum permissions an identity-based policy can grant to a principal.
 
-Break-glass accounts should stay separate from daily work. They need strong multi-factor authentication, a small owner list, clear storage and recovery procedures, and alerting when anyone signs in or uses them. The access should be powerful enough to recover the environment, but the process around it should make casual use uncomfortable and visible.
+IAM Recommender fills part of the access-review evidence job that AWS IAM Access Analyzer and Access Advisor-style workflows often support. Privileged Access Manager covers just-in-time temporary elevation, similar to temporary role sessions wrapped in an approval workflow. Cloud Audit Logs are the GCP evidence source closest to CloudTrail for who-did-what questions.
 
-In the checkout story, PAM should be the normal first tool for temporary production debugging and log inspection. Break-glass would enter the story only if the normal identity path failed during the incident, or if a misconfigured deny or boundary policy blocked the platform team from restoring access. When someone uses break-glass, the incident record should explain why PAM or normal administrator access was unavailable for the situation.
+The main GCP difference is hierarchy and policy placement. Organization, folder, project, and resource scopes all matter for effective access. PAM works by adding and removing IAM role bindings on resources, so Terraform and other policy automation should avoid clobbering those temporary bindings.
 
-A strong break-glass procedure records:
+## Putting the Review Together
+<!-- section-summary: A complete production access review ties baseline access, temporary grants, guardrails, recommendations, and audit evidence into one routine. -->
 
-| Control | What It Captures |
-|---|---|
-| **Named emergency identities** | Which account or group can recover access. |
-| **Credential protection** | How MFA devices, passkeys, recovery codes, and passwords are stored. |
-| **Activation reason** | Incident number, business impact, and why normal access was unavailable. |
-| **Real-time alerting** | Security and platform notifications when the identity signs in or changes IAM. |
-| **After-action cleanup** | Password rotation, session review, audit log export, and a written follow-up. |
+For the checkout incident, the final review should be simple enough for a new team member to follow. Maya requested log and Cloud Run viewer access for incident `INC-4821`. The approver accepted the request for two hours. PAM or a conditional fallback created the temporary role bindings. Maya inspected Cloud Run service details and logs. Folder guardrails stayed active. The grant ended. Audit logs and the incident record show the path.
 
-Real emergencies happen, so the access path needs to be rare, monitored, and reviewable. A break-glass path that nobody tests can fail at the worst moment. A break-glass path used for ordinary debugging is just permanent privileged access with a dramatic name. The healthy middle is a tested procedure with clear evidence requirements.
+That review should tell a plain story rather than present a pile of screenshots. The story is: what production problem required access, which exact access was granted, how long it lasted, what Maya did with it, which guardrails stayed active, and how the team proved cleanup. If the story has a gap, the process needs a fix before the next incident.
 
-## Terraform Review Habits for IAM Changes
-<!-- section-summary: Terraform IAM diffs need reviewers to inspect scope, role size, principal type, expiration, and interaction with PAM-managed bindings. -->
+After the incident, the team should also review permanent access. If Recommender shows broad roles on the checkout engineer group, replace them with narrower baseline access and a PAM entitlement for rare elevation. If a deny policy blocked a risky action during the incident, keep the evidence because it proves the guardrail worked. If Data Access logs were missing for a sensitive read, add that logging decision to the platform backlog.
 
-Terraform is often the place where IAM access is applied. A pull request can grant a role at the organization, folder, project, or resource level. It can also change deny policies, conditional bindings, service account impersonation, logging sinks, and the resources that IAM policies protect. That means Terraform review is a security review as much as an infrastructure review.
+The point is practical access hygiene. Production teams need a way to help during incidents, and security teams need access that stays explainable after the incident. Guardrails, temporary access, recommendations, PAM, and Cloud Audit Logs give both sides a shared path.
 
-The first Terraform habit is to review the **scope** before the role name. A `roles/logging.viewer` binding on one project has a small blast radius. The same role on the production folder gives visibility into every project below that folder. A service account impersonation role on one deployer service account is one thing; the same permission across a folder can create a lateral movement path.
+## References
 
-The second habit is to review the **resource type** used by the Google provider. Authoritative IAM resources manage a whole policy or a whole role binding and can remove members that another system added. Non-authoritative member resources manage a single member binding. When PAM manages temporary role bindings, non-authoritative Terraform resources reduce the chance that an apply removes PAM's active grants.
-
-The third habit is to require a clear story for every production IAM change. The pull request should say who receives access, which role they receive, where the role is attached, why the role is needed, how long it should last, and which ticket or incident owns the request. If the answer is "debug checkout failures for two hours," the review should prefer PAM or a conditional binding. If the answer is "normal on-call log visibility," the review should prefer a group binding with the narrowest stable role.
-
-This conditional binding example carries review-friendly information in the resource name, condition title, and description:
-
-```hcl
-resource "google_project_iam_member" "checkout_oncall_log_viewer" {
-  project = "checkout-prod"
-  role    = "roles/logging.viewer"
-  member  = "group:checkout-oncall@example.com"
-
-  condition {
-    title       = "checkout_oncall_business_hours"
-    description = "Checkout on-call log access for production support"
-    expression  = "request.time.getDayOfWeek(\"Europe/London\") >= 1 && request.time.getDayOfWeek(\"Europe/London\") <= 5"
-  }
-}
-```
-
-This config is consumed as a stable Terraform-managed IAM member binding for the checkout on-call group. The `member` field uses a group instead of a personal user so the identity team can manage membership separately, and the `condition` expression makes the intended support window visible to reviewers. If the team needs true 24/7 incident visibility, the reviewer should change the design rather than silently accept a business-hours condition that conflicts with operations.
-
-The plan should make the scope and condition easy to inspect:
-
-```hcl
-# google_project_iam_member.checkout_oncall_log_viewer will be created
-+ resource "google_project_iam_member" "checkout_oncall_log_viewer" {
-    project = "checkout-prod"
-    role    = "roles/logging.viewer"
-    member  = "group:checkout-oncall@example.com"
-
-    condition {
-      title       = "checkout_oncall_business_hours"
-      description = "Checkout on-call log access for production support"
-      expression  = "request.time.getDayOfWeek(\"Europe/London\") >= 1 && request.time.getDayOfWeek(\"Europe/London\") <= 5"
-    }
-  }
-```
-
-That example is a teaching shape rather than a universal recommendation. Many teams give on-call groups stable log visibility because incidents happen outside business hours. The useful part is the review pattern: the condition is visible, the principal is a group rather than a personal user, and the scope is one production project rather than the organization.
-
-For IAM pull requests, reviewers should pause on these changes:
-
-| Terraform Diff | Reviewer Concern |
-|---|---|
-| `google_organization_iam_*` | Company-wide blast radius. |
-| `google_folder_iam_*` | Every child project inherits the role. |
-| `roles/owner`, `roles/editor`, `roles/viewer` | Basic roles grant broad access across many services. |
-| `roles/iam.serviceAccountTokenCreator` or `roles/iam.serviceAccountUser` | The principal may act as or mint tokens for a service account. |
-| IAM resources with no condition for a short request | Temporary work may turn into permanent access. |
-| Authoritative IAM resources around PAM-managed resources | Terraform may remove temporary grants managed by PAM. |
-| Logging sink or retention changes | Audit evidence may disappear or move beyond reviewer access. |
-
-Good Terraform review makes the production access story clear. The diff says what changed. The ticket says why. The IAM scope is narrow. Temporary access has an expiration path. Audit logs prove what happened after the change.
-
-## Access Review Cadence
-<!-- section-summary: Access reviews need different rhythms for emergency access, temporary grants, broad roles, recommendations, and Terraform drift. -->
-
-Access review works best as a routine, because production IAM rarely fails all at once. It drifts. A temporary grant misses cleanup. A folder-level group gains a new member. A service account keeps an old broad role after the deployment pipeline changed. A logging sink loses a destination during a refactor. The combined effect weakens the identity layer.
-
-A cadence gives each kind of risk a normal review window:
-
-| Cadence | Review Area | Evidence |
-|---|---|---|
-| **After each incident** | PAM grants, manual IAM changes, break-glass usage, and audit queries for the incident window. | Incident ticket, approval record, Cloud Audit Logs, and cleanup PR. |
-| **Weekly** | Active or recently expired temporary grants, emergency access alerts, and unusual Policy Denied logs. | PAM grant list, alert history, and Logs Explorer queries. |
-| **Monthly** | Project and folder IAM changes, broad roles, service account impersonation grants, and logging sink health. | Terraform diffs, Cloud Asset Inventory exports, Recommender findings, and audit log routes. |
-| **Quarterly** | Organization-level IAM, production folder inheritance, principal access boundaries, deny policies, and break-glass procedure tests. | Access certification, policy review notes, test evidence, and owner sign-off. |
-
-The checkout incident creates a simple after-incident checklist. The review should show that Maya's PAM grant ended, no manual IAM binding remains, the audit log package includes approval and removal evidence, and break-glass stayed unused. Any discovered permanent broad role turns into a remediation item with IAM Recommender evidence and a Terraform pull request.
-
-The cadence also keeps ownership visible. Security teams usually own organization guardrails, deny policies, principal access boundaries, and break-glass policy. Platform teams usually own PAM entitlements, Terraform modules, and shared logging routes. Product teams usually own whether their service groups still need the access they have. A review that names the owner has a much better chance of producing a change instead of a spreadsheet nobody trusts.
-
-## Putting It All Together
-<!-- section-summary: A good GCP production access workflow grants short-lived access, keeps guardrails active, records approval, checks logs, and removes access cleanly. -->
-
-Let's replay the checkout incident with the full workflow in place. The team starts by checking whether Maya already has the right access through a production folder group. The review shows that baseline access allows normal dashboard visibility, but detailed production log inspection requires a temporary role. The folder already has deny policies that block project deletion and other high-risk actions, so emergency debugging stays inside those hard lines.
-
-Maya requests the `checkout-prod-debugging` PAM entitlement for two hours and includes the incident number. The incident commander approves the request. PAM grants `roles/logging.viewer` and `roles/run.viewer` on the `checkout-prod` project, and the principal access boundary for checkout engineers keeps the eligible resource area focused on checkout-owned production resources.
-
-Maya inspects Cloud Run revisions and logs, finds that payment callback requests started timing out after a provider endpoint changed behavior, and shares the evidence in the incident channel. The application team rolls back the checkout configuration. PAM removes Maya's temporary role bindings when the grant ends, and the team confirms in Cloud Audit Logs that the access appeared, was used for the incident, and was removed.
-
-After the incident, the team reviews the permanent access that made the investigation possible. IAM Recommender shows one old broad role on a checkout deployment service account, so the platform team opens a Terraform pull request to replace it with narrower roles. Security reviews the folder-level guardrails and confirms that the deny policies, principal access boundary bindings, and logging routes still match the production access design.
-
-That is the whole pattern. **Inherited access gets reviewed before new access is granted. Deny policies create hard stops. Principal access boundaries keep principals inside their expected resource area. IAM Recommender reduces permanent excess. PAM handles temporary elevated access. Cloud Audit Logs prove who did what, where, and when. Break-glass stays separate. Terraform IAM changes receive security-level review.** When those habits work together, production access can be fast during an incident and still leave a clean explanation afterward.
-
----
-
-**References**
-
-- [Google Cloud: Using resource hierarchy for access control](https://cloud.google.com/iam/docs/resource-hierarchy-access-control) - Explains organization, folder, project, and resource-level IAM inheritance.
-- [Google Cloud: Manage access to projects, folders, and organizations](https://cloud.google.com/iam/docs/granting-changing-revoking-access) - Documents how allow policies grant roles on parent resources and descendants.
-- [Google Cloud: Deny policies](https://cloud.google.com/iam/docs/deny-overview) - Describes deny policy structure, inheritance, deny rules, and conditions.
-- [Google Cloud: Principal access boundary policies](https://cloud.google.com/iam/docs/principal-access-boundary-policies) - Explains how principal access boundaries restrict eligible resource access for principal sets.
-- [Google Cloud: Overview of role recommendations](https://cloud.google.com/iam/docs/recommender-overview) - Describes IAM Recommender, role recommendations, policy insights, observation periods, and excessive-permission cleanup.
-- [Google Cloud: Privileged Access Manager overview](https://cloud.google.com/iam/docs/pam-overview) - Explains PAM concepts, grant retention, and Terraform interaction with PAM-managed role bindings.
-- [Google Cloud: Request temporary elevated access with PAM](https://cloud.google.com/iam/docs/pam-request-temporary-elevated-access) - Documents requesting grants against entitlements for a fixed duration.
-- [Google Cloud: Create entitlements in Privileged Access Manager](https://cloud.google.com/iam/docs/pam-create-entitlements) - Documents entitlement roles, requesters, approvers, conditions, and maximum grant duration.
-- [Google Cloud: Cloud Audit Logs overview](https://cloud.google.com/logging/docs/audit) - Explains Admin Activity, Data Access, System Event, Policy Denied logs, and caller identity fields.
-- [Google Cloud: Configure temporary access](https://cloud.google.com/iam/docs/configuring-temporary-access) - Shows time-bounded access with conditional role bindings.
-- [Google Cloud: IAM Conditions overview](https://cloud.google.com/iam/docs/conditions-overview) - Explains conditional access in allow policies, deny policies, and principal access boundary policy bindings.
+- [IAM policy types](https://docs.cloud.google.com/iam/docs/policy-types) - Explains allow policies, deny policies, principal access boundary policies, and policy evaluation.
+- [Deny policies](https://docs.cloud.google.com/iam/docs/deny-overview) - Documents how IAM deny policies block supported permissions.
+- [Deny access to resources](https://docs.cloud.google.com/iam/docs/deny-access) - Shows deny-policy structure, attachment points, denied principals, exceptions, and denied permissions.
+- [Principal access boundary policies](https://docs.cloud.google.com/iam/docs/principal-access-boundary-policies) - Explains eligibility boundaries for principal sets and supported resources.
+- [Create and apply principal access boundary policies](https://docs.cloud.google.com/iam/docs/principal-access-boundary-policies-create) - Documents PAB rule files, enforcement versions, policy bindings, and simulator checks.
+- [Temporary elevated access overview](https://docs.cloud.google.com/iam/docs/temporary-elevated-access) - Describes temporary elevation patterns and Privileged Access Manager.
+- [Privileged Access Manager overview](https://docs.cloud.google.com/iam/docs/pam-overview) - Documents PAM entitlements, grants, and IAM policy modification behavior.
+- [Create entitlements in Privileged Access Manager](https://docs.cloud.google.com/iam/docs/pam-create-entitlements) - Documents entitlement fields such as requester, approver, role, and maximum grant duration.
+- [Request temporary elevated access with Privileged Access Manager](https://docs.cloud.google.com/iam/docs/pam-request-temporary-elevated-access) - Documents fixed-duration grant requests and automatic role removal.
+- [Review and apply role recommendations](https://docs.cloud.google.com/policy-intelligence/docs/review-apply-role-recommendations) - Shows IAM Recommender commands, recommendation fields, and safe state transitions.
+- [Remediate excessive permissions with Privileged Access Manager](https://docs.cloud.google.com/iam/docs/pam-remediate-iam-recommendations) - Shows how IAM Recommender findings can move toward on-demand access.
+- [Cloud Audit Logs overview](https://docs.cloud.google.com/logging/docs/audit) - Explains audit logs and the who-did-what evidence model.
+- [Understanding audit logs](https://docs.cloud.google.com/logging/docs/audit/understanding-audit-logs) - Documents Admin Activity, Data Access, System Event, and Policy Denied audit log types.

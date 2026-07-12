@@ -10,5 +10,3 @@
     mode: "0640"
   no_log: true
 ```
-
-The task still manages the secret-bearing file, but Ansible should not print token-bearing values in task output.

@@ -1,57 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A developer says, `We have Azure SQL automated backups, so recovery is done.` A bad release wrote wrong order statuses for 20 minutes. What is missing from that statement?",
+      "scenario": "The Orders checkout service has a documented 15-minute RPO and 60-minute RTO. Azure Backup reports that the nightly backup completed, but the team has never restored the database, reconnected Key Vault secrets, or proved the app can serve a checkout in a recovery environment. During the design review, what should the recovery lead conclude?",
       "options": [
-        { "id": "a", "text": "The restore time, restored database target, app cutover plan, data repair plan, and validation evidence." },
-        { "id": "b", "text": "Only a nicer database name, because backups automatically update the app." },
-        { "id": "c", "text": "Only a larger App Service plan, because compute capacity restores bad rows." },
-        { "id": "d", "text": "Nothing, because every backup is already a complete recovery plan." }
+        {
+          "id": "a",
+          "text": "The backup copy exists, but recovery readiness is still unproven until the team restores the workload and validates the full application path."
+        },
+        {
+          "id": "b",
+          "text": "The backup job result is enough to call the service recoverable because the remaining dependencies can be fixed during an incident."
+        },
+        {
+          "id": "c",
+          "text": "The team can defer restore validation to the next scheduled recovery exercise, because the successful backup run already proves the protection design is working."
+        },
+        {
+          "id": "d",
+          "text": "The written RTO and RPO targets are enough evidence because they already define how recovery will work."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A backup is a restore source. Recovery also needs a target, a cutover path, validation, and a decision about valid data written after the restore point."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "Azure SQL point-in-time restore creates `orders-restored-20260517-1020`. What should the team remember?",
-      "options": [
-        { "id": "a", "text": "The restored database is a target the app must be pointed to or used for repair; it does not automatically replace application behavior." },
-        { "id": "b", "text": "The restore deletes all later production data automatically." },
-        { "id": "c", "text": "The restored database means RTO is zero because the database name exists." },
-        { "id": "d", "text": "The app can ignore secrets and connection strings after a restore." }
+      "correct": [
+        "a"
       ],
-      "correct": ["a"],
-      "explanation": "The restore gives the team a database target. The recovery plan still has to decide how the app uses it and how the team handles data after the chosen restore point."
+      "explanation": "A completed backup job proves only that Azure stored a recovery source. It does not prove the team can restore the database, reconnect identity and secrets, route traffic correctly, and validate a working checkout flow within the target window. The closest distractor is the backup-job answer, because dependencies really might be repairable later, but that is still guesswork until a restore drill proves the whole path. See [Microsoft Learn: Back up and restore your data in Azure](https://learn.microsoft.com/en-us/azure/backup/backup-overview) and [Microsoft Learn: Validate Azure VM backups by using restore tests](https://learn.microsoft.com/en-us/azure/backup/backup-azure-restore-validation)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A receipt blob is deleted by mistake. The storage account has blob soft delete with a 14-day retention period.",
+      "scenario": "During a recovery drill, the team restores the Orders database into a safe target in 18 minutes. The checkout app still cannot place an order because its recovery app lacks the right Key Vault access and the recovered subnet is missing the firewall path to Azure SQL. The incident manager asks what the drill actually exposed.",
       "options": [
-        { "id": "a", "text": "The team may be able to recover the blob within the retention window, but the recovery process and verification still matter." },
-        { "id": "b", "text": "The blob can be recovered forever, no matter how retention is configured." },
-        { "id": "c", "text": "Soft delete only protects SQL rows and has no relationship to blobs." },
-        { "id": "d", "text": "The app automatically switches users to a recovered receipt without any restore action." }
+        {
+          "id": "b",
+          "text": "The drill should be counted as successful because the database was restored inside the RTO target."
+        },
+        {
+          "id": "c",
+          "text": "The right fix is to restore into a larger database tier so the application can start with more headroom."
+        },
+        {
+          "id": "a",
+          "text": "The team tested only one recovery source, not the full application recovery workflow that includes identity, configuration, and network dependencies."
+        },
+        {
+          "id": "d",
+          "text": "The team proved the restore target works, so the remaining identity and network fixes can be deferred to a separate application readiness drill."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Soft delete can help with accidental deletion during its retention window. The team still needs a process to restore the object and prove users can read the right receipt."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The drill proved that data restore alone was not enough to recover the service. Recovery planning has to include the restored target, identity, secrets, network path, and application validation. The closest distractor is the database-only success claim, because the restore did finish quickly, but the article's point is that users care about a working workflow, not an isolated database status. See [Microsoft Learn: Back up and restore your data in Azure](https://learn.microsoft.com/en-us/azure/backup/backup-overview) and [Microsoft Learn: Validate Azure VM backups by using restore tests](https://learn.microsoft.com/en-us/azure/backup/backup-azure-restore-validation)."
     },
     {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "Which items belong in a recovery plan instead of only in a backup inventory?",
+      "id": "02-set-rto-and-rpo-q1",
+      "type": "single",
+      "scenario": "The commerce director says the business can tolerate losing at most 15 minutes of newly placed orders, but checkout must be usable again within 60 minutes of a declared incident. Which mapping is correct for the recovery plan?",
       "options": [
-        { "id": "a", "text": "What data or workflow must come back first." },
-        { "id": "b", "text": "Which restore target is created and how the app uses it." },
-        { "id": "c", "text": "What proves recovery worked, such as checkout tests, receipt reads, metrics, and data checks." },
-        { "id": "d", "text": "A vague note that backups exist somewhere." }
+        {
+          "id": "b",
+          "text": "RTO is 15 minutes, and RPO is 60 minutes."
+        },
+        {
+          "id": "a",
+          "text": "RPO is 15 minutes, and RTO is 60 minutes."
+        },
+        {
+          "id": "c",
+          "text": "RPO is 60 minutes because it measures how long the outage can last, and RTO is 15 minutes because it measures how recent the restored data must be."
+        },
+        {
+          "id": "d",
+          "text": "RPO is 15 minutes, and RTO should be omitted because the service can restore from backups when needed."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A recovery plan names priority, target, app cutover or repair, and validation. A vague backup inventory does not tell the team how users get a working service back."
+      "correct": [
+        "a"
+      ],
+      "explanation": "RPO is the acceptable data-loss window, and RTO is the acceptable service-outage window. The closest distractor is the reversed pair, because both values are time based and easy to swap under pressure, but the meaning of each target is different and drives different design choices. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
+    },
+    {
+      "id": "02-set-rto-and-rpo-q2",
+      "type": "single",
+      "scenario": "The Orders database is backed up once every 24 hours. Business stakeholders accept no more than one hour of lost committed order data after a restore. During the review, what issue should be raised first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The backup schedule is acceptable if the database restore can finish inside one hour, because that satisfies the stated target."
+        },
+        {
+          "id": "c",
+          "text": "The team mainly needs faster restore automation, because the backup interval does not affect whether the restored data is recent enough."
+        },
+        {
+          "id": "d",
+          "text": "The review should focus first on whether the team has enough restore engineers on call, because RPO is mostly an incident staffing issue."
+        },
+        {
+          "id": "a",
+          "text": "The recovery-point design does not satisfy the one-hour RPO target."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A one-hour RPO means the recovered data should be no more than about one hour behind the incident, so one restore point per day is an obvious mismatch. The closest distractor is the restore-time answer, because teams often confuse how fast they can restore with how recent the recovered data will be, but RPO is about acceptable data loss, not restore speed. See [Microsoft Learn: Back up and restore your data in Azure](https://learn.microsoft.com/en-us/azure/backup/backup-overview)."
+    },
+    {
+      "id": "02-set-rto-and-rpo-q4",
+      "type": "single",
+      "scenario": "The team can restore the Orders database in 20 minutes, but a realistic recovery still requires recreating network access, restoring Key Vault references, warming the app, and switching traffic. Those extra steps take another 90 minutes. Which statement is the best review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The real RTO is measured against the full service recovery path, not just the database restore duration."
+        },
+        {
+          "id": "b",
+          "text": "Only the database restore time counts because the application can finish its own setup after users return."
+        },
+        {
+          "id": "c",
+          "text": "Those extra tasks change the RPO instead of the RTO because they happen after the restore point is chosen."
+        },
+        {
+          "id": "d",
+          "text": "The dependency steps can be ignored if the database recovery itself meets the written objective."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "RTO ends when the service is usefully back, so dependent identity, network, application, and routing steps belong in the timing. The closest distractor is the database-only view, because database recovery is often the longest technical step, but a user cannot complete checkout until the whole path works. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
+    },
+    {
+      "id": "03-choose-recovery-strategy-q2",
+      "type": "single",
+      "scenario": "A nightly finance export is derived from the Orders database and can be rebuilt from source data the next morning without customer impact. The team wants a lower-cost recovery design than checkout uses. Which strategy is the most defensible fit?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Active-active across regions so the export workflow never pauses, regardless of cost."
+        },
+        {
+          "id": "c",
+          "text": "Warm standby with a permanently running duplicate export stack, even though the workflow is rebuildable and low urgency."
+        },
+        {
+          "id": "a",
+          "text": "Backup and restore, with documented rebuild steps and an accepted longer RTO."
+        },
+        {
+          "id": "d",
+          "text": "No documented recovery path, because rebuildable internal workflows do not need an agreed owner or objective."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A rebuildable, lower-urgency workflow often fits a backup-and-restore design with a longer accepted RTO. The closest distractor is warm standby, because it would shorten recovery, but the scenario is explicitly asking for a lower-cost shape where the business can tolerate delay. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
+    },
+    {
+      "id": "03-choose-recovery-strategy-q3",
+      "type": "multiple",
+      "scenario": "The Orders checkout workflow must recover within 60 minutes and lose no more than 15 minutes of committed data. The architecture review is choosing between backup and restore, pilot light, warm standby, and active-active. Before cost discussions, which two technical requirements should drive that choice most directly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The required RTO and RPO."
+        },
+        {
+          "id": "c",
+          "text": "How quickly dependent application and infrastructure components can be brought online after the recovery path starts."
+        },
+        {
+          "id": "b",
+          "text": "The data consistency and replication behavior the workflow can safely tolerate."
+        },
+        {
+          "id": "d",
+          "text": "Whether the team already has a documented escalation path for approving cross-region failover actions."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "RTO and RPO tell the team how fast and how current recovery must be, and consistency or replication behavior tells the team whether a more active topology is actually safe for the workload. The closest distractor is the dependency-startup answer, because recovery sequencing does matter, but it is a second-order implementation detail after the business recovery targets and replication model are understood. See [Microsoft Learn: Redundancy, replication, and backup](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
     }
   ]
 }

@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A vendor import tool expects files under `/mnt/incoming` and writes results beside them. What storage shape is this?",
+      "scenario": "Northstar Manufacturing is migrating a legacy database process to one Compute Engine VM. The process requires a mountable block filesystem at `/var/lib/app/data`, uses `fsync` and atomic file renames, and does not share the path with another VM. The disk must survive VM replacement. Which storage choice best matches these constraints?",
       "options": [
-        { "id": "a", "text": "Attached filesystem-shaped storage." },
-        { "id": "b", "text": "Relational checkout records." },
-        { "id": "c", "text": "A warehouse query." },
-        { "id": "d", "text": "A signed URL only." }
+        {
+          "id": "a",
+          "text": "Attach a Persistent Disk or Hyperdisk with the required performance and durability, then format and mount it at `/var/lib/app/data`."
+        },
+        {
+          "id": "b",
+          "text": "Mount a Cloud Storage bucket through Cloud Storage FUSE and treat its object operations as equivalent to the required block-device `fsync` and rename semantics."
+        },
+        {
+          "id": "c",
+          "text": "Provision Filestore for the single VM so the application gains shared NFS semantics that no current client requires."
+        },
+        {
+          "id": "d",
+          "text": "Keep the data on the boot disk and preserve it by creating a new custom VM image before each instance replacement."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The tool asks for a mounted path, which is attached-storage territory."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A durable attached block device matches the single-VM filesystem, `fsync`, and atomic-rename requirements while surviving VM replacement independently of the boot disk. Cloud Storage FUSE does not turn object storage into a block device with identical filesystem semantics. Filestore can provide shared NFS, but the scenario has no sharing requirement and would add an unnecessary service boundary. Rebuilding images from mutable customer data is not a recovery design. See [Persistent Disk overview](https://cloud.google.com/compute/docs/disks/persistent-disks)."
     },
     {
-      "id": "q2",
+      "id": "persistent-disk-q5",
       "type": "single",
-      "scenario": "A customer receipt should be downloaded later by object name. Which service remains the better first thought?",
+      "scenario": "A resize plan changes a VM machine type but leaves the disk type unchanged. The incident was caused by disk throughput saturation. What should the reviewer say?",
       "options": [
-        { "id": "a", "text": "Cloud Storage." },
-        { "id": "b", "text": "Persistent Disk by default." },
-        { "id": "c", "text": "Filestore by default." },
-        { "id": "d", "text": "A VM local folder with no backup." }
+        {
+          "id": "c",
+          "text": "Increase CPU and memory first because disk throughput scales only with the VM machine type."
+        },
+        {
+          "id": "d",
+          "text": "Change the filesystem mount path but keep the same saturated disk type, size, and workload pattern."
+        },
+        {
+          "id": "a",
+          "text": "Review disk type, size, and performance limits separately from CPU and memory sizing."
+        },
+        {
+          "id": "b",
+          "text": "Machine type changes generally remove disk bottlenecks."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Receipt PDFs are object-shaped, not attached-storage-shaped."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer separates compute sizing from disk performance. The distractors overstate machine changes or point to unrelated labels and Firestore indexes. See [Google Cloud performance documentation](https://cloud.google.com/compute/docs/disks/performance)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which are attached-storage signals?",
+      "id": "filestore-q1",
+      "type": "single",
+      "scenario": "A media processor runs on several VMs and all workers must read and write files under the same shared path. Which GCP storage service matches that requirement best?",
       "options": [
-        { "id": "a", "text": "The workload needs a mounted path." },
-        { "id": "b", "text": "The operating system should see a block device." },
-        { "id": "c", "text": "Several clients need a shared file tree." },
-        { "id": "d", "text": "The data is a business relationship between order rows." }
+        {
+          "id": "d",
+          "text": "Cloud Storage FUSE without testing the workers' concurrent writes and POSIX locking assumptions."
+        },
+        {
+          "id": "a",
+          "text": "Filestore, because it provides managed NFS file shares for Compute Engine and GKE clients."
+        },
+        {
+          "id": "b",
+          "text": "Persistent Disk attached read-write to every VM at once."
+        },
+        {
+          "id": "c",
+          "text": "A separate Persistent Disk for each VM plus periodic synchronization, accepting divergent files between sync runs."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Attached storage is about disks and filesystems presented to compute."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer picks Filestore for a shared NFS file path. A single Persistent Disk is not the same shared NFS service, Firestore is document storage, and object metadata is not file locking. See [Google Cloud docs documentation](https://cloud.google.com/filestore/docs/overview)."
+    },
+    {
+      "id": "filestore-q2",
+      "type": "multiple",
+      "scenario": "A migration moves a shared media workspace from a self-managed NFS server to Filestore. Six VMs mount /srv/media, workers rely on POSIX ownership and file locks, and peak writes reach 180 MiB/s. Which three checks belong in the readiness review?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Test the application ownership, permissions, concurrent-write, and locking behavior against the new share."
+        },
+        {
+          "id": "c",
+          "text": "Validate capacity, throughput, backups, and the selected Filestore service tier against the measured workload."
+        },
+        {
+          "id": "d",
+          "text": "Validate public CDN cache invalidation for every NFS write, even though clients access a private mounted path."
+        },
+        {
+          "id": "e",
+          "text": "Compare the source server's display name with the Filestore instance name as proof that file ownership and lock behavior match."
+        },
+        {
+          "id": "a",
+          "text": "Confirm client subnet reachability and the exact Filestore mount path used by every worker."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The migration must prove network and mount behavior, POSIX semantics, and performance and recovery fit. Public CDN invalidation is not part of a private NFS client path. See [Filestore mount documentation](https://cloud.google.com/filestore/docs/mounting-fileshares)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Northstar Photos runs three web VMs in a managed instance group. Each request writes an uploaded image to `/srv/uploads` on that VM's boot disk, and a later request can land on another instance. During routine replacement, hundreds of uploads disappear even though the replacement VM starts successfully. What design mistake caused the loss?",
+      "options": [
+        {
+          "id": "a",
+          "text": "User uploads were tied to replaceable instance-local state instead of durable storage chosen for the data shape."
+        },
+        {
+          "id": "b",
+          "text": "Keep uploads on a larger boot disk and rely on the managed instance group to copy that disk when it replaces a VM."
+        },
+        {
+          "id": "c",
+          "text": "Capture a new custom image after each upload so replacement instances include the latest customer files."
+        },
+        {
+          "id": "d",
+          "text": "Disable automated VM replacement so the instance-local upload directory remains attached to the original server."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Customer uploads were coupled to the lifecycle of one replaceable VM and were never placed in shared durable storage. A larger boot disk has the same lifecycle problem, managed instance groups do not copy mutable boot-disk data, and custom images are deployment artifacts rather than per-request storage. Disabling replacement sacrifices availability without making the design durable. See [Google Cloud disks documentation](https://cloud.google.com/compute/docs/disks)."
+    },
+    {
+      "id": "persistent-disk-q2",
+      "type": "single",
+      "scenario": "Northstar Manufacturing runs a stateful scheduler on a Compute Engine VM in `us-central1-a` with one zonal Persistent Disk. Its recovery objective requires the disk data to remain available if that zone fails, and the application architecture is supported for failover to `us-central1-b`. Which storage option should the reviewer compare with the current zonal disk?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Use Local SSD because its host-level replication preserves the volume when the zone or VM disappears."
+        },
+        {
+          "id": "d",
+          "text": "Increase the VM machine type because additional CPU and memory also convert a zonal disk into regional storage."
+        },
+        {
+          "id": "a",
+          "text": "Regional Persistent Disk or an architecture that replicates data across zones."
+        },
+        {
+          "id": "b",
+          "text": "Use one zonal Persistent Disk and attach the same writable disk to replacement VMs in both zones during a failure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer compares regional disk or application-level replication. Local SSD is not durable regional storage, labels do not replicate data, and machine size alone does not change disk availability. See [Google Cloud regional persistent disk documentation](https://cloud.google.com/compute/docs/disks/regional-persistent-disk)."
+    },
+    {
+      "id": "filestore-q3",
+      "type": "single",
+      "scenario": "Northstar Photos is designing storage for immutable user images that are uploaded once, delivered publicly at high scale, and removed by lifecycle policy after one year. The proposal uses Filestore even though clients do not mount a shared POSIX path or modify files in place. Which storage decision should the architect reconsider?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep Filestore because immutable objects still benefit from NFS locking and public web clients can mount the share directly."
+        },
+        {
+          "id": "c",
+          "text": "Use one Persistent Disk in multi-writer mode as the default public object origin without reviewing zone and filesystem limits."
+        },
+        {
+          "id": "d",
+          "text": "Store each image as a base64 field in Firestore so browser delivery and object lifecycle require no separate design."
+        },
+        {
+          "id": "a",
+          "text": "Whether object storage such as Cloud Storage is a better fit for immutable public objects."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer challenges the file-share choice for immutable public objects. The distractors confuse services or invent CDN and pricing behavior. See [Google Cloud docs documentation](https://cloud.google.com/storage/docs/introduction)."
     }
   ]
 }

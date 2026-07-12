@@ -1,7 +1,6 @@
 ---
-title: "Choose Disk or Files"
-sectionSlug: attached-storage
+title: "EBS, EFS, and FSx"
 order: 1
 ---
 
-The report workers need local scratch, shared input, finished exports, and order records. Separate block storage, shared filesystems, objects, and databases by how the app uses the data.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

@@ -1,1 +1,1 @@
-Start by listing what is inside `/var/log/` with `ls` or `find`. Then use `grep -r "sshd" /var/log/` to find which files mention SSH. Read `/var/log/syslog` with `cat` or `tail` to see the services that wrote to it.
+List the top-level log directory and the service-specific subdirectories first. Then use filtering to connect the request id across Nginx and the application log.

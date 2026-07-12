@@ -1,61 +1,141 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A teammate says the orders database has automated backups, so a bad migration is safe. What is the best next question?",
+      "scenario": "LearnTrail stores enrollment records in Azure SQL Database, invoice PDFs in Blob Storage, and activity events in Cosmos DB. The recovery policy says the platform must recover within a two-hour RTO and lose no more than four hours of data. During a readiness review, the service owner shows a green dashboard for last night's backup jobs and says the requirement is covered. What is the strongest review response?",
       "options": [
         {
           "id": "a",
-          "text": "Where would we restore the database, and how would we compare or repair the affected data safely?"
+          "text": "A successful backup job is only part of the story; the team still has to prove it can restore the right data to a usable target within the recovery objective."
         },
         {
           "id": "b",
-          "text": "Can we delete the migration review because backups exist?"
+          "text": "The green backup dashboard is enough because Azure-managed services already guarantee a working restore path."
         },
         {
           "id": "c",
-          "text": "Can we store the database backup in the receipt container?"
+          "text": "The team only needs documented retention windows and backup schedules, because restore drills are optional once backup automation is healthy."
         },
         {
           "id": "d",
-          "text": "Can we lower retention before the migration to reduce cost?"
+          "text": "The review only needs to confirm that backups finish inside the nightly maintenance window, because restore timing can be measured during a real outage."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Backups matter only when restore is understood. A bad migration needs a restore target, comparison path, and repair plan."
+      "explanation": "The correct answer is the only one that separates creating a recovery point from proving a usable restore. The closest distractor is the green-dashboard claim, but a successful backup job does not show which restore point to use, where to restore it, or whether the application can meet the RTO after recovery. Documented schedules and maintenance windows matter, but they still do not prove that the restore path works within the target objective. See [Azure Backup overview](https://learn.microsoft.com/en-us/azure/backup/backup-overview) and [Azure reliability guidance on backup and recovery](https://learn.microsoft.com/en-us/azure/reliability/concept-redundancy-replication-backup)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "Which statements separate backup from restore correctly?",
+      "type": "single",
+      "scenario": "An app team wants to verify its Azure SQL Database restore plan before a release freeze. To save time, it proposes restoring the production backup directly over the live database for ten minutes, running a smoke test, and then reopening traffic if nothing looks wrong. Which review decision best matches the article's restore guidance?",
       "options": [
         {
-          "id": "a",
-          "text": "A backup is a recovery point or copy."
-        },
-        {
           "id": "b",
-          "text": "Restore is bringing data back to a usable place."
+          "text": "Restore over production immediately, because the live database is the only place where a restore test is realistic."
         },
         {
           "id": "c",
-          "text": "A backup automatically decides which production rows should be repaired."
+          "text": "Skip the test restore if the selected recovery point is recent, because a fresh backup timestamp is the main risk control."
+        },
+        {
+          "id": "a",
+          "text": "Restore into an isolated target first, validate the recovered data and application behavior there, and only then plan any production cutover."
         },
         {
           "id": "d",
-          "text": "A restore drill proves whether the recovery path actually works."
+          "text": "Move the database to another region first, because restore validation is less important than regional redundancy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer follows the article's safe-restore pattern: recover beside production, validate there, and avoid turning a test into an outage. The closest distractor is restoring directly over production for realism, but that removes the known-good system before the recovered copy is proven. A recent timestamp and a second region do not replace restore validation. See [Restore a database in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups) and [Azure Backup overview](https://learn.microsoft.com/en-us/azure/backup/backup-overview)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "LearnTrail keeps one monthly backup for seven years to satisfy audit requirements. It also has a recurring operational problem: support often discovers accidental deletes three or four days after they happen. The current policy keeps no daily restore points beyond 24 hours. What is the best review finding?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The seven-year monthly policy is enough, because any missing record can be reconstructed from the next monthly recovery point."
+        },
+        {
+          "id": "a",
+          "text": "Long archival retention does not cover the short-term recovery window the support team actually needs."
+        },
+        {
+          "id": "c",
+          "text": "The team should standardize on one 30-day daily retention policy for every workload, even if different services have different recovery windows."
+        },
+        {
+          "id": "d",
+          "text": "The real issue is audit scope, because operational accidental deletes are an application problem rather than a backup design concern."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer distinguishes archival retention from day-to-day recovery. The closest distractor is the idea that a seven-year monthly policy is already enough, but a monthly point is too coarse when support discovers mistakes within days and needs a precise recent restore point. A single standard retention window for every workload ignores different RPO and RTO needs, and backup design absolutely includes accidental-delete recovery. See [Azure Backup overview](https://learn.microsoft.com/en-us/azure/backup/backup-overview)."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The invoice service stores PDF files in Azure Blob Storage. Compliance wants recovery from accidental overwrite and accidental deletion for at least 14 days, but the team does not want to make the container public or depend on users keeping local copies. Which controls directly support that recovery goal?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Blob versioning, so earlier blob versions remain available after an overwrite."
+        },
+        {
+          "id": "c",
+          "text": "Blob snapshots taken before planned maintenance windows, because point-in-time copies before scheduled changes are the main recovery tool for later accidental overwrites and deletes."
+        },
+        {
+          "id": "b",
+          "text": "Blob soft delete or container soft delete, so deleted data can be recovered during the configured retention window."
+        },
+        {
+          "id": "d",
+          "text": "A lifecycle rule that moves blobs to a cooler tier after a few days, because tiering preserves storage cost without creating delete recovery points."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "d"
+        "b"
       ],
-      "explanation": "The backup provides the source. The team still needs the restore process and judgment."
+      "explanation": "Blob versioning and soft delete are the controls that directly preserve recoverable copies after overwrite or delete. The closest distractor is the snapshot idea, because snapshots can help with controlled change windows, but they do not provide the broad continuous overwrite-and-delete recovery behavior described in the requirement. Tiering is also not a recovery copy and can even conflict with retention goals if it is designed badly. See [Soft delete for Azure Storage blobs](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview) and [Blob versioning](https://learn.microsoft.com/en-us/azure/storage/blobs/versioning-overview)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The data platform uses Azure Cosmos DB for activity events. The product owner now asks whether engineers can restore an item that was deleted last week. The current account is using a backup mode whose restore granularity does not meet that request. What should the review insist on before production approval?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase periodic backup retention and keep the same restore mode, because a longer backup history alone will satisfy item-level recovery from last week."
+        },
+        {
+          "id": "c",
+          "text": "Add a second read region, because regional replication keeps deleted items available in another location."
+        },
+        {
+          "id": "d",
+          "text": "Rely on the change feed and application audit logs as the primary restore path, because account restore is only needed for catastrophic service loss."
+        },
+        {
+          "id": "a",
+          "text": "Confirm that the Cosmos DB backup mode and restore capability match the required recovery point and restore workflow."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer keeps the discussion on the actual Azure recovery contract: backup mode, retention, and restore workflow have to match the requested recovery point. The closest distractor is increasing periodic retention, but longer history does not fix the wrong restore granularity or workflow. Replication copies the logical delete rather than acting as a restore point, and change feeds or audit logs are not a supported substitute for account restore capability. See [Azure Cosmos DB backup and restore](https://learn.microsoft.com/en-us/azure/cosmos-db/online-backup-and-restore)."
     }
   ]
 }

@@ -2,4 +2,4 @@ The TTL is the second column of the A-record row, in seconds. The runbook marks 
 
 ---
 
-`grep -c PATTERN file` returns just the count, no surrounding lines. Use it to get the stale-resolver number directly.
+Pipe the old-IP matches into `wc -l` to get the stale-resolver number directly while keeping the matching evidence available if you need to inspect it first.

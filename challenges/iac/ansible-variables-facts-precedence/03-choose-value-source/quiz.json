@@ -4,29 +4,93 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Both `orders-web-01` and `orders-web-02` use the same API port. Where should `orders_api_port: 8080` normally live?",
+      "scenario": "All production orders web hosts use port `8080`, while staging uses `8081`. The role default is `8000` for local testing. No individual production host needs an exception. Where should the production value normally live?",
       "options": [
-        {
-          "id": "a",
-          "text": "`group_vars/orders_web.yml`, because the value describes the whole group."
-        },
-        {
-          "id": "b",
-          "text": "Inside every task that needs the port."
-        },
-        {
-          "id": "c",
-          "text": "Only in a handler, because handlers run late."
-        },
-        {
-          "id": "d",
-          "text": "In the inventory group name itself."
-        }
+        { "id": "a", "text": "In production group variables, overriding the weak role default for the whole production web group." },
+        { "id": "b", "text": "In host variables for every production server so each host repeats the same value." },
+        { "id": "c", "text": "As an extra variable in every deployment command so it has the strongest precedence." },
+        { "id": "d", "text": "As a fact gathered from each host because environment policy should be discovered at runtime." }
       ],
-      "correct": [
-        "a"
+      "correct": ["a"],
+      "explanation": "The value is durable environment policy shared by a group, so production group variables are the clearest source. Repeating it in host variables creates drift, a permanent extra variable hides durable configuration in job input, and gathered facts describe host state rather than the team's desired application port."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The compiled production inventory shows `orders_api_port: 8080` for `orders-web-02`, but the release job runs `ansible-playbook ... -e orders_api_port=9090`. The rendered file uses `9090`. What is the best incident conclusion?",
+      "options": [
+        { "id": "b", "text": "The group variable failed to load because compiled inventory should always override command-line values." },
+        { "id": "a", "text": "The extra variable won as a strong runtime override, so the job input must be traced and removed or governed if it was unintended." },
+        { "id": "c", "text": "The template engine selected the numerically larger port, independent of variable precedence." },
+        { "id": "d", "text": "The host fact cache changed the value because facts outrank every explicit release input." }
       ],
-      "explanation": "A group variable keeps shared values close to the scope they describe and avoids repeated literals across tasks."
+      "correct": ["a"],
+      "explanation": "Extra variables have very high precedence, so this runtime input explains the winning value. The correct response is to trace the automation source and make exceptional overrides visible and temporary. Inventory, numeric comparison, and fact caching do not explain the observed result. See [Ansible variable precedence](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html)."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The team is reviewing variable sources for a reusable orders role. Which two placements create an auditable scope without turning runtime data into permanent configuration?",
+      "options": [
+        { "id": "a", "text": "Keep normal caller-tunable behavior in role defaults, then override it in environment group variables where policy differs." },
+        { "id": "c", "text": "Store a long-lived production endpoint in `set_fact` so later runs inherit it from the playbook." },
+        { "id": "b", "text": "Use a registered result for a command response that only later tasks in the same run need." },
+        { "id": "d", "text": "Pass every durable environment value through `-e` so Git does not reveal which configuration production uses." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Weak role defaults plus scoped inventory overrides form a visible configuration contract, while registered results correctly hold short-lived runtime evidence. `set_fact` affects later tasks in the current run rather than serving as a durable environment source. Hiding all durable policy in extra variables makes review and incident reconstruction harder."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A play targets a mixed Debian and Red Hat fleet. The package task currently runs `ansible.builtin.apt` on every host. Gathered facts show `ansible_facts.os_family` as `Debian` or `RedHat`. What is the best correction within the article's model?",
+      "options": [
+        { "id": "b", "text": "Put `os_family: Debian` in group variables so the apt task runs consistently on all hosts." },
+        { "id": "c", "text": "Pass `-e ansible_facts.os_family=Debian` during releases so the desired package manager wins precedence." },
+        { "id": "a", "text": "Gate the apt-specific task with the discovered OS family, and provide the appropriate path for the other family." },
+        { "id": "d", "text": "Register the apt failure and use that failed result as the permanent operating-system source." }
+      ],
+      "correct": ["a"],
+      "explanation": "The operating-system family is discovered host evidence, so the play should branch on that fact and use a suitable package path for each family. Overriding facts with desired values would misrepresent the hosts, while a failed task result is not durable inventory policy."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "`group_vars/prod.yml` sets `orders_api_port: 8080`. `host_vars/orders-web-02.yml` sets `orders_api_port: 8081` for a temporary compatibility exception. No play or extra variable overrides it. Which review outcome is correct?",
+      "options": [
+        { "id": "b", "text": "The host should render `8080` because a group value always outranks a host-specific value." },
+        { "id": "c", "text": "Ansible should fail because defining the same variable at group and host scope is invalid." },
+        { "id": "d", "text": "The result depends on inventory host order because the last server listed supplies the shared value." },
+        { "id": "a", "text": "`orders-web-02` should render `8081`, and the host exception should carry an owner and removal condition." }
+      ],
+      "correct": ["a"],
+      "explanation": "The narrower host variable wins over the group value in this stated setup. The exception is technically valid, but it should remain visible and temporary so it does not become unexplained drift. Duplicate definitions are resolved by precedence rather than host order or an automatic error."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A template renders `orders_api_port` early in the play. A later task runs `set_fact: orders_api_port=8082`, and a following debug task prints `8082`. An operator assumes the already-rendered file also changed to `8082`. What is the best correction?",
+      "options": [
+        { "id": "a", "text": "The new fact affects later evaluation only; the earlier file remains based on the value that existed when its template task ran." },
+        { "id": "b", "text": "`set_fact` retroactively rerenders every earlier template that referenced the same variable name." },
+        { "id": "c", "text": "The debug result proves the template task must have been skipped before the fact was set." },
+        { "id": "d", "text": "The file changes only if the host variable file is rewritten with the registered value." }
+      ],
+      "correct": ["a"],
+      "explanation": "Tasks evaluate variables when they run. A later `set_fact` can influence subsequent tasks but does not retroactively rerun an earlier template. The debug output proves the current runtime value, not the historical content decision."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A deployment uses port `9090`, but Git contains only `8080`. The compiled inventory also shows `8080`, and the job summary does not record command arguments. Which improvement most directly makes the next precedence incident diagnosable?",
+      "options": [
+        { "id": "a", "text": "Record the selected inventory, limited hosts, approved extra variables, and a non-secret view of the resolved operational values with the run." },
+        { "id": "b", "text": "Move all values into role vars so no caller or environment can override them." },
+        { "id": "c", "text": "Rename `orders_api_port` in every file after each release so stale overrides stop matching." },
+        { "id": "d", "text": "Disable debug and inventory output entirely so runtime values cannot conflict with Git." }
+      ],
+      "correct": ["a"],
+      "explanation": "Precedence incidents require evidence about the selected target and strong runtime inputs. Recording approved, non-secret run context makes the winning value traceable. Locking everything in role vars removes a useful interface, renaming evades governance, and suppressing evidence makes future diagnosis harder."
     }
   ]
 }

@@ -1,7 +1,7 @@
 ---
 title: "What Is GCP Compute"
-description: "Choose where application code should run in GCP by matching Cloud Run, Compute Engine, Cloud Run functions, and GKE to workload shape and team responsibility."
-overview: "Compute is the GCP layer where code gets CPU, memory, network access, startup behavior, scaling behavior, identity, and operating evidence. This article builds the foundation for choosing a runtime without turning the choice into a product list."
+description: "Choose where application code should run in GCP by matching workload shape to Cloud Run, Compute Engine, Cloud Run functions, and GKE."
+overview: "Compute is the GCP layer where your code gets CPU, memory, runtime startup, scaling, identity, logs, and a production operating path."
 tags: ["gcp", "compute", "cloud-run", "compute-engine", "gke"]
 order: 1
 id: article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model
@@ -16,245 +16,212 @@ aliases:
 ## Table of Contents
 
 1. [What GCP Compute Is](#what-gcp-compute-is)
-2. [The Orders Team Scenario](#the-orders-team-scenario)
-3. [The Four Runtime Choices](#the-four-runtime-choices)
-4. [Compute Engine: Virtual Machines](#compute-engine-virtual-machines)
-5. [Cloud Run: Serverless Containers](#cloud-run-serverless-containers)
-6. [Cloud Run Functions: Event Handlers](#cloud-run-functions-event-handlers)
-7. [GKE: Managed Kubernetes](#gke-managed-kubernetes)
-8. [Background Work and Queues](#background-work-and-queues)
-9. [Operational Questions Before You Choose](#operational-questions-before-you-choose)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+2. [Your Laptop Already Shows the Jobs](#your-laptop-already-shows-the-jobs)
+3. [Four Workload Shapes](#four-workload-shapes)
+4. [Request-Driven Containers](#request-driven-containers)
+5. [Server-Shaped Software](#server-shaped-software)
+6. [Event-Driven Work](#event-driven-work)
+7. [Many Services With Shared Platform Rules](#many-services-with-shared-platform-rules)
+8. [What Every Runtime Must Provide](#what-every-runtime-must-provide)
+9. [Putting the Choice Together](#putting-the-choice-together)
+10. [References](#references)
 
 ## What GCP Compute Is
-<!-- section-summary: GCP compute choices make sense after you name the work pattern and the operating responsibility your team wants to own. -->
+<!-- section-summary: GCP compute gives your code a production place to run, with CPU, memory, startup rules, scaling, identity, and logs. -->
 
-**Compute** is the part of Google Cloud that gives your code a place to run. That place includes CPU, memory, network access, startup rules, scaling rules, an identity for calling other Google services, and logs that prove what happened when something went wrong. In local development, your laptop quietly provides all of those things. In production, the runtime has to provide them in a repeatable way.
+Your code needs a place to run. On your laptop, that place may be a terminal tab running `npm start`, a Python script, a local Docker container, or a service you keep open while testing. The laptop quietly supplies CPU, memory, environment variables, a network port, a filesystem, credentials, logs, and a human nearby to restart the process.
 
-The beginner trap is treating compute as a product list. A small team sees **Compute Engine**, **Cloud Run**, **Cloud Run functions**, and **Google Kubernetes Engine**, then tries to memorize which one is the "best" service. A senior engineer usually asks a different question first: what shape does the work have, and which responsibilities should the team keep?
+Production asks for the same jobs with less luck involved. The code needs CPU and memory in a region. It needs a runtime that starts it the same way every time. Users or events need a path into it. It needs scaling rules, a safe identity for Google Cloud APIs, logs for support, and a release path for new versions.
 
-A **runtime** is the managed environment that starts your code and keeps it reachable. A **workload shape** is the pattern of work your code handles: long-running HTTP requests, short event handlers, batch jobs, legacy server processes, or a full container platform. A **responsibility boundary** is the line between what your team operates and what Google operates. Those three ideas turn the choice into an engineering conversation instead of a product quiz.
+That is the core compute problem: your program needs somewhere reliable to run after it leaves your laptop. A runtime is more than "a server." It is the agreement between your code and the platform. The agreement says how the code starts, how traffic or events reach it, how many copies can run, how it proves health, which identity it uses, and how the team replaces it with a new version.
 
-This article follows one small team moving an Orders and Checkout system to GCP. They have a customer-facing Orders API, a receipt email task, a nightly reconciliation job, a legacy invoice PDF worker that still expects a Linux server, and a future platform discussion about Kubernetes. Each piece needs compute, but each piece asks for a different runtime contract.
+**GCP compute** is the Google Cloud service family that gives application code that running place. The main beginner choice is not the product name first. The useful first question is: what shape does the work have?
 
 ![Four workload shapes mapped to runtime contracts](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/runtime-contract-map.png)
-*The same checkout system can contain an HTTP API, a legacy server process, an event handler, and a shared platform workload, so the runtime choice starts from the work pattern.*
+*Compute choices make sense after the work shape is visible: request service, server process, event handler, or shared platform workload.*
 
-## The Orders Team Scenario
-<!-- section-summary: One application area can contain several workload shapes, so one cloud runtime rarely fits every part equally well. -->
+## Your Laptop Already Shows the Jobs
+<!-- section-summary: A local process hides several production responsibilities that a cloud runtime has to make explicit. -->
 
-Imagine a six-person team running a checkout system for an online store. The main **Orders API** receives HTTP requests from the frontend, validates carts, writes orders to a database, and calls a payment provider. Customers notice latency on this path, so the team cares about fast startup, predictable scaling, safe rollouts, and logs tied to each request.
+Picture a tiny contact form API on your laptop. It receives `POST /contact`, validates the email address, stores the message, and sends a notification. While you test it locally, the command line hides a lot of details. Your machine has a CPU. Your process has memory. The app listens on a port. Logs print in the terminal. A `.env` file provides a mail provider key.
 
-The same team also sends receipt emails after an order succeeds. That work starts from an event, usually a Pub/Sub message or another platform event. The handler can retry if the email provider has a temporary problem, and the customer request should finish before the email provider responds.
+Moving that API to production makes each hidden detail explicit:
 
-At night, the team runs a reconciliation task that compares orders, payment captures, and refunds. This task may process thousands of rows, exit after completion, and produce an audit report. It needs a batch-style runtime, not a permanent web server.
+| Runtime job | Plain question | Contact form example |
+|---|---|---|
+| **CPU and memory** | How much capacity can the code use while it runs? | The API needs enough memory for validation and mail client libraries. |
+| **Startup** | What command launches the app? | The container runs `node server.js` and listens for HTTP requests. |
+| **Runtime contract** | What does the platform expect from the code? | The app reads the provided port and writes logs to standard output. |
+| **Scaling** | What happens during traffic spikes or quiet periods? | More instances can handle a campaign spike, then idle capacity can shrink. |
+| **Identity** | Which software identity calls other GCP services? | The API reads one secret and writes to one database with a service account. |
+| **Logs and metrics** | How does the team investigate behavior? | Failed submissions show route, request ID, revision, and sanitized error reason. |
 
-One older billing piece still renders invoice PDFs with a vendor library that expects a specific Linux package, a local daemon, and a predictable filesystem path. The team wants to retire it later, but today the fastest safe migration may put that process on a virtual machine. That buys time while the team removes the OS dependency.
+Those jobs appear in every compute service. The services differ in how much of the surrounding server or platform work your team owns.
 
-A different group in the company already runs Kubernetes for shared internal platforms. They ask whether the Orders team should join that platform. That question matters only if the Orders team needs Kubernetes features, shared cluster policy, service mesh patterns, or platform-level workload controls.
+## Four Workload Shapes
+<!-- section-summary: The first compute decision is the workload shape, then the matching GCP service name enters the conversation. -->
 
-So the conversation starts with the work itself. The same business feature contains a request-driven API, an event handler, a batch task, a legacy server process, and a possible platform workload. GCP has compute services for all of these, and the right choice depends on the job.
+A workload shape describes how work arrives, how long it runs, and how much platform control it needs. The names below appear only after the job is clear.
 
-## The Four Runtime Choices
-<!-- section-summary: The main choices differ by deployment unit, scaling model, and how much infrastructure your team operates directly. -->
+| Workload shape | The job in plain English | Good GCP fit |
+|---|---|---|
+| **Request-driven container service** | A containerized web API or backend receives HTTP requests and can scale around request traffic. | **Cloud Run** |
+| **Server-shaped software** | Software expects a VM, an operating system, host packages, a daemon, or block storage. | **Compute Engine** |
+| **Event-driven handler** | A small piece of code runs after an event such as a message, file upload, or schedule. | **Cloud Run functions** |
+| **Shared Kubernetes platform workload** | Many services need Kubernetes APIs, cluster policy, sidecars, service mesh, or custom controllers. | **GKE** |
 
-GCP gives you several compute services because production applications do several kinds of work. The main options in this part of the roadmap are **Compute Engine**, **Cloud Run**, **Cloud Run functions**, and **GKE**. They overlap in small places, but their day-to-day operating experience is very different.
-
-| Runtime | Deployment unit | Best fit in the Orders scenario | Team owns | Google owns |
-|---|---|---|---|---|
-| **Compute Engine** | Virtual machine | Legacy invoice PDF worker that needs OS-level control | Guest OS, packages, process manager, patch plan, disks | Physical hardware, virtualization, base infrastructure |
-| **Cloud Run** | Container service, job, or worker pool | Orders API and containerized batch tasks | Container contract, app code, service config, IAM roles | Server hosts, routing, sandboxing, autoscaling, revision management |
-| **Cloud Run functions** | Function source code | Receipt email handler triggered by an order event | Handler code, trigger shape, retry-safe logic | Buildpacks, build flow, event delivery into Cloud Run, runtime management |
-| **GKE** | Kubernetes workloads | Shared platform with Kubernetes policies and add-ons | Kubernetes objects, cluster policies, workload configuration | Managed control plane and GKE integrations |
-
-**Serverless** means the cloud provider handles server provisioning and scaling around a documented contract. Cloud Run and Cloud Run functions are serverless in this sense. You still design the application carefully, set limits, choose identities, watch costs, and protect downstream systems, but you spend far less time managing host machines.
-
-**Virtual machines** give the most direct server control. **Kubernetes** gives a powerful orchestration API for teams that already need cluster-level primitives. **Serverless containers** give a simpler service model for stateless web services and many background tasks. **Functions** give a small handler model for event-driven work. With that map in mind, we can walk through each option as the Orders team makes decisions, starting with the runtime that looks most like a traditional server.
+For AWS readers, the rough anchors are useful after the GCP job is clear. Cloud Run overlaps with App Runner for container services and has Lambda-like scaling behavior for containers. Compute Engine maps closely to EC2. Cloud Run functions map to Lambda-style handlers often wired through EventBridge, SNS, SQS, or S3 notifications. GKE maps to EKS, while ECS or Fargate may be the simpler AWS comparison for managed containers without Kubernetes APIs.
 
 ![Compute responsibility boundary across four runtime types](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/responsibility-boundary.png)
-*The responsibility boundary changes with each runtime: a VM keeps more server work with the team, while a function narrows the team's work to the handler and trigger.*
+*The responsibility boundary moves by runtime. A VM keeps more server work with your team, while managed services narrow the contract.*
 
-## Compute Engine: Virtual Machines
-<!-- section-summary: Compute Engine fits workloads that need direct operating-system control, but the team accepts more patching and process-management work. -->
+## Request-Driven Containers
+<!-- section-summary: A request-driven container fits Cloud Run because the app already has a web-service shape and needs managed scaling around it. -->
 
-**Compute Engine** is Google Cloud's virtual machine service. A **virtual machine**, or VM, is a software-defined server with a machine type, operating system image, attached disks, network interfaces, firewall rules, and a service account identity. It is the closest GCP runtime to a server you might run in a datacenter.
+A request-driven service receives an HTTP request, does a bounded piece of application work, and returns a response. The contact form API has that shape. A customer submits a form, the API validates the payload, stores the message, publishes a notification, and returns success.
 
-The Orders team would choose Compute Engine for the legacy invoice PDF worker because that worker depends on OS packages, a local daemon, and predictable disk behavior. The team can install the package, configure `systemd`, place logs under the normal Linux paths, attach a persistent disk if needed, and control maintenance windows more directly. That control solves real migration problems when the application cannot yet fit a container or function contract.
+If that API already runs in a container on your laptop, **Cloud Run** is often the clean first production home. A container packages the app code, runtime, dependencies, and startup command. Cloud Run wraps that container with a managed service endpoint, scaling, release history, traffic routing, runtime identity, and Cloud Logging integration.
 
-A first test VM might look like this. The command names the server, chooses a zone and machine type, picks a Debian image, and attaches a dedicated runtime service account.
+The useful production question is no longer "Can the container run?" The better question is "Can this service receive real requests safely?" That means the container listens on the provided port, keeps durable state outside the container, handles concurrent requests safely, uses a narrow service account, and emits logs that help you debug failed submissions.
+
+The AWS bridge is close to App Runner as a managed container service. It also has Lambda-like scale-to-zero behavior for request traffic, but Cloud Run still runs your container image and can host a normal HTTP app with multiple routes.
+
+The first practical check is the container contract. Confirm that the container listens on the port Cloud Run provides, starts without writing required state to the local filesystem, and logs a clean startup line. If those three checks fail, scaling and traffic splitting will not save the service.
+
+## Server-Shaped Software
+<!-- section-summary: Server-shaped software fits Compute Engine for operating-system runtime requirements. -->
+
+Some software expects a server. An invoice renderer may need a licensed native PDF package, a local daemon, a mounted data disk, a specific Linux library, and `systemd` process supervision. That shape can be awkward to force into a small function or a stateless web container.
+
+**Compute Engine** gives you virtual machines on Google Cloud. A virtual machine is a software-defined server with a machine type, boot image, disk, zone, network, startup behavior, and service account. Google operates the physical hardware and virtualization layer. Your team still operates the guest operating system, packages, patches, process manager, disks, and application health inside the VM.
+
+The VM path can be the right migration step for the invoice renderer. The team can install the vendor package, run the worker under `systemd`, attach a persistent disk for in-flight files, send logs through the Ops Agent, and later rewrite the workload after the server dependency is gone.
+
+For AWS readers, Compute Engine maps closely to EC2. Images map to AMIs, Persistent Disk maps to EBS, startup scripts play a similar role to user data, and `systemd` patterns carry over directly for Linux services. The GCP details differ in IAM, metadata, networking, and disk options, so the service names are familiar while the operating checklist still needs GCP-specific review.
+
+The first practical check is the VM boot and service state. Confirm the image, machine type, disk, zone, service account, firewall path, startup script, and `systemd` service status. That evidence tells you whether the server shape exists before you debug the application itself.
+
+## Event-Driven Work
+<!-- section-summary: Event-driven work fits Cloud Run functions for small handlers triggered by a message, file upload, or schedule. -->
+
+Some work should happen after an event, outside the main request. A receipt email can run after a purchase succeeds. A thumbnail generator can run after an image upload. A cleanup task can run after a scheduled message. Keeping these jobs outside the main request protects the user path from slower providers and retry loops.
+
+A **function** is a small handler with one clear entry point. A **trigger** decides the handler start condition. The trigger might come from Pub/Sub, Eventarc, Cloud Storage, or an HTTP request. **Cloud Run functions** let you write that handler from source while Google builds and runs it on Cloud Run.
+
+The thumbnail example fits the shape well. A user uploads `profile-photo.png` to Cloud Storage. A storage event reaches the function. The handler validates the object name, creates thumbnail sizes, writes them back to a bucket, records status, and exits. If the platform retries the event, the handler needs idempotency so it can handle the same file event safely.
+
+For AWS readers, this is the closest fit to Lambda wired to EventBridge, SNS/SQS, or S3 event notifications. The difference is that modern Cloud Run functions are built and hosted on Cloud Run, so the function authoring model sits on top of the Cloud Run platform.
+
+The first practical check is the trigger route. Confirm that the trigger exists, points to the expected function service, carries the event type you expect, and shows one successful test event in logs. A handler can be correct and still never run if the trigger path is wrong.
+
+## Many Services With Shared Platform Rules
+<!-- section-summary: GKE fits teams that want Kubernetes as the platform API for many services and shared controls. -->
+
+One service can be simple. Many services with shared platform rules may need a stronger common operating layer. Imagine an internal commerce platform with a catalog API, pricing API, checkout API, fraud scoring service, background workers, service mesh policy, sidecar proxies, custom deployment rules, and team-specific namespaces.
+
+**Kubernetes** is an orchestration system for running containerized workloads through an API. **Google Kubernetes Engine**, or **GKE**, is Google's managed Kubernetes service. GKE manages the Kubernetes control plane and connects clusters to Google Cloud networking, identity, logging, monitoring, and node options.
+
+GKE is justified if Kubernetes itself is part of the requirement. The platform team may need admission policy, network policy, sidecars, service mesh routing, custom controllers, namespace boundaries, or a shared way to deploy many services. A single contact form API usually does not need that much platform surface on day one.
+
+For AWS readers, GKE maps to EKS. ECS and Fargate are useful comparison points for managed container hosting without Kubernetes. Kubernetes adds a vocabulary of clusters, nodes, Pods, Deployments, Services, and Ingress or Gateway resources that the team must understand and operate, so the first GKE check should prove the team really needs that shared platform surface.
+
+The first practical check is the Kubernetes object path. Confirm the cluster, namespace, Deployment, Pods, Service, and route. If a team cannot explain how traffic reaches one Pod through those objects, GKE is probably too much surface for a first single-service deployment.
+
+## What Every Runtime Must Provide
+<!-- section-summary: Every compute choice still needs capacity, startup, scaling, identity, logs, release safety, and recovery decisions. -->
+
+The service names change, but the production checklist stays recognizable. You want each runtime choice to answer the same operational questions before the workload reaches users.
+
+| Question | What a good answer includes |
+|---|---|
+| **How does the code start?** | Container command, VM startup script, function entry point, or Kubernetes Deployment spec. |
+| **How does work reach it?** | HTTP request, queue message, object event, schedule, internal service call, or Kubernetes routing. |
+| **How does it scale?** | Instance limits, concurrency, VM group size, function retry behavior, or Kubernetes autoscaling. |
+| **Which identity does it use?** | A narrow service account or workload identity with only the roles needed for the job. |
+| **Where does state live?** | Managed databases, object storage, queues, or disks with clear backup and recovery rules. |
+| **How does the team debug it?** | Logs, metrics, traces, error reports, audit logs, and release records tied to versions. |
+| **How does rollback work?** | Cloud Run traffic movement, VM template rollback, function redeploy, or Kubernetes rollout undo. |
+
+Apply the checklist to the contact API on Cloud Run. The service is a containerized HTTP API, so good evidence should prove that the container starts, Cloud Run can scale it inside known bounds, the app runs as the expected service account, and support can find a failed request in logs.
 
 ```bash
-gcloud compute instances create invoice-worker-1 \
-  --zone=us-central1-a \
-  --machine-type=e2-standard-2 \
-  --image-family=debian-12 \
-  --image-project=debian-cloud \
-  --service-account=invoice-worker-runtime@orders-prod.iam.gserviceaccount.com
-```
-
-The output should confirm the instance was created, show the chosen zone, and show a running status after the VM starts. A beginner can use that status to separate "the VM exists" from "the invoice worker is healthy."
-
-```console
-Created [https://www.googleapis.com/compute/v1/projects/orders-prod/zones/us-central1-a/instances/invoice-worker-1].
-NAME              ZONE           MACHINE_TYPE   INTERNAL_IP  EXTERNAL_IP  STATUS
-invoice-worker-1  us-central1-a  e2-standard-2  10.20.1.14               RUNNING
-```
-
-That command only creates the server. The production checklist continues with startup scripts or image baking, OS patching, process supervision, firewall rules, disk backups, monitoring agents, and a plan for replacing failed instances. Managed instance groups can help with fleets of similar VMs, but the team still owns the guest operating system and the process running inside it.
-
-This is the main tradeoff. Compute Engine gives server-shaped workloads a practical home, especially during migrations. For a new stateless HTTP API, the same control turns into extra work that the Orders team may not need. The Orders API is already containerized, so the team looks next at a runtime that keeps the container and removes most host operations.
-
-## Cloud Run: Serverless Containers
-<!-- section-summary: Cloud Run fits stateless containers that should receive requests or run managed container work without VM or cluster operations. -->
-
-**Cloud Run** runs containers on a fully managed platform. A **container image** is the packaged application: code, runtime, dependencies, and startup command. A **Cloud Run service** is the managed HTTPS endpoint, revision history, traffic rules, scaling configuration, identity, and logging path around that image.
-
-That distinction matters for the Orders API. The Docker image alone does not decide who can call the service, how many instances can start, which service account the code uses, or which revision receives traffic. Cloud Run stores those decisions in the service configuration and creates a new immutable revision when important deployable settings change.
-
-The first Orders API deployment might use a command like this. The image tag is tied to a specific code version, and the service account is the identity the running container will use.
-
-```bash
-gcloud run deploy orders-api \
-  --image=us-central1-docker.pkg.dev/orders-prod/apps/orders-api:a3f8c2d \
+gcloud run services describe contact-api \
   --region=us-central1 \
-  --service-account=orders-api-runtime@orders-prod.iam.gserviceaccount.com \
-  --no-allow-unauthenticated
+  --format="yaml(status.conditions,status.latestReadyRevisionName,spec.template.spec.serviceAccountName,spec.template.spec.containerConcurrency,spec.template.metadata.annotations)"
 ```
 
-The deploy output should name the service URL, the latest revision, and the traffic target. The `--no-allow-unauthenticated` flag means the service URL can exist while callers still need the right invoker permission.
+Important parts:
 
-```console
-Deploying container to Cloud Run service [orders-api] in project [orders-prod] region [us-central1]
-OK Deploying new service... Done.
-  OK Creating Revision...
-  OK Routing traffic...
-Done.
-Service [orders-api] revision [orders-api-00001-tan] has been deployed and is serving 100 percent of traffic.
-Service URL: https://orders-api-7a2b3c-uc.a.run.app
+- `status.conditions` shows whether the latest revision reached a ready state.
+- `status.latestReadyRevisionName` names the revision that actually started.
+- `serviceAccountName` shows the runtime identity used by application code.
+- `containerConcurrency` and scaling annotations show how Cloud Run accepts and bounds traffic.
+
+Good output should read like a small operations record:
+
+```yaml
+status:
+  conditions:
+    - type: Ready
+      status: 'True'
+  latestReadyRevisionName: contact-api-00018-canary
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '15'
+    spec:
+      containerConcurrency: 20
+      serviceAccountName: contact-api-runtime@support-prod.iam.gserviceaccount.com
 ```
 
-In this example, the backend is private to callers with the right IAM permission. A public website can still sit in front of it, or the team can intentionally allow unauthenticated Cloud Run invocation for a public API. The important point is that access belongs in service configuration, not in the container image.
+The interpretation is direct. `Ready: True` says Cloud Run accepted the revision and the container passed the platform startup path. `maxScale: 15` and `containerConcurrency: 20` tell reviewers the service can handle up to about 300 simultaneous in-flight requests before requests queue or fail, depending on downstream pressure and request duration. The service account confirms that the code uses the workload identity assigned to production.
 
-Cloud Run is a strong default for stateless HTTP APIs because the team can focus on a smaller contract. The container needs to start cleanly, listen on the port Cloud Run provides, handle concurrent requests safely, write logs to standard output and standard error, and store durable state in managed services such as Cloud SQL, Firestore, Spanner, or Cloud Storage. Google handles the server fleet around that contract.
-
-Cloud Run also has **jobs** and **worker pools**. A job runs container tasks to completion, which fits batch work like nightly reconciliation. A worker pool runs containers for continuous background work without a public load-balanced URL. Those options keep the container model while changing how work enters the runtime.
-
-The receipt email task has an even smaller shape than a container service. That points the team toward Cloud Run functions.
-
-## Cloud Run Functions: Event Handlers
-<!-- section-summary: Cloud Run functions fit small handlers that respond to events and let Google build and host the function as a Cloud Run-backed service. -->
-
-**Cloud Run functions** are single-purpose functions that respond to HTTP requests or events. A function is usually a small handler with an entry point, runtime base image, source directory, and trigger. Google uses buildpacks and Cloud Build to turn that source into a container image, stores artifacts in Artifact Registry, and hosts the result on Cloud Run.
-
-For the Orders team, the receipt email handler is a good function candidate. The checkout flow publishes an `order.created` event after the database transaction commits. The function receives that event, loads the order summary, calls the email provider, and records delivery status.
-
-A simple deployment flow may create the function first and then attach an Eventarc trigger. The function deployment names the source entry point, while the trigger connects Pub/Sub events to the Cloud Run-hosted function.
+Logs complete the check because a ready service can still reject real requests. A first support query should filter by service, revision, and route:
 
 ```bash
-gcloud run deploy receipt-email \
-  --source=. \
-  --function=sendReceipt \
-  --base-image=nodejs24 \
-  --region=us-central1
-
-gcloud eventarc triggers create receipt-email-order-created \
-  --location=us-central1 \
-  --destination-run-service=receipt-email \
-  --destination-run-region=us-central1 \
-  --event-filters="type=google.cloud.pubsub.topic.v1.messagePublished" \
-  --transport-topic=projects/orders-prod/topics/order-created \
-  --service-account=receipt-trigger@orders-prod.iam.gserviceaccount.com
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   resource.labels.service_name="contact-api"
+   resource.labels.revision_name="contact-api-00018-canary"
+   jsonPayload.route="/contact"' \
+  --limit=3 \
+  --format="value(timestamp,jsonPayload.severity,jsonPayload.message,jsonPayload.requestId,jsonPayload.status)"
 ```
 
-The function deploy output should show a ready service revision, while the trigger output should show that Eventarc accepted the route from the Pub/Sub topic to the function. If the trigger does not reach an active state, the team should check the trigger service account and topic path before replaying events.
+Healthy evidence might look like this:
 
 ```console
-Service [receipt-email] revision [receipt-email-00003-puv] has been deployed.
-Service URL: https://receipt-email-7a2b3c-uc.a.run.app
-
-Created trigger [receipt-email-order-created] in location [us-central1].
-Event filters:
-  type: google.cloud.pubsub.topic.v1.messagePublished
-Destination: Cloud Run service [receipt-email]
-Transport topic: projects/orders-prod/topics/order-created
+2026-07-04T10:18:22Z INFO contact request accepted req-9c12 202
+2026-07-04T10:18:37Z WARN contact validation failed req-9c19 400
 ```
 
-The practical production idea here is **idempotency**. An idempotent handler can process the same event more than once and still leave the system in the correct final state. The receipt function can store an `email_sent_at` timestamp or an email delivery record keyed by `order_id`, so a retry does not send three receipts for one purchase.
+The `INFO` line proves one request reached the new revision and returned the expected accepted status. The `WARN` line is also useful because it shows a client validation failure with a request ID and sanitized reason, rather than a secret value or full message body. That is the level of evidence a runtime review needs before the team calls the compute choice production-ready.
 
-Functions are helpful when the code naturally fits a small event handler. If the Orders team starts adding many routes, shared middleware, long dependency initialization, custom container behavior, and rollout controls, the work may fit a Cloud Run service more cleanly. The decision follows the shape of the code and the operations the team wants to see. The platform team then raises Kubernetes, which is a different kind of runtime choice because it changes the operating surface and the platform contract around the container.
+This checklist keeps compute from turning into a product quiz. You can explain the workload, choose the runtime, and then prove that the runtime has the controls a production team needs.
 
-## GKE: Managed Kubernetes
-<!-- section-summary: GKE fits teams that intentionally operate through Kubernetes APIs and need cluster-level platform capabilities. -->
+## Putting the Choice Together
+<!-- section-summary: The best compute choice follows the job, then the team checks the runtime responsibilities before launch. -->
 
-**Google Kubernetes Engine**, or **GKE**, is managed Kubernetes on Google Cloud. Kubernetes runs containerized workloads through objects such as **Pods**, **Deployments**, **Services**, **ConfigMaps**, **Secrets**, **Ingress**, and **HorizontalPodAutoscalers**. GKE manages the Kubernetes control plane and integrates the cluster with Google Cloud networking, identity, logging, and monitoring.
+Here is the short version you can carry into the rest of the module:
 
-GKE is a strong fit when the organization already has a platform built around Kubernetes. The platform might enforce admission policies, sidecar injection, network policies, service mesh routing, custom controllers, or shared observability agents. In that world, the Orders API may join the cluster because the platform contract has value beyond simply running a container.
+Use the table as a first-pass map, then test the choice against real operations. A service that appears simple in a diagram still needs logs, identity, rollback, and recovery. A VM that seems familiar still needs patching, disk care, firewall review, and process supervision. GKE earns its place only if the Kubernetes platform features are part of the requirement.
 
-The team pays for that power with more moving parts. Someone has to understand manifests, namespaces, rollout status, pod scheduling, cluster upgrades, node pools or Autopilot constraints, workload identity, ingress behavior, and cluster-level failure modes. A small team that only needs one HTTPS API can spend a lot of time learning Kubernetes before they ship meaningful business value.
-
-This is why Cloud Run and GKE can coexist in one company. The Orders API may start on Cloud Run while a central platform runs complex internal systems on GKE. Later, if the Orders system needs the shared Kubernetes platform, migration is a platform decision rather than a reaction to product names. That leaves the background work, where teams often mix up events, jobs, and long-running consumers.
-
-## Background Work and Queues
-<!-- section-summary: Background work needs a trigger, a retry story, and a runtime that matches whether the task is event-based, batch-based, or continuous. -->
-
-**Background work** is work that happens outside the customer-facing request path. It often starts from a queue, a scheduler, a file upload, or a database change. The runtime choice depends on how the work starts and how long it runs.
-
-For the Orders team, receipt emails fit a Cloud Run function because each event triggers a small handler. The nightly reconciliation task fits a Cloud Run job because it runs a container, finishes, and exits. A long-running consumer that continuously pulls from a custom broker may fit a Cloud Run worker pool. A legacy process with OS-level dependencies may stay on Compute Engine until the team can modernize it.
-
-The queue matters as much as the runtime. Pub/Sub fits event streams and fan-out. Cloud Tasks fits controlled HTTP task delivery, rate limits, and retry scheduling for per-request background work. Cloud Scheduler can start periodic work, often by calling a service, publishing to Pub/Sub, or starting a job through a workflow.
-
-The production habit is to separate the customer request from slow or unreliable dependencies. The checkout request should commit the order and publish a durable event. Email, analytics, warehouse sync, and reconciliation can happen after that. This design protects user latency and gives the team clearer retry points. With the runtime choices on the table, the last step is asking operational questions before the team commits.
-
-## Operational Questions Before You Choose
-<!-- section-summary: A good runtime choice names startup, ingress, state, scaling, identity, dependencies, and debugging evidence before the first deploy. -->
-
-The Orders team should answer a few questions for each workload. These questions turn the runtime choice into a reviewable design, and they help beginners avoid choosing a service only because it was the last one they learned.
-
-| Question | Why it matters | Orders example |
+| You have this job | First runtime to consider | Why |
 |---|---|---|
-| **How does the work start?** | The trigger tells you whether the workload is request-driven, event-driven, scheduled, batch, or continuous. | Checkout requests start the API; Pub/Sub starts receipt email; a scheduler starts reconciliation. |
-| **How long does it run?** | Short handlers, web services, and long-running processes need different lifecycle behavior. | The Orders API runs continuously as requests arrive; reconciliation exits after the report finishes. |
-| **Does it need local state?** | Serverless containers and functions should treat local disk as temporary. | Orders live in Cloud SQL or another database, not inside a container filesystem. |
-| **What should scaling protect?** | Compute scaling can overload databases, third-party APIs, and queues. | Max instances and queue rate limits protect the orders database and payment provider. |
-| **Which identity does it use?** | Runtime service accounts should have only the permissions the workload needs. | The Orders API can read one database secret and connect to one database, but it does not need project Editor. |
-| **Where will the team debug?** | A runtime choice also chooses the evidence trail. | Cloud Run shows revisions and request logs; VMs need guest OS logs and process status; GKE needs pod events and workload logs. |
+| A containerized HTTP API, webhook receiver, or simple backend | Cloud Run | It gives the container a managed service endpoint, scaling, traffic control, identity, and logs. |
+| A legacy worker or package that expects a Linux server | Compute Engine | It gives OS control, disks, startup scripts, and process management while staying on GCP infrastructure. |
+| A small task after a message, upload, schedule, or platform event | Cloud Run functions | It keeps the code focused on one handler and one trigger. |
+| A multi-service platform that needs Kubernetes policy and APIs | GKE | It gives Kubernetes as the shared operating layer for many services and platform controls. |
 
-These questions also make migration safer. The first version may put the invoice PDF worker on Compute Engine while the team rewrites it. The Orders API can move to Cloud Run sooner because it already has a stateless container shape. The receipt handler can move to Cloud Run functions because event handling is the natural contract.
+![Summary of runtime choices by workload shape](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/compute-choice-summary.png)
+*A compute choice is a workload-shape decision first, then a responsibility decision.*
 
-## Putting It All Together
-<!-- section-summary: The final architecture can use more than one runtime, because each workload keeps the runtime contract that fits its shape. -->
+The rest of this module walks each option in more depth. Cloud Run comes next because it is often the simplest production home for a container that already works locally and needs a managed service around it.
 
-Here is the small team's first GCP compute plan. The **Orders API** runs as a Cloud Run service from an immutable container image, with a dedicated runtime service account, explicit concurrency, max instances to protect the database, and logs written to standard output. The service receives traffic through a controlled ingress path and uses revisions for deploy safety.
+## References
 
-The **receipt email handler** runs as a Cloud Run function triggered by an order event. The handler records delivery state by order ID so retries do not duplicate customer emails. The function stays small because its job is one event, one side effect, and one audit record.
-
-The **nightly reconciliation** runs as a Cloud Run job. It uses the same container discipline as the API, but its lifecycle is batch-oriented: start, process, write a report, exit. The team can schedule it and review execution logs without keeping a VM alive all day.
-
-The **legacy invoice PDF worker** starts on Compute Engine. That keeps the OS-specific dependency available while the team removes it from the checkout path. The team treats this as a migration bridge with a patching plan, monitoring, backups, and a clear retirement target.
-
-The **shared platform discussion** stays open for GKE. If the Orders system later needs Kubernetes policies, service mesh sidecars, custom controllers, or a company-wide deployment platform, GKE may be the right home. Until then, Cloud Run gives the Orders team a smaller operating surface for the main API.
-
-This is the core lesson: GCP compute selection is about workload shape and operating responsibility. The best architecture for a small team can use several runtimes at once, as long as each one has a clear reason to exist.
-
-![Summary of runtime choices for the Orders system](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/compute-choice-summary.png)
-*The late-stage summary ties each runtime to one production signal: concurrency for Cloud Run, patching for VMs, retries for functions, and cluster policy for GKE.*
-
-## What's Next
-<!-- section-summary: The next article zooms into Cloud Run because it is the usual first home for a stateless backend API on GCP. -->
-
-The Orders API is the most important user-facing path in this scenario, so the next article goes deep on Cloud Run. We will follow one container image into a Cloud Run service, then connect the details: services, revisions, traffic splits, rollbacks, concurrency, max instances, min instances, runtime identity, environment variables, secrets, logs, and verification.
-
----
-
-**References**
-
-- [Cloud Run documentation](https://docs.cloud.google.com/run/docs) - Official Cloud Run documentation for services, jobs, worker pools, functions, configuration, security, and operations.
-- [What is Cloud Run](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) - Explains Cloud Run services, jobs, and worker pools as ways to run code on the same managed execution environment.
-- [Create jobs in Cloud Run](https://docs.cloud.google.com/run/docs/create-jobs) - Documents Cloud Run jobs for container tasks that run to completion.
-- [Deploy worker pools to Cloud Run](https://docs.cloud.google.com/run/docs/deploy-worker-pools) - Describes worker pools for continuous background work without a load-balanced endpoint.
-- [Compute Engine documentation](https://docs.cloud.google.com/compute/docs) - Official documentation for creating and running virtual machines on Google infrastructure.
-- [Cloud Run functions documentation](https://docs.cloud.google.com/functions/docs) - Defines Cloud Run functions as single-purpose functions for Cloud events and HTTP handlers.
-- [Deploy a Cloud Run function](https://docs.cloud.google.com/run/docs/deploy-functions) - Documents the current Cloud Run function deployment flow using `gcloud run deploy`, buildpacks, and Eventarc triggers.
-- [GKE overview](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview) - Defines GKE as managed Kubernetes for running containerized workloads at scale.
-- [GKE and Cloud Run](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/gke-and-cloud-run) - Compares Cloud Run and GKE for containerized application hosting choices.
+- [What is Cloud Run](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) - Official Cloud Run overview for services, jobs, functions, and managed runtime behavior.
+- [Compute Engine instances](https://docs.cloud.google.com/compute/docs/instances) - Official Compute Engine documentation for VM instances and related instance operations.
+- [Write Cloud Run functions](https://docs.cloud.google.com/run/docs/write-functions) - Official guide for HTTP and event-driven Cloud Run functions.
+- [Google Kubernetes Engine documentation](https://docs.cloud.google.com/kubernetes-engine/docs) - Official GKE documentation for clusters and workload deployment.

@@ -1,7 +1,6 @@
 ---
-title: "Judge Local State Risk"
-sectionSlug: moving-from-local-state
+title: "Remote Backends, Locking, and Isolation"
 order: 2
 ---
 
-Classify when local state is acceptable and when a shared backend is needed. Focus on the operational risk of split state files, Git history, and team-owned infrastructure.
+Use backend, lock, credential, and artifact evidence to decide whether Terraform state is shared and protected safely.

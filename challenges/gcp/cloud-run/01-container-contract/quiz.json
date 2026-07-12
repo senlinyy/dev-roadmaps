@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "The Orders API image builds successfully but Cloud Run never marks the revision ready. The app always listens on hardcoded port `3000`. What should the team check?",
-      "options": [
-        { "id": "a", "text": "Whether the container listens on the port Cloud Run expects through the `PORT` environment variable." },
-        { "id": "b", "text": "Whether the image tag is longer." },
-        { "id": "c", "text": "Whether DNS has more TXT records." },
-        { "id": "d", "text": "Whether the billing account is renamed." }
-      ],
-      "correct": ["a"],
-      "explanation": "A built image can still fail the runtime contract if it does not listen where Cloud Run sends traffic."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The app writes uploaded receipts to the local container filesystem and expects them to be there next week. What is the Cloud Run design issue?",
+      "scenario": "The image for checkout-api writes uploaded receipts under /app/uploads and expects another request to read them later. It works in one local container but fails after Cloud Run scales to multiple instances. Which design review comment fits the container contract?",
       "options": [
-        { "id": "a", "text": "Container instances are not durable storage homes; durable state should live outside the container." },
-        { "id": "b", "text": "Cloud Run cannot receive requests." },
-        { "id": "c", "text": "Every file must be in a Kubernetes Pod." },
-        { "id": "d", "text": "The service account name is too short." }
+        {
+          "id": "c",
+          "text": "Write the files to `/tmp` and route later reads to the same revision, assuming revision affinity also selects the original instance."
+        },
+        {
+          "id": "d",
+          "text": "Store each receipt as a binary field in the service's relational order table, coupling large file delivery and lifecycle operations to transactional rows."
+        },
+        {
+          "id": "a",
+          "text": "Store receipts in an external durable service such as Cloud Storage instead of relying on the container filesystem."
+        },
+        {
+          "id": "b",
+          "text": "Set maximum instances to one and back up the local directory during deployments, treating instance replacement as a controlled storage event."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Cloud Run instances can be replaced or scaled down. Durable data belongs in a durable service."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud Run containers should keep durable state outside the container, so external object storage is the right direction. Forcing one instance sacrifices scaling and still leaves ephemeral storage risk, /tmp is not replicated across instances, and memory size does not make filesystem data durable. See [Google Cloud container contract documentation](https://cloud.google.com/run/docs/container-contract)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which items belong in a Cloud Run container contract review?",
+      "id": "revisions-q2",
+      "type": "single",
+      "scenario": "A rollback ticket says, \"go back to the old code,\" but does not name a revision. The current service has revisions orders-api-00039, orders-api-00040, and orders-api-00041 with different images and secret versions. What should the release owner ask for?",
       "options": [
-        { "id": "a", "text": "Startup reliability." },
-        { "id": "b", "text": "Listening on the expected port." },
-        { "id": "c", "text": "Keeping durable state outside the instance filesystem." },
-        { "id": "d", "text": "Manually SSHing into each Cloud Run instance." }
+        {
+          "id": "a",
+          "text": "The exact revision to receive traffic, including the image and key runtime settings it represents."
+        },
+        {
+          "id": "b",
+          "text": "Use the previous Git branch as the rollback target and assume Cloud Run resolves it to the matching runtime configuration."
+        },
+        {
+          "id": "c",
+          "text": "The immediately preceding revision number, without confirming its image, secret mapping, identity, or observed health."
+        },
+        {
+          "id": "d",
+          "text": "The image tag from the previous Git release, without confirming which Cloud Run revision contains that image and runtime configuration."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Cloud Run expects a well-behaved process; it does not expose servers for manual runtime setup."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback should target a known revision snapshot so image, secret mapping, service account, and settings are clear. Branch names do not move Cloud Run traffic by themselves, oldest is not automatically safest, and a database restart avoids the revision evidence. See [Google Cloud resource model documentation](https://cloud.google.com/run/docs/resource-model)."
+    },
+    {
+      "id": "traffic-q1",
+      "type": "single",
+      "scenario": "Revision orders-api-00051 passes smoke tests on its tag URL. The current traffic split is 100 percent to orders-api-00050. The release plan wants a cautious customer rollout. What next step fits Cloud Run traffic control?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Delete orders-api-00050 so Cloud Run has no choice but to serve the new revision."
+        },
+        {
+          "id": "c",
+          "text": "Send 100 percent to the tagged revision because its tag URL passed a smoke test, then restore the old split if customer metrics regress."
+        },
+        {
+          "id": "d",
+          "text": "Keep production traffic on the stable revision and run synthetic requests only against the tag URL, treating that as customer-load evidence."
+        },
+        {
+          "id": "a",
+          "text": "Send a small percentage of service traffic to orders-api-00051 and watch request, error, and latency signals before increasing it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud Run supports gradual traffic migration between revisions, so a small split with health evidence fits. Deleting the old revision removes rollback, renaming is not how traffic moves, and the container port is unrelated to revision percentage. See [Google Cloud rollouts rollbacks traffic migration documentation](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)."
+    },
+    {
+      "id": "traffic-q4",
+      "type": "multiple",
+      "scenario": "Northstar Retail has sent 10 percent of checkout traffic to revision `orders-api-00052` for 30 minutes. The release owner wants to move to 50 percent, but the service-level objective covers checkout error rate and p95 latency, and rollback must remain available during the observation window. Which two pieces of evidence are required before increasing traffic?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The stable revision has been removed from the traffic split after one successful canary request, simplifying the service to one active revision."
+        },
+        {
+          "id": "a",
+          "text": "The canary revision has comparable error rate and latency on the critical routes."
+        },
+        {
+          "id": "b",
+          "text": "Logs and metrics can separate canary results from stable revision results."
+        },
+        {
+          "id": "c",
+          "text": "The canary has processed the same absolute request count as the stable revision, even if that requires extending the canary for several hours."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The decision needs service-level health on critical routes and telemetry that attributes results to each revision. Equal absolute request counts are not required when the sample is sufficient for the agreed risk and observation window. Removing stable traffic after one request discards the controlled comparison and weakens rollback. See [Google Cloud rollouts rollbacks traffic migration documentation](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Northstar Logistics exposes an HTTP endpoint that confirms a shipment request. The handler waits up to 20 minutes for a partner batch file before responding, but the customer contract requires acknowledgement within 2 seconds and traffic spikes leave Cloud Run instances blocked. Which redesign best satisfies the response-time requirement without losing the partner work?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Set min instances to 10 because warm containers make long user waits safe."
+        },
+        {
+          "id": "d",
+          "text": "Increase the request timeout and minimum instances so each request can wait for the partner while preserving the synchronous API contract."
+        },
+        {
+          "id": "a",
+          "text": "Keep the HTTP handler bounded and move long follow-up work to an asynchronous path such as Pub/Sub plus a worker."
+        },
+        {
+          "id": "b",
+          "text": "Raise request concurrency so each instance can wait on more partner files at the same time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud Run HTTP services fit bounded request work, so asynchronous handoff is the right design for long partner waits. Higher concurrency can make more requests pile up, min instances reduce cold starts but not long blocking responses, and redeploying images for data files is not an operational storage pattern. See [Google Cloud container contract documentation](https://cloud.google.com/run/docs/container-contract)."
+    },
+    {
+      "id": "revisions-q1",
+      "type": "single",
+      "scenario": "Production revision orders-api-00042 has image tag 2026-07-05-a, memory 512Mi, and service account orders-runtime@. A new deploy changes only MEMORY_LIMIT to 1Gi and keeps the image tag. What does Cloud Run create?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A new revision, because runtime configuration changes are part of the revision snapshot."
+        },
+        {
+          "id": "b",
+          "text": "No revision, because only container image changes create revisions."
+        },
+        {
+          "id": "c",
+          "text": "A new service URL, because every revision has a separate production hostname."
+        },
+        {
+          "id": "d",
+          "text": "A new project-level IAM binding, because memory settings are stored in IAM."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A revision captures deployable service configuration, including settings such as memory, so a config-only change creates a new revision. Image-only thinking misses runtime config, the service URL does not need to change, and memory is not an IAM binding. See [Google Cloud resource model documentation](https://cloud.google.com/run/docs/resource-model)."
+    },
+    {
+      "id": "traffic-q3",
+      "type": "single",
+      "scenario": "Two revisions receive traffic: 90 percent stable and 10 percent canary. A customer reports a failed request but logs do not include revision name. What observability gap should the team fix?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Compare only service-wide error rate because a 10 percent canary cannot materially affect the aggregate signal."
+        },
+        {
+          "id": "a",
+          "text": "Log or query revision-level evidence so failures can be tied to the specific revision that handled the request."
+        },
+        {
+          "id": "b",
+          "text": "Remove traffic splitting because all split traffic is impossible to debug."
+        },
+        {
+          "id": "c",
+          "text": "Record the intended traffic percentage in the ticket and infer the serving revision probabilistically for each failed request."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "With split traffic, revision-level evidence is necessary to connect failures to a rollout. Removing splits gives up a useful safety control, disabling logs removes evidence, and making revisions identical defeats the purpose of a canary. See [Google Cloud rollouts rollbacks traffic migration documentation](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)."
     }
   ]
 }

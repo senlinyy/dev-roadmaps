@@ -1,6 +1,6 @@
 ---
 title: "Extended Regex with grep -E"
-sectionSlug: extended-regular-expressions
+sectionSlug: search-with-grep
 order: 3
 ---
 

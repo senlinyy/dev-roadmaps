@@ -1,8 +1,6 @@
 ---
-title: "Recognize Event Work"
-sectionSlug: events
+title: "Functions"
 order: 1
-description: "Separate event jobs from always-on APIs."
 ---
 
-Separate event jobs from always-on APIs.
+Use the scenarios to apply the linked article's guidance on event-shaped work, trigger boundaries, retries, and hosting tradeoffs.

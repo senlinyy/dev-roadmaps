@@ -1,8 +1,6 @@
 ---
-title: "Choose the Recovery Path"
-sectionSlug: the-recovery-paths
+title: "Rollback vs. Roll-Forward"
 order: 1
 ---
 
-Knowledge check covering traffic revert, redeploying a previous artifact, disabling a flag, patching forward, and stopping a rollout when the signal is unclear.
-
+Choose the fastest safe recovery path from evidence about user impact, artifact availability, and current data or message state.

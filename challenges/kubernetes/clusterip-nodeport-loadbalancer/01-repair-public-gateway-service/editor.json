@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "public-gateway-service.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: public-gateway\n  namespace: platform\n  labels:\n    app.kubernetes.io/part-of: platform-edge\n    app.kubernetes.io/managed-by: platform-team\n  annotations:\n    devpolaris.io/owner: edge-team\nspec:\n  externalTrafficPolicy: Cluster\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "Service API version" },
+      { "path": ["kind"], "equals": "Service", "label": "Service kind" },
+      { "path": ["metadata", "name"], "equals": "public-gateway", "label": "gateway Service name" },
+      { "path": ["metadata", "namespace"], "equals": "platform", "label": "platform namespace" },
+      { "path": ["spec", "type"], "equals": "LoadBalancer", "label": "infrastructure entry type" },
+      { "path": ["spec", "selector", "app.kubernetes.io/name"], "equals": "public-gateway", "label": "gateway Pod selector" },
+      { "path": ["spec", "ports"], "containsObject": { "name": "https", "protocol": "TCP", "port": 443, "targetPort": "https" }, "label": "HTTPS Service contract" },
+      { "path": ["spec", "ports", 0, "nodePort"], "exists": false, "label": "no fixed node port" }
+    ]
+  }
+}

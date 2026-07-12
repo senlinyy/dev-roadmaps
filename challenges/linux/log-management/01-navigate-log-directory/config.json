@@ -6,35 +6,34 @@
     "/var/log": { "type": "dir" },
     "/var/log/syslog": {
       "type": "file",
-      "content": "Jan 15 08:01:12 devpolaris systemd[1]: Started Session 42 of user dev.\nJan 15 08:05:33 devpolaris cron[1284]: (root) CMD (/usr/lib/sysstat/sa1 1 1)\nJan 15 08:10:01 devpolaris cron[1310]: (dev) CMD (/home/dev/backup.sh)\nJan 15 09:00:44 devpolaris sshd[2051]: Accepted publickey for dev from 10.0.1.5 port 52340\nJan 15 09:15:22 devpolaris kernel: [42135.221] usb 2-1: new high-speed USB device\nJan 15 10:00:01 devpolaris cron[2200]: (root) CMD (test -x /usr/sbin/anacron || { cd / && run-parts /etc/cron.daily; })\nJan 15 10:30:18 devpolaris nginx[980]: 10.0.0.3 - - \"GET /api/health HTTP/1.1\" 200\nJan 15 11:00:05 devpolaris systemd[1]: logrotate.service: Succeeded.\nJan 15 11:22:09 devpolaris sshd[2415]: Failed password for root from 192.168.1.100 port 44322\nJan 15 12:00:01 devpolaris cron[2500]: (root) CMD (/usr/lib/sysstat/sa1 1 1)\nJan 15 12:45:33 devpolaris kernel: [59133.812] EXT4-fs (sda1): re-mounted. Opts: errors=remount-ro\nJan 15 13:10:07 devpolaris nginx[980]: 10.0.0.7 - - \"POST /api/login HTTP/1.1\" 401\n"
-    },
-    "/var/log/auth.log": {
-      "type": "file",
-      "content": "Jan 15 09:00:44 devpolaris sshd[2051]: Accepted publickey for dev from 10.0.1.5 port 52340 ssh2\nJan 15 09:00:44 devpolaris sshd[2051]: pam_unix(sshd:session): session opened for user dev\nJan 15 11:22:09 devpolaris sshd[2415]: Failed password for root from 192.168.1.100 port 44322 ssh2\nJan 15 11:22:12 devpolaris sshd[2415]: Connection closed by 192.168.1.100 port 44322\nJan 15 14:05:30 devpolaris sudo: dev : TTY=pts/0 ; PWD=/home/dev ; USER=root ; COMMAND=/usr/bin/apt update\n"
-    },
-    "/var/log/kern.log": {
-      "type": "file",
-      "content": "Jan 15 09:15:22 devpolaris kernel: [42135.221] usb 2-1: new high-speed USB device number 4 using xhci_hcd\nJan 15 09:15:22 devpolaris kernel: [42135.350] usb 2-1: New USB device found, idVendor=0781, idProduct=5581\nJan 15 12:45:33 devpolaris kernel: [59133.812] EXT4-fs (sda1): re-mounted. Opts: errors=remount-ro\n"
+      "content": "Jul 05 09:41:11 checkout-vm systemd[1]: Started orders-api.service - Orders API.\nJul 05 09:42:03 checkout-vm orders-api[2712]: listening on 127.0.0.1:3000\nJul 05 09:47:19 checkout-vm systemd[1]: orders-api.service: Main process exited, code=exited, status=1/FAILURE\n"
     },
     "/var/log/nginx": { "type": "dir" },
     "/var/log/nginx/access.log": {
       "type": "file",
-      "content": "10.0.0.1 - - [15/Jan/2025:08:30:12 +0000] \"GET / HTTP/1.1\" 200 612 \"-\" \"Mozilla/5.0\"\n10.0.0.2 - - [15/Jan/2025:09:12:45 +0000] \"GET /about HTTP/1.1\" 200 1420 \"-\" \"curl/7.88.1\"\n10.0.0.3 - - [15/Jan/2025:10:30:18 +0000] \"GET /api/health HTTP/1.1\" 200 15 \"-\" \"monitoring/1.0\"\n10.0.0.5 - - [15/Jan/2025:11:05:02 +0000] \"GET /missing-page HTTP/1.1\" 404 162 \"-\" \"Mozilla/5.0\"\n10.0.0.7 - - [15/Jan/2025:13:10:07 +0000] \"POST /api/login HTTP/1.1\" 500 52 \"-\" \"Mozilla/5.0\"\n"
+      "content": "10.0.1.8 - - [05/Jul/2026:09:45:19 +0000] \"GET /health HTTP/2.0\" 200 18 \"-\" \"monitor/1.0\"\n10.0.1.21 - - [05/Jul/2026:09:47:22 +0000] \"POST /checkout HTTP/2.0\" 502 166 \"-\" \"Mozilla/5.0\" request_id=req-8842 upstream=127.0.0.1:3000\n10.0.1.22 - - [05/Jul/2026:09:48:01 +0000] \"GET /catalog HTTP/2.0\" 200 3210 \"-\" \"Mozilla/5.0\"\n"
     },
     "/var/log/nginx/error.log": {
       "type": "file",
-      "content": "2025/01/15 11:05:02 [error] 980#980: *14 open() \"/var/www/html/missing-page\" failed (2: No such file or directory)\n2025/01/15 13:10:07 [error] 980#980: *21 connect() failed (111: Connection refused) while connecting to upstream\n2025/01/15 13:10:07 [crit] 980#980: *21 upstream prematurely closed connection while reading response header\n"
+      "content": "2026/07/05 09:47:22 [error] 411#411: *88 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 10.0.1.21, server: shop.devpolaris.test, request: \"POST /checkout HTTP/2.0\", upstream: \"http://127.0.0.1:3000/checkout\", request_id=req-8842\n"
     },
-    "/var/log/dpkg.log": {
+    "/var/log/app": { "type": "dir" },
+    "/var/log/app/orders-api.jsonl": {
       "type": "file",
-      "content": "2025-01-14 16:20:05 install nginx:amd64 1.24.0-1ubuntu1\n2025-01-14 16:20:12 status installed nginx:amd64 1.24.0-1ubuntu1\n"
+      "content": "{\"ts\":\"2026-07-05T09:47:22Z\",\"level\":\"error\",\"service\":\"orders-api\",\"request_id\":\"req-8842\",\"message\":\"payment gateway timeout\"}\n{\"ts\":\"2026-07-05T09:48:05Z\",\"level\":\"info\",\"service\":\"orders-api\",\"request_id\":\"req-8843\",\"message\":\"health check ok\"}\n"
     }
   },
   "grader": {
     "strategy": "contains",
     "source": "all-stdout",
     "loose": true,
-    "expected": ["auth.log", "syslog", "sshd", "cron", "nginx"],
-    "requireCommands": ["cat", "grep"]
+    "expected": [
+      "orders-api.service",
+      "POST /checkout",
+      "upstream timed out",
+      "req-8842",
+      "\"level\":\"error\""
+    ],
+    "requireCommands": ["ls", "cat", "grep"]
   }
 }

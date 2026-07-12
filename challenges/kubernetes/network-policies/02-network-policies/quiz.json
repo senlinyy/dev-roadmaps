@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "directional-isolation-q1",
+      "type": "single",
+      "scenario": "The platform team applies a NetworkPolicy in `orders` that selects `orders-api`, lists only `Ingress` in `policyTypes`, and has no ingress allow rules. A test shows checkout requests time out, but the orders API can still resolve DNS and connect to PostgreSQL. Which explanation best fits the evidence?",
+      "options": [
+        { "id": "a", "text": "The policy denies both directions, but established database connections bypass the egress restriction." },
+        { "id": "b", "text": "The selected Pods are isolated only for ingress, while their egress remains open because no egress policy applies." },
+        { "id": "c", "text": "The policy protects the orders Service, so Pod egress is outside the selected object." },
+        { "id": "d", "text": "The empty ingress list allows all callers, so the timeout must prove a DNS failure." }
+      ],
+      "correct": ["b"],
+      "explanation": "Ingress and egress isolation are directional. This policy closes ingress to the selected Pods but does not restrict their egress. NetworkPolicy selects Pods rather than Services, and an empty ingress allow list denies inbound application traffic instead of allowing it."
+    },
+    {
+      "id": "dns-egress-q2",
+      "type": "single",
+      "scenario": "After a default deny egress policy reaches `orders-api`, calls to `postgres.data.svc.cluster.local` fail with name resolution errors. The intended database rule allows TCP 5432 to PostgreSQL Pods, but no other egress rule exists. What is the most direct policy correction?",
+      "options": [
+        { "id": "a", "text": "Allow TCP 5432 to every Pod in `kube-system` because database names are resolved there." },
+        { "id": "b", "text": "Replace the PostgreSQL selector with an `ipBlock` for the current CoreDNS Pod address." },
+        { "id": "c", "text": "Remove egress isolation because NetworkPolicy cannot represent DNS traffic separately from application traffic." },
+        { "id": "d", "text": "Add egress to the cluster DNS Pods on both UDP and TCP port 53, using the actual DNS labels in the cluster." }
+      ],
+      "correct": ["d"],
+      "explanation": "Default deny egress also blocks DNS. The policy needs an explicit DNS path to the cluster DNS Pods on UDP and TCP 53. Allowing database traffic does not allow name resolution, a current Pod IP is fragile, and removing all egress isolation discards the intended boundary."
+    },
+    {
+      "id": "selector-shape-q3",
+      "type": "single",
+      "scenario": "A reviewer sees two entries under `ingress.from`: one entry has a namespace selector for `checkout`, and the second has a Pod selector for `checkout-web`. The requirement is to allow only checkout web Pods from the checkout namespace. What should the reviewer request?",
+      "options": [
+        { "id": "a", "text": "Put both selectors in the same peer item so a source must match the namespace and Pod labels together." },
+        { "id": "b", "text": "Keep separate peer items because NetworkPolicy evaluates list entries as a logical AND." },
+        { "id": "c", "text": "Remove the namespace selector because Pod labels are globally unique across a cluster." },
+        { "id": "d", "text": "Move both selectors into the protected workload `podSelector` so they identify the caller." }
+      ],
+      "correct": ["a"],
+      "explanation": "Selectors in one peer item combine to narrow the same source. Separate peer items are additive and widen access to all Pods in checkout plus matching Pods in the policy namespace. Pod labels are not globally unique, and the policy level selector identifies protected destination Pods."
+    },
+    {
+      "id": "enforcement-boundary-q4",
+      "type": "single",
+      "scenario": "A security team applies a valid default deny policy in a test cluster. The object appears in the Kubernetes API, but traffic between selected Pods remains unchanged. Labels and namespaces match the manifest. Which platform fact should the team verify next?",
+      "options": [
+        { "id": "a", "text": "Whether the Service uses a named target port, because unnamed ports disable every NetworkPolicy." },
+        { "id": "b", "text": "Whether RBAC grants the application Pods permission to read the NetworkPolicy object." },
+        { "id": "c", "text": "Whether the cluster network plugin supports and enables NetworkPolicy enforcement." },
+        { "id": "d", "text": "Whether the selected Pods use readiness probes, because only ready Pods can be isolated." }
+      ],
+      "correct": ["c"],
+      "explanation": "Kubernetes stores the object, but the network plugin enforces it. Service port naming, application RBAC, and Pod readiness do not activate policy enforcement. A policy capable and enabled CNI implementation is required."
+    },
+    {
+      "id": "rollout-review-q5",
+      "type": "multiple",
+      "scenario": "The team plans to restrict production egress for `orders-api`. Current traffic includes DNS, PostgreSQL, and inventory calls. Which two rollout practices best reduce outage risk while proving the boundary works?",
+      "options": [
+        { "id": "a", "text": "List required flows from owners and observed evidence, then add narrowly scoped rules in stages." },
+        { "id": "b", "text": "Apply one allow all egress rule first and leave it permanently beside the narrower policies." },
+        { "id": "c", "text": "Test both an intended allowed path and an intended denied path after each small policy change." },
+        { "id": "d", "text": "Use rollout specific Pod labels so each ReplicaSet receives a separate temporary boundary." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A flow inventory and staged allowed and denied path tests provide useful rollout evidence. An additive allow all rule defeats the restriction, while rollout specific labels create fragile policy targets that change with ReplicaSets."
+    }
+  ]
+}

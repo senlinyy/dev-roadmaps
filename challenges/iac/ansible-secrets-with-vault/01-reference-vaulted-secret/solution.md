@@ -10,5 +10,3 @@ orders_api_port: 8080
 ```yaml
 vault_orders_api_token: "$ANSIBLE_VAULT;1.1;AES256..."
 ```
-
-The reviewed variable file now names the setting without exposing the actual secret value.

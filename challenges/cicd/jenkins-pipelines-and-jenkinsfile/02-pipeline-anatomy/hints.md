@@ -1,1 +1,1 @@
-`agent`, `environment`, and `options` are all peers of `stages` directly inside the `pipeline { ... }` block. Order does not matter to Jenkins. `environment` uses `KEY = "value"` (no `def`), and `options` is filled with method-call statements like `timeout(...)` and `disableConcurrentBuilds()`.
+The missing pieces are pipeline-level declarations, not extra shell commands. Add the execution target, environment defaults, and safety options as peers of `stages` inside the main pipeline block.

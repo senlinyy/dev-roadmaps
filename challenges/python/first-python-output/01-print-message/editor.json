@@ -4,17 +4,24 @@
   "files": [
     {
       "filename": "main.py",
-      "initialValue": "message = \"hello from devpolaris\"\nprint(message)\n"
+      "initialValue": "def main():\n    message = \"replace me\"\n    print(message)\n\n\nif __name__ == \"__main__\":\n    main()\n"
     }
   ],
   "executor": {
     "runtime": "python-3.13",
     "entrypoint": "main.py",
+    "mode": "run",
     "runLabel": "Run Python"
   },
   "grader": {
-    "strategy": "text-contains",
-    "expected": ["hello from devpolaris"],
-    "loose": true
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "stdout": [
+      {
+        "match": "contains",
+        "value": "hello from devpolaris",
+        "label": "stdout prints the practice message"
+      }
+    ]
   }
 }

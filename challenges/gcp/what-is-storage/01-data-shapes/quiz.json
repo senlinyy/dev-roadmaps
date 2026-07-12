@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The Orders API generates receipt PDFs and needs to store and fetch them by name. Which data shape is this?",
+      "scenario": "Northstar Retail is decomposing a legacy server that keeps PDF invoices, editable profile drafts, transactional order rows, analytical click events, and database files on one local disk. The migration must preserve each workload's query, update, sharing, and recovery behavior rather than force all data into one managed product. What should the storage architect do first?",
       "options": [
-        { "id": "a", "text": "Object-shaped file data." },
-        { "id": "b", "text": "Relational checkout records." },
-        { "id": "c", "text": "A Kubernetes cluster mode." },
-        { "id": "d", "text": "A billing account." }
+        {
+          "id": "a",
+          "text": "Classify each data shape before choosing Cloud Storage, Firestore, Cloud SQL, BigQuery, or block/file storage."
+        },
+        {
+          "id": "b",
+          "text": "Start with one Cloud Storage bucket and add external indexes and exports as each non-object access pattern appears."
+        },
+        {
+          "id": "c",
+          "text": "Start with Firestore for every data type and store PDFs and VM disk images as encoded document fields."
+        },
+        {
+          "id": "d",
+          "text": "Choose one service from current unit price, then adapt consistency, query, sharing, and recovery behavior in application code."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Receipt PDFs are file-like bytes that fit object storage."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer starts with data shape. One bucket, one document database, or price-only choice ignores object, document, relational, analytics, and disk semantics. See [Google Cloud Google Cloud services documentation](https://cloud.google.com/docs/overview/cloud-platform-services)."
     },
     {
-      "id": "q2",
+      "id": "objects-q1",
       "type": "single",
-      "scenario": "Orders, line items, payments, and refunds need relationships and transactions. Which first GCP service fits that shape?",
+      "scenario": "A web app stores generated monthly statements as PDF files and serves them later by account. Which Cloud Storage evidence matters most in the design review?",
       "options": [
-        { "id": "a", "text": "Cloud SQL." },
-        { "id": "b", "text": "Cloud Storage only." },
-        { "id": "c", "text": "Filestore by default." },
-        { "id": "d", "text": "BigQuery as the checkout source of truth." }
+        {
+          "id": "c",
+          "text": "Record the object prefix and retention period but leave caller identity and upload or download authorization for implementation time."
+        },
+        {
+          "id": "d",
+          "text": "Document the CDN hostname and cache policy as the storage design, without naming the bucket ownership or recovery controls."
+        },
+        {
+          "id": "a",
+          "text": "Bucket, object naming pattern, access control path, retention or lifecycle policy, and encryption requirements."
+        },
+        {
+          "id": "b",
+          "text": "Record only the globally unique bucket name and assume it also captures object access, lifecycle, and encryption decisions."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Related business records and transactions are relational data."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer gathers bucket and object-specific evidence. VM size, similar document IDs, and console color do not define object storage behavior. See [Google Cloud Cloud Storage objects documentation](https://cloud.google.com/storage/docs/objects)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which pairings match the article?",
+      "id": "recovery-copies-q1",
+      "type": "single",
+      "scenario": "Northstar Legal stores signed contracts in a multi-region Cloud Storage bucket for availability. The recovery requirement says an operator-deleted contract must be restorable for 90 days, but the bucket has no versioning, soft delete, retention control, or backup export. Which correction is required before the team can claim the recovery objective is met?",
       "options": [
-        { "id": "a", "text": "Whole files -> Cloud Storage." },
-        { "id": "b", "text": "Document-shaped app state -> Firestore." },
-        { "id": "c", "text": "Analytical questions over many events -> BigQuery." },
-        { "id": "d", "text": "Every data problem -> one SQL table." }
+        {
+          "id": "d",
+          "text": "Cross-region replication to a second bucket is sufficient if deletion events and lifecycle changes are replicated to that destination."
+        },
+        {
+          "id": "a",
+          "text": "Replication improves availability, but deletion recovery still needs a retained previous copy such as versioning, soft delete, retention, or backup."
+        },
+        {
+          "id": "b",
+          "text": "A longer lifecycle age is sufficient recovery protection, even though it does not preserve an object deleted manually before that age."
+        },
+        {
+          "id": "c",
+          "text": "Audit logs provide the deleted object payload, so responders can reconstruct the original bytes without a retained data copy."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The data shape should lead the service choice."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Availability copies can replicate a deletion, so recoverability needs a service-specific history or backup control. Labels and names do not create previous object generations. See [Cloud Storage soft delete documentation](https://cloud.google.com/storage/docs/soft-delete)."
+    },
+    {
+      "id": "recovery-copies-q2",
+      "type": "multiple",
+      "scenario": "A storage inventory covers overwrite-prone objects, a VM boot volume, and user drafts in Firestore. Which three mechanisms can provide a previous recoverable state when they are configured and retained for the required window?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Persistent Disk snapshots that can create a replacement disk for validation."
+        },
+        {
+          "id": "c",
+          "text": "Firestore backups or point-in-time recovery for supported database recovery cases."
+        },
+        {
+          "id": "d",
+          "text": "A label named backup=true without a version, snapshot, export, or restore procedure."
+        },
+        {
+          "id": "e",
+          "text": "A second resource with the same display name but no retained data copy or tested recovery operation."
+        },
+        {
+          "id": "a",
+          "text": "Cloud Storage object versioning or soft delete for overwritten or deleted objects."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Object history, disk snapshots, and configured Firestore recovery features create real recovery points. A label is metadata and does not contain recoverable data. See [Cloud Storage object versioning](https://cloud.google.com/storage/docs/object-versioning) and [Firestore backup documentation](https://cloud.google.com/firestore/docs/backups)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A photo upload service needs durable object storage, lifecycle retention, and public delivery controls. Which storage family should be reviewed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Cloud Storage buckets and object access patterns."
+        },
+        {
+          "id": "b",
+          "text": "Filestore mounted by the upload service, prioritizing POSIX paths despite the immutable object and public delivery requirements."
+        },
+        {
+          "id": "c",
+          "text": "Firestore documents containing encoded image bytes, with TTL used as the public delivery and retention mechanism."
+        },
+        {
+          "id": "d",
+          "text": "Persistent Disk snapshots as the primary upload API, object naming, and end-user delivery interface."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer matches whole-file objects to Cloud Storage. Single-VM disks, Firestore indexes, and GKE node pools are not the first fit for user object storage. See [Google Cloud docs documentation](https://cloud.google.com/storage/docs/introduction)."
+    },
+    {
+      "id": "objects-q5",
+      "type": "single",
+      "scenario": "Northstar Claims lets an external browser upload one evidence file directly to a predetermined Cloud Storage object. The authorization must expire in 10 minutes, the browser must not receive bucket IAM, and application servers must not proxy the file bytes. Which access pattern best meets those constraints?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Granting the client Storage Object Creator on the whole bucket and removing the binding after the expected upload window."
+        },
+        {
+          "id": "d",
+          "text": "Issuing a signed URL for the bucket root with a one-day expiry so the client can choose any destination object."
+        },
+        {
+          "id": "a",
+          "text": "A signed URL or delegated upload path with tight expiration and object scope."
+        },
+        {
+          "id": "b",
+          "text": "Proxying the upload through an application endpoint that uses a project-wide storage administrator identity for every object operation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer uses narrow temporary delegation. Service account keys, public buckets, and project-wide objectAdmin are broad and risky. See [Google Cloud signed urls documentation](https://cloud.google.com/storage/docs/access-control/signed-urls)."
+    },
+    {
+      "id": "recovery-copies-q5",
+      "type": "single",
+      "scenario": "A lifecycle rule permanently deletes invoice objects after 30 days, but the legal and support requirement is to recover an earlier copy for 90 days. Which review finding best captures the gap?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The 30-day rule is safe because lifecycle deletion affects storage cost but not the underlying object data."
+        },
+        {
+          "id": "c",
+          "text": "The team can meet the 90-day requirement later by adding a recovery label to objects that were already deleted."
+        },
+        {
+          "id": "d",
+          "text": "Changing the bucket display name after an incident will expose the deleted generations for another 60 days."
+        },
+        {
+          "id": "a",
+          "text": "The lifecycle policy conflicts with the recovery window unless versioning, soft delete, retention, or a separate archive preserves recoverable copies for 90 days."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The deletion control and recovery requirement must describe the same time window. Once data is permanently removed, labels and renames cannot recreate it, so a retained version, soft-delete window, retention control, or archive must exist before deletion. See [Cloud Storage lifecycle documentation](https://cloud.google.com/storage/docs/lifecycle)."
     }
   ]
 }

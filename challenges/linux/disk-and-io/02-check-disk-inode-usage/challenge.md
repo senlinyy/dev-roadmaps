@@ -1,6 +1,6 @@
 ---
 title: "Check Disk and Inode Usage"
-sectionSlug: inodes-df-and-du
+sectionSlug: space-inodes-and-directory-usage
 order: 2
 ---
 

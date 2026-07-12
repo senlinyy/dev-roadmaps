@@ -1,6 +1,6 @@
 ---
 title: "Navigate Your Way"
-sectionSlug: basic-navigation-cd-ls-and-pwd
+sectionSlug: move-with-cd-and-path-names
 order: 1
 ---
 

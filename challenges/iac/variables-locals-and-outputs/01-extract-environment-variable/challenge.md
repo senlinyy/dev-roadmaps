@@ -1,14 +1,16 @@
 ---
 title: "Extract Environment Variable"
-sectionSlug: input-variables
+sectionSlug: declaring-variables
 order: 1
 ---
 
-Add the environment input in `variables.tf` and use it from `s3.tf`.
+The bucket resource is hardcoded for one environment. Add an input so the same resource shape can be reviewed for dev, staging, or prod without copying the whole file.
 
-Requirements:
+Your job:
 
-1. **Variable:** `variable "environment"` with `type = string`.
-2. **Bucket name:** include `${var.environment}` in the name.
-3. **Environment tag:** use `var.environment`.
-4. **Do not use** hardcoded `"prod"` in the editable file.
+1. **Declare an environment input** with a clear string type.
+2. **Use that input in the bucket name** instead of a fixed production suffix.
+3. **Use the same input in the environment tag** so names and tags stay aligned.
+4. **Remove the hardcoded production value** from the editable resource file.
+
+The grader checks the variable and resource references in HCL.

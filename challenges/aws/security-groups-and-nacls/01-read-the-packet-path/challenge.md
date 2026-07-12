@@ -1,7 +1,6 @@
 ---
-title: "Read The Packet Path"
-sectionSlug: the-route-exists-so-why-is-the-packet-still-blocked
+title: "Security Groups and NACLs"
 order: 1
 ---
 
-Knowledge check on separating AWS API permissions from packet reachability while following the `devpolaris-orders-api` request path.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

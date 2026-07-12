@@ -1,6 +1,6 @@
 ---
 title: "Read a Unit File"
-sectionSlug: anatomy-of-a-unit-file
+sectionSlug: unit-files-as-written-instructions
 order: 1
 ---
 

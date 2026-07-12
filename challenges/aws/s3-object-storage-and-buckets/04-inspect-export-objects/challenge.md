@@ -1,6 +1,6 @@
 ---
 title: "Inspect Export Objects"
-sectionSlug: keys
+sectionSlug: buckets-keys-and-objects
 order: 4
 ---
 

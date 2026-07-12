@@ -1,0 +1,44 @@
+{
+  "language": "yaml",
+  "filename": "orders-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: devpolaris-orders-api\n  namespace: orders\nspec:\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: devpolaris-orders-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: devpolaris-orders-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/devpolaris/orders-api:2026.07.11\n          ports:\n            - name: http\n              containerPort: 8080\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "spec",
+          "selector",
+          "matchLabels",
+          "app.kubernetes.io/name"
+        ],
+        "equals": "devpolaris-orders-api",
+        "label": "Deployment selector"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "labels",
+          "app.kubernetes.io/name"
+        ],
+        "equals": "devpolaris-orders-api",
+        "label": "Pod template label"
+      },
+      { "path": ["spec", "template", "spec", "securityContext", "runAsNonRoot"], "equals": true, "label": "non-root requirement" },
+      { "path": ["spec", "template", "spec", "securityContext", "runAsUser"], "equals": 10001, "label": "application UID" },
+      { "path": ["spec", "template", "spec", "securityContext", "runAsGroup"], "equals": 10001, "label": "application GID" },
+      { "path": ["spec", "template", "spec", "securityContext", "fsGroup"], "equals": 10001, "label": "writable volume group" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "API container" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/orders-api:2026.07.11", "label": "approved API image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "allowPrivilegeEscalation"], "equals": false, "label": "privilege escalation blocked" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "readOnlyRootFilesystem"], "equals": true, "label": "read-only image filesystem" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "capabilities", "drop"], "includes": "ALL", "label": "all capabilities dropped" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "seccompProfile", "type"], "equals": "RuntimeDefault", "label": "runtime default seccomp" },
+      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "tmp", "mountPath": "/tmp" }, "label": "temporary directory mount" },
+      { "path": ["spec", "template", "spec", "volumes"], "containsObject": { "name": "tmp", "emptyDir": {} }, "label": "temporary writable volume" }
+    ]
+  }
+}

@@ -1,7 +1,6 @@
 ---
-title: "Separate Secret And Version"
-sectionSlug: secrets-and-versions
+title: "Secret Manager and Runtime Secrets"
 order: 1
 ---
 
-Practice separating a secret name from the sensitive payload stored in versions. The questions focus on why versioning makes rotation possible.
+Review production scenarios covering secret names, versions, IAM access, runtime flow, rotation, evidence, encryption, and KMS judgment.

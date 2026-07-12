@@ -22,7 +22,7 @@ id: article-devops-foundation-linux-linux-basics-vim-essentials
 ## Why Vim Matters on a Server
 <!-- section-summary: Vim is the editor you can rely on when a remote Linux server only gives you a terminal. -->
 
-Sooner or later, a server gives you only a terminal and one small file to fix. Maybe an Nginx config points at the wrong port, a systemd unit has a bad environment path, or an emergency shell has no desktop editor available. In that moment, the useful skill is not "master Vim." It is editing one file safely without getting trapped in the editor.
+Sooner or later, a server gives you only a terminal and one small file to fix. Maybe an Nginx config points at the wrong port, a systemd unit has a bad environment path, or an emergency shell has no desktop editor available. In that moment, the useful skill is simple: edit one file safely without getting trapped in the editor.
 
 **Vim** is the terminal editor you can usually rely on in that situation. It is often available on Linux servers, rescue shells, containers, and cloud images. When you connect over SSH, Vim lets you open and edit config files without a desktop editor or remote IDE.
 
@@ -33,7 +33,7 @@ On a server, a common edit is small and important. You may change an Nginx upstr
 ## Modes: How Vim Changes What Keys Do
 <!-- section-summary: Vim uses modes so the same keys can either edit text or run commands, depending on the current state. -->
 
-The first surprising moment in Vim usually happens right after opening a config file. You type letters and they may appear in the file, or the cursor may jump around instead. Vim is doing exactly what its current mode tells it to do.
+The first surprising moment in Vim usually happens right after opening a config file. You type letters and they may appear in the file, or the cursor may jump around instead. That is Vim's mode system showing up before anyone has explained it.
 
 Vim is a **modal editor**. A mode is a state that changes what your keys mean. In one mode, typing `server_name` writes those letters into the file. In another mode, pressing `w` jumps to the next word and pressing `dd` deletes a line.
 
@@ -54,10 +54,14 @@ Here is the shape of a real edit. You open the Nginx site file and Vim starts in
 
 The production symptom is accidental text typed into the file or command keys that seem to do nothing. That usually means the editor is in the wrong mode for the action. The next decision is simple: press `Esc`, check the bottom of the screen for mode text, then continue from Normal mode.
 
+![Vim mode map infographic showing normal mode, insert mode, command mode, visual mode, and the keys that move between them](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-mode-map.png)
+
+_The image makes Vim modes explicit, so the same key doing different jobs is less confusing._
+
 ## Open, Edit, Save, and Quit
 <!-- section-summary: The survival workflow is open a file, enter Insert mode, save with `:w`, and quit with `:q`. -->
 
-A common first server edit is changing one Nginx backend port over SSH. The target is small: open the site config, change `8080` to `8081`, write the file, and quit without disturbing the rest of the config.
+After modes make sense, the first real win is a tiny server edit. A common one is changing an Nginx backend port over SSH. The target is small: open the site config, change `8080` to `8081`, write the file, and quit without disturbing the rest of the config.
 
 Opening a file is `vim` followed by the path. System config files usually require elevated privileges, so the Nginx site file uses `sudo`:
 
@@ -117,7 +121,7 @@ The practical model is: edit the buffer, write the file, validate the service, t
 ## Move Through a Config File
 <!-- section-summary: Normal-mode navigation lets you reach the right line quickly without scrolling through a terminal by hand. -->
 
-Nginx reports `invalid URL prefix in /etc/nginx/sites-enabled/web.conf:18`, and Vim opens the file at the top. The useful skill is getting to line 18 quickly, checking the nearby directive, and moving through the file without changing text by accident.
+After you can save and quit, the next frustration is reaching the right line. Nginx reports `invalid URL prefix in /etc/nginx/sites-enabled/web.conf:18`, and Vim opens the file at the top. The useful skill is getting to line 18 quickly, checking the nearby directive, and moving through the file without changing text by accident.
 
 The basic cursor keys are `h`, `j`, `k`, and `l` for left, down, up, and right. Arrow keys also work on most systems. Many engineers still use `hjkl` because it is fast and reliable over remote sessions.
 
@@ -138,13 +142,10 @@ This helps when Nginx reports an error with a line number:
 
 ```bash
 sudo nginx -t
-```
 
-Example output:
-
-```console
-nginx: [emerg] invalid URL prefix in /etc/nginx/sites-enabled/web.conf:18
-nginx: configuration file /etc/nginx/nginx.conf test failed
+# Example output:
+# nginx: [emerg] invalid URL prefix in /etc/nginx/sites-enabled/web.conf:18
+# nginx: configuration file /etc/nginx/nginx.conf test failed
 ```
 
 Back in Vim, `18G` takes you directly to line 18. The command `:set number` shows line numbers, and `:set relativenumber` can help when you need to move a known number of lines. Many operators turn on line numbers during config repair because service error messages usually speak in line numbers.
@@ -152,7 +153,7 @@ Back in Vim, `18G` takes you directly to line 18. The command `:set number` show
 ## Change Text Without Losing Control
 <!-- section-summary: Vim editing commands combine an action with a movement, which makes small config changes fast and repeatable. -->
 
-After the first few edits, the task often gets more precise. You may need to replace one wrong directive, delete one duplicate line, or change only the value inside quotes. Dropping into Insert mode and moving character by character works, but it is easy to disturb nearby text.
+After the first few edits, the task often gets more precise. You may need to replace one wrong directive, delete one duplicate line, or change only the value inside quotes. Dropping into Insert mode and moving character by character works, and it is easy to disturb nearby text.
 
 Normal mode gives you precise changes with fewer keystrokes. Vim often combines an operator with a motion. The operator says what to do, and the motion says how much text it affects.
 
@@ -197,10 +198,14 @@ The pieces explain why this edit stays controlled:
 
 The dot command, `.`, repeats the last change. For example, if you use `cw8081` and then `Esc` to change one port value, pressing `.` on another matching value repeats the same change. That is useful when a config file has the same backend port in a main server block and a health-check block.
 
+![Vim operator and motion infographic showing delete, change, yank, word, line, and search motions combining into precise edits](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-operator-motion.png)
+
+_The image shows how operators and motions combine into small repeatable edits._
+
 ## Search, Replace, and Review
 <!-- section-summary: Search and substitution help you find every related directive before you save a server config change. -->
 
-Before saving a backend change, find every reference to the old address. One `proxy_pass` may sit in the main location block, another may sit in a health-check location, and a comment may mention the old port for documentation. Search lets you review each match before changing the file.
+Before saving a backend change, pause and find every reference to the old address. One `proxy_pass` may sit in the main location block, another may sit in a health-check location, and a comment may mention the old port for documentation. Search lets you review each match before changing the file.
 
 Search starts from Normal mode. `/proxy_pass` searches forward for the next `proxy_pass`, and `?proxy_pass` searches backward. After a search, `n` jumps to the next match and `N` jumps to the previous match.
 
@@ -240,7 +245,7 @@ Before leaving Vim, a quick review reduces mistakes. `:set number` shows line nu
 ## A Safe Remote Editing Workflow
 <!-- section-summary: Safe server edits include backup, minimal change, validation, reload, and rollback path. -->
 
-Editing production files directly deserves a small ritual. The ritual protects you from typos and gives you a way back if the service rejects the change.
+After Vim commands feel usable, wrap them in a safe server workflow. Editing production files directly deserves a small ritual. The ritual protects you from typos and gives you a way back if the service rejects the change.
 
 The ritual exists because remote edits often happen under pressure. A timestamped backup gives you a known previous file. A minimal edit reduces the amount of text to review. Validation catches syntax errors before reload. A rollback command keeps recovery close at hand.
 
@@ -254,13 +259,10 @@ Check that the backup exists:
 
 ```bash
 ls -l /etc/nginx/sites-available/web.conf*
-```
 
-Example output:
-
-```console
--rw-r--r-- 1 root root 1280 Jun 24 09:21 /etc/nginx/sites-available/web.conf
--rw-r--r-- 1 root root 1280 Jun 24 09:21 /etc/nginx/sites-available/web.conf.bak.20260624-092100
+# Example output:
+# -rw-r--r-- 1 root root 1280 Jun 24 09:21 /etc/nginx/sites-available/web.conf
+# -rw-r--r-- 1 root root 1280 Jun 24 09:21 /etc/nginx/sites-available/web.conf.bak.20260624-092100
 ```
 
 Open the file:
@@ -273,13 +275,10 @@ Make the smallest edit you can. Save with `:w` or `:wq`, then validate Nginx:
 
 ```bash
 sudo nginx -t
-```
 
-Example output:
-
-```console
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
+# Example output:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
 ```
 
 Reload Nginx only after the validation passes:
@@ -292,13 +291,10 @@ Check service state:
 
 ```bash
 systemctl status nginx --no-pager
-```
 
-Example output:
-
-```console
-● nginx.service - A high performance web server and a reverse proxy server
-     Active: active (running) since Wed 2026-06-24 09:22:10 UTC; 8s ago
+# Example output:
+# ● nginx.service - A high performance web server and a reverse proxy server
+#      Active: active (running) since Wed 2026-06-24 09:22:10 UTC; 8s ago
 ```
 
 The commands have separate jobs:
@@ -321,13 +317,10 @@ Then validate and reload again:
 
 ```bash
 sudo nginx -t
-```
 
-Example output:
-
-```console
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
+# Example output:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
 ```
 
 ```bash
@@ -336,10 +329,14 @@ sudo systemctl reload nginx
 
 The same shape applies to systemd units and environment files. Back up the file, make the smallest edit, run the service's validation command when one exists, reload or restart intentionally, and keep the rollback command obvious.
 
+![Vim buffer and swap file infographic showing original file, editing buffer, swap file, write, and recovery path](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-buffer-swap-file.png)
+
+_The image shows why Vim can recover work and why careful writes matter on a remote server._
+
 ## Cheatsheet
 <!-- section-summary: A compact set of Vim commands covers most remote Linux editing tasks. -->
 
-Keep this table as a safety recap during server edits. Press `Esc` to return to Normal mode, use one command for the action you need, then validate the service outside Vim before reloading anything. The goal is a calm edit path, not memorizing every Vim feature.
+Keep this table as a safety recap during server edits. Press `Esc` to return to Normal mode, use one command for the action you need, then validate the service outside Vim before reloading anything. The goal is a calm edit path rather than memorizing every Vim feature.
 
 | Task | Keys or command |
 |---|---|
@@ -362,6 +359,10 @@ Keep this table as a safety recap during server edits. Press `Esc` to return to 
 Use this table during the safe remote editing workflow: back up the file, open it, press `Esc` to return to Normal mode whenever the editor feels confusing, make the smallest change, save, validate, and reload only after validation passes. The cheatsheet is not a separate learning track; it is the small set of keys that supports that workflow.
 
 This is enough to edit `/etc/nginx`, `/etc/systemd/system`, `/etc/fstab`, and simple environment files during normal server work. More Vim can come later, after the basics are steady.
+
+![Vim essentials summary infographic showing modes, movement, edits, search, save, quit, and safe remote workflow](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-essentials-summary.png)
+
+_The summary image turns the article into a compact Vim survival map._
 
 ## References
 

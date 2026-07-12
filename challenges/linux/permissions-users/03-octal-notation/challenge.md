@@ -1,6 +1,6 @@
 ---
 title: "Octal Notation Practice"
-sectionSlug: numeric-octal-notation
+sectionSlug: change-permissions-with-chmod
 order: 3
 ---
 

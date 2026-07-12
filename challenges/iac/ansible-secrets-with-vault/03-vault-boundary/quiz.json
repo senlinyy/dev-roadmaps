@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A vaulted variable file is committed to Git. During a playbook run, a task renders the secret into `/etc/default/devpolaris-orders-api`. Which statement is most accurate?",
+      "scenario": "A vaulted variable file is committed to Git. During a run, a task renders the decrypted token into `/etc/default/devpolaris-orders-api` and the task output is visible in CI logs. What did Vault protect?",
       "options": [
         {
           "id": "a",
-          "text": "Vault protects the value at rest in the repository, but the decrypted value still exists during the run and can leak through logs or rendered files."
-        },
-        {
-          "id": "b",
-          "text": "Vault means the secret can never appear on a managed host."
+          "text": "The stored Ansible content at rest, but not every downstream place the decrypted value traveled during execution."
         },
         {
           "id": "c",
-          "text": "Vault removes the need for file permissions on the rendered destination."
+          "text": "Only the variable name, not the encrypted file contents."
         },
         {
           "id": "d",
-          "text": "Vault encrypts every Ansible log automatically, even without `no_log`."
+          "text": "Nothing, because vaulted files cannot be committed to Git."
+        },
+        {
+          "id": "b",
+          "text": "The CI logs, rendered remote file, and process environment automatically."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Vault is an at-rest protection for stored variable files. Runtime output, rendered files, and destination permissions still need careful handling."
+      "explanation": "Vault protects encrypted content at rest. Once decrypted for a run, output, rendered files, diffs, and logs need their own controls. See [Ansible Vault guide](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A repo stores `group_vars/prod/main.yml` with public settings and `group_vars/prod/vault.yml` as an encrypted file. A reviewer sees only ciphertext changed in `vault.yml`. What is the right review focus?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Reject the change because encrypted files cannot be reviewed at all."
+        },
+        {
+          "id": "d",
+          "text": "Approve automatically because encryption proves the value is correct."
+        },
+        {
+          "id": "c",
+          "text": "Ask the author to paste the secret value into the pull request for review."
+        },
+        {
+          "id": "a",
+          "text": "Ask why the secret set changed, who rotated it, and how the canary will verify the new value without exposing it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Vaulted diffs are process reviews: intent, owner, rotation plan, and verification evidence matter because reviewers cannot inspect the cleartext value. Automatic approval cannot prove ciphertext contains the intended secret, while rejecting every encrypted change blocks safe rotation and pasting plaintext into the pull request defeats the secret boundary."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A CI run decrypts an API token and renders it into a remote environment file. Which two controls directly reduce disclosure through Ansible output while the decrypted value is in use?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Set restrictive mode on the remote file and assume this also redacts controller-side task output."
+        },
+        {
+          "id": "a",
+          "text": "`no_log: true` on the task that handles the secret value."
+        },
+        {
+          "id": "d",
+          "text": "Keep the Vault password beside the encrypted vars so the CI job has one reviewed source."
+        },
+        {
+          "id": "b",
+          "text": "`diff: false` when file diffs could reveal secret-bearing content."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "`no_log` and disabled diffs directly reduce controller and CI output exposure for the secret-bearing task. Restrictive remote permissions are still required, but they do not redact controller output as the option claims. Keeping the decrypting password beside the ciphertext defeats the at-rest trust boundary."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A CI job decrypts Vault using `--vault-password-file ./prod-vault-pass`, and that password file is committed beside the encrypted vars. What is wrong?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The only problem is that the filename is too obvious."
+        },
+        {
+          "id": "b",
+          "text": "Vault requires password files to be committed so teammates can reproduce runs."
+        },
+        {
+          "id": "c",
+          "text": "The password file should be copied into every role directory instead."
+        },
+        {
+          "id": "a",
+          "text": "The encrypted file and the password that decrypts it are in the same trust zone, defeating the storage boundary."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The encrypted data and its decryption password must not share the same repository trust boundary. Committing or copying the password beside roles makes ciphertext recoverable to anyone with the checkout, and changing the filename does not reduce that access. Keep the password source in a CI secret store, controlled password manager, or secure prompt path."
+    },
+    {
+      "id": "safe-vault-workflow-q1",
+      "type": "single",
+      "scenario": "DevPolaris must rotate a production API token without interrupting order processing. The upstream service can accept the old and new tokens together for one hour, Ansible distributes the vaulted value to three hosts, and the team requires one-host verification before fleet rollout. Which sequence completes the rotation with a recoverable overlap window?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Commit the new token in plaintext for one review cycle, then encrypt it after the rollout has completed."
+        },
+        {
+          "id": "d",
+          "text": "Disable the old token before editing Vault so every failed host immediately reveals which variable still needs updating."
+        },
+        {
+          "id": "a",
+          "text": "Create the new token in the service, edit the vaulted variable, canary one host, roll the fleet, then disable the old token after health is proven."
+        },
+        {
+          "id": "b",
+          "text": "Run `ansible-vault rekey`, then deploy without changing the application token because the Vault password has rotated."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application secret rotation and Vault password rotation are different operations. A safe app-token rotation coordinates the service, vaulted value, rollout, and verification."
+    },
+    {
+      "id": "safe-vault-workflow-q2",
+      "type": "single",
+      "scenario": "A former contractor retained a copy of the production Vault password source after access should have ended. Audit logs show no use of the database password stored inside the vaulted file, and the application credential does not yet require rotation. Which action directly restores the compromised encryption boundary?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rekey the Vault files and verify the old password can no longer decrypt them."
+        },
+        {
+          "id": "b",
+          "text": "Change only the database password and keep the same Vault password."
+        },
+        {
+          "id": "c",
+          "text": "Delete all encrypted files from Git history and stop using Vault."
+        },
+        {
+          "id": "d",
+          "text": "Add `no_log: true` to unrelated tasks and leave the Vault password unchanged."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A leaked Vault password compromises the encryption boundary, so the team should rekey affected Vault content and verify the retired password no longer decrypts it. Rotating only the database password leaves the leaked decrypting key valid. Deleting Vault or changing unrelated task logging does not restore that boundary."
+    },
+    {
+      "id": "safe-vault-workflow-q4",
+      "type": "single",
+      "scenario": "A production API token was committed in plaintext last week and may exist in clones, CI artifacts, and repository history. The team encrypts the current file with Vault, but the application still accepts the exposed token. What additional response is required to close the incident?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Move the plaintext token into role defaults so it is less visible."
+        },
+        {
+          "id": "b",
+          "text": "Nothing. Encrypting the current file removes the old secret from all previous commits."
+        },
+        {
+          "id": "c",
+          "text": "Only a Vault rekey is needed because the app token was never at risk."
+        },
+        {
+          "id": "a",
+          "text": "Treat the old value as leaked: rotate the exposed application secret and address history, clones, logs, and artifacts according to policy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Encrypting the current file protects future storage but does not revoke a token already exposed through history, clones, logs, or artifacts. The application token must be rotated and the historical exposure handled under policy. Moving the value or rekeying Vault alone does not invalidate the leaked application credential."
     }
   ]
 }

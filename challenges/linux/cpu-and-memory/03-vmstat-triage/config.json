@@ -2,8 +2,7 @@
   "cwd": "/home/dev",
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
-    "/home/dev": { "type": "dir" },
-    "/home/dev/vmstat-reference.txt": { "type": "file", "content": "r  - processes waiting for CPU time\nb  - processes in uninterruptible sleep\nswpd - virtual memory used (kB)\nfree - idle memory (kB)\nbuff - memory used as buffers (kB)\ncache - memory used as cache (kB)\nsi - memory swapped in from disk (kB/s)\nso - memory swapped out to disk (kB/s)\nbi - blocks received from block device (blocks/s)\nbo - blocks sent to block device (blocks/s)\nin - interrupts per second\ncs - context switches per second\nus - user CPU time (%)\nsy - system CPU time (%)\nid - idle CPU time (%)\nwa - I/O wait time (%)\nst - time stolen from virtual machine (%)\n" }
+    "/home/dev": { "type": "dir" }
   },
   "customCommands": {
     "vmstat": {
@@ -15,7 +14,7 @@
     "strategy": "contains",
     "source": "all-stdout",
     "loose": true,
-    "expected": ["3  1", "120", "65 12 18  5", "processes waiting for CPU"],
-    "requireCommands": ["vmstat", "cat"]
+    "expected": ["3  1", "120", "80", "65 12 18  5"],
+    "requireCommands": ["vmstat"]
   }
 }

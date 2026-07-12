@@ -1,7 +1,6 @@
 ---
-title: "Recognize Relational Shape"
-sectionSlug: relational-shape
+title: "Cloud SQL"
 order: 1
 ---
 
-Practice identifying when application data needs relationships, constraints, and SQL instead of object or document storage.
+Review production scenarios covering relational data shape, Cloud SQL instances, transactions, connections, private access, migrations, backups, and high availability.

@@ -1,14 +1,16 @@
 ---
 title: "Add Module Inputs"
-sectionSlug: inputs
+sectionSlug: extracting-one-private-bucket-module
 order: 2
 ---
 
-Add the missing module inputs in `variables.tf`.
+The private bucket module is missing part of its public contract. Add caller-facing inputs that make environment, ownership, and versioning choices explicit without pushing raw provider details back to every root module.
 
-Requirements:
+Your job:
 
-1. **Environment input:** `variable "environment"` with `type = string`.
-2. **Validation:** allow only `dev`, `staging`, or `prod`.
-3. **Owner input:** `variable "owner"` with `type = string` and `default = "platform"`.
-4. **Versioning input:** `variable "versioning_enabled"` with `type = bool` and `default = false`.
+1. **Declare the environment input** as a string and reject values outside dev, staging, and prod.
+2. **Declare the owner input** with a safe platform default.
+3. **Declare the versioning toggle** as a boolean with a conservative default.
+4. **Keep descriptions useful for module callers** who will read this file during review.
+
+The grader checks the variable contract in HCL.

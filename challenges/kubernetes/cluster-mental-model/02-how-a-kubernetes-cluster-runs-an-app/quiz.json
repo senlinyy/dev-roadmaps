@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "api-object-q1",
+      "type": "single",
+      "scenario": "A release pipeline submits a Deployment requesting three `notification-api` replicas. Seconds later, the API record shows `spec.replicas: 3` and `status.availableReplicas: 1`. Which interpretation is most accurate while the rollout is still progressing?",
+      "options": [
+        { "id": "a", "text": "The team requested one replica, and Kubernetes plans to increase that request to three." },
+        { "id": "b", "text": "The scheduler has already placed three ready Pods, but the Deployment spec has not caught up." },
+        { "id": "c", "text": "The API server rejected the object because `spec` and `status` contain different numbers." },
+        { "id": "d", "text": "The desired state is three replicas, while Kubernetes currently reports only one available replica." }
+      ],
+      "correct": ["d"],
+      "explanation": "The team writes desired state in `spec`, while Kubernetes reports observed state in `status`. A temporary difference is expected during reconciliation. The scheduler does not rewrite the desired replica count, and different spec and status values do not by themselves mean rejection."
+    },
+    {
+      "id": "node-capacity-q2",
+      "type": "single",
+      "scenario": "Four new worker Pods remain `Pending`. Their events say no node has enough available memory for each Pod's request. The application image starts successfully in a smaller development cluster. What should the team investigate first?",
+      "options": [
+        { "id": "a", "text": "Node capacity and the worker memory requests, because the scheduler needs a node where each Pod fits." },
+        { "id": "b", "text": "The Service DNS name, because DNS resolution determines whether the scheduler can reserve memory." },
+        { "id": "c", "text": "The readiness endpoint, because failed readiness prevents a Pod from being assigned to a node." },
+        { "id": "d", "text": "The Deployment image history, because an old image revision consumes the requested memory before scheduling." }
+      ],
+      "correct": ["a"],
+      "explanation": "The scheduler uses resource requests when deciding whether a Pod fits on a node, so node capacity and request sizing are the direct evidence. Service DNS and readiness matter after placement. Image history does not reserve memory for an unscheduled Pod."
+    },
+    {
+      "id": "selector-traffic-q3",
+      "type": "single",
+      "scenario": "A Deployment creates three ready Pods labeled `app: notification-api` and `component: api`. The internal Service resolves correctly but selects `app: notification-api` and `component: backend`, so no application endpoints appear. What is the most direct repair?",
+      "options": [
+        { "id": "a", "text": "Increase Deployment replicas so the Service can select a Pod after the fourth copy starts." },
+        { "id": "b", "text": "Align the Service selector with the approved Pod labels so both use `component: api`." },
+        { "id": "c", "text": "Replace the ClusterIP Service with direct Pod IPs recorded in the caller configuration." },
+        { "id": "d", "text": "Raise the API memory limit so Kubernetes can translate `backend` into the Pod's `api` label." }
+      ],
+      "correct": ["b"],
+      "explanation": "Selectors match exact label key-value pairs, so the Service and Pod identity must align. More replicas do not repair a mismatch. Direct Pod IPs discard the stable Service contract, and resource limits do not transform labels."
+    },
+    {
+      "id": "rollout-path-q4",
+      "type": "single",
+      "scenario": "Version `1.8.0` creates new API Pods, but each fails `/ready` while the old Pods remain ready. Callers still reach the old version through the same Service name. Which explanation best describes the cooperating objects?",
+      "options": [
+        { "id": "a", "text": "The Service owns both ReplicaSets and changes the Deployment image only after every request succeeds." },
+        { "id": "b", "text": "The nodes keep the old image because a Deployment cannot create old and new Pods at the same time." },
+        { "id": "c", "text": "The Deployment creates replacement Pods, readiness keeps failed new Pods out of traffic, and the Service continues routing to ready matches." },
+        { "id": "d", "text": "The API server copies user requests into the old Pods until the new image changes its labels automatically." }
+      ],
+      "correct": ["c"],
+      "explanation": "The Deployment controls replacement, the readiness result determines traffic eligibility, and the Service keeps a stable route to ready selected Pods. Services do not own ReplicaSets, Deployments can run old and new revisions during a rollout, and the API server does not proxy application requests."
+    },
+    {
+      "id": "operations-review-q5",
+      "type": "multiple",
+      "scenario": "Users report slow notification requests after a rollout. The Deployment has three desired and three available replicas. Two slow Pods are both on `worker-03`, while the third Pod on `worker-01` is healthy. The Service selector matches all three Pods, and every Pod reports ready. Which two investigation moves follow the article's object relationships?",
+      "options": [
+        { "id": "a", "text": "Inspect `worker-03` for pressure, network, disk, or runtime trouble because the symptom follows one node." },
+        { "id": "b", "text": "Rewrite the Service name because a stable name cannot route to Pods on more than one node." },
+        { "id": "c", "text": "Confirm resource usage and limits for the affected Pods because CPU throttling or memory pressure can create runtime symptoms." },
+        { "id": "d", "text": "Change the Deployment selector for the current image so each rollout receives a new workload identity." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "The node correlation makes `worker-03` a strong investigation target, and resource evidence can explain throttling or pressure on those Pods. A Service can route across nodes, and changing the stable Deployment selector per image would break the ownership contract rather than diagnose the slowdown."
+    }
+  ]
+}

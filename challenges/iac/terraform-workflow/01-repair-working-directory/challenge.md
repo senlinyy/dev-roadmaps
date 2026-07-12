@@ -1,14 +1,16 @@
 ---
 title: "Repair the Working Directory"
-sectionSlug: the-working-directory
+sectionSlug: configuration-is-the-teams-starting-point
 order: 1
 ---
 
-Write the first Terraform root module across `main.tf` and `s3.tf`.
+The starter root module is missing the pieces a first plan needs: provider setup and one managed object. Repair the working directory so Terraform can preview a single invoice bucket change.
 
-Requirements:
+Your job:
 
-1. **Provider:** source `hashicorp/aws`, version constraint `~> 5.0`, region `eu-west-2`.
-2. **Bucket resource:** `aws_s3_bucket.orders_invoices`.
-3. **Bucket name:** `dp-orders-invoices-prod`.
-4. **Tags:** `service = "orders-api"`, `environment = "prod"`, `owner = "platform"`.
+1. **Complete the AWS provider setup** with a reviewed provider source, version constraint, and production region.
+2. **Add the managed invoice bucket** for the orders production service.
+3. **Apply the service ownership tags** from the release brief.
+4. **Keep provider setup and resource configuration in focused files**.
+
+The grader checks the HCL files, not a real Terraform command.

@@ -1,6 +1,6 @@
 ---
 title: "Audit a Saved iptables Ruleset"
-sectionSlug: iptables-the-linux-packet-filter
+sectionSlug: host-firewalls-with-iptables
 order: 1
 ---
 

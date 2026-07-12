@@ -1,7 +1,7 @@
 ---
 title: "What Is GCP IAM"
-description: "Understand how GCP IAM checks principals, permissions, roles, allow policies, scopes, conditions, deny policies, principal access boundaries, and troubleshooting evidence."
-overview: "GCP IAM decides whether a human, service account, or federated workload can use a specific permission on a specific resource. This foundation article follows devpolaris-orders-api on Cloud Run as Google Cloud checks its caller, role binding, scope, condition, guardrails, and policy evidence."
+description: "Understand how Google Cloud IAM checks callers, permissions, resources, roles, allow policies, bindings, hierarchy, and conditions."
+overview: "GCP IAM answers a plain access question for every request: who is calling, what are they trying to do, and which resource are they touching. The examples follow a photo uploader service that writes to one bucket and a support analyst who needs read-only log access."
 tags: ["gcp", "iam", "security", "authorization"]
 order: 1
 id: article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model
@@ -18,299 +18,312 @@ aliases:
 
 ## Table of Contents
 
-1. [Start With the Access Question](#start-with-the-access-question)
-2. [Principals: Who Is Calling](#principals-who-is-calling)
-3. [The Runtime Service Account in Our Scenario](#the-runtime-service-account-in-our-scenario)
-4. [Resource Hierarchy: Where the Grant Lives](#resource-hierarchy-where-the-grant-lives)
-5. [Permissions and Roles: What the Caller Needs](#permissions-and-roles-what-the-caller-needs)
-6. [Allow Policies and Role Bindings](#allow-policies-and-role-bindings)
-7. [IAM Conditions](#iam-conditions)
-8. [Deny Policies and Principal Access Boundaries](#deny-policies-and-principal-access-boundaries)
-9. [Following One Denied Request](#following-one-denied-request)
-10. [Troubleshooting With Policy Evidence](#troubleshooting-with-policy-evidence)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [The Access Question](#the-access-question)
+2. [Principal: Who Is Calling](#principal-who-is-calling)
+3. [Resource: What Is Being Touched](#resource-what-is-being-touched)
+4. [Permission: The Exact Action](#permission-the-exact-action)
+5. [Role: A Bundle of Permissions](#role-a-bundle-of-permissions)
+6. [Allow Policy: Where Grants Are Stored](#allow-policy-where-grants-are-stored)
+7. [Binding: The Link Between Principal and Role](#binding-the-link-between-principal-and-role)
+8. [Hierarchy: Where Access Inherits](#hierarchy-where-access-inherits)
+9. [Condition: Extra Rules on a Binding](#condition-extra-rules-on-a-binding)
+10. [How AWS Readers Can Map the Ideas](#how-aws-readers-can-map-the-ideas)
+11. [Debugging One Denied Request](#debugging-one-denied-request)
+12. [References](#references)
 
-## Start With the Access Question
-<!-- section-summary: GCP IAM answers one request at a time by checking the caller, permission, resource, policy scope, and guardrails. -->
+## The Access Question
+<!-- section-summary: GCP IAM answers who is calling, what action they want, and which resource the request touches. -->
 
-**Google Cloud IAM** is the access-control system Google Cloud uses to decide whether a caller can perform an action on a resource. A caller might be a person in the console, a Terraform pipeline, a Cloud Run service, or an external workload that federates into Google Cloud.
+Google Cloud IAM is the access-control system that decides whether a caller may use a Google Cloud API on a Google Cloud resource. The plain version of the question is direct: **who is calling, what are they trying to do, and which resource are they touching?** Every IAM topic in this module fits somewhere inside that question.
 
-The basic question sounds small: can this caller do this action here? Under the hood, Google Cloud breaks that question into a few concrete pieces: the **principal** that made the request, the **permission** required by the API method, the **resource** being touched, the **allow policies** attached to that resource and its parents, and any guardrails such as **IAM Conditions**, **deny policies**, or **principal access boundary policies**.
+Picture a small product team that runs a photo-sharing app. A Cloud Run service named `photo-uploader` receives image uploads and writes objects into one Cloud Storage bucket named `prod-photo-uploads`. A support analyst named Priya sometimes investigates customer tickets by reading application logs for the same service.
 
-We will use one production-style service throughout the article. `devpolaris-orders-api` runs on Cloud Run in `projects/devpolaris-prod`, and its runtime service account is `orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com`. The service needs to read the Secret Manager secret `orders-db-password`, write export files into the Cloud Storage bucket `devpolaris-order-exports-prod`, publish order messages to the Pub/Sub topic `order-events`, and connect to the Cloud SQL instance `orders-prod`.
+The beginner version is like access at a workplace. A person or service presents an identity, asks to do a task, and touches a specific room or file. The decision is different for "Priya may view application logs" and "the upload service may create photo objects." IAM turns those plain access sentences into policies Google Cloud can evaluate on every API request.
 
-That service gives us a real path through IAM. A single denied Secret Manager request can show every important piece: who called, which permission was required, where the binding should live, whether the role contains the permission, whether a condition matched, whether a guardrail blocked access, and what evidence Google Cloud gives you when you troubleshoot the result.
+That is why IAM is not only a security team topic. Every production service uses it. The runtime identity of a Cloud Run service, the deploy identity in CI, the analyst opening logs, and the automation rotating secrets all produce IAM decisions. If the article teaches only role names, the reader still cannot debug the denied request. The access question gives the debugging shape.
 
-| Piece | Plain English Meaning | Example From This Article |
-|---|---|---|
-| **Principal** | The authenticated caller | `serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com` |
-| **Permission** | The granular API action needed | `secretmanager.versions.access` |
-| **Role** | A named bundle of permissions | `roles/secretmanager.secretAccessor` |
-| **Allow policy** | The resource-attached grant document | A policy on `orders-db-password` |
-| **Role binding** | The link between principal and role | Runtime service account gets Secret Accessor |
-| **Scope** | Where the policy is attached | Secret, bucket, topic, project, folder, or organization |
-| **Condition** | Extra context that must be true | Only allow access before a timestamp or for one resource name |
-| **Guardrail** | A policy that limits or blocks access | Deny policy or principal access boundary |
-| **Evidence** | The explanation used for debugging | Policy Troubleshooter output and audit logs |
+Those two jobs need different access. The uploader service should create objects in one bucket, and it should not administer the whole project. Priya should read logs, and she should not read secret payloads or change runtime settings. IAM lets you describe those jobs as principals, resources, permissions, roles, policies, bindings, hierarchy, and conditions.
 
 ![IAM request path](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-request-path.png)
-*Every IAM decision follows the same request path: identify the caller, name the permission, locate the resource, check applicable allow bindings, then review guardrails and evidence.*
+*An IAM decision follows the request: caller, action, target resource, applicable grants, and any extra rules on those grants.*
 
-## Principals: Who Is Calling
-<!-- section-summary: A principal is the authenticated identity in an IAM decision, and finding the exact principal is the first step in every access investigation. -->
+## Principal: Who Is Calling
+<!-- section-summary: A principal is the identity that Google Cloud sees on the request. -->
 
-A **principal** is the identity that Google Cloud sees on the request. IAM uses principals for both humans and workloads, so the caller could be a developer, a team group, a whole domain, a service account, or an identity from another system that Google Cloud trusts through federation.
+A **principal** is the authenticated identity that makes a request. A principal can be a human user, a Google group, a service account, a domain, or a federated identity from another identity provider. IAM decisions always need the actual principal on the request, because two callers can run the same command and receive different results.
 
-The most familiar principal is a **user**, written like `user:maya@devpolaris.com`. This usually represents a human account from Google Workspace, Cloud Identity, or a Google Account. A user signs in to the console, runs `gcloud`, approves a deployment, or reads logs during an incident.
+Think of a principal as the name on the request envelope. Google Cloud does not decide access from the laptop, browser, or container alone. It decides from the authenticated identity attached to the API call. That identity might be Priya signing in as a human, a Cloud Run service account writing an object, or a CI/CD service account deploying a new revision.
 
-A **Google group** is written like `group:gcp-platform-admins@devpolaris.com`. Groups make human access easier to manage because IAM policy can mention the group once, and the identity team can add or remove people from the group as jobs change. In production, teams usually grant roles to groups for human access instead of granting the same role to ten individual users.
+This is why "the app has access" is too vague. Which app identity? The service account attached to Cloud Run? The CI account that deployed it? A human who tested the command locally? A clear access review names the exact principal because audit logs and IAM policies use that identity.
 
-A **domain** principal is written like `domain:devpolaris.com`. It represents identities in a Google Workspace or Cloud Identity domain, so it is much broader than a group. Domain grants need extra care because a future employee or service identity in that domain can inherit access without anyone editing the IAM policy again.
+For the photo app, the runtime principal is the service account attached to Cloud Run:
 
-A **service account** is written like `serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com`. This is the main workload principal in our scenario. Cloud Run uses the service account attached to `devpolaris-orders-api` when the container calls Google APIs, so IAM checks the service account rather than the developer who deployed the service.
+`serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com`
 
-A **federated identity** comes from an external identity provider and maps into Google Cloud through workforce identity federation or workload identity federation. Workforce federation is common for contractors or employees signing in from an external identity provider. Workload federation is common for GitHub Actions, GitLab CI, Kubernetes workloads, or another cloud provider calling Google Cloud with short-lived federated access.
+Priya's human identity is a different principal:
 
-The first access-debugging habit is to ask, "Which principal actually made the request?" A developer might test locally as `user:maya@devpolaris.com` and succeed, while Cloud Run fails in production as `serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com`. IAM can only evaluate the caller on the actual request, so the exact principal matters more than the person who wrote the code.
+`user:priya@example.com`
 
-## The Runtime Service Account in Our Scenario
-<!-- section-summary: Cloud Run workload access should come from the runtime service account, with human accounts and long-lived key files kept out of the runtime path. -->
+Groups help manage human access. Instead of granting log access to each analyst one by one, the team can grant a role to `group:support-analysts@example.com` and manage membership through the company identity process. For software, dedicated service accounts keep workload access separate from human access and make audit logs easier to read.
 
-For `devpolaris-orders-api`, the caller we care about is the runtime service account. Cloud Run can attach a service account to a service, and the Google Cloud client libraries in the container use Application Default Credentials to obtain credentials for that service account. The application code calls Secret Manager, Cloud Storage, Pub/Sub, and Cloud SQL connectors while the container filesystem stays free of JSON key files.
+## Resource: What Is Being Touched
+<!-- section-summary: A resource is the Google Cloud object the request wants to read, change, create, or delete. -->
 
-This detail matters because the service account starts with only the permissions it receives through IAM. The email address can look official and production-ready, and the identity still needs explicit grants before it can read secrets, create objects, publish messages, or connect to databases. Each action needs a role binding at a scope that covers the target resource.
+A **resource** is the thing the request touches. It might be a project, folder, bucket, secret, log bucket, Pub/Sub topic, Cloud Run service, or one object inside a service. IAM needs the resource because access is not only about the caller. It is also about the target.
 
-In a healthy setup, deployment and runtime use different principals. A CI/CD service account might deploy the Cloud Run service, while `orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com` handles only the permissions needed while the service is running. This separation helps incident response because a compromised runtime identity has a smaller blast radius and keeps deployment authority separate.
+Use a building-access picture. A badge that opens one storage room is very different from a badge that opens the whole building. The person holding the badge may be the same, and the action may still be "open a door," but the target changes the risk. IAM works the same way. A role on one bucket is a narrow storage-room grant. A role on a project can reach many resources inside that project.
 
-So our access design starts with one workload identity and a short list of production tasks. The service reads one database password secret, writes order export files, publishes order events, and connects to one Cloud SQL instance. Now we need to decide where those grants live in the Google Cloud resource hierarchy.
+That is why resource scope is a beginner concept, not an advanced detail. If you grant access at the wrong resource level, the role may technically work while the security design is still wrong.
 
-## Resource Hierarchy: Where the Grant Lives
-<!-- section-summary: Google Cloud resources sit under organizations, folders, and projects, and IAM allow policies inherit from parents to children. -->
+The uploader service needs the bucket:
 
-The **resource hierarchy** is the parent-child structure Google Cloud uses for resources. At the top, an **organization** represents the company. Under that, **folders** can group departments, environments, or business units. Under folders, **projects** hold most service resources and act as a common trust, billing, and administration boundary.
+`projects/_/buckets/prod-photo-uploads`
 
-Our example project is `projects/devpolaris-prod`. Inside that project, the service touches individual resources: the Secret Manager secret `orders-db-password`, the Cloud Storage bucket `devpolaris-order-exports-prod`, the Pub/Sub topic `order-events`, and the Cloud SQL instance `orders-prod`. IAM looks at the target resource and also looks upward through the resource's ancestors.
+Priya needs logging resources in the production project:
 
-Allow policies inherit downward. A binding at the organization can affect folders, projects, and resources underneath it. A binding at `projects/devpolaris-prod` can affect many resources in that project. A binding directly on `orders-db-password`, when the service supports that resource-level policy, narrows the grant to that one resource.
+`projects/media-prod`
 
-That scope choice controls blast radius. If the runtime service account receives `roles/secretmanager.secretAccessor` at `projects/devpolaris-prod`, it can access every secret in that project where the role applies. If it receives the same role on the `orders-db-password` secret, it can read only that secret, which is a much better fit for a service that needs one database password.
+Those targets should stay separate. Bucket write access belongs on the bucket for a workload that only writes photos there. Log viewing access belongs on the project or log view that covers the support workflow. If both callers receive broad project roles, the policy stops saying what each job actually needs.
 
-Some Google Cloud resources accept their own allow policies, and some rely on inherited policies from a parent such as a project. This is why production IAM design usually starts with the narrowest supported scope, then moves one level up only when the service or workflow requires it. The target resource still matters even when the binding lives on an ancestor, because IAM checks whether the inherited role contains the permission needed for that target.
+## Permission: The Exact Action
+<!-- section-summary: A permission is the smallest IAM action a Google Cloud API checks. -->
 
-For `devpolaris-orders-api`, a practical first pass looks like this:
+A **permission** is the exact API action required for an operation. It is the smallest action IAM checks, such as create an object, list log entries, update a service, or access a secret payload. You usually do not grant permissions one by one, yet the API check still happens at this level.
 
-| Task | Target Resource | Narrow Scope To Prefer |
+Think of a role as a job title and a permission as one task inside that job. "Storage object creator" is the job-shaped role. `storage.objects.create` is the exact task the Cloud Storage API needs for a new object write. During troubleshooting, the missing permission tells you the exact task that failed. During design, the role should still describe the job a human can review.
+
+For photo uploads, Cloud Storage checks for an object-create permission. For Priya's log search, Cloud Logging checks for log-viewing permissions.
+
+Here is the shape of the two jobs:
+
+| Job | Resource | Permission idea |
 |---|---|---|
-| Read the database password | Secret `orders-db-password` | Secret-level binding when available |
-| Write order export files | Bucket `devpolaris-order-exports-prod` | Bucket-level binding |
-| Publish order events | Topic `order-events` | Topic-level binding |
-| Connect to Cloud SQL | Instance `orders-prod` | Project-level Cloud SQL connectivity grant in `projects/devpolaris-prod` |
+| Photo uploader writes images | Bucket `prod-photo-uploads` | Create objects in the bucket. |
+| Support analyst reads logs | Project or log view for `media-prod` | View log entries and related metadata. |
 
-![IAM grant scope map](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-grant-scope-map.png)
-*The same role can have a very different blast radius depending on where the binding lives, so production reviews should ask for the smallest supported scope first.*
+Permission names often look service-shaped, such as `storage.objects.create` or `logging.logEntries.list`. That naming is useful during troubleshooting because an error message may say which permission was missing. The fix should still grant a job-shaped role at the narrowest useful scope instead of handing out a broad admin role.
 
-## Permissions and Roles: What the Caller Needs
-<!-- section-summary: Google Cloud APIs check granular permissions, and IAM grants those permissions through role bundles. -->
+## Role: A Bundle of Permissions
+<!-- section-summary: A role packages permissions into a named access bundle that can be granted to a principal. -->
 
-A **permission** is the smallest IAM action that a Google Cloud API checks. Permission names usually follow a service, resource type, and verb pattern, such as `pubsub.topics.publish` or `secretmanager.versions.access`. Many permissions map closely to API methods, so calling a method usually requires the matching permission on the resource.
+A **role** is a named bundle of permissions. Google Cloud provides predefined roles for common jobs, such as object creation in Cloud Storage or viewing logs in Cloud Logging. Your organization can also create custom roles if predefined roles grant more than the job needs.
 
-You normally grant permissions through **roles**, and a role is a named collection of permissions. This keeps day-to-day access management focused on job-shaped bundles instead of hundreds of separate API actions. When you bind a role to a principal, the principal receives all permissions in that role at the scope covered by the binding.
+The uploader service can use `roles/storage.objectCreator` on the `prod-photo-uploads` bucket. That role is a good fit for upload-only services because it allows object creation without handing the service a normal file-browser style role across the whole project.
 
-Here are the permissions our Cloud Run service needs for its core production tasks:
+Priya can use a logging viewer role that fits the support process. If the support team only needs application logs, a narrower log view plus a viewer role can reduce exposure compared with project-wide broad access. The key habit is to describe the job first, then pick the smallest role and scope that covers that job.
 
-| Service Task | Permission Google Cloud Checks | Common Predefined Role |
-|---|---|---|
-| Access the secret payload for `orders-db-password` | `secretmanager.versions.access` | `roles/secretmanager.secretAccessor` |
-| Create new objects in `devpolaris-order-exports-prod` | `storage.objects.create` | `roles/storage.objectCreator` |
-| Publish to the `order-events` topic | `pubsub.topics.publish` | `roles/pubsub.publisher` |
-| Connect through Cloud SQL Auth Proxy or connectors | `cloudsql.instances.connect` and `cloudsql.instances.get` | `roles/cloudsql.client` |
+Basic roles such as Owner, Editor, and Viewer are too broad for most production work. They may appear in old projects or early experiments, yet they hide the real access story. A production service named `photo-uploader` should not need a role that can edit unrelated services, buckets, secrets, networks, and IAM policies.
 
-Google Cloud has three main role types. **Predefined roles** are managed by Google Cloud services and usually match common job functions, such as publishing to Pub/Sub or accessing Secret Manager payloads. They are a good starting point because Google updates them as services change.
+## Allow Policy: Where Grants Are Stored
+<!-- section-summary: An allow policy is attached to a resource and stores the role grants for that resource. -->
 
-**Custom roles** are roles your organization creates from a selected list of supported permissions. They help when a predefined role grants more than a workload should have, and they bring maintenance work. When Google Cloud adds a new API feature or permission, your custom role needs a review and update before it includes that new permission.
+An **allow policy** is the IAM policy attached to a Google Cloud resource. The policy contains metadata and one or more bindings. Google Cloud evaluates the policies attached to the target resource and its parents to decide whether a principal has a role that includes the required permission.
 
-**Basic roles** include broad roles such as Owner, Editor, and Viewer. These roles grant wide access across many services and are too large for production workload identity in almost every normal case. They can still appear during early testing or account bootstrap, while `devpolaris-orders-api` should use limited predefined or custom roles for its runtime access.
+For the uploader service, the strongest first shape is a policy on the bucket. That policy can say that only the uploader service account receives object-create access on `prod-photo-uploads`. A project-level policy would reach more resources, so it needs a stronger reason.
 
-The role choice and the binding scope work together. `roles/storage.objectCreator` on one bucket lets the service create objects there, which fits a one-way export workflow. The same role on the project lets the service create objects in buckets across the project, which might be more access than the application needs.
+The policy document itself is not the whole story. Its attachment point matters just as much as its contents. The same binding on one bucket is narrow. The same binding on a project can cover many buckets. The same binding on a folder can cover many projects.
 
-## Allow Policies and Role Bindings
-<!-- section-summary: An allow policy is attached to a resource and contains role bindings that connect principals to roles, optionally with conditions. -->
+Compare the same grant in two places. The narrow version lives on the bucket policy:
 
-An **allow policy** is the IAM policy document attached to a Google Cloud resource. The policy contains **role bindings**, and each binding connects one or more principals to one role. In older APIs and examples, principals are often called **members**, so you will still see the `members` field in JSON policy output.
-
-Here is a small allow-policy shape for the Secret Manager secret `orders-db-password`. The important part is the binding: the runtime service account receives `roles/secretmanager.secretAccessor`, and that role contains the `secretmanager.versions.access` permission needed to read a secret version payload.
-
-```json
-{
-  "bindings": [
-    {
-      "role": "roles/secretmanager.secretAccessor",
-      "members": [
-        "serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com"
-      ]
-    }
-  ]
-}
+```yaml
+resource: //storage.googleapis.com/projects/_/buckets/prod-photo-uploads
+bindings:
+- role: roles/storage.objectCreator
+  members:
+  - serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com
 ```
 
-That JSON only makes sense together with its attachment point. If the policy is attached to the `orders-db-password` secret, the binding is narrow. If the same binding is attached to `projects/devpolaris-prod`, the service account can access every secret in the project where that inherited role applies.
+The broader version lives on the project policy:
 
-Google Cloud evaluates the **effective allow policy** for the target resource. The effective policy includes the resource's own allow policy plus inherited allow policies from parents such as the project, folder, and organization. If any applicable binding grants a role that contains the required permission, the allow side of the decision can pass.
+```yaml
+resource: //cloudresourcemanager.googleapis.com/projects/media-prod
+bindings:
+- role: roles/storage.objectCreator
+  members:
+  - serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com
+```
 
-Automation tools need to handle allow-policy updates carefully because policy updates replace a policy document as a whole. Google Cloud uses an `etag` on allow policies to prevent concurrent writers from overwriting each other. Terraform, `gcloud`, and the console handle much of this for normal workflows, and custom automation should read the policy, modify it, and write it back with the current `etag`.
+The member and role stay the same. The attachment point changes the blast radius. The bucket policy lets `photo-uploader` create objects in `prod-photo-uploads`. The project policy can apply to Cloud Storage buckets in `media-prod` where that role is honored through project-level IAM, including future buckets unless another control blocks the request.
 
-## IAM Conditions
-<!-- section-summary: IAM Conditions add context to a role binding so the role applies only when the condition expression is true. -->
+A quick review should check both places:
 
-An **IAM Condition** is an expression on a role binding that must evaluate to true before the binding grants the role. Conditions let you use request and resource attributes, such as request time, resource name, resource type, resource service, and tags. They are useful when the right role is still too broad unless extra context narrows it.
+```bash
+gcloud storage buckets get-iam-policy gs://prod-photo-uploads \
+  --format='table(bindings.role,bindings.members)'
 
-For example, imagine the orders team temporarily grants a migration service account permission to write order exports for one weekend. A condition can use `request.time` so the binding stops granting access after a fixed timestamp. The role binding stays visible in the policy, and it applies only while the expression passes.
+gcloud projects get-iam-policy media-prod \
+  --flatten='bindings[].members' \
+  --filter='bindings.members:photo-uploader@media-prod.iam.gserviceaccount.com' \
+  --format='table(bindings.role,bindings.members)'
+```
 
-Conditions can also narrow a broader binding to a resource pattern. If a team has to grant a role at the project level, a condition can check `resource.name` or `resource.type` so the binding applies only to the intended resource shape. This pattern needs careful testing because the condition attribute values must match the service's documented resource-name format.
+- The bucket command should show the object-creator role on the bucket that needs writes.
+- The project command should return nothing for that same Storage writer grant unless the team has approved project-wide bucket access.
+- If the project command shows the role, the reviewer should ask which other buckets the uploader can touch and why the grant belongs at project scope.
+
+## Binding: The Link Between Principal and Role
+<!-- section-summary: A binding connects a principal to a role, optionally with a condition. -->
+
+A **binding** is the part of an allow policy that connects one or more principals to one role. Older IAM output often calls principals `members`, so you may see `members` in JSON and YAML policy results.
+
+The binding is the actual sentence inside the policy: this principal gets this role here. The role by itself grants nothing. The principal by itself grants nothing. The resource policy by itself is only a document. The binding links them together so Google Cloud can answer the request.
+
+For beginners, this is the point where IAM stops being abstract. You can point at one binding and ask: who receives access, what role did they receive, and which resource stores the grant? If any of those three pieces are broader than the job, the access design needs review.
+
+The uploader bucket binding can be created with the Google Cloud CLI after the service account and bucket already exist:
+
+```bash
+gcloud storage buckets add-iam-policy-binding gs://prod-photo-uploads \
+  --member="serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com" \
+  --role="roles/storage.objectCreator"
+```
+
+- `gs://prod-photo-uploads` is the resource receiving the allow-policy change.
+- `--member` names the workload principal that will call Cloud Storage.
+- `--role` grants a predefined role that includes object creation without broad project administration.
+
+A healthy result should show a binding like this:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com
+  role: roles/storage.objectCreator
+etag: BwYh2mQ9cJ0=
+```
+
+- The role and member appear together, which means the policy now has the binding.
+- The `etag` protects policy updates from accidental overwrite by concurrent changes.
+- The output should name the service account that actually runs the Cloud Run service, not the human who deployed it.
+
+## Hierarchy: Where Access Inherits
+<!-- section-summary: Google Cloud resources sit in a hierarchy, and allow policies can inherit from parent resources to children. -->
+
+The **resource hierarchy** is the parent-child structure that organizes Google Cloud resources. An organization can contain folders, folders can contain projects, and projects contain service resources such as buckets, secrets, topics, services, and log buckets.
+
+Allow policies inherit downward. A role granted on an organization can affect folders and projects below it. A role granted on a production folder can affect every production project inside that folder. A role granted directly on a bucket affects that bucket without granting the same access to every bucket in the project.
+
+![IAM grant scope map](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-grant-scope-map.png)
+*The same role can have a different blast radius depending on whether it lives on a bucket, project, folder, or organization.*
+
+For the photo app, inheritance is the reason the bucket-level binding is safer than a project-level grant. The service account only needs to create objects in `prod-photo-uploads`. A project-level Storage role might cover other buckets, including private exports or security evidence that the uploader should never touch.
+
+Priya's log access may need a wider scope because support investigations often cross several Cloud Run revisions and log streams inside one project. Even then, the team should decide whether the access belongs on the project, a log view, or a support group rather than granting unrelated roles directly to one user.
+
+## Condition: Extra Rules on a Binding
+<!-- section-summary: An IAM Condition adds a context expression that must pass before a binding grants access. -->
+
+An **IAM Condition** is an extra rule on a binding. The binding still has a principal, role, and scope, and the condition controls whether that binding applies. Conditions can use attributes such as request time, resource name, resource type, and resource tags if the target service supports conditional role bindings.
+
+Think of a condition as a checked note attached to the grant. The policy still says the migration service account can create objects, and the condition adds a rule such as "only before this approved end time." This is useful for temporary access, migration access, and tightly scoped operational windows.
+
+Conditions are powerful because they let a reviewed grant carry more context than principal plus role. They are also easy to over-trust. A condition on a broad project role can still create too much access if the expression misses the real resource boundary. The safer order is: choose a narrow resource, choose the smallest useful role, then add a condition for time, resource name, or tag constraints.
+
+Imagine the photo platform has an approved migration that allows a temporary service account to write test images into the production upload bucket. A condition can limit the binding to a short time window and to object resources under the intended bucket path.
 
 ```json
 {
   "role": "roles/storage.objectCreator",
   "members": [
-    "serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com"
+    "serviceAccount:photo-migration@media-prod.iam.gserviceaccount.com"
   ],
   "condition": {
-    "title": "OnlyOrderExportObjects",
-    "description": "Allow object creation only in the production order export bucket.",
-    "expression": "resource.type == 'storage.googleapis.com/Object' && resource.name.startsWith('projects/_/buckets/devpolaris-order-exports-prod/')"
+    "title": "PhotoMigrationWindow",
+    "description": "Temporary object creation for the approved photo migration window.",
+    "expression": "request.time < timestamp(\"2026-07-06T08:00:00Z\")"
   }
 }
 ```
 
-For a beginner, the key idea is simple: a conditional binding still has a principal, a role, and a scope, and the role applies only when the expression returns true. During troubleshooting, this means a binding can include the right principal and the right role while still failing because the time window expired, the resource name missed the expected pattern, or the request context lacked the attribute the condition expected.
+- `role` and `members` still carry the normal binding meaning.
+- `condition.title` and `condition.description` help reviewers understand why the binding exists.
+- `expression` is the rule that must evaluate to true before the role applies.
 
-When using the REST API or client libraries, conditional allow policies use policy version 3 so the condition appears in the policy response. The console and `gcloud` handle this detail for common workflows. Custom tools should request and write the version that preserves conditions, because losing a condition can accidentally broaden access.
+Conditions are useful, yet they do not replace clean role choice and clean scope choice. A conditional project-level grant can still be too broad if the expression is wrong or the service does not expose the attribute you expected. Use the narrow resource scope first, then add conditions for jobs that need time, tag, or resource-name limits.
 
-## Deny Policies and Principal Access Boundaries
-<!-- section-summary: Deny policies block permissions at resource scopes, while principal access boundaries limit which resources selected principals are eligible to access. -->
+## How AWS Readers Can Map the Ideas
+<!-- section-summary: GCP IAM uses familiar access-control pieces, with different names and inheritance behavior than AWS. -->
 
-Allow policies grant access. Production environments also need guardrails around those grants. Google Cloud gives you two important guardrail tools at beginner level: **deny policies** and **principal access boundary policies**. They solve different problems, so it helps to separate them before using either one.
+AWS readers can map the main pieces without forcing them into a one-to-one service match. A GCP principal is the caller, similar to an AWS IAM principal. A GCP permission is close to an AWS action. A GCP resource is the target of the API request. A GCP role is a bundle of permissions, while AWS policies often list actions and resources directly inside policy documents.
 
-A **deny policy** contains deny rules that block selected principals from using selected permissions. IAM checks relevant deny policies before checking allow policies. If a deny rule matches the principal and permission, the request is denied even if an allow binding grants a role with that permission.
+The largest habit difference is hierarchy. In Google Cloud, allow policies can attach to organizations, folders, projects, and many service resources, then inherit downward. AWS also has organization-level controls such as SCPs, yet day-to-day IAM identity policies and resource policies are shaped differently. In GCP, checking parent folders and projects is a normal part of understanding effective access.
 
-Deny policies attach to organizations, folders, or projects, and they inherit downward through the hierarchy. A security team might attach a deny policy at the organization to stop most principals from deleting projects, changing custom roles, or creating service account keys. The policy can include exceptions for a tightly controlled admin group when the business needs a break-glass path.
+Service account identity also differs from the AWS workload-role pattern. In Google Cloud, a service account is an IAM principal that can receive roles, and it is also a resource with its own IAM policy that controls who can attach or impersonate it. In AWS, workloads often receive credentials by assuming an IAM role through STS. The security goal is similar: give software short-lived, scoped credentials. The operational model and policy surfaces are different.
 
-A **principal access boundary policy**, often shortened to **PAB**, controls which resources a set of principals is eligible to access. It attaches to principal sets through policy bindings, so it follows selected principals across resource boundaries. A PAB is an eligibility boundary; allow policies still perform the grant.
+## Debugging One Denied Request
+<!-- section-summary: Denied request debugging follows principal, resource, permission, role, policy, binding, hierarchy, and condition in order. -->
 
-For example, DevPolaris could use a PAB so service accounts from `projects/devpolaris-prod` are eligible to access only resources inside the DevPolaris organization or inside an approved production project set. If someone accidentally grants `orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com` a role on an external project, the PAB can prevent access for permissions that PAB enforcement covers. The allow binding might exist, but the principal is outside its eligible resource boundary.
+Suppose the photo uploader returns `403 PERMISSION_DENIED` while trying to save `customers/8842/profile.jpg` into `prod-photo-uploads`. The useful path is the same access question from the opening section.
 
-At this stage, treat deny policies and PABs as broad guardrails around the normal allow-policy grants. For `devpolaris-orders-api`, the normal grant still comes from allow policies. Deny policies and PABs help the platform team prevent dangerous actions and keep workload identities inside approved resource areas.
+First, confirm the principal. The Cloud Run service should run as `photo-uploader@media-prod.iam.gserviceaccount.com`. If the service runs as the default Compute Engine service account, your policy change may target the wrong caller.
 
-## Following One Denied Request
-<!-- section-summary: A denied Secret Manager request shows IAM checking caller identity, permission, scope, role binding, conditions, and guardrails in one path. -->
+Second, confirm the resource. The failed request targets the bucket `prod-photo-uploads` and a specific object name. A binding on a different bucket, a staging project, or a parent folder that excludes this project will not help the request.
 
-Now let's follow a real failed request. `devpolaris-orders-api` starts on Cloud Run and tries to load its database password from Secret Manager. The application asks for the latest version of `orders-db-password`, and the request comes back with `403 PERMISSION_DENIED`.
+Third, confirm the permission and role. Object creation needs a role that contains the object-create permission. A metadata viewer role can show bucket details while still failing on object creation.
 
-The first question is the caller. The deployed request comes from Cloud Run's runtime identity. Cloud Run calls as `serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com`, because that is the runtime service account attached to the service.
+Fourth, inspect the effective policy path. Look for a binding on the bucket, project, folder, or organization that names the runtime service account and the right role. If a binding has a condition, check the time, resource, and attribute values that the condition expects.
 
-The second question is the permission. Reading a Secret Manager payload requires `secretmanager.versions.access` on the secret version resource. A role such as `roles/secretmanager.viewer` can let someone view metadata, while payload access still requires the Secret Accessor permission path.
-
-The third question is the resource. The target lives under `projects/devpolaris-prod`, and the resource path points to the `orders-db-password` secret version. IAM can consider an allow policy on the secret itself, plus inherited allow policies from the project, folder, and organization.
-
-The fourth question is guardrails. A deny policy on the project or an ancestor could block `secretmanager.versions.access` for this service account. A principal access boundary could also make the service account ineligible to access this resource. If either guardrail blocks the request, another allow binding leaves the denial in place.
-
-The fifth question is the allow evidence. IAM looks for a role binding that includes the runtime service account and grants a role containing `secretmanager.versions.access` at a scope that covers the secret. If the only binding is for `serviceAccount:orders-api-deploy@devpolaris-prod.iam.gserviceaccount.com`, then the deployer can manage deployment work while the runtime request remains denied.
-
-The sixth question is condition evidence. The binding might name the right service account and the right role, and a condition can still stop it from applying. A condition could require a resource-name prefix that misses the Secret Manager version, or it could have a time window that expired after a migration.
-
-A narrow fix for the common missing-binding case can look like this:
+Policy Troubleshooter can turn that checklist into a focused access check. Use the full resource name, the runtime service account, and the exact permission that failed:
 
 ```bash
-gcloud secrets add-iam-policy-binding orders-db-password \
-  --project=devpolaris-prod \
-  --member="serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+gcloud policy-intelligence troubleshoot-policy iam \
+  //storage.googleapis.com/projects/_/buckets/prod-photo-uploads \
+  --principal-email=photo-uploader@media-prod.iam.gserviceaccount.com \
+  --permission=storage.objects.create \
+  --format=yaml
 ```
 
-You would run this when the audit log or Policy Troubleshooter shows that the Cloud Run runtime service account lacks payload access to this one secret. The `orders-db-password` argument is the secret receiving the binding, `--project` selects the owning project, `--member` names the exact runtime principal, and `--role` grants the predefined role that contains `secretmanager.versions.access`.
-
-The command prints the updated allow policy. A healthy result should show the runtime service account under `roles/secretmanager.secretAccessor` on the secret policy, not a broad project-level policy:
-
-```yaml
-bindings:
-- members:
-  - serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com
-  role: roles/secretmanager.secretAccessor
-etag: BwYF4K8q6yA=
-version: 1
-```
-
-This binds the Secret Accessor role to the runtime service account on one secret. After IAM propagation, the same Secret Manager request has the principal, permission, role, binding, and scope lined up. The application can read `orders-db-password`, and the rest of the project secrets stay outside its grant.
-
-The other service permissions follow the same pattern. The runtime service account needs `roles/storage.objectCreator` on `devpolaris-order-exports-prod` so it can create export objects. It needs `roles/pubsub.publisher` on `order-events` so it can publish messages. It needs `roles/cloudsql.client` in `projects/devpolaris-prod` so Cloud SQL connectors or the Cloud SQL Auth Proxy can connect to `orders-prod`.
-
-## Troubleshooting With Policy Evidence
-<!-- section-summary: Policy Troubleshooter explains access decisions by showing allow, deny, PAB, role, principal, permission, resource, and condition evidence. -->
-
-Guessing at IAM is slow because a denied request can come from the wrong principal, a missing permission, a broad grant at the wrong place, a condition that failed, a deny policy, or a principal access boundary. **Policy Troubleshooter** helps by asking the same access question directly: can this principal use this permission on this resource?
-
-For the Secret Manager failure, the access tuple has three required parts: the principal email, the full resource name, and the permission. A troubleshooting query can use the Google Cloud CLI, and the `beta` version includes principal access boundary policy evaluation. The audit log might show a concrete secret version such as `versions/5`, even when application code asked for the `latest` version alias.
-
-```bash
-gcloud beta policy-intelligence troubleshoot-policy iam \
-  "//secretmanager.googleapis.com/projects/devpolaris-prod/secrets/orders-db-password/versions/5" \
-  --principal-email="orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com" \
-  --permission="secretmanager.versions.access"
-```
-
-You would run this before changing IAM because it asks Google Cloud to evaluate the exact access tuple from the failing request. The resource argument uses the full resource name from the audit log, `--principal-email` names the caller without the `serviceAccount:` prefix, and `--permission` names the granular API permission that failed.
-
-The output is intentionally evidence-heavy. In a missing-binding case, expect a denied result with an explanation that no allow binding grants the permission to the runtime account:
+A shortened denied result might look like this:
 
 ```yaml
 access: DENIED
 explainedPolicies:
-- fullResourceName: //secretmanager.googleapis.com/projects/devpolaris-prod/secrets/orders-db-password
+- fullResourceName: //storage.googleapis.com/projects/_/buckets/prod-photo-uploads
   bindingExplanations:
-  - role: roles/secretmanager.secretAccessor
-    relevance: HIGH
+  - role: roles/storage.objectViewer
+    rolePermission: NOT_INCLUDED
     memberships:
-      serviceAccount:orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com:
-        membership: NOT_INCLUDED
-errors: []
+      serviceAccount:photo-uploader@media-prod.iam.gserviceaccount.com: INCLUDED
 ```
 
-The useful output includes more than the final allowed or denied result. The explanation shows whether an allow policy contains a relevant binding, whether the binding includes the principal, whether the role includes the permission, whether a condition evaluated to true, whether a deny rule matched, and whether a principal access boundary allowed the resource. That evidence can point to "the binding names the deployer service account instead of the runtime service account."
+- `access: DENIED` confirms the request still lacks the permission.
+- `rolePermission: NOT_INCLUDED` means the matched role does not contain `storage.objects.create`.
+- If the output shows `UNKNOWN`, the troubleshooter may lack permission to inspect a parent policy, group membership, custom role, deny policy, or principal access boundary that affects the result.
+
+Audit logs help tie the check back to the real failed call. Search the same principal and time window before adding any broad grant:
+
+```bash
+gcloud logging read \
+  'protoPayload.authenticationInfo.principalEmail="photo-uploader@media-prod.iam.gserviceaccount.com"
+   protoPayload.status.code=7
+   protoPayload.resourceName:"prod-photo-uploads"
+   timestamp >= "2026-07-04T10:00:00Z"
+   timestamp <= "2026-07-04T10:20:00Z"' \
+  --project=media-prod \
+  --limit=5 \
+  --format='table(timestamp,protoPayload.serviceName,protoPayload.methodName,protoPayload.status.message)'
+```
+
+```console
+TIMESTAMP                 SERVICE_NAME            METHOD_NAME             STATUS_MESSAGE
+2026-07-04T10:08:31Z      storage.googleapis.com  storage.objects.create  Permission 'storage.objects.create' denied on resource
+```
+
+- The principal in the log should match the Cloud Run runtime service account.
+- The method should match the permission you tested.
+- The resource should point at the bucket or object path you expected, not a staging bucket or a different project.
 
 ![IAM debug evidence board](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/iam-debug-evidence-board.png)
-*A denied request should turn into an evidence board: the troubleshooter result, the audit log caller, and the binding check all need to point at the same principal, permission, and resource.*
+*A useful access investigation keeps caller, target, permission, role, binding, scope, condition, and evidence in one place.*
 
-Audit logs add another layer of evidence. An Admin Activity or Data Access log entry can show the request time, caller, method, resource, and error details. Troubleshooting from a log entry gives Policy Troubleshooter more request context for conditions, which helps when a condition depends on time, tags, resource attributes, or other request facts.
+Google Cloud has tools such as Policy Troubleshooter, Policy Analyzer, and Cloud Audit Logs to support this investigation. The human habit still matters: write down the caller, action, target resource, expected role, actual binding scope, any condition, and the evidence source before changing access. That keeps a small bucket-writing failure from turning into a broad project-level grant.
 
-There are still limits to remember. If you lack permission to view a parent policy, a custom role, group membership, domain membership, or a principal access boundary, the tool may report part of the evidence as unknown. That unknown result is useful in its own way because it tells you the investigation needs more visibility before you can trust the final answer.
+## References
 
-## Putting It All Together
-<!-- section-summary: A good GCP IAM design keeps the runtime identity narrow, grants roles at the smallest supported scope, and uses evidence to debug access. -->
-
-By the end of the setup, `devpolaris-orders-api` has one clear runtime identity: `orders-api-runtime@devpolaris-prod.iam.gserviceaccount.com`. That identity receives only the roles needed for the application to run. Human deployers, CI/CD deployers, and runtime code can stay separated by job.
-
-The service account gets `roles/secretmanager.secretAccessor` on the single `orders-db-password` secret. It gets `roles/storage.objectCreator` on the `devpolaris-order-exports-prod` bucket for one-way export writes. It gets `roles/pubsub.publisher` on the `order-events` topic. It gets `roles/cloudsql.client` in `projects/devpolaris-prod` for Cloud SQL connectivity to `orders-prod`.
-
-The platform team can add guardrails above that workload access. A deny policy can stop broad dangerous actions such as service account key creation or project deletion across production. A principal access boundary can keep selected service accounts eligible only for approved resources, which helps when accidental grants appear outside the intended project or organization.
-
-The debugging workflow is the same every time. Identify the exact principal, identify the permission required by the API call, identify the target resource, inspect effective allow policies from the resource and ancestors, check conditions, check deny policies, check principal access boundaries, and use Policy Troubleshooter plus audit logs for evidence. That workflow makes IAM a readable request path instead of a pile of disconnected permission screens.
-
-## What's Next
-
-The next article can build on this foundation by focusing on service accounts in daily work. That topic deserves its own space because runtime identities, Application Default Credentials, workload identity federation, service account impersonation, and key-file risk shape how applications authenticate before IAM ever checks authorization.
-
----
-
-**References**
-
-- [Google Cloud: IAM overview](https://docs.cloud.google.com/iam/docs/overview) - Explains principals, roles, permissions, allow policies, deny policies, principal access boundaries, and IAM Conditions.
-- [Google Cloud: Understanding allow policies](https://docs.cloud.google.com/iam/docs/allow-policies) - Defines allow policies, role bindings, principals, roles, conditions, inheritance, and policy versions.
-- [Google Cloud: Roles and permissions](https://docs.cloud.google.com/iam/docs/roles-overview) - Describes permissions, predefined roles, custom roles, and basic roles.
-- [Google Cloud: Using resource hierarchy for access control](https://docs.cloud.google.com/iam/docs/resource-hierarchy-access-control) - Explains organizations, folders, projects, resources, inheritance, and effective allow policies.
-- [Google Cloud: Principal identifiers](https://docs.cloud.google.com/iam/docs/principal-identifiers) - Lists principal formats for users, groups, domains, service accounts, workforce identities, and workload identities.
-- [Google Cloud: Overview of IAM Conditions](https://docs.cloud.google.com/iam/docs/conditions-overview) - Documents conditional role bindings, CEL expressions, request attributes, resource attributes, and tag-based conditions.
-- [Google Cloud: Deny policies](https://docs.cloud.google.com/iam/docs/deny-overview) - Describes deny rules, denied principals, denied permissions, exceptions, attachment points, and deny-before-allow behavior.
-- [Google Cloud: Principal access boundary policies](https://docs.cloud.google.com/iam/docs/principal-access-boundary-policies) - Explains how PAB policies define the resources that principals are eligible to access.
-- [Google Cloud: Troubleshoot IAM permissions](https://docs.cloud.google.com/policy-intelligence/docs/troubleshoot-access) - Shows how Policy Troubleshooter evaluates principals, resources, permissions, allow policies, deny policies, PAB policies, and conditions.
-- [Google Cloud: Cloud SQL IAM roles](https://docs.cloud.google.com/iam/docs/roles-permissions/cloudsql) - Lists Cloud SQL roles and permissions, including `roles/cloudsql.client`.
+- [IAM overview](https://docs.cloud.google.com/iam/docs/overview) - Defines the main IAM access question and the relationship between principals, roles, and resources.
+- [IAM principals](https://docs.cloud.google.com/iam/docs/principals-overview) - Lists the principal types that can appear in Google Cloud allow policies.
+- [Roles and permissions](https://docs.cloud.google.com/iam/docs/roles-overview) - Explains permissions, predefined roles, custom roles, and basic roles.
+- [Understanding allow policies](https://docs.cloud.google.com/iam/docs/allow-policies) - Documents allow-policy structure, bindings, members, etags, and conditional bindings.
+- [Using resource hierarchy for access control](https://docs.cloud.google.com/iam/docs/resource-hierarchy-access-control) - Explains IAM inheritance through organizations, folders, projects, and resources.
+- [Overview of IAM Conditions](https://docs.cloud.google.com/iam/docs/conditions-overview) - Documents conditional, attribute-based access control for Google Cloud resources.
+- [Troubleshoot IAM permissions](https://docs.cloud.google.com/policy-intelligence/docs/troubleshoot-access) - Documents Policy Troubleshooter inputs, output, and audit-log troubleshooting flow.

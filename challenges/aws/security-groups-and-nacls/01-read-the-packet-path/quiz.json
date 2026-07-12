@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "devpolaris-orders-api starts successfully, reads its database secret, then logs:\n\nerror=database_connect_failed\nhost=orders-staging.abcxyz.us-east-1.rds.amazonaws.com\nport=5432\ncause=connect ETIMEDOUT 10.20.41.18:5432\n\nWhich layer should you inspect first?",
-      "options": [
-        { "id": "a", "text": "Network rules and routing for the task-to-RDS packet path." },
-        { "id": "b", "text": "The task role permission for `secretsmanager:GetSecretValue`." },
-        { "id": "c", "text": "The Route 53 public alias for `orders.devpolaris.com`." },
-        { "id": "d", "text": "The ACM certificate attached to the HTTPS listener." }
-      ],
-      "correct": ["a"],
-      "explanation": "The task already read the secret, so this is not the first IAM check. The timeout names a host, port, and private IP, which points to packet reachability. Start with the RDS security group, task security group, routes, and NACLs if needed."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The intended rule chain is:\n\nInternet client -> ALB on 443\nALB -> ECS task on 3000\nECS task -> RDS on 5432\n\nWhich security group rule is missing if target health reports `Target.Timeout` and the task SG inbound only allows TCP 3000 from `sg-developer-vpn`?",
+      "scenario": "DevPolaris routes public HTTPS traffic to an ALB on port 443, forwards requests from the ALB to ECS tasks on port 3000, and lets those tasks reach RDS on port 5432. After a security-group cleanup, target health reports `Target.Timeout`; the task security group allows port 3000 only from `sg-developer-vpn`. Which rule is missing from the intended request path?",
       "options": [
-        { "id": "a", "text": "Task SG inbound TCP 3000 from `sg-orders-alb`." },
-        { "id": "b", "text": "ALB SG inbound TCP 3000 from `0.0.0.0/0`." },
-        { "id": "c", "text": "DB SG inbound TCP 443 from `sg-orders-alb`." },
-        { "id": "d", "text": "Task role permission for `elasticloadbalancing:ForwardTraffic`." }
+        {
+          "id": "b",
+          "text": "Allow the ALB security group on task port 3000 but leave the task inbound rule restricted to `sg-developer-vpn`."
+        },
+        {
+          "id": "a",
+          "text": "Task SG inbound TCP 3000 from `sg-orders-alb`."
+        },
+        {
+          "id": "c",
+          "text": "Allow task inbound TCP 3000 from the VPC CIDR so health checks work even if the ALB security group changes."
+        },
+        {
+          "id": "d",
+          "text": "Allow ALB outbound TCP 3000 to the task subnet CIDR but leave task inbound limited to the developer VPN."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The ALB is the caller for the app port, so the task security group must allow port `3000` from the ALB security group. A developer VPN rule may let one engineer test, but it does not prove the real caller can reach the task. IAM does not forward packets between ALB and ECS."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The ALB is the caller for the app port, so the task security group must allow port `3000` from the ALB security group. A developer VPN rule may let one engineer test, but it does not prove the real caller can reach the task. IAM does not forward packets between ALB and ECS.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
     },
     {
-      "id": "q3",
+      "id": "q-use-resource-level-rules-2",
+      "type": "single",
+      "scenario": "During a rollout, old tasks are replaced with new task IPs:\n\nOld task is 10.20.10.45. New task is 10.20.11.72. Security group is sg-orders-task.\n\nWhy does the DB rule `TCP 5432 from sg-orders-task` age better than `TCP 5432 from 10.20.10.45/32`?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The security-group reference follows network interfaces assigned that group, while a `/32` follows only one replaced address."
+        },
+        {
+          "id": "c",
+          "text": "A subnet CIDR source would also survive task replacement but would admit unrelated resources in that subnet."
+        },
+        {
+          "id": "a",
+          "text": "The new task keeps the intended network role when it is associated with `sg-orders-task`."
+        },
+        {
+          "id": "d",
+          "text": "A service-managed prefix list would identify the ECS service more precisely than the task security group."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Fargate task IPs are replaceable, so a single-IP rule is brittle. The security group reference follows the role of the task tier as tasks are replaced. That is exactly why resource-level rules are clearer inside an AWS app path.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-diagnose-subnet-guardrails-3",
+      "type": "single",
+      "scenario": "A database subnet NACL is evaluated in rule-number order:\n\n100 inbound deny TCP 5432 from 10.20.10.0/24 120 inbound allow TCP 5432 from 10.20.0.0/16 32767 inbound deny all\n\nThe orders API task is `10.20.10.45`. What happens to its database request?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Treat the stateful security-group allow as overriding the lower-numbered NACL deny."
+        },
+        {
+          "id": "c",
+          "text": "Rule 120 allows the packet because NACLs use the most specific CIDR rather than rule order."
+        },
+        {
+          "id": "a",
+          "text": "It is denied by rule 100 before the later broader allow rule is considered."
+        },
+        {
+          "id": "d",
+          "text": "The result depends on the outbound NACL only because inbound rules do not apply to database listener traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "NACL rules are checked from the lowest rule number upward. A matching deny at rule 100 stops the packet before the allow at rule 120 can help. This is why rule order matters when NACLs become stricter.\n\nLearn more in [VPC network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)."
+    },
+    {
+      "id": "q-use-resource-level-rules-4",
       "type": "multiple",
-      "scenario": "Which statements correctly explain the packet path for devpolaris-orders-api?",
+      "scenario": "A production network review must preserve the browser-to-ALB-to-task-to-database request path while narrowing unnecessary access. Which review actions improve the security group design without breaking the intended orders path?",
       "options": [
-        { "id": "a", "text": "The ALB security group can allow public HTTPS while the task security group stays private." },
-        { "id": "b", "text": "The ECS task role can read Secrets Manager without opening TCP 5432 to RDS." },
-        { "id": "c", "text": "A database security group can allow Postgres from the task security group as the named source." },
-        { "id": "d", "text": "If IAM allows the task role, security groups are optional for the database hop." }
+        {
+          "id": "b",
+          "text": "Use `sg-orders-task` as the source for DB inbound TCP 5432."
+        },
+        {
+          "id": "d",
+          "text": "Allow DB inbound TCP 5432 from both `sg-orders-task` and the whole VPC CIDR as a temporary fallback with no expiry."
+        },
+        {
+          "id": "a",
+          "text": "Use `sg-orders-alb` as the source for task inbound TCP 3000."
+        },
+        {
+          "id": "c",
+          "text": "Keep ALB inbound TCP 443 from public clients because it is the public front door."
+        },
+        {
+          "id": "e",
+          "text": "Allow task inbound TCP 3000 from the public client CIDRs in addition to the ALB security group."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The public entry point, application tier, and database tier each need a clear network rule. IAM can authorize AWS API calls, but the database packet path still needs security group reachability. Keeping those layers separate makes the design safer and easier to debug."
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The intended path is internet to ALB, ALB to task, and task to database. Security group references express the internal hops cleanly, while the ALB keeps the narrow public entry on HTTPS. A broad VPC CIDR on every rule erases useful boundaries.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
     },
     {
-      "id": "q4",
+      "id": "q1",
       "type": "single",
-      "scenario": "The CLI output for `sg-orders-task` includes:\n\nInbound:\nFromPort: 3000\nToPort: 3000\nUserIdGroupPairs: [{ GroupId: sg-orders-alb }]\n\nHow should you read this?",
+      "scenario": "devpolaris-orders-api starts successfully, reads its database secret, then logs:\n\n```text\nerror=database_connect_failed\nhost=orders-staging.abcxyz.us-east-1.rds.amazonaws.com\nport=5432\ncause=connect ETIMEDOUT 10.20.41.18:5432\n```\n\nWhich layer should you inspect first?",
       "options": [
-        { "id": "a", "text": "Resources associated with `sg-orders-alb` may reach the task on TCP 3000." },
-        { "id": "b", "text": "Only IAM users in the ALB admin group may call the task." },
-        { "id": "c", "text": "Every IP in the VPC CIDR may reach the task on TCP 3000." },
-        { "id": "d", "text": "The task may initiate outbound database connections on TCP 3000." }
+        {
+          "id": "b",
+          "text": "The task role permission for `secretsmanager:GetSecretValue`."
+        },
+        {
+          "id": "a",
+          "text": "Network rules and routing for the task-to-RDS packet path."
+        },
+        {
+          "id": "c",
+          "text": "The Route 53 public alias for `orders.devpolaris.com`."
+        },
+        {
+          "id": "d",
+          "text": "The ACM certificate attached to the HTTPS listener."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "`UserIdGroupPairs` is the CLI shape for a security group reference. It describes a network source group; IAM groups are a separate access concept. The rule is inbound to the task on the app port."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The task already read the secret, so this is not the first IAM check. The timeout names a host, port, and private IP, which points to packet reachability. Start with the RDS security group, task security group, routes, and NACLs if needed.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
     },
     {
-      "id": "q5",
+      "id": "q-use-resource-level-rules-1",
       "type": "single",
-      "scenario": "A review finds this database rule:\n\nsg-orders-db inbound:\nTCP 5432 from 0.0.0.0/0\n\nThe app works today and RDS is in private subnets. What is the best review comment?",
+      "scenario": "Two database rule proposals are on the review:\n\nProposal A is TCP 5432 from 10.20.0.0/16. Proposal B is TCP 5432 from sg-orders-task.\n\nThe database only serves devpolaris-orders-api. Which proposal is better and why?",
       "options": [
-        { "id": "a", "text": "Replace the source with `sg-orders-task` so the rule describes the app tier that should reach Postgres." },
-        { "id": "b", "text": "Leave it because private subnets make broad database security group rules harmless forever." },
-        { "id": "c", "text": "Change the database port to 443 so browsers can reuse the ALB certificate." },
-        { "id": "d", "text": "Move the rule to the ALB security group because all public traffic starts there." }
+        {
+          "id": "b",
+          "text": "Proposal A is easier to operate because it continues working when another application is placed in the VPC."
+        },
+        {
+          "id": "c",
+          "text": "Proposal B is narrower because only network interfaces associated with `sg-orders-task` can use the rule as the source."
+        },
+        {
+          "id": "d",
+          "text": "Proposal B is clearer, but Proposal A may be required if the path crosses a middlebox that prevents security-group referencing."
+        },
+        {
+          "id": "a",
+          "text": "Proposal B, because it describes the app task tier as the sender."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The database rule should express the intended caller: the orders API tasks. A broad source may not expose the database to the whole internet today, but it widens the blast radius for any source that gains a route. Fixing the rule is better than relying on other layers by accident."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A security group reference describes the role in the architecture with a named source group. That is helpful for Fargate tasks whose private IPs can change. It also avoids giving unrelated VPC resources the same chance to reach the database port.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
+    },
+    {
+      "id": "q-diagnose-subnet-guardrails-2",
+      "type": "single",
+      "scenario": "A flow-log style record appears after the same change:\n\nsrcaddr=10.20.12.44 dstaddr=10.20.2.18 srcport=3000 dstport=51748 protocol=6 action=REJECT\n\nThe target group reports `Target.Timeout`. What does the rejected packet most likely represent?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Return traffic from the app target port to an ephemeral client-side port."
+        },
+        {
+          "id": "b",
+          "text": "A browser attempting to connect directly to the RDS database port."
+        },
+        {
+          "id": "c",
+          "text": "A Route 53 resolver query being blocked by an ACM validation record."
+        },
+        {
+          "id": "d",
+          "text": "An IAM policy evaluation being denied by the ECS task role."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The source port is `3000`, which matches the app target port. The destination port is a high temporary port, which looks like return traffic. With NACLs, that return path must be explicitly allowed.\n\nLearn more in [VPC network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)."
     }
   ]
 }

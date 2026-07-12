@@ -33,5 +33,3 @@ variable "versioning_enabled" {
   default     = false
 }
 ```
-
-These inputs form a small contract: callers provide values that vary, while the module keeps the bucket implementation inside the child module.

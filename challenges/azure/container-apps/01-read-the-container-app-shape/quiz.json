@@ -1,61 +1,141 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The team deploys `devpolaris-orders-api` as a container image and wants Azure to run replicas, expose HTTPS, keep logs, and support revision traffic. Which Azure concept is central to this service?",
+      "scenario": "The Orders API is packaged as one HTTP container image. The platform team wants managed ingress, revision-based rollouts, secrets, managed identity, and scale-to-zero without operating Kubernetes nodes. Which Azure service is the best first fit?",
       "options": [
         {
           "id": "a",
-          "text": "A container app inside a managed Container Apps environment."
+          "text": "Azure Container Apps, because it runs containerized apps with managed environments, ingress, revisions, identity, and scale rules."
         },
         {
           "id": "b",
-          "text": "A storage account container."
+          "text": "Azure App Service, because it can host web apps and containers with managed deployment features but is not centered on Container Apps revisions and scale rules."
         },
         {
           "id": "c",
-          "text": "A VM data disk."
+          "text": "Azure Functions, because HTTP-triggered functions can expose endpoints, but the workload is described as one long-running containerized app."
         },
         {
           "id": "d",
-          "text": "A DNS TXT record."
+          "text": "AKS, because it can run containerized apps with ingress and scaling, but it adds cluster operations the team explicitly wants to avoid."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Container Apps gives the container image a managed runtime, ingress, revision history, scale behavior, and identity surface."
+      "explanation": "Azure Container Apps directly matches the required runtime shape. The closest distractor is Azure App Service, because it can also host containers with managed operations, but the scenario points specifically to revision-based rollouts, scale-to-zero, and the Container Apps model described in the article. Functions and AKS are both real compute options, but they impose a different execution or operations shape. See [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview) and [Compare Azure compute options](https://learn.microsoft.com/en-us/azure/container-apps/compare-options)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "The orders API runs as a container app, and the next release will move traffic between two revisions. The team needs enough evidence to explain what users may hit after the change. Which facts help explain a Container Apps production release?",
+      "type": "single",
+      "scenario": "The stable revision serves 90 percent of production traffic and a new revision has just been deployed. The release plan says to shift 100 percent of traffic to the new revision immediately after deployment, then inspect logs if users report problems. Which release control should the review require instead?",
       "options": [
         {
-          "id": "a",
-          "text": "The image tag used by each active revision."
-        },
-        {
           "id": "b",
-          "text": "Traffic weights across revisions."
+          "text": "Deactivate the stable revision first so the platform has only one active backend and the cutover is easier to reason about."
         },
         {
           "id": "c",
-          "text": "Ingress target port and public or private exposure."
+          "text": "Run a manual smoke test against the new revision, then switch the app to single-revision mode and cut all traffic at once if that test passes."
+        },
+        {
+          "id": "a",
+          "text": "Use revisions with traffic splitting and health observation so the candidate can be promoted gradually and rolled back quickly."
         },
         {
           "id": "d",
-          "text": "Only the name of the Azure subscription."
+          "text": "Keep the plan as-is, because a managed platform should make gradual rollout unnecessary for a single container image."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's safe release shape is to keep a stable revision active and move traffic gradually. The closest distractor is the manual smoke test followed by a full cutover, because pre-traffic validation is useful, but it still skips the gradual production exposure and quick rollback shape the article recommends. Deactivating stable first is even riskier, and keeping the immediate 100 percent cutover assumes away the whole value of revision-based release control. See [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) and [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A canary revision receives 5 percent of traffic, but only that revision is returning `403` when it tries to read a database password from Key Vault. Revision events show the container started successfully, and the managed identity token request succeeds. What boundary is most likely failing?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The revision's Key Vault network path, such as private endpoint or firewall rules, because vault access failures can appear as authorization problems."
+        },
+        {
+          "id": "a",
+          "text": "Authorization for the managed identity on Key Vault or the secret reference wiring, not basic container startup."
+        },
+        {
+          "id": "c",
+          "text": "The secret version or secret name referenced by the canary revision, because the new revision may be requesting a secret that the stable revision does not use."
+        },
+        {
+          "id": "d",
+          "text": "The revision-specific managed identity assignment, because the new revision may not be using the same identity configuration as stable."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The revision is already running, and the token request succeeds, so the evidence points first to Key Vault authorization or secret reference wiring rather than generic startup failure. The closest distractor is the revision-specific identity assignment, because a canary can differ from stable in identity configuration, but that still falls under the broader identity-and-secret boundary named by the correct answer. Secret version drift and vault network rules are also plausible checks, but they are narrower than the direct authorization and secret-reference review the evidence points to first. See [Manage secrets in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets) and [Use managed identities in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A new revision starts locally on a developer laptop but never becomes a healthy ingress target in Azure Container Apps. Revision events show repeated readiness failure and no evidence of `OOMKilled` or CPU throttling. Which two service-specific checks should the responder prioritize first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The target port or ingress configuration does not match the port the container actually listens on."
+        },
+        {
+          "id": "c",
+          "text": "The readiness probe path or expected HTTP status is wrong for the application endpoint the revision exposes."
+        },
+        {
+          "id": "b",
+          "text": "A required secret reference or managed identity permission is missing for startup."
+        },
+        {
+          "id": "d",
+          "text": "The CPU or memory allocation is too low for the app to become ready within the probe timing, even if it does not show clear OOM or throttling evidence yet."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "A release review needs revision, traffic, and ingress details. Subscription context matters, but it does not explain how the container is currently serving traffic."
+      "explanation": "A port mismatch and missing secret or identity access both fit the exact hosted-environment symptoms in the scenario. The closest distractor is the readiness probe path, because probe configuration is absolutely relevant, but the option asks for the first two checks and the scenario already highlights container-environment specifics around ingress and startup dependencies. Resource sizing can also matter, but the prompt deliberately says there is no OOM or throttling evidence, so it is not one of the first two checks here. See [Troubleshoot deployment issues in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/troubleshooting)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A candidate revision is configured with `minReplicas: 0`, receives no traffic yet, and shows no provisioning or probe failures. The release owner expected one warm replica to stay ready before any traffic shift. What change best matches that requirement?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase the maximum replica count, because higher headroom allows the platform to keep an idle warm replica available for the candidate."
+        },
+        {
+          "id": "c",
+          "text": "Lower the HTTP scaling threshold, because a more aggressive scale rule will create a warm replica even before the revision receives traffic."
+        },
+        {
+          "id": "d",
+          "text": "Switch the app to single-revision mode, because inactive side-by-side revisions do not keep warm replicas until they own all traffic."
+        },
+        {
+          "id": "a",
+          "text": "Set the candidate revision's minimum replica count to 1, then verify it becomes Ready before shifting traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "With zero traffic, `minReplicas: 0`, and no failure evidence, scale to zero is expected behavior. The closest distractor is lowering the HTTP scaling threshold, because scale rules do matter once traffic arrives, but they do not express the specific requirement to keep one replica warm before any traffic shift. Maximum replica count and revision mode also do not guarantee an idle warm instance. See [Scale applications in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/scale-app)."
     }
   ]
 }

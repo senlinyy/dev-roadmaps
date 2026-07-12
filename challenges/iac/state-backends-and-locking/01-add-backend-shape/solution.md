@@ -28,5 +28,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   bucket = "dp-devpolaris-orders-prod-invoices"
 }
 ```
-
-The backend block lives in Terraform settings because Terraform needs state location before it can safely work with the rest of the module.

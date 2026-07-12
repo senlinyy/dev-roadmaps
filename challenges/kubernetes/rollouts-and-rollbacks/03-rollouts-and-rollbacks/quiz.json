@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "rollout-capacity-q1",
+      "type": "single",
+      "scenario": "A three-replica notification API uses `maxSurge: 1` and `maxUnavailable: 0`. During an image update, three old Pods are available and one new Pod is starting. What does this state demonstrate?",
+      "options": [
+        { "id": "a", "text": "The strategy can create one temporary Pod while preserving all three desired available replicas." },
+        { "id": "b", "text": "The Deployment must delete an old Pod before the new Pod can become ready." },
+        { "id": "c", "text": "The desired replica count has permanently changed from three to four." },
+        { "id": "d", "text": "The old ReplicaSet is outside Deployment control until the rollout finishes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The surge allowance permits a fourth temporary Pod, while zero unavailable protects the three desired available replicas. The desired count remains three, and both ReplicaSets remain managed by the Deployment during the update."
+    },
+    {
+      "id": "stuck-rollout-q2",
+      "type": "single",
+      "scenario": "Rollout status times out. The Deployment reports `Progressing=False` with reason `ProgressDeadlineExceeded`, old Pods remain ready, and the only new Pod is in `CrashLoopBackOff`. Previous logs report an invalid `NOTIFICATION_EVENT_TOPIC`. What is the best next interpretation?",
+      "options": [
+        { "id": "c", "text": "The progress deadline stopped all future reconciliation, so only deleting the Deployment can recover it." },
+        { "id": "b", "text": "The old ReplicaSet is unhealthy because old Pods remaining ready prevents new Pods from starting." },
+        { "id": "a", "text": "The new template is failing to make progress, so the team should preserve evidence and choose a forward configuration fix or rollback." },
+        { "id": "d", "text": "The Service selector must be wrong because a configuration error cannot cause a container restart loop." }
+      ],
+      "correct": ["a"],
+      "explanation": "The new revision is crashing on a concrete configuration error, and the progress condition marks the stalled rollout. The controller continues reconciling after the deadline. Healthy old Pods preserve capacity, and a container configuration failure can directly cause the observed restart loop."
+    },
+    {
+      "id": "restart-or-rollback-q3",
+      "type": "single",
+      "scenario": "The current notification API image and environment values are still correct, but all Pods need recreation after a mounted Secret refresh. The team does not want an earlier image revision. Which rollout action matches the intent?",
+      "options": [
+        { "id": "d", "text": "Reduce revision history because deleting old ReplicaSets restarts current Pods." },
+        { "id": "b", "text": "Undo to the previous revision so Kubernetes restores an earlier Pod template." },
+        { "id": "c", "text": "Pause the Deployment because pausing recreates all Pods without changing the template." },
+        { "id": "a", "text": "Restart the Deployment rollout so fresh Pods are created from the current template." }
+      ],
+      "correct": ["a"],
+      "explanation": "A rollout restart recreates Pods from the current template. Undo restores an older template, pause stops rollout progression, and revision history controls retained old ReplicaSets rather than restarting current Pods."
+    },
+    {
+      "id": "rollback-boundary-q4",
+      "type": "single",
+      "scenario": "Release `2026.06.14-2` changed the Deployment image and also applied a database migration that older code cannot read. Users see errors, and revision 1 is known good at the Kubernetes level. Why is immediate rollout undo alone an incomplete recovery plan?",
+      "options": [
+        { "id": "b", "text": "Undo restores database state but cannot restore a previous container image." },
+        { "id": "a", "text": "Undo restores an earlier Pod template, but it does not reverse the incompatible database schema change." },
+        { "id": "c", "text": "Undo only changes Service selectors, so the Deployment image remains on the failing release." },
+        { "id": "d", "text": "Undo requires every old Pod object to still exist with its original name." }
+      ],
+      "correct": ["a"],
+      "explanation": "Kubernetes rollback restores a previous Deployment Pod template, not external database state. The old image can be restored from revision history without preserving old Pod names, and Service selectors are not the core object changed by rollout undo."
+    },
+    {
+      "id": "release-verification-q5",
+      "type": "multiple",
+      "scenario": "Kubernetes reports that the notification API rollout completed. The release lead still needs evidence that the approved artifact is live and the user-facing path works. Which two checks complete that verification?",
+      "options": [
+        { "id": "a", "text": "Read the live Deployment template image and confirm it is the approved immutable release artifact." },
+        { "id": "c", "text": "Treat rollout completion as proof that all database and provider behavior is correct." },
+        { "id": "b", "text": "Run the business smoke test that exercises the notification template preview path." },
+        { "id": "d", "text": "Inspect only the oldest ReplicaSet because it records the image currently receiving all traffic." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "The live template check proves artifact identity, and the business smoke test proves an application path works. Rollout completion proves Pod availability, not every external dependency or business behavior. The oldest ReplicaSet does not establish the current release artifact or traffic outcome."
+    }
+  ]
+}

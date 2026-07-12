@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "service.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: orders-api\n  namespace: orders\n  labels:\n    app.kubernetes.io/part-of: checkout\n    app.kubernetes.io/managed-by: platform-team\n  annotations:\n    devpolaris.io/owner: orders-team\nspec:\n  sessionAffinity: None\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "Service API version" },
+      { "path": ["kind"], "equals": "Service", "label": "Service kind" },
+      { "path": ["metadata", "name"], "equals": "orders-api", "label": "Service name" },
+      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["spec", "type"], "equals": "ClusterIP", "label": "internal Service type" },
+      { "path": ["spec", "selector", "app.kubernetes.io/name"], "equals": "orders-api", "label": "application selector" },
+      { "path": ["spec", "selector", "app.kubernetes.io/component"], "equals": "api", "label": "component selector" },
+      { "path": ["spec", "ports"], "containsObject": { "name": "http", "protocol": "TCP", "port": 80, "targetPort": "http" }, "label": "caller and backend port contract" }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: "Exit Codes and Chaining"
-sectionSlug: exit-codes-traps-and-cleanup
+sectionSlug: exit-codes-and-branching
 order: 3
 ---
 

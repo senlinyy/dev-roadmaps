@@ -4,93 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A repository has an AWS Secret Access Key stored as a repository-level secret. The workflow has three jobs: `lint`, `test`, and `deploy`. Only `deploy` needs AWS credentials. Which statement is true?",
+      "scenario": "AWS_DEPLOY_KEY is a repository secret. Only deploy-production references it today, but any future workflow job in the repository could add the same secrets reference. The team wants the value unavailable until a protected production deployment is approved. What should change?",
       "options": [
-        { "id": "a", "text": "Only the `deploy` job can access the secret because GitHub automatically detects which jobs need it." },
-        { "id": "b", "text": "All three jobs can access the secret. Repository-level secrets are available to every job in every workflow in the repository." },
-        { "id": "c", "text": "Secrets are only available to the first job in the workflow." },
-        { "id": "d", "text": "The `test` and `lint` jobs can see the secret name but not the value." }
+        {
+          "id": "a",
+          "text": "Keep the repository secret, but restrict the workflow file with CODEOWNERS and branch protection."
+        },
+        {
+          "id": "b",
+          "text": "Move the credential to an organization secret limited to the production repository."
+        },
+        {
+          "id": "c",
+          "text": "Move the credential to the production environment and require the deploy job to target that protected environment."
+        },
+        {
+          "id": "d",
+          "text": "Keep repository scope and add a manual approval job before the deployment job references the secret."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Repository-level secrets are injected into every job that references them via `${{ secrets.NAME }}`. There is no automatic scoping. This is why environment-scoped secrets are recommended: they restrict access to only jobs that declare a specific environment. Option A describes the behavior of environment secrets, not repository secrets."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Environment scope ties the secret to jobs that target production, and protection rules delay access until approval. CODEOWNERS protects reviewed changes but does not make the repository secret unavailable to another authorized workflow. Organization scope limits repositories, not jobs. A separate approval job also cannot enforce when a repository-scoped value becomes readable. See [GitHub Actions environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A workflow reaches a production deployment job, but the Actions UI shows the job in a **Waiting** state with the message: \"1 approval required from @devops-lead\". Nobody has clicked anything. The job does not start. Which environment protection rule is active?",
+      "scenario": "A production job is queued with the message that one approval is required from payments-on-call. The workflow has reached the job, but no runner has begun deployment steps. Which control is working?",
       "options": [
-        { "id": "a", "text": "Required Reviewers. The job will not start until the designated reviewer manually approves the deployment." },
-        { "id": "b", "text": "Wait Timer. The job is waiting for a configured time delay to elapse." },
-        { "id": "c", "text": "Deployment Branch Restriction. The branch is not allowed to deploy to this environment." },
-        { "id": "d", "text": "Concurrency Lock. Another deployment to the same environment is in progress." }
+        {
+          "id": "a",
+          "text": "A production concurrency group is queuing the job behind an earlier deployment."
+        },
+        {
+          "id": "b",
+          "text": "A required reviewer protection rule is withholding the environment until approval."
+        },
+        {
+          "id": "c",
+          "text": "A deployment branch rule is waiting for the source ref to be evaluated."
+        },
+        {
+          "id": "d",
+          "text": "An organization approval policy is holding the workflow run before any jobs are created."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The message \"1 approval required from @devops-lead\" is the signature of Required Reviewers. This rule designates specific users or teams who must approve before the job starts. Wait timers (option B) show a countdown, not an approval request. Branch restrictions (option C) would cause the job to be skipped immediately, not enter a waiting state."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The named reviewer requirement is direct evidence that an environment protection rule is holding the deployment. Concurrency can also queue work, but it identifies another run rather than a reviewer. Branch rules reject or allow refs, and organization approval policies act at a different boundary. See [Reviewing deployments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A developer deploys from a branch named `hotfix/urgent-patch` to the `production` environment. The job is instantly skipped without entering a waiting state. The same workflow deploys successfully from `main`. What is the most likely cause?",
+      "scenario": "A pull request test job only checks out source and runs unit tests. Its workflow-level permissions grant contents: write and packages: write because a later release job publishes images. The security standard also requires any future job to start read-only unless it explicitly declares a write need. Which review change satisfies both requirements?",
       "options": [
-        { "id": "a", "text": "The production environment has a Deployment Branch rule that only allows the `main` branch (or a pattern like `release/*`)." },
-        { "id": "b", "text": "The `hotfix/urgent-patch` branch has merge conflicts." },
-        { "id": "c", "text": "The developer does not have write access to the repository." },
-        { "id": "d", "text": "The production environment has a wait timer that has not expired yet." }
+        {
+          "id": "a",
+          "text": "Keep the workflow-level grants but override the test job to `contents: read` and `packages: read`."
+        },
+        {
+          "id": "b",
+          "text": "Set the workflow default to read-only and use a GitHub App token with package write in every job."
+        },
+        {
+          "id": "c",
+          "text": "Split publishing into a second workflow while leaving the current workflow-level write grants unchanged."
+        },
+        {
+          "id": "d",
+          "text": "Set a read-only default and grant package write only on the publishing job."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Deployment Branch rules restrict which branches can trigger jobs for a specific environment. Unlike Required Reviewers (which pause the job), branch restrictions cause the job to be skipped entirely. The job never enters a waiting state. Option D is wrong because wait timers delay execution, they do not skip the job."
+      "correct": [
+        "d"
+      ],
+      "explanation": "A read-only default plus a narrow publishing-job override makes least privilege visible and prevents future jobs from inheriting writes. Overriding only the current test job helps today but leaves broad rights as the default for new jobs. A GitHub App token can be appropriate for cross-repository work, but granting it everywhere repeats the same scope problem. Splitting workflows does not help if the broad permission remains. See [GITHUB_TOKEN authentication](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "An engineer created an IAM user six months ago and stored the Access Key in GitHub Secrets. The engineer has since left the company, and nobody has rotated the credentials. A new developer accidentally runs `printenv` in a workflow step and the AWS key appears in the logs. What is the core security problem?",
+      "scenario": "The production workflow uses aws-actions/configure-aws-credentials and no static AWS keys. The step fails before contacting AWS with a message that it cannot obtain an ID token. Which workflow permission is required?",
       "options": [
-        { "id": "a", "text": "The developer ran a forbidden command. The fix is to add a linting rule against `printenv`." },
-        { "id": "b", "text": "The credentials are long-lived static secrets. Even after the leak, they remain valid indefinitely until someone manually rotates them. The exposure window is unlimited." },
-        { "id": "c", "text": "GitHub should have detected the key in the log output and automatically revoked it." },
-        { "id": "d", "text": "The problem is that the engineer left the company. Static secrets are safe as long as the original creator is employed." }
+        {
+          "id": "a",
+          "text": "id-token: write on the deployment job, along with only the other permissions that job needs."
+        },
+        {
+          "id": "b",
+          "text": "actions: read on the deployment job so it can read the workflow's identity metadata."
+        },
+        {
+          "id": "c",
+          "text": "contents: read and `AWS_ROLE_ARN` in the job environment, because the action derives an ID token automatically."
+        },
+        {
+          "id": "d",
+          "text": "id-token: read at workflow level, because requesting a cloud token should not require write access."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The root cause is that static credentials never expire on their own. After a leak, the attacker has access until someone discovers the exposure and manually rotates the key. GitHub does redact known secret patterns from logs, but redaction is best-effort (it fails on embedded, encoded, or multi-line secrets). The solution is to avoid static credentials entirely by using OIDC, which issues tokens that expire automatically."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`id-token: write` authorizes the job to request a signed OIDC identity token; the unusual verb does not grant repository write access. Repository or action read permissions do not authorize token minting, and `id-token: read` is not a supported substitute. AWS then validates the token and can issue temporary credentials. See [GitHub OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "When using OIDC with AWS, the workflow job needs to request an identity token from GitHub. The developer adds the `aws-actions/configure-aws-credentials@v4` action but gets this error:\n\n```\nError: Could not get ID Token from GitHub Actions.\nPlease make sure the 'id-token' permission is set to 'write'.\n```\n\nWhat is missing?",
+      "scenario": "An AWS role trust policy allows only the subject repo:acme/checkout-api:environment:production. A workflow from the same repository runs on main but does not target the production environment. Can it assume the role?",
       "options": [
-        { "id": "a", "text": "The `permissions` block must include `id-token: write`. Without it, GitHub does not generate the JWT that the action needs to authenticate with AWS." },
-        { "id": "b", "text": "The `GITHUB_TOKEN` does not support OIDC. A Personal Access Token (PAT) must be used instead." },
-        { "id": "c", "text": "The `aws-region` parameter is missing from the action configuration." },
-        { "id": "d", "text": "The job must be running on a self-hosted runner for OIDC to work." }
+        {
+          "id": "a",
+          "text": "Yes, if branch protection allows only reviewed changes to reach `main`."
+        },
+        {
+          "id": "b",
+          "text": "Yes, if the workflow declares `environment: production` on a later step rather than on the job."
+        },
+        {
+          "id": "c",
+          "text": "No, because its subject claim does not contain the required production environment context."
+        },
+        {
+          "id": "d",
+          "text": "Yes, because the role permission policy is evaluated after the repository portion of the subject matches."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The `id-token: write` permission is required for GitHub to generate the OIDC JWT. When you declare an explicit `permissions` block, it overrides all defaults, and `id-token` defaults to `none`. This is one of the most common OIDC setup errors. Option B is wrong because OIDC specifically uses the GITHUB_TOKEN infrastructure. Option D is wrong because OIDC works on both hosted and self-hosted runners."
+      "correct": [
+        "c"
+      ],
+      "explanation": "The trust policy compares the exact token claims with its conditions. A main-branch subject and an environment subject are different identities, and the environment must be declared at job scope to affect the token subject. Adding the main subject would change the policy, but under the stated condition the current job is denied. See [Configuring OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "An AWS IAM trust policy for a GitHub OIDC role contains:\n\n```json\n\"Condition\": {\n  \"StringLike\": {\n    \"token.actions.githubusercontent.com:sub\": \"repo:my-org/my-repo:*\"\n  }\n}\n```\n\nA developer forks `my-org/my-repo` to `attacker/my-repo` and tries to assume the role from a workflow in their fork. Does it work?",
-      "options": [
-        { "id": "a", "text": "Yes, the wildcard `*` matches any suffix, including fork repositories." },
-        { "id": "b", "text": "No. The `sub` claim includes the full `repo:owner/name` path. The fork's claim would be `repo:attacker/my-repo:*`, which does not match `repo:my-org/my-repo:*`." },
-        { "id": "c", "text": "It depends on whether the fork is public or private." },
-        { "id": "d", "text": "Forks inherit the parent repository's OIDC claims." }
-      ],
-      "correct": ["b"],
-      "explanation": "The OIDC `sub` claim includes the full repository owner and name. A fork under `attacker/my-repo` generates a claim with `repo:attacker/my-repo`, which does not match the pattern `repo:my-org/my-repo:*`. The wildcard only matches the suffix (branch, environment, tag), not the organization or repository name. This is a critical security boundary that prevents cross-repository impersonation."
-    },
-    {
-      "id": "q7",
       "type": "multiple",
-      "scenario": "A team is choosing a credential management strategy for deploying a Node.js application to AWS S3 from GitHub Actions. The application is customer-facing and processes payment data. Which approaches would you recommend?",
+      "scenario": "A customer-facing service is replacing repository AWS keys with a protected, auditable deployment flow. Which controls form a safer production path from GitHub Actions?",
       "options": [
-        { "id": "a", "text": "Use OIDC with environment-scoped IAM role assumptions so no static credentials exist." },
-        { "id": "b", "text": "Store the AWS credentials as repository-level secrets and reference them in every job." },
-        { "id": "c", "text": "Add environment protection rules (required reviewers, branch restrictions) on the production environment." },
-        { "id": "d", "text": "Restrict the IAM role to only the `s3:PutObject` permission on the specific bucket, not `AdministratorAccess`." }
+        {
+          "id": "a",
+          "text": "A repository-level OIDC role shared by staging and production with branch-only subject restrictions."
+        },
+        {
+          "id": "b",
+          "text": "A protected production environment with reviewers and deployment branch rules."
+        },
+        {
+          "id": "c",
+          "text": "OIDC trust restricted to the intended repository and production environment."
+        },
+        {
+          "id": "d",
+          "text": "One production role for every repository, restricted by organization name but not repository or environment."
+        },
+        {
+          "id": "e",
+          "text": "A short-lived role whose permissions cover only the required production resources and actions."
+        }
       ],
-      "correct": ["a", "c", "d"],
-      "explanation": "For a payment-processing application, you want maximum security: OIDC (option A) eliminates static credentials, protection rules (option C) add human oversight, and least-privilege IAM (option D) limits blast radius. Repository-level secrets (option B) lack environment scoping and give every job access to production credentials, which violates least privilege for a sensitive deployment."
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "Environment protection controls when the job runs, OIDC conditions control which workflow identity may assume the role, and least-privilege permissions control what the session can do. A branch-only shared role does not distinguish staging from production. An organization-wide role leaves too many repositories eligible even though its credentials are temporary. See [GitHub OIDC](https://docs.github.com/en/actions/concepts/security/openid-connect)."
     }
   ]
 }

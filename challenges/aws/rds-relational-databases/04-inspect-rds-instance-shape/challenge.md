@@ -1,6 +1,6 @@
 ---
 title: "Inspect RDS Instance Shape"
-sectionSlug: sample-database-shape
+sectionSlug: rds-for-managed-engines
 order: 4
 ---
 

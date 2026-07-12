@@ -1,6 +1,6 @@
 ---
 title: "Write the Release Decision"
-sectionSlug: write-the-release-record-while-the-facts-are-fresh
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

@@ -1,7 +1,6 @@
 ---
-title: "Review Sensitive Values"
-sectionSlug: sensitive-values
+title: "Input Variables"
 order: 4
 ---
 
-Judge how Terraform sensitivity changes display behavior, state exposure, and review quality. The goal is to use sensitive values deliberately without treating redaction as a complete secrets strategy.
+Use variable sources, validation, plan values, outputs, and state exposure to decide whether a Terraform input contract is safe and reviewable.

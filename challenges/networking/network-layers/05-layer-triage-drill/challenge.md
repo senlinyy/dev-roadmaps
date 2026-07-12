@@ -1,6 +1,6 @@
 ---
 title: "Walk the Layers to the Real Fault"
-sectionSlug: where-each-layer-breaks
+sectionSlug: debugging-by-layer
 order: 5
 ---
 

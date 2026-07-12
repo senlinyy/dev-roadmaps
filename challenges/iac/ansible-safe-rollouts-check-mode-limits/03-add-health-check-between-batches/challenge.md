@@ -4,11 +4,12 @@ sectionSlug: "health-checks-between-batches"
 order: 3
 ---
 
-Add a post-role health check so each batch proves the local service is responding.
+The play now rolls one host at a time, but each batch still needs service evidence before the next host changes. Add a local HTTP health check with retries after the role call.
 
-Requirements:
+Your job:
 
-1. **Module:** `ansible.builtin.uri`.
-2. **URL:** `http://127.0.0.1/health`.
-3. **Expected status:** `status_code: 200`.
-4. **Retry shape:** `register: orders_health`, `retries: 5`, `delay: 3`, `until: orders_health.status == 200`.
+1. **Check the local health endpoint** at `http://127.0.0.1/health`.
+2. **Treat HTTP 200 as success** and register the result as `orders_health`.
+3. **Retry the check** up to five times with a three-second delay until the status is 200.
+
+The grader checks the health-check task shape, not command output.

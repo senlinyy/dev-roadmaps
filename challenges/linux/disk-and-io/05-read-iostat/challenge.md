@@ -1,6 +1,6 @@
 ---
 title: "Read iostat Output"
-sectionSlug: reading-iostat-and-the-io-stack
+sectionSlug: io-latency-with-iostat
 order: 5
 ---
 

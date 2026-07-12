@@ -1,0 +1,71 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "pod-replacement-q1",
+      "type": "single",
+      "scenario": "A company runs a checkout API as a standalone Pod named `checkout-api`. The node hosting the Pod fails permanently during a traffic spike. The team expects Kubernetes to create an equivalent Pod on another healthy node, but no replacement appears. Which change best meets that requirement?",
+      "options": [
+        { "id": "a", "text": "Manage the Pod through a Deployment so a controller maintains the desired replica count and creates a replacement." },
+        { "id": "b", "text": "Set `restartPolicy: Always` because the kubelet can recreate the Pod on a different node after the original node disappears." },
+        { "id": "c", "text": "Add a liveness probe so the scheduler receives permission to bind the existing Pod to a new node." },
+        { "id": "d", "text": "Add a second container to the Pod so one container remains available when the node fails." }
+      ],
+      "correct": ["a"],
+      "explanation": "A Pod is scheduled to one node for its lifetime. A restart policy lets the kubelet restart containers on that node, but it does not provide a controller that replaces a lost Pod elsewhere. A Deployment maintains desired replicas and creates replacement Pods. [Kubernetes Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) explains Pod lifetime and replacement behavior."
+    },
+    {
+      "id": "shared-network-q2",
+      "type": "single",
+      "scenario": "An application Pod contains an API container listening on port `8080` and a metrics sidecar that must scrape the API without exposing a Service or using the node address. Both containers are intentionally deployed in the same Pod. Which address should the sidecar use?",
+      "options": [
+        { "id": "a", "text": "The node's primary IP address and port 8080, because each Pod container inherits the node network namespace." },
+        { "id": "b", "text": "The API container name as a DNS hostname, because Kubernetes assigns DNS records to every container." },
+        { "id": "c", "text": "`localhost:8080`, because containers in one Pod share the Pod network namespace and IP address." },
+        { "id": "d", "text": "The API image registry hostname, because that is the stable identity shared by both containers." }
+      ],
+      "correct": ["c"],
+      "explanation": "Containers in one Pod share the Pod network namespace, including its IP address and localhost interface. Container names and registry names do not create this communication path. [Kubernetes Pods](https://kubernetes.io/docs/concepts/workloads/pods/) documents the shared networking and storage context."
+    },
+    {
+      "id": "readiness-q3",
+      "type": "single",
+      "scenario": "A payments API remains alive while its database connection pool rebuilds for about 20 seconds. During that interval it should stop receiving new Service traffic, but restarting the process would extend recovery and increase load on the database. Which probe should represent this condition?",
+      "options": [
+        { "id": "a", "text": "A startup probe that runs forever and permanently disables the other probes after the first successful startup." },
+        { "id": "b", "text": "A liveness probe that fails while the database pool is rebuilding so Kubernetes restarts the process immediately." },
+        { "id": "c", "text": "A postStart lifecycle hook that deletes the Pod whenever the database is temporarily unavailable." },
+        { "id": "d", "text": "A readiness probe that fails during recovery so the Pod leaves Service endpoints without forcing a restart." }
+      ],
+      "correct": ["d"],
+      "explanation": "Readiness controls whether a Pod receives Service traffic. Liveness is for conditions where restarting can restore progress, while a temporary dependency recovery should not trigger a restart loop. [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) distinguishes readiness from liveness and startup checks."
+    },
+    {
+      "id": "startup-probe-q4",
+      "type": "single",
+      "scenario": "A Java reporting service normally starts in 70 seconds while loading rules. Its liveness endpoint is valid after startup, but a new release repeatedly restarts at 30 seconds because the liveness probe begins too early. The team wants fast deadlock detection after startup without increasing the liveness threshold for the entire Pod lifetime. What should they add?",
+      "options": [
+        { "id": "a", "text": "A longer termination grace period, because it postpones every liveness probe until the grace period expires." },
+        { "id": "b", "text": "A startup probe with enough failure budget for initialization, allowing liveness checks only after startup succeeds." },
+        { "id": "c", "text": "A readiness gate that restarts the container whenever the custom condition is false." },
+        { "id": "d", "text": "A second liveness probe with a different path so Kubernetes averages the two results." }
+      ],
+      "correct": ["b"],
+      "explanation": "A startup probe protects slow initialization. Kubernetes waits for it to succeed before running readiness and liveness probes, so liveness can remain strict during normal operation. [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) documents this startup behavior."
+    },
+    {
+      "id": "pod-review-q5",
+      "type": "multiple",
+      "scenario": "A production review examines a Pod manifest for an internal orders API. The image and application behavior are already approved. Which two additions most directly establish a stable workload identity and a traffic-safety contract for later Service integration?",
+      "options": [
+        { "id": "a", "text": "Add a consistent `app: orders-api` label that a Service selector can target." },
+        { "id": "b", "text": "Add `hostNetwork: true` so the Pod receives the node address and bypasses Service routing." },
+        { "id": "c", "text": "Add a readiness probe that reports whether the Pod can safely receive requests." },
+        { "id": "d", "text": "Add a fixed `nodeName` so every replacement uses the same worker node." },
+        { "id": "e", "text": "Add a second application port chosen randomly during every container startup." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A stable label lets another resource select the workload, and readiness prevents traffic from reaching a Pod that cannot serve requests. Host networking and fixed node binding reduce portability, while a changing port breaks a stable Service contract. [Kubernetes Pods](https://kubernetes.io/docs/concepts/workloads/pods/) covers labels and Pod configuration, and [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) covers readiness."
+    }
+  ]
+}

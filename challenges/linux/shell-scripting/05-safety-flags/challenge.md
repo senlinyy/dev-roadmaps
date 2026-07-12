@@ -1,6 +1,6 @@
 ---
 title: "The Safety Net"
-sectionSlug: the-safety-net-set--euo-pipefail
+sectionSlug: a-safer-deploy-script
 order: 5
 ---
 

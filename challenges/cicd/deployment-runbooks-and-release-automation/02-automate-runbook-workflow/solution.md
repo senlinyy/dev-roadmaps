@@ -31,6 +31,3 @@ jobs:
       - run: ./scripts/smoke-orders-api.sh
       - run: ./scripts/watch-canary.sh
 ```
-
-The workflow accepts the release record values, blocks overlapping production deploys, and keeps the runbook sequence visible for reviewers.
-

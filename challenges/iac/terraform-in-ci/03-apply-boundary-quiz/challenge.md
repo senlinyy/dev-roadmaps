@@ -1,7 +1,6 @@
 ---
-title: "Choose a Safe Apply Boundary"
-sectionSlug: apply-boundaries
+title: "Terraform in CI/CD"
 order: 3
 ---
 
-Check whether the Terraform CI boundary protects production while still giving reviewers useful plan evidence. Each scenario asks what the team should automate and where human approval still belongs.
+Use plan freshness, approval, identity, backend, and lock evidence to decide whether Terraform automation can change production safely.

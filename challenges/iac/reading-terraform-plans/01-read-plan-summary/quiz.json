@@ -4,67 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A pull request says it adds S3 bucket versioning, public access blocking, and an IAM write policy for `devpolaris-orders`. The plan ends with:\n\n```text\nPlan: 3 to add, 1 to change, 0 to destroy.\n```\n\nWhat is the best first review response?",
+      "scenario": "A PR says it only enables versioning on `aws_s3_bucket.orders`. CI ran from `infra/orders/prod` and uploaded this plan excerpt:\n\n```text\nTerraform will perform the following actions:\n\n  # aws_s3_bucket_versioning.orders will be created\n  + resource \"aws_s3_bucket_versioning\" \"orders\" {\n      + bucket = \"dp-orders-prod\"\n      + versioning_configuration {\n          + status = \"Enabled\"\n        }\n    }\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n```\n\nWhat is the best review response?",
       "options": [
-        { "id": "a", "text": "Continue into the resource details and verify that the three creates and one update match the pull request story." },
-        { "id": "b", "text": "Approve the plan immediately because the destroy count is zero." },
-        { "id": "c", "text": "Block the change because any nonzero add count means Terraform will create unsafe resources." },
-        { "id": "d", "text": "Ask for a refresh-only plan because normal plans cannot show adds safely." }
+        {
+          "id": "d",
+          "text": "Ask for refresh-only mode because normal plans cannot show resource details."
+        },
+        {
+          "id": "c",
+          "text": "Reject because any create in production is unsafe."
+        },
+        {
+          "id": "a",
+          "text": "The plan matches the stated intent and still needs normal reviewer approval before apply."
+        },
+        {
+          "id": "b",
+          "text": "Approve automatically because the destroy count is zero."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The summary matches the expected shape, but it is only the first checkpoint. The reviewer still needs to connect each create and update to the stated intent. A zero destroy count is encouraging, not approval by itself. Adds can be expected. A refresh-only plan is for drift inspection, not the normal review path for a pull request."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "The pull request intent says:\n\n```text\nAdd bucket versioning.\nAdd a public access block.\nAttach one write policy.\nNo resource deletion expected.\n```\n\nThe plan summary says:\n\n```text\nPlan: 3 to add, 0 to change, 1 to destroy.\n```\n\nWhat should you do before approving?",
-      "options": [
-        { "id": "a", "text": "Ask the author to name the destroyed resource and explain why deletion is part of this change." },
-        { "id": "b", "text": "Ignore the destroy because the add count is higher than the destroy count." },
-        { "id": "c", "text": "Approve if the destroyed resource is listed near the bottom of the plan." },
-        { "id": "d", "text": "Run apply with auto-approve so Terraform can show the final state." }
+      "correct": [
+        "a"
       ],
-      "correct": ["a"],
-      "explanation": "The destroy does not match the stated intent, so it needs a concrete explanation before review continues. Add counts do not cancel deletion risk. Plan location is not a safety signal. Applying first would move the team from review into cleanup mode."
-    },
-    {
-      "id": "q3",
-      "type": "single",
-      "scenario": "A CI job runs `terraform plan -detailed-exitcode` for a pull request and exits with code `2`. The job also uploads the readable plan. What does the exit code mean?",
-      "options": [
-        { "id": "a", "text": "The plan command failed and no reviewable plan exists." },
-        { "id": "b", "text": "The plan succeeded and contains proposed changes." },
-        { "id": "c", "text": "The plan succeeded and found no infrastructure changes." },
-        { "id": "d", "text": "Terraform detected drift but refused to compare configuration." }
-      ],
-      "correct": ["b"],
-      "explanation": "With the detailed exit code, `2` means Terraform found changes and the command completed successfully. `0` means no changes. `1` means an error. The exit code does not replace the uploaded plan, because reviewers still need to inspect what changed."
+      "explanation": "Terraform plan previews proposed changes so reviewers can compare them with intent before apply. The one create matches the requested versioning resource, but a zero destroy count does not remove normal review. A create is not inherently unsafe, and refresh-only mode would not replace review of the proposed configuration change. See [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan)."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A reviewer sees this plan summary for a production change:\n\n```text\nPlan: 2 to add, 0 to change, 1 to destroy.\n```\n\nThe pull request only mentions creating two new monitoring alarms. Which review comments are valid?",
+      "scenario": "A reviewer sees this summary for a PR that should add two alarms:\n\n```console\nPlan: 2 to add, 0 to change, 1 to destroy.\n```\n\nWhich comments are valid?",
       "options": [
-        { "id": "a", "text": "The destroy must be explained because it is outside the stated intent." },
-        { "id": "b", "text": "The summary alone cannot identify which resource is being destroyed, so resource details still matter." },
-        { "id": "c", "text": "The plan is safe because two additions outweigh one deletion." },
-        { "id": "d", "text": "The detailed exit code would be `1` because any destroy is an error." }
+        {
+          "id": "c",
+          "text": "Approve if the destroyed object is an alarm being replaced by one of the two additions, even without reading its address or attributes."
+        },
+        {
+          "id": "d",
+          "text": "Rerun with `-refresh=false` so remote drift cannot add an unrelated destroy to the review."
+        },
+        {
+          "id": "a",
+          "text": "The destroy must be explained because it is outside the stated intent."
+        },
+        {
+          "id": "b",
+          "text": "The summary alone cannot identify the destroyed resource, so the plan body matters."
+        }
       ],
-      "correct": ["a", "b"],
-      "explanation": "A destroy outside the stated intent needs explanation, and the reviewer must inspect the resource details to learn what is affected. Terraform does not weigh additions against deletions. A plan with changes usually uses detailed exit code `2`; a destroy is not automatically a command error."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Terraform summaries count action types, but reviewers must inspect the resource address and attributes and compare them with intent. A possible alarm replacement still needs evidence from the plan body. Disabling refresh would hide remote changes rather than explain the unexpected destroy."
     },
     {
-      "id": "q5",
+      "id": "catch-replacement-risk-q1",
       "type": "single",
-      "scenario": "A pull request says it adds an invoice bucket module call, but the plan summary says:\n\n```text\nNo changes. Your infrastructure matches the configuration.\n```\n\nWhich conclusion is most accurate?",
+      "scenario": "A PR updates an RDS instance class, but the plan shows:\n\n```text\n-/+ resource \"aws_db_instance\" \"orders\" {\n      identifier = \"orders-prod\"\n    ~ engine_version = \"14.10\" -> \"16.2\" # forces replacement\n}\n\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nWhat is the best review response?",
       "options": [
-        { "id": "a", "text": "The review should verify the branch, root module directory, workspace, and environment because the plan is not seeing the intended change." },
-        { "id": "b", "text": "The pull request is approved because no changes are always safer than changes." },
-        { "id": "c", "text": "Terraform automatically skipped bucket creation because the bucket name was globally unique." },
-        { "id": "d", "text": "The author should add a destroy action so the plan summary is not empty." }
+        {
+          "id": "c",
+          "text": "Ignore the marker because the summary has one add and one destroy."
+        },
+        {
+          "id": "a",
+          "text": "Block approval until the author explains the replacement, data protection, and recovery plan."
+        },
+        {
+          "id": "b",
+          "text": "Approve because Terraform will create the new database before destroying the old one in every case."
+        },
+        {
+          "id": "d",
+          "text": "Ask CI to hide replacement markers so reviewers focus on counts."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A quiet plan can be correct, but it conflicts with a pull request that claims to add infrastructure. The likely problem is the review context: wrong branch, wrong root module, wrong workspace, or wrong environment. No changes are not approval when the expected change is missing."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Replacement is a create plus destroy action on the same address. The plan does not guarantee a safe create-before-destroy sequence, and balanced add and destroy counts do not reduce the data risk. Hiding the replacement marker would remove the evidence reviewers need rather than make the change safer."
+    },
+    {
+      "id": "unknown-and-sensitive-values-q1",
+      "type": "single",
+      "scenario": "The security team is reviewing a Terraform plan that creates an IAM access key for a legacy integration. The terminal shows:\n\n```text\n+ secret = (sensitive value)\n```\n\nThe saved plan will move from the plan job to a protected apply job. What does this redaction prove, and what protection is still required?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The secret is encrypted out of state and saved plans because the terminal marks it as sensitive."
+        },
+        {
+          "id": "a",
+          "text": "Terraform is hiding the value in terminal output, but reviewers still need to protect state and any saved plan artifacts."
+        },
+        {
+          "id": "d",
+          "text": "The value is unknown until apply and Terraform will discard it instead of recording it after creation."
+        },
+        {
+          "id": "c",
+          "text": "The provider refused to create the access key because it could not display the secret safely."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Sensitive display redacts terminal output, but Terraform state and saved plan files can still contain the value. Redaction does not mean the provider rejected the resource, prevent the provider from receiving the secret, or mean the value is merely unknown. See [Terraform sensitive data guidance](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)."
+    },
+    {
+      "id": "unknown-and-sensitive-values-q2",
+      "type": "single",
+      "scenario": "The orders team is reviewing creation of a new IAM role before any provider API call occurs. The policy and role name are visible, but the plan shows `arn = (known after apply)`. The reviewer must decide whether this is a missing input or a normal computed result. What should they infer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The provider cannot know that computed value until the object is created."
+        },
+        {
+          "id": "d",
+          "text": "The ARN is sensitive and hidden forever."
+        },
+        {
+          "id": "b",
+          "text": "The plan failed to load the IAM provider."
+        },
+        {
+          "id": "c",
+          "text": "Terraform will skip the role because ARN is missing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Plans can include unknown values for attributes computed by the provider during apply. This does not show a provider loading failure or cause Terraform to skip the role. Unlike a sensitive value, the ARN is unavailable until creation rather than known and deliberately hidden."
+    },
+    {
+      "id": "drift-in-plan-output-q1",
+      "type": "single",
+      "scenario": "A normal PR plan says Terraform detected that `aws_security_group.orders` changed outside Terraform, then proposes restoring the missing ingress rule from configuration. What is the best review response?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Delete the security-group binding from state so the plan no longer compares the remote rule with configuration."
+        },
+        {
+          "id": "a",
+          "text": "Treat the drift notice as evidence, confirm whether the outside change was intentional, and decide whether config or the remote object should win."
+        },
+        {
+          "id": "b",
+          "text": "Approve automatically because refresh evidence tells Terraform whether the operator intended the outside security-group change."
+        },
+        {
+          "id": "d",
+          "text": "Run apply immediately because every drift notice should be reconciled back to configuration before anyone investigates its origin."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Terraform refreshes state during planning and can reveal remote drift, but it cannot infer whether an emergency outside change should remain. Deleting state would discard ownership information, while applying immediately or approving automatically would reconcile the rule before the team confirms intent."
+    },
+    {
+      "id": "drift-in-plan-output-q4",
+      "type": "single",
+      "scenario": "Production plans have become slow, and the orders team proposes `terraform plan -refresh=false` for pull requests. Operators sometimes make emergency security-group changes directly in AWS, and reviewers require the plan to reveal current remote drift before approval. What risk would the proposed optimization introduce?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Terraform will refresh state twice."
+        },
+        {
+          "id": "d",
+          "text": "Terraform will force every resource to be replaced."
+        },
+        {
+          "id": "a",
+          "text": "Terraform may miss remote changes and produce an incomplete or incorrect plan."
+        },
+        {
+          "id": "c",
+          "text": "Terraform will apply changes during plan."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Disabling refresh can hide remote changes and produce a plan based on stale state. It does not refresh twice, run apply during planning, or force replacement by itself. The risk is that reviewers approve incomplete evidence about the current infrastructure."
     }
   ]
 }

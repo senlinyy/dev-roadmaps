@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "notification-worker-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-worker\n  namespace: customer-notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: notification-worker\n  template:\n    metadata:\n      labels:\n        app: notification-worker\n    spec:\n      containers:\n        - name: worker\n          image: ghcr.io/customer-notifications/notification-worker:1.8.0\n          ports:\n            - name: metrics\n              containerPort: 9090\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "worker", "label": "worker container" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notifications/notification-worker:1.8.0", "label": "approved worker image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "env"], "containsObject": { "name": "QUEUE_NAME", "valueFrom": { "configMapKeyRef": { "name": "notification-worker-config", "key": "QUEUE_NAME" } } }, "label": "queue ConfigMap reference" },
+      { "path": ["spec", "template", "spec", "containers", 0, "env"], "containsObject": { "name": "EMAIL_PROVIDER_TOKEN", "valueFrom": { "secretKeyRef": { "name": "notification-worker-secrets", "key": "EMAIL_PROVIDER_TOKEN" } } }, "label": "provider Secret reference" },
+      { "path": ["spec", "template", "spec", "containers", 0, "env"], "containsObject": { "name": "POD_NAME", "valueFrom": { "fieldRef": { "fieldPath": "metadata.name" } } }, "label": "Pod name Downward API reference" }
+    ]
+  }
+}

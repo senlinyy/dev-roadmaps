@@ -1,6 +1,6 @@
 ---
 title: "Read Deployment After Update"
-sectionSlug: deployment-evidence
+sectionSlug: ecs-runtime-checks
 order: 4
 ---
 

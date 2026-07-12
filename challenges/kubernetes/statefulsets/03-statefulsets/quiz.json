@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "controller-choice-q1",
+      "type": "single",
+      "scenario": "The notification API can serve any request from any ready replica, but a staging PostgreSQL member must reconnect to the same data directory and keep a predictable member name after rescheduling. Which controller split best fits these requirements?",
+      "options": [
+        { "id": "a", "text": "Use one StatefulSet for both API and PostgreSQL so every process receives an ordinal identity." },
+        { "id": "b", "text": "Use a Deployment for the API and a StatefulSet for PostgreSQL so only the identity-sensitive workload receives stable names and claims." },
+        { "id": "c", "text": "Use a DaemonSet for PostgreSQL because database storage should follow every eligible node." },
+        { "id": "d", "text": "Use a Job for PostgreSQL because durable data makes the database a finite workload." }
+      ],
+      "correct": ["b"],
+      "explanation": "A Deployment suits replaceable API replicas, while a StatefulSet gives PostgreSQL stable ordinal identity and storage. One shared StatefulSet would couple unrelated scaling and identity needs. A DaemonSet follows nodes, and a Job tracks finite completion rather than a continuously running database."
+    },
+    {
+      "id": "dns-contract-q2",
+      "type": "single",
+      "scenario": "Pod `notification-postgres-0` is Running, but its member DNS name has no answer. The headless Service exists with `clusterIP: None`, yet its selector is `app.kubernetes.io/name: postgres` while the Pod label is `app.kubernetes.io/name: notification-postgres`. What should the team repair first?",
+      "options": [
+        { "id": "a", "text": "Change the PVC access mode because DNS records are created only for multi-node volumes." },
+        { "id": "b", "text": "Replace the headless Service with a LoadBalancer so the ordinal name receives a public IP." },
+        { "id": "c", "text": "Align the Service selector with the StatefulSet Pod label, then confirm EndpointSlices contain the member endpoint." },
+        { "id": "d", "text": "Rename the Pod manually because StatefulSet ordinals do not participate in Service discovery." }
+      ],
+      "correct": ["c"],
+      "explanation": "The selector mismatch prevents the headless Service from discovering the Pod, so matching labels and EndpointSlice evidence are the direct repair path. PVC access modes do not create DNS, a LoadBalancer does not provide the per-member contract, and the controller owns the ordinal Pod name."
+    },
+    {
+      "id": "ordered-startup-q3",
+      "type": "single",
+      "scenario": "A three-member StatefulSet uses the default Pod management policy. `notification-postgres-0` is Running but fails readiness, and members `-1` and `-2` have not appeared. The release team expected all three Pods to start together. What best explains the evidence?",
+      "options": [
+        { "id": "a", "text": "OrderedReady waits for the lower ordinal to become ready before creating the next member." },
+        { "id": "b", "text": "The headless Service limits every StatefulSet to one active Pod until DNS propagation completes." },
+        { "id": "c", "text": "ReadWriteOncePod allows only one PVC across the entire StatefulSet, so later claims cannot be created." },
+        { "id": "d", "text": "The scheduler always serializes Pods whose names share the same prefix." }
+      ],
+      "correct": ["a"],
+      "explanation": "The default OrderedReady policy creates ordinal 0 and waits for readiness before proceeding to ordinal 1. Headless Services do not impose replica limits. Each ordinal receives its own claim, and generic Pod name prefixes do not create scheduler ordering."
+    },
+    {
+      "id": "partition-update-q4",
+      "type": "single",
+      "scenario": "The database team has three members and wants to test image `16.4` only on `notification-postgres-2` while ordinals 0 and 1 remain on the current image. Which update choice matches the article?",
+      "options": [
+        { "id": "a", "text": "Set replicas to one so only the highest ordinal remains available for the test." },
+        { "id": "b", "text": "Change the selector for ordinal 2 so the controller creates a separate revision identity." },
+        { "id": "c", "text": "Delete ordinals 0 and 1 because StatefulSets always update from zero upward." },
+        { "id": "d", "text": "Use a rolling update partition of 2 so only Pods with ordinals at least 2 receive the new template." }
+      ],
+      "correct": ["d"],
+      "explanation": "A partition of 2 targets ordinal 2 while preserving lower ordinals on the previous template. Scaling down would remove the highest ordinals first, selector changes break controller identity, and ordered StatefulSet updates proceed from higher ordinals toward zero."
+    },
+    {
+      "id": "production-upgrade-q5",
+      "type": "multiple",
+      "scenario": "A PostgreSQL image update may change the on-disk format. The team has a recent backup, but no restore rehearsal, and proposes deleting old PVCs immediately after the first new Pod becomes ready. Which two review comments directly reduce the stateful upgrade risk?",
+      "options": [
+        { "id": "a", "text": "Require a restore test and an explicit rollback decision before changing the database image." },
+        { "id": "b", "text": "Replace the headless Service with a normal ClusterIP because load balancing prevents disk format changes." },
+        { "id": "c", "text": "Preserve old claims until backup, restore, and data compatibility evidence make cleanup safe." },
+        { "id": "d", "text": "Raise the replica count because additional Pods guarantee every PVC contains an interchangeable copy." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A tested restore path and a deliberate rollback plan address data compatibility risk, while preserving claims avoids destroying recovery evidence too early. Service type does not control disk formats, and more replicas do not guarantee valid or interchangeable storage copies."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 title: "Promote One Image Digest"
-sectionSlug: build-once-promote-one-image-digest
+sectionSlug: build-once-promote-the-same-artifact
 order: 1
 ---
 

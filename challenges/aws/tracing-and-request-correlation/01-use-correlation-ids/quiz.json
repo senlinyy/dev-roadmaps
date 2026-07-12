@@ -1,70 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A checkout request arrives without a request ID header. The Node backend creates this context:\n\n```text\nrequest_id=req_01J8K2M6TK7S1E9R0Y6Q\nroute=POST /v1/orders\nrelease=2026-05-02.4\n```\n\nWhich logging habit is best?",
+      "scenario": "A request reaches `POST /v1/orders` without an application request ID. The service creates `req_01J8K2M6TK7S1E9R0Y6Q`, but downstream payment and database logs contain unrelated identifiers. What should the team change first?",
       "options": [
-        { "id": "a", "text": "Write the same `request_id` on important app log lines and carry it into traces where possible." },
-        { "id": "b", "text": "Generate a different request ID for each downstream step so every log looks unique." },
-        { "id": "c", "text": "Use the customer email as the request ID because support can recognize it." },
-        { "id": "d", "text": "Skip request IDs until the app has a full tracing platform." }
+        {
+          "id": "b",
+          "text": "Create a new request ID in each service and rely on close timestamps when asynchronous work overlaps."
+        },
+        {
+          "id": "c",
+          "text": "Use a stable customer ID as the cross-service correlation key, exposing one identifier across unrelated requests."
+        },
+        {
+          "id": "d",
+          "text": "Wait for complete distributed tracing before adding any correlation field to application logs."
+        },
+        {
+          "id": "a",
+          "text": "Create a safe ID at the entry boundary, propagate the request context, and include that ID on important structured log events."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A correlation ID should be safe, consistent, and present where the team will search. It connects the request story without exposing private data. You do not need perfect tracing before you can make logs easier to follow."
+      "correct": [
+        "a"
+      ],
+      "explanation": "One safe identifier should follow the request so operators can connect application events even when a trace is absent. Independent IDs break the chain, customer data is unsafe as a correlation key, and useful log correlation does not depend on a complete tracing rollout.\n\nLearn more in [AWS guidance for OpenTelemetry instrumentation](https://docs.aws.amazon.com/xray/latest/devguide/xray-instrumenting-your-app.html)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The API creates an order and publishes a receipt email event:\n\n```text\nevent=receipt.email.requested\nrequest_id=req_91Q\norder_id=ord_91Q\nreceipt_key=receipts/2026/05/02/order_ord_91Q/receipt.pdf\n```\n\nWhat should the Lambda side job do with this context?",
+      "scenario": "The orders API publishes an SQS message after checkout. The producer trace ends at `sqs.send`, and the Lambda consumer starts a new unrelated trace even though the business event is the same. Which change best restores the request path?",
       "options": [
-        { "id": "a", "text": "Log the same request ID and order ID when it renders and sends the receipt email." },
-        { "id": "b", "text": "Drop both IDs because async jobs should not be connected to the original checkout." },
-        { "id": "c", "text": "Replace the request ID with the Lambda runtime request ID in every app log field." },
-        { "id": "d", "text": "Log only the receipt key and never the order ID, even when support investigates one order." }
+        {
+          "id": "a",
+          "text": "Increase the global trace sampling rate so unrelated traces are more likely to appear together."
+        },
+        {
+          "id": "b",
+          "text": "Use the Lambda invocation request ID as the parent ID in the producer before the message is sent."
+        },
+        {
+          "id": "c",
+          "text": "Inject trace context into message metadata and extract it before the consumer creates its processing span."
+        },
+        {
+          "id": "d",
+          "text": "Copy the complete checkout request body into both services' logs and correlate on matching payload text."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The side job is part of the business flow, even if it runs after the API response. Carrying request ID and order ID lets the team connect a receipt-email failure back to the checkout. The Lambda runtime ID can also exist, but it should not replace the business correlation fields."
+      "correct": [
+        "c"
+      ],
+      "explanation": "An asynchronous boundary needs an explicit context handoff. Injecting and extracting trace context lets the consumer continue the causal path. More sampling does not create parentage, a future Lambda ID cannot parent the producer, and copying request bodies creates privacy risk without valid trace relationships.\n\nLearn more in [Tracing Amazon SQS requests with X-Ray](https://docs.aws.amazon.com/xray/latest/devguide/xray-services-sqs.html)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A Logs Insights query is supposed to follow one request, but the services log different field names:\n\n```text\norders-api: request_id=req_72 step=checkout.complete\nreceipt-email: reqId=req_72 step=email.send\nexport-worker: correlation=req_72 step=export.skip\n```\n\nWhat is the design problem?",
+      "scenario": "One checkout trace shows this timing:\n\n```text\nPOST /v1/orders              1143 ms\n  payment.authorize            51 ms\n  rds.insert_order           1030 ms\n  dynamodb.put_idempotency      12 ms\n  s3.write_receipt              31 ms\n```\n\nFleet-level RDS latency is normal for the same five-minute window. What is the best conclusion?",
       "options": [
-        { "id": "a", "text": "The same concept has inconsistent field names, so cross-service search is harder than it needs to be." },
-        { "id": "b", "text": "The ID is too short for CloudWatch Logs to store." },
-        { "id": "c", "text": "Logs from different services should never share an ID." },
-        { "id": "d", "text": "Every request should have one ID for ECS and a conflicting ID for Lambda." }
+        {
+          "id": "a",
+          "text": "The trace proves the entire RDS fleet was unhealthy, so the database should be failed over immediately."
+        },
+        {
+          "id": "b",
+          "text": "Treat normal fleet metrics as proof that the slow trace is instrumentation error."
+        },
+        {
+          "id": "c",
+          "text": "The trace identifies a slow database span for this request; normal metrics make an isolated or query-specific cause worth checking next."
+        },
+        {
+          "id": "d",
+          "text": "Instrument each helper before checking the correlated query and database log for this request."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Correlation works only when the ID appears where you search it. Different field names make simple queries harder and increase the chance of missing a related log. Consistent structured fields are a small design choice with big incident value."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Traces and metrics answer different scope questions. The trace localizes time for one request, while normal fleet metrics warn against declaring a service-wide database failure. The next evidence should be the query and logs correlated to this trace, not an immediate failover or more instrumentation.\n\nLearn more in [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html)."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "Which choices make a good correlation design for `devpolaris-orders-api`?",
+      "scenario": "A service still uses the X-Ray SDK and X-Ray daemon. The team is planning the migration described in the article. Which two actions belong in the target design?",
       "options": [
-        { "id": "a", "text": "Use a safe request ID generated or accepted at the edge of the service." },
-        { "id": "b", "text": "Add order ID after the order exists so support and backend evidence can meet." },
-        { "id": "c", "text": "Pass relevant IDs into events for Lambda or worker side jobs." },
-        { "id": "d", "text": "Use payment tokens as correlation IDs because they are already unique." }
+        {
+          "id": "b",
+          "text": "Instrument the application with OpenTelemetry and send OTLP data through the CloudWatch agent or an OpenTelemetry collector."
+        },
+        {
+          "id": "d",
+          "text": "Remove all sampling during migration so trace counts become the release acceptance test."
+        },
+        {
+          "id": "a",
+          "text": "Keep the X-Ray SDK as the permanent source and export only selected spans through OpenTelemetry, maintaining two instrumentation models."
+        },
+        {
+          "id": "c",
+          "text": "Validate propagation and trace-to-log correlation before retiring the old instrumentation path."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Good correlation connects technical requests and business objects without leaking private values. Request ID, order ID, and side-job propagation all help the team follow work. Payment tokens and similar secrets should never become log identifiers."
+      "correct": [
+        "b",
+        "c"
+      ],
+      "explanation": "AWS directs new and migrated tracing work toward OpenTelemetry, with an AWS-supported agent or collector exporting the data. Propagation and log correlation need verification before cutover. Keeping the legacy SDK as the permanent target defeats the migration, and disabling sampling confuses telemetry volume with correctness.\n\nLearn more in [Migrating from X-Ray SDKs to OpenTelemetry](https://docs.aws.amazon.com/xray/latest/devguide/xray-sdk-migration.html)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "Support reports order `ord_8x7k2n` did not send a receipt email. The API logs include both IDs:\n\n```text\nrequest_id=req_8x7 order_id=ord_8x7k2n step=checkout.complete status=201\n```\n\nWhich search path is most useful?",
+      "scenario": "The service handles 30,000 routine health requests per minute and 40 payment requests per minute. Recording every trace is too expensive, but payment failures need strong evidence. Which sampling plan best matches the article?",
       "options": [
-        { "id": "a", "text": "Search API and receipt-email logs for the order ID and request ID, then compare the side-job steps." },
-        { "id": "b", "text": "Search only ALB metrics, because metrics include the order ID for every request." },
-        { "id": "c", "text": "Use only the request ID, because business identifiers are not part of backend debugging." },
-        { "id": "d", "text": "Search every Lambda stream from the month before using no filter." }
+        {
+          "id": "b",
+          "text": "Keep higher coverage for the important payment path and lower coverage for high-volume routine traffic, then review the rules as traffic changes."
+        },
+        {
+          "id": "a",
+          "text": "Use one fixed sampling rate for routine health traffic and payment operations despite their different volume and diagnostic value."
+        },
+        {
+          "id": "c",
+          "text": "Disable tracing on payment because low-volume routes do not produce statistically useful data."
+        },
+        {
+          "id": "d",
+          "text": "Record all traces and remove correlated application logs to offset telemetry storage cost."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The order ID connects the support report to backend evidence. The request ID connects logs and traces for the original checkout. Searching both gives the team a practical bridge from customer report to side-job failure."
+      "correct": [
+        "b"
+      ],
+      "explanation": "Sampling should reflect business risk and traffic volume. Important, low-volume payment work deserves stronger coverage than routine health traffic. A uniform low rate can miss the path that matters, no payment traces removes incident evidence, and deleting logs sacrifices a complementary signal instead of controlling trace volume.\n\nLearn more in [X-Ray sampling rules](https://docs.aws.amazon.com/xray/latest/devguide/xray-console-sampling.html)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A trace shows `rds.insert_order` taking 4.9 seconds. The application log group has the likely timeout, but none of its JSON events include a trace ID or span ID. What is the most durable improvement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Correlate by nearest timestamp and host name because those fields uniquely identify a distributed request."
+        },
+        {
+          "id": "b",
+          "text": "Add trace and span identifiers from the active telemetry context to structured application logs."
+        },
+        {
+          "id": "c",
+          "text": "Copy full span payloads into application logs, duplicating telemetry and increasing exposure and cost."
+        },
+        {
+          "id": "d",
+          "text": "Correlate by timestamp and task ID, accepting collisions when concurrent requests share the same runtime."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Trace and span identifiers create a direct join between the slow span and the exact application events. Timestamps and hosts can collide, full trace payloads add noise and cost, and duration cannot identify a request. Request IDs can remain alongside trace context for support and business workflows.\n\nLearn more in [CloudWatch trace-to-log correlation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Application-Signals-TraceLogCorrelation.html)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A new trace contains spans named `handler`, `aws`, and `db`. The associated logs say only `started`, `slow`, and `done`. During an incident, responders cannot tell which business operation or dependency call each span represents. What should the team improve first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Add spans around private helpers while keeping generic operation names and no business attributes."
+        },
+        {
+          "id": "c",
+          "text": "Attach customer email and payment token values as span attributes so each trace is unmistakable."
+        },
+        {
+          "id": "d",
+          "text": "Remove application logs after tracing is enabled so responders have one telemetry source."
+        },
+        {
+          "id": "b",
+          "text": "Rename spans for operations such as `checkout.authorize_payment` and `rds.insert_order`, then emit safe structured fields that tell the same request story."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Instrumentation should express meaningful operations and safe context. More generic spans add volume without clarity, sensitive attributes create security risk, and traces do not replace logs. Clear operation names plus structured correlation make both tools easier to use.\n\nLearn more in [AWS guidance for OpenTelemetry instrumentation](https://docs.aws.amazon.com/xray/latest/devguide/xray-instrumenting-your-app.html)."
     }
   ]
 }

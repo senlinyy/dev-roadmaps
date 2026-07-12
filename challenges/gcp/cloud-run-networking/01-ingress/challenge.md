@@ -1,7 +1,6 @@
 ---
-title: "Separate Ingress"
-sectionSlug: ingress
+title: "Cloud Run Networking"
 order: 1
 ---
 
-Practice treating Cloud Run ingress as reachability into the service. The questions separate generated URLs, load balancer entry, internal paths, and invocation permission.
+Review production scenarios covering separating Cloud Run ingress, IAM, egress, Direct VPC egress, private ranges, all-traffic paths, and startup failure evidence.

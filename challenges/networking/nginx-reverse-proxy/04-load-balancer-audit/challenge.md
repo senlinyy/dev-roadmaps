@@ -1,6 +1,6 @@
 ---
 title: "Audit a Lopsided Load Balancer"
-sectionSlug: basic-load-balancing
+sectionSlug: load-balancing-and-health-behavior
 order: 4
 ---
 

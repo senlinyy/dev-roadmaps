@@ -4,82 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A release changes the checkout payment flow on a service that receives 10,000 checkout requests per minute. A teammate proposes a 10 percent first canary slice because that is the default example they remember. What is the best response?",
+      "scenario": "A checkout service handles 20,000 requests per minute. The release changes payment authorization and has no recent production equivalent. The team proposes starting at 25 percent for five minutes because staging passed. Which first step is safer?",
       "options": [
-        { "id": "a", "text": "Use a smaller first slice, such as one percent, because checkout impact is high and ten percent is still many users." },
-        { "id": "b", "text": "Use 50 percent so the team gets faster signal." },
-        { "id": "c", "text": "Skip canary because high-traffic services do not need it." },
-        { "id": "d", "text": "Use ten percent for every service because canary percentages are fixed." }
+        {
+          "id": "a",
+          "text": "Start at 10 percent for five minutes so the release gathers a large sample before the payment window changes."
+        },
+        {
+          "id": "b",
+          "text": "Start at 25 percent but require payment success and latency to remain inside the staging thresholds."
+        },
+        {
+          "id": "c",
+          "text": "Start with a much smaller slice, define a watch window, and increase only after release-split gates pass."
+        },
+        {
+          "id": "d",
+          "text": "Start at 5 percent and promote on request count alone once the canary has processed 5,000 requests."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The first slice should match traffic volume and user impact. For a high-impact checkout or payment change, a smaller first slice can still provide signal while limiting blast radius."
+      "correct": [
+        "c"
+      ],
+      "explanation": "High traffic gives a small canary enough samples quickly, while the payment change warrants a small initial blast radius and a defined observation window. Ten or 25 percent exposes more users than needed before production evidence exists. Request count is useful, but promotion still requires technical and business gates rather than volume alone. See [Argo Rollouts canary strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "During a 10 percent canary, the whole-service 5xx graph rises from 0.08 percent to 0.45 percent. The team has no graph split by task definition or release. What is the core observability problem?",
+      "scenario": "The canary serves 5 percent of traffic. The global checkout 5xx rate rises only from 0.10 percent to 0.24 percent, but metrics have no version label. What evidence is missing for a defensible promotion decision?",
       "options": [
-        { "id": "a", "text": "The aggregate graph can hide whether the canary is much worse than stable." },
-        { "id": "b", "text": "Whole-service graphs are always more accurate than release-split graphs." },
-        { "id": "c", "text": "The canary should be promoted because total 5xx is below one percent." },
-        { "id": "d", "text": "The team should ignore 5xx and only check deployment status." }
+        {
+          "id": "a",
+          "text": "Release-split errors, latency, and checkout success for canary and baseline."
+        },
+        {
+          "id": "b",
+          "text": "A longer global observation window with the same aggregate service metrics."
+        },
+        {
+          "id": "c",
+          "text": "Canary pod CPU and memory compared with the stable fleet over the same window."
+        },
+        {
+          "id": "d",
+          "text": "Request totals for each version without outcome, latency, or business-result dimensions."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A serious canary problem can look like a modest whole-service bump because stable traffic is still most of the traffic. Canary decisions need signals split by release, task definition, or image digest."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The healthy baseline can dilute a failing 5 percent slice in an aggregate chart. Release-split errors, latency, and business outcomes support a like-for-like decision. A longer aggregate window preserves the dilution problem. Resource metrics and request totals add context but cannot show whether canary users successfully complete checkout. See [OpenTelemetry metric attributes](https://opentelemetry.io/docs/concepts/signals/metrics/)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "The release dashboard shows:\n\n```text\nstable orders-api:41: 5xx 0.07%, checkout success 99.45%, p95 179ms\ncanary orders-api:42: 5xx 3.91%, checkout success 94.10%, p95 422ms\n```\n\nWhat should the canary controller do first?",
+      "scenario": "An internal admin API receives 12 requests per hour. A 1 percent canary has received no requests after 45 minutes, and all charts are flat. What should the team do before promotion?",
       "options": [
-        { "id": "a", "text": "Stop the canary and route traffic back to stable." },
-        { "id": "b", "text": "Promote to 100 percent because there is enough canary traffic for debugging." },
-        { "id": "c", "text": "Increase canary to 50 percent to confirm the pattern." },
-        { "id": "d", "text": "Ignore the dashboard until the full deployment completes." }
+        {
+          "id": "a",
+          "text": "Increase the canary to 10 percent immediately and use the next scheduled admin request as the validation sample."
+        },
+        {
+          "id": "b",
+          "text": "Extend the current 1 percent watch window until one organic request reaches the canary."
+        },
+        {
+          "id": "c",
+          "text": "Promote after readiness and a direct health check pass, then evaluate business behavior at full traffic."
+        },
+        {
+          "id": "d",
+          "text": "Send a controlled cohort or synthetic traffic to the canary until the gate has enough evidence."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The canary is clearly worse across errors, checkout success, and latency. The first action is to protect users by sending traffic back to stable, then debug the canary after impact is reduced."
+      "correct": [
+        "d"
+      ],
+      "explanation": "No requests means no behavioral evidence. A controlled cohort or synthetic traffic creates repeatable evidence without depending on one random organic request. Increasing weight may also help, but changing exposure before defining the evidence and gate is less controlled. Readiness and health checks do not prove the admin transaction. See [Istio traffic shifting](https://istio.io/latest/docs/tasks/traffic-management/traffic-shifting/)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A canary receives only two real requests in an hour because the service is a low-traffic internal tool. The metrics look clean. What is the best next step?",
+      "scenario": "During the 10 percent step, the dashboard shows:\n\n| Signal | Stable | Canary |\n|---|---:|---:|\n| 5xx | 0.08% | 2.9% |\n| p95 | 180 ms | 430 ms |\n| Checkout success | 99.4% | 95.1% |\n\nWhat should the controller do?",
       "options": [
-        { "id": "a", "text": "Treat the clean graph as strong proof and promote immediately." },
-        { "id": "b", "text": "Generate synthetic checks or route a named test account before trusting the canary signal." },
-        { "id": "c", "text": "Disable all stop rules because low traffic cannot fail." },
-        { "id": "d", "text": "Switch to blue-green because blue-green never needs tests." }
+        {
+          "id": "a",
+          "text": "Pause at 10 percent and extend the window to determine whether the canary converges toward the stable baseline."
+        },
+        {
+          "id": "b",
+          "text": "Set canary traffic to zero and mark the release failed."
+        },
+        {
+          "id": "c",
+          "text": "Return to 5 percent while investigating, because the service-wide error budget is not yet exhausted."
+        },
+        {
+          "id": "d",
+          "text": "Hold at 10 percent and require one additional successful synthetic checkout before promotion."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "A canary needs enough meaningful traffic to teach the team something. For low-traffic services, percentages may not produce signal, so synthetic requests or named internal accounts can make the test meaningful."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The canary is materially worse across independent technical and business signals, so the predefined failure action should remove its traffic. Extending or reducing the slice continues exposing users after a decisive gate failure. One synthetic success cannot outweigh sustained release-split regressions. See [Argo Rollouts analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A user can bounce between stable and canary during checkout because traffic splitting is request-based and there is no session affinity. The canary changes discount validation. What risk does this create?",
+      "scenario": "A user can add a discount through the canary and submit payment through stable. The versions interpret discount records differently. Which design best protects the experiment?",
       "options": [
-        { "id": "a", "text": "The user may see inconsistent behavior across one workflow, making the signal confusing and the experience unsafe." },
-        { "id": "b", "text": "The canary becomes safer because every request is randomly independent." },
-        { "id": "c", "text": "The stable version will automatically learn the canary code path." },
-        { "id": "d", "text": "Session behavior does not matter for stateful checkout flows." }
+        {
+          "id": "a",
+          "text": "Use random request-level weighting and require both versions to read the new discount format during the rollout."
+        },
+        {
+          "id": "b",
+          "text": "Route only discount creation to canary while payment requests remain on stable until promotion."
+        },
+        {
+          "id": "c",
+          "text": "Use a stable user cohort or session routing and keep data formats compatible across both versions."
+        },
+        {
+          "id": "d",
+          "text": "Use session affinity for traffic but allow canary-only writes because stable remains the read path."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Canary traffic should be designed so the observed behavior is meaningful. If a user bounces between versions in one stateful flow, it can produce confusing symptoms and a poor checkout experience."
+      "correct": [
+        "c"
+      ],
+      "explanation": "A stateful user journey needs consistent exposure, and both versions must understand shared data during the release. Random request weighting can split one journey across versions. Routing only one operation by version still crosses incompatible contracts, while affinity alone cannot protect stable from data it cannot read. See [Istio traffic shifting](https://istio.io/latest/docs/tasks/traffic-management/traffic-shifting/)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "A canary has completed its first watch window. Which facts support promotion to full traffic?",
+      "scenario": "The checkout team is defining an automated decision gate before the first production traffic shift. Which ingredients belong in that customer-facing canary gate?",
       "options": [
-        { "id": "a", "text": "Canary 5xx rate is close to stable over the same time window." },
-        { "id": "b", "text": "Checkout success on canary remains close to stable." },
-        { "id": "c", "text": "Canary p95 latency is close to stable after normal warmup." },
-        { "id": "d", "text": "Logs show no new error pattern for the canary release." },
-        { "id": "e", "text": "The whole-service average looks fine, but no release-split metrics exist." }
+        {
+          "id": "a",
+          "text": "A service-wide error-budget burn alert evaluated without release or version dimensions."
+        },
+        {
+          "id": "b",
+          "text": "Canary versus baseline error and latency comparisons over a defined window."
+        },
+        {
+          "id": "c",
+          "text": "A business signal such as payment authorization or checkout completion."
+        },
+        {
+          "id": "d",
+          "text": "A readiness gate plus a minimum canary request count, without comparison to the stable version."
+        },
+        {
+          "id": "e",
+          "text": "A predefined failure action that pauses or returns canary weight to zero."
+        }
       ],
-      "correct": ["a", "b", "c", "d"],
-      "explanation": "Promotion should rely on release-split canary evidence: errors, business success, latency, and logs. A clean aggregate graph without release split can hide a bad canary."
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "A useful gate compares release-specific technical signals, checks the outcome users care about, and defines what failure does. A service-wide burn alert remains useful as a safety net but can hide a small failing canary. Readiness and sample size prove availability and volume, not parity with stable behavior. See [Google SRE monitoring guidance](https://sre.google/sre-book/monitoring-distributed-systems/) and [Argo Rollouts canary strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)."
     }
   ]
 }
-

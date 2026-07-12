@@ -1,7 +1,6 @@
 ---
-title: "Match Data Shapes"
-sectionSlug: data-shapes
+title: "What Is Storage"
 order: 1
 ---
 
-Practice choosing a GCP data service from how the data behaves. The questions compare files, records, documents, analytics, attached storage, and recovery copies.
+Review production scenarios covering matching GCP data shapes to objects, relational records, documents, analytics tables, attached storage, and recovery copies.

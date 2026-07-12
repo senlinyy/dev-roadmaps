@@ -1,6 +1,6 @@
 ---
 title: "Inspect EC2 Instance Shape"
-sectionSlug: sample-server-shape
+sectionSlug: amis-instance-types-and-volumes
 order: 4
 ---
 

@@ -1,0 +1,18 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-statefulset.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: notification-postgres\n  namespace: notifications\nspec:\n  serviceName: notification-postgres\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-postgres\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-postgres\n    spec:\n      containers: []\n  volumeClaimTemplates:\n    - metadata:\n        name: data\n      spec:\n        accessModes: [ReadWriteOncePod]\n        storageClassName: fast-ssd\n        resources:\n          requests:\n            storage: 20Gi\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "postgres", "label": "PostgreSQL container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "postgres:16.4", "label": "approved PostgreSQL image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "ports"], "containsObject": { "name": "postgres", "containerPort": 5432 }, "label": "named PostgreSQL port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "env"], "containsObject": { "name": "POSTGRES_USER", "valueFrom": { "secretKeyRef": { "name": "notification-postgres-auth", "key": "username" } } }, "label": "PostgreSQL user Secret reference" },
+      { "path": ["spec", "template", "spec", "containers", 0, "env"], "containsObject": { "name": "POSTGRES_PASSWORD", "valueFrom": { "secretKeyRef": { "name": "notification-postgres-auth", "key": "password" } } }, "label": "PostgreSQL password Secret reference" },
+      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "data", "mountPath": "/var/lib/postgresql/data" }, "label": "ordinal data volume mount" },
+      { "path": ["spec", "volumeClaimTemplates", 0, "metadata", "name"], "equals": "data", "label": "matching claim template name" }
+    ]
+  }
+}

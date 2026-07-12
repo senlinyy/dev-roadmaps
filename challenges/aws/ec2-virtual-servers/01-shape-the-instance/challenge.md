@@ -1,7 +1,6 @@
 ---
-title: "Shape The Instance"
-sectionSlug: sample-server-shape
+title: "EC2 Virtual Servers"
 order: 1
 ---
 
-Use the launch evidence to choose the EC2 operating decision that matches the problem. Keep the ALB, instance role, disk, access path, and process model separate in your thinking.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

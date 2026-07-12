@@ -1,7 +1,6 @@
 ---
-title: "Design Object Keys"
-sectionSlug: keys
+title: "S3: Buckets, Objects, Permissions, and Lifecycle"
 order: 1
 ---
 
-The export worker is writing S3 invoice, receipt, and manifest objects for `devpolaris-orders-api`. Use the bucket, key, and metadata evidence to make object decisions instead of treating S3 like a server folder.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

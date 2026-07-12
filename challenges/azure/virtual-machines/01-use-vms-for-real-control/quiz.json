@@ -1,61 +1,195 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The legacy orders worker needs a vendor package installed at the OS level and writes to a mounted disk. The team cannot package it cleanly into App Service or Container Apps yet. Which compute option is honest?",
+      "scenario": "A vendor-supplied inventory worker must run a custom kernel module, write to a mounted block device, and keep a local daemon under direct OS supervision. The team would prefer a managed platform where possible, but those requirements are non-negotiable for this workload. Which Azure compute choice is the most honest fit?",
       "options": [
         {
           "id": "a",
-          "text": "A VM, with an explicit operations plan for patching, boot, disk, access, logs, and monitoring."
+          "text": "Azure Virtual Machines, because the workload has real server-level control requirements inside the guest operating system."
         },
         {
           "id": "b",
-          "text": "Azure Functions, because all background work should be event-driven."
+          "text": "Azure App Service, because the platform can usually absorb guest-level package and kernel requirements without exposing a server."
         },
         {
           "id": "c",
-          "text": "App Service, because it removes all OS concerns even when the app depends on them."
+          "text": "Azure Container Apps, because container revisions are the normal answer when a daemon needs a custom kernel module."
         },
         {
           "id": "d",
-          "text": "Blob Storage, because the worker writes files."
+          "text": "Azure Functions, because event-driven scale is the simplest way to satisfy mounted-disk and local-daemon requirements."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The VM gives the required control, but it also gives the team more operating responsibility."
+      "explanation": "The article frames VMs as the right choice when the requirement sits inside the operating system, such as kernel modules, local daemons, or mounted block devices. The closest distractor is the container answer, because containers can package many custom runtimes, but they do not give the team the guest-kernel and host-level control described here. See [Microsoft Learn: Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "The legacy worker is staying on a VM for now because it needs OS-level control. The team wants the decision record to show what extra work they accepted by choosing a machine. Which responsibilities increase when the team chooses a VM?",
+      "type": "single",
+      "scenario": "A small team wants to migrate a stateless HTTP API with no host-level agents, no custom kernel requirements, and no special disk layout. Their main argument for choosing VMs is that the team already knows SSH, but they have limited capacity for patching, image maintenance, backup drills, and service supervision. What should the architecture review challenge first?",
       "options": [
         {
-          "id": "a",
-          "text": "Operating system patching and package management."
-        },
-        {
           "id": "b",
-          "text": "Boot diagnostics, VM agent health, disk capacity, and process supervision."
+          "text": "Whether standardizing everything on VMs is automatically better because one platform shape is easier to teach."
         },
         {
           "id": "c",
-          "text": "All application bugs disappear because the machine is dedicated."
+          "text": "Whether SSH familiarity proves the production design is appropriate for the workload."
+        },
+        {
+          "id": "a",
+          "text": "Whether a managed compute platform would remove guest-OS ownership that this simple API does not appear to need."
         },
         {
           "id": "d",
-          "text": "Network access and identity still need review."
+          "text": "Whether the team's need for direct shell access is an operational habit rather than evidence that the workload truly needs guest operating system ownership."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The key review question is whether the workload really needs VM control, because choosing a VM also chooses patching, image, backup, and process responsibilities. The closest distractor is the standardization answer, because platform simplification can be valuable, but it should not override a clear mismatch between workload needs and operating burden. See [Microsoft Learn: Choose an Azure compute service for your application](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/compute-decision-tree)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A production VM hosts a stateful worker that the business depends on nightly. During an audit, the team admits there is no patch window, no backup test, and no boot-diagnostics habit when a rebuilt machine fails to start. What is the strongest finding?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Azure hosting removes most guest-operating responsibilities, so the missing practices are mainly documentation gaps."
+        },
+        {
+          "id": "a",
+          "text": "The team chose VM control without building the operating practices that make that control safe and recoverable."
+        },
+        {
+          "id": "c",
+          "text": "Boot diagnostics can wait until a major outage review, because routine VM operations should be judged mainly by steady-state service health."
+        },
+        {
+          "id": "d",
+          "text": "A stateful VM does not need backups if the application data also exists somewhere in Azure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "VMs give control, but they also require patching, backups, restore drills, and early-boot evidence. The closest distractor is the Azure-hosting answer, because Azure does own the physical platform, but the guest image, packages, service behavior, and recovery habits remain the team's responsibility. See [Microsoft Learn: Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) and [Microsoft Learn: Azure boot diagnostics](https://learn.microsoft.com/en-us/azure/virtual-machines/boot-diagnostics)."
+    },
+    {
+      "id": "03-read-first-boot-and-access-risk-q1",
+      "type": "single",
+      "scenario": "A VM bootstrap script installs packages from an internal mirror during first boot. New instances started failing only after a route-table change on the subnet. Older instances that were already configured remain healthy. Before anyone rolls back the subnet change, what should the operator inspect first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The route-table change record and effective route should be reviewed first, and the team should roll back only if the startup evidence confirms the path broke bootstrap access."
+        },
+        {
+          "id": "c",
+          "text": "The package mirror itself should be treated as the likely root cause first, because healthy older instances show the subnet path is probably unrelated."
+        },
+        {
+          "id": "d",
+          "text": "The VM size should be increased before investigation, because bootstrap failures after network edits often come from temporary CPU starvation during package installation."
+        },
+        {
+          "id": "a",
+          "text": "Startup evidence such as boot or cloud-init logs, together with the effective outbound route and the mirror's access path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's first-boot path is to inspect early boot evidence and then trace the network boundary the bootstrap depends on. The closest distractor is the immediate rollback answer, because the timing makes the route change suspicious, but the operator should still confirm the failing path before undoing possibly unrelated work. See [Microsoft Learn: Azure boot diagnostics](https://learn.microsoft.com/en-us/azure/virtual-machines/boot-diagnostics)."
+    },
+    {
+      "id": "03-read-first-boot-and-access-risk-q3",
+      "type": "multiple",
+      "scenario": "A newly created VM never joins service after deployment. The team wants first-boot evidence that shows whether the guest reached a usable state and whether the initial configuration steps actually ran. Which two sources are the best fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Boot diagnostics or serial-console output from the VM."
+        },
+        {
+          "id": "c",
+          "text": "Network route and DNS checks for downstream dependencies only."
+        },
+        {
+          "id": "b",
+          "text": "Cloud-init logs or Custom Script Extension logs from the guest setup path."
+        },
+        {
+          "id": "d",
+          "text": "The release record's image version and deployment owner without any guest runtime evidence."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "d"
+        "b"
       ],
-      "explanation": "A VM does not remove application or security work. It adds machine-level work the team must manage."
+      "explanation": "Boot diagnostics shows whether the VM reached a usable boot state, and cloud-init or extension logs show what happened during initial guest configuration. The closest distractor is the network-check answer, because dependency reachability does matter later, but it does not replace the two direct first-boot evidence sources the question asks for. See [Microsoft Learn: Azure boot diagnostics](https://learn.microsoft.com/en-us/azure/virtual-machines/boot-diagnostics)."
+    },
+    {
+      "id": "03-read-first-boot-and-access-risk-q4",
+      "type": "single",
+      "scenario": "A Windows VM is left reachable by public RDP because the project team says the open path makes setup faster. The platform review accepts that administrators still need remote access, but it wants a safer steady-state design. What should the review require?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A controlled admin path such as Azure Bastion or another restricted private-access route with time-bound access."
+        },
+        {
+          "id": "b",
+          "text": "Permanent public RDP with a stronger password policy, because convenience is the main operational requirement during incidents."
+        },
+        {
+          "id": "c",
+          "text": "A DNS rename that makes the VM harder to recognize from the Internet, while leaving the same public RDP path in place."
+        },
+        {
+          "id": "d",
+          "text": "A just-in-time or otherwise time-bound public RDP rule, because limiting exposure windows is safer than leaving the management path permanently open."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The access-path section recommends a controlled administrative route rather than a permanently exposed public management endpoint. The closest distractor is the stronger-password answer, because credentials matter, but narrowing and brokering the path itself is the more important design improvement. See [Microsoft Learn: What is Azure Bastion?](https://learn.microsoft.com/en-us/azure/bastion/bastion-overview)."
+    },
+    {
+      "id": "04-avoid-vm-sprawl-q3",
+      "type": "single",
+      "scenario": "A large VM runs a scheduled cron-style job for about ten minutes each day and sits idle the rest of the month. The job has no special host-level dependency beyond basic execution. What should the cost and operations review ask next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the VM should simply be resized down, because a smaller always-on server might preserve the existing runbook with less cost."
+        },
+        {
+          "id": "c",
+          "text": "Whether the job should move to a VM scale set, because scheduled work may still benefit from VM-oriented image control and timed capacity."
+        },
+        {
+          "id": "a",
+          "text": "Whether a scheduled serverless option, container job, or smaller compute shape would meet the need with less idle VM ownership."
+        },
+        {
+          "id": "d",
+          "text": "Whether the idle time is acceptable because the VM already exists, even if the workload itself needs compute for only a few minutes each day."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is the kind of workload where the review should question whether a full-time VM is honest or just inherited habit. The closest distractor is the smaller-VM idea hidden inside general VM ownership, because resizing could reduce cost, but the stronger question is whether the workload needs a VM at all. See [Microsoft Learn: Choose an Azure compute service for your application](https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/compute-decision-tree)."
     }
   ]
 }

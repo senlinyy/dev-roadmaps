@@ -25,5 +25,3 @@ all:
         state: present
         update_cache: true
 ```
-
-The play names the host group, uses privilege escalation, and lets the apt module describe package state.

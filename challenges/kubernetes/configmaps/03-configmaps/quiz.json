@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "config-boundary-q1",
+      "type": "single",
+      "scenario": "A release review finds four values proposed for `notification-api-config`. The Deployment and container image are stored in Git, and the ConfigMap will be readable by the application support team. Which value belongs in this ConfigMap?",
+      "options": [
+        { "id": "a", "text": "The production database password used by the API connection pool." },
+        { "id": "b", "text": "The private key used to sign outbound webhook requests." },
+        { "id": "c", "text": "The `LOG_LEVEL` setting that changes from `debug` in staging to `info` in production." },
+        { "id": "d", "text": "The cloud provider token that permits the worker to send customer messages." }
+      ],
+      "correct": ["c"],
+      "explanation": "A log level is ordinary runtime configuration and can be reviewed openly. Database passwords, signing keys, and provider tokens grant access and belong in Secrets or a protected external secret workflow."
+    },
+    {
+      "id": "explicit-reference-q2",
+      "type": "single",
+      "scenario": "The shared `platform-settings` ConfigMap contains 18 keys used by several workloads. `notification-api` requires only `LOG_LEVEL` and `EMAIL_PROVIDER_URL`, and reviewers want future keys to stay out of its process unless explicitly approved. Which delivery choice best fits?",
+      "options": [
+        { "id": "a", "text": "Use two `configMapKeyRef` entries so the Deployment names each required key." },
+        { "id": "b", "text": "Use `envFrom` so all current and future keys enter the container automatically." },
+        { "id": "c", "text": "Copy the two values into the container image during the production build." },
+        { "id": "d", "text": "Store the two values in an `emptyDir` volume and let the application invent defaults." }
+      ],
+      "correct": ["a"],
+      "explanation": "Explicit key references make the required contract visible and prevent unrelated future keys from entering the process. `envFrom` is better for a dedicated ConfigMap whose complete key set belongs to one container. Baking values into the image removes environment separation, and `emptyDir` is not a configuration source."
+    },
+    {
+      "id": "update-behavior-q3",
+      "type": "single",
+      "scenario": "At 14:00 the team changes `LOG_LEVEL` from `info` to `debug` in a ConfigMap. The running Deployment receives `LOG_LEVEL` through `configMapKeyRef`. At 14:05 the existing Pods still report `info`, although the ConfigMap object shows `debug`. What is the best explanation and response?",
+      "options": [
+        { "id": "a", "text": "Environment variables are captured at container startup, so restart the Deployment and verify the rollout." },
+        { "id": "b", "text": "ConfigMap environment variables refresh only every hour, so wait without changing the Pods." },
+        { "id": "c", "text": "The value must be base64 encoded before an environment variable can receive it." },
+        { "id": "d", "text": "The ConfigMap must be converted to a PersistentVolume before a running process can read it." }
+      ],
+      "correct": ["a"],
+      "explanation": "A container receives ConfigMap-backed environment values when it starts. Existing processes keep the old environment until the Pods restart. Mounted directory content can refresh after kubelet synchronization, but the application still needs a reload mechanism to use changed files."
+    },
+    {
+      "id": "immutable-release-q4",
+      "type": "single",
+      "scenario": "Production releases must preserve the exact configuration used by each ReplicaSet and make rollback reviewable. The current ConfigMap is edited in place, so incident responders cannot easily tell which values an older rollout used. Which design best improves that release contract?",
+      "options": [
+        { "id": "a", "text": "Make one ConfigMap immutable, keep its name forever, and edit its data during each release." },
+        { "id": "b", "text": "Create immutable versioned ConfigMaps and update the Deployment reference for each configuration release." },
+        { "id": "c", "text": "Move all settings into Pod annotations so every ReplicaSet inherits the latest values." },
+        { "id": "d", "text": "Remove the ConfigMap from Git and patch the live object manually during deployment." }
+      ],
+      "correct": ["b"],
+      "explanation": "An immutable object cannot be edited, so each change needs a new versioned name. Updating the Pod template reference creates a visible rollout and preserves the prior object for rollback. Annotations are not the application configuration path, while manual live patches create drift."
+    },
+    {
+      "id": "config-review-q5",
+      "type": "multiple",
+      "scenario": "A worker reads `routing.yaml` from a ConfigMap mounted at `/etc/notification`. The team expects routing changes to reach running Pods without a rollout. Which two review comments are correct?",
+      "options": [
+        { "id": "a", "text": "Mount the ConfigMap as a full directory because a `subPath` mount does not receive ConfigMap updates." },
+        { "id": "b", "text": "Switch to `envFrom` because environment variables refresh faster than projected files." },
+        { "id": "c", "text": "Confirm the worker watches or reloads the file because refreshed volume content does not make the process consume it automatically." },
+        { "id": "d", "text": "Store routing rules in the container writable layer so kubelet can replace them during synchronization." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A full ConfigMap directory mount can refresh after kubelet synchronization, while `subPath` blocks that update behavior. The application must still watch or reload the file. Environment variables remain fixed for the container lifetime, and the writable image layer is not the ConfigMap delivery path."
+    }
+  ]
+}

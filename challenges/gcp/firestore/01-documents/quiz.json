@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A user's checkout draft is read and written as one small record by user ID. Which Firestore concept matches that unit?",
+      "scenario": "A mobile app stores one draft per user, reads drafts by document path, updates individual fields, and occasionally queries drafts by status. The team wants the data to stay close to its JSON-like application shape. Which Firestore model best fits?",
       "options": [
-        { "id": "a", "text": "A document." },
-        { "id": "b", "text": "A Cloud SQL transaction log." },
-        { "id": "c", "text": "A BigQuery warehouse query." },
-        { "id": "d", "text": "A Persistent Disk snapshot." }
+        {
+          "id": "a",
+          "text": "A draft document in a collection, with fields and paths designed for the required reads and queries."
+        },
+        {
+          "id": "b",
+          "text": "One shared document containing every user draft, so the app has only one path to read and update."
+        },
+        {
+          "id": "c",
+          "text": "A separate collection for every draft field, joined in the client whenever a draft is opened."
+        },
+        {
+          "id": "d",
+          "text": "A Cloud Storage object per draft, even though the app needs field updates and indexed status queries."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A small state record read by path is document-shaped."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A document in a collection matches path reads, field updates, and document queries. One shared document becomes a hot and unbounded record, field-per-collection design creates client-side joins, and object storage is a poor fit for frequent field-level updates. See [Firestore data model documentation](https://cloud.google.com/firestore/docs/data-model)."
+    },
+    {
+      "id": "access-patterns-q1",
+      "type": "single",
+      "scenario": "A tenant news page must show the 20 newest published articles for one tenant and category. The proposal loads every article document, then filters and sorts in the browser. Which design is most appropriate?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Place every article ID for a tenant in one growing array document and fetch article details one at a time."
+        },
+        {
+          "id": "d",
+          "text": "Create one collection per category and scan every tenant document because collection names replace query fields."
+        },
+        {
+          "id": "a",
+          "text": "Store queryable tenant, category, publication state, and timestamp fields, then create the index required by that filter and order pattern."
+        },
+        {
+          "id": "b",
+          "text": "Keep the client-side scan because Firestore bills only documents displayed after browser filtering."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Firestore data shape should follow the access pattern, including the fields and index needed for the filter and sort. Client filtering reads unnecessary documents, a growing ID array creates a hot record and extra reads, and collection names do not remove the tenant query requirement. See [Firestore query documentation](https://cloud.google.com/firestore/docs/query-data/queries)."
+    },
+    {
+      "id": "indexes-q1",
+      "type": "single",
+      "scenario": "Production issues a query with equality filters on assignee and status plus an orderBy on dueDate. The request fails with a Firestore message that includes a composite-index creation link. What is the best response?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Disable security rules because an index error means authorization prevented a full collection scan."
+        },
+        {
+          "id": "a",
+          "text": "Create the composite index that matches the filter and sort combination, wait for it to serve, then retry the query."
+        },
+        {
+          "id": "b",
+          "text": "Remove orderBy and sort an unbounded result set in every client so no index is needed."
+        },
+        {
+          "id": "c",
+          "text": "Encode dueDate into the collection name and create a new collection each day."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error identifies an unsupported query shape, so the required composite index is the direct fix. Client-side sorting can increase reads, date-based collection names complicate the model, and security rules are separate from index availability. See [Firestore index management documentation](https://cloud.google.com/firestore/docs/query-data/indexing)."
+    },
+    {
+      "id": "indexes-q2",
+      "type": "multiple",
+      "scenario": "A high-write events collection receives 8,000 documents per second. The team proposes several composite indexes, collection-group indexes, and indexing a large payload field that no query uses. Which three changes can increase index storage, write work, or build time?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keeping the large, rarely queried payload field indexed."
+        },
+        {
+          "id": "c",
+          "text": "Creating collection-group indexes across many matching subcollections."
+        },
+        {
+          "id": "d",
+          "text": "Exempting the unqueried payload field from indexing after confirming no query depends on it."
+        },
+        {
+          "id": "e",
+          "text": "Reducing the number of unused composite indexes after checking production query plans."
+        },
+        {
+          "id": "a",
+          "text": "Adding composite indexes to the high-write collection."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Each maintained composite, field, or collection-group index adds index work and storage. Exempting a large field that is not queried can reduce that burden, so it is the excluded choice. See [Firestore index overview](https://cloud.google.com/firestore/docs/query-data/index-overview)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The team wants to store order, payment, refund, and support relationships in one large document because JSON feels easy. What is the concern?",
+      "scenario": "A profile document appends every click event to one array. The document is now large, receives concurrent writes from many sessions, and is rarely read as one complete history. What should the data-model review recommend?",
       "options": [
-        { "id": "a", "text": "The data may need relational constraints and transactions better suited to Cloud SQL." },
-        { "id": "b", "text": "Firestore cannot store fields." },
-        { "id": "c", "text": "Documents must be public." },
-        { "id": "d", "text": "BigQuery is required for every user preference." }
+        {
+          "id": "a",
+          "text": "Move the event history to separate documents or an analytics pipeline and keep only bounded profile state in the profile document."
+        },
+        {
+          "id": "b",
+          "text": "Increase the array indefinitely because Firestore by default shards fields inside one document."
+        },
+        {
+          "id": "c",
+          "text": "Split the array into several fields on the same document, which removes document size and contention limits."
+        },
+        {
+          "id": "d",
+          "text": "Convert every event to a document-name suffix but continue writing the full history into the profile document."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "JSON-like shape does not remove relational requirements."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The unbounded history creates document-size and contention risk, while the profile does not need the full click stream for normal reads. Separate event documents or an analytics path match the access pattern; rearranging fields in the same record does not remove the hot-document problem. See [Firestore best practices](https://cloud.google.com/firestore/docs/best-practices)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which are reasonable Firestore document examples?",
+      "id": "access-patterns-q4",
+      "type": "single",
+      "scenario": "Two checkout workers read inventory/sku-42 with available=1, then each writes a reservation and sets available=0. Both reservations succeed because the read and writes were separate operations. Which Firestore change protects this invariant?",
       "options": [
-        { "id": "a", "text": "Checkout draft by user ID." },
-        { "id": "b", "text": "User preference record." },
-        { "id": "c", "text": "Small support note document." },
-        { "id": "d", "text": "A quarter of analytics event scans." }
+        {
+          "id": "c",
+          "text": "Add a composite index on available and reservationId, because indexes serialize concurrent writers."
+        },
+        {
+          "id": "d",
+          "text": "Cache available=1 in each worker so both workers avoid another database read."
+        },
+        {
+          "id": "a",
+          "text": "Use a transaction that reads the inventory document and atomically writes the reservation and updated quantity, allowing Firestore to retry on contention."
+        },
+        {
+          "id": "b",
+          "text": "Use a batched write without reading the current quantity, because batches detect business conflicts by default."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Firestore fits predictable document-shaped app state."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The decision depends on the current quantity, so it needs a transaction that can retry when the document changes concurrently. A blind batch cannot validate the prior value, indexes do not serialize business decisions, and independent caches preserve the race. See [Firestore transaction documentation](https://cloud.google.com/firestore/docs/manage-data/transactions)."
+    },
+    {
+      "id": "indexes-q5",
+      "type": "single",
+      "scenario": "Northstar Support is releasing a ticket dashboard that filters by tenant and status, then orders by update time. The required Firestore composite index is still `BUILDING`, the current application does not issue that query, and the release must avoid customer-visible query failures. What should the release owner do?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Deploy immediately because Firestore falls back to an unrestricted collection scan while an index builds."
+        },
+        {
+          "id": "c",
+          "text": "Delete older documents to make the unfinished index optional for the new query."
+        },
+        {
+          "id": "d",
+          "text": "Restart application instances repeatedly so the Firestore service completes the index sooner."
+        },
+        {
+          "id": "a",
+          "text": "Keep the old query path active or gate the release until the required index reports ready."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A query that depends on an unfinished index can fail, so the release needs a readiness gate or a compatible fallback. Firestore does not substitute an arbitrary full scan, and deleting data or restarting clients does not finish the managed index. See [Firestore index management documentation](https://cloud.google.com/firestore/docs/query-data/indexing)."
     }
   ]
 }

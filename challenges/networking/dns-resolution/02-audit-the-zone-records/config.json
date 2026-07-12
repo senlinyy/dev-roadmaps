@@ -7,6 +7,10 @@
     "/etc/bind/zones/db.example.com": {
       "type": "file",
       "content": "; example.com zone export, generated 2026-04-15\nexample.com.        3600    IN      NS      ns1.example.com.\nexample.com.        3600    IN      NS      ns2.example.com.\nexample.com.        3600    IN      MX      10 mail1.example.com.\nexample.com.        3600    IN      MX      20 mail2.example.com.\nexample.com.        3600    IN      TXT     \"v=spf1 ip4:93.184.216.0/24 -all\"\nexample.com.        3600    IN      TXT     \"google-site-verification=abc123\"\nexample.com.        300     IN      A       93.184.216.34\napp.example.com.    300     IN      A       93.184.216.40\napp.example.com.    300     IN      AAAA    2606:2800:220:1::1234\napi.example.com.    300     IN      A       93.184.216.41\nwww.example.com.    300     IN      CNAME   app.example.com.\nstatus.example.com. 300     IN      CNAME   status.statuspage.io.\n"
+    },
+    "/var/log/dns/provider-import-check.log": {
+      "type": "file",
+      "content": "provider import dry-run for example.com\nOK    imported A example.com. -> 93.184.216.34\nOK    imported A app.example.com. -> 93.184.216.40\nOK    imported AAAA app.example.com. -> 2606:2800:220:1::1234\nOK    imported MX priority 10 mail1.example.com.\nOK    imported MX priority 20 mail2.example.com.\nOK    imported CNAME www.example.com. -> app.example.com.\nWARN  external CNAME status.example.com. -> status.statuspage.io. needs owner verification\nERROR TXT google-site-verification=abc123 missing from import manifest\n"
     }
   },
   "grader": {
@@ -16,8 +20,10 @@
     "expected": [
       "MX 10 mail1.example.com",
       "CNAME app.example.com",
-      "v=spf1"
+      "v=spf1",
+      "WARN",
+      "missing from import manifest"
     ],
-    "requireCommands": ["grep"]
+    "requireCommands": ["cat", "grep", "wc"]
   }
 }

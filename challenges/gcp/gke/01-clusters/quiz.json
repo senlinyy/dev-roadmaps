@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A platform team says the Orders API will run on GKE. What is the first platform boundary to identify?",
+      "scenario": "A platform diagram shows an API Deployment, a Service, and an Ingress, but the author labels all three as \"the cluster.\" What correction should the design review make?",
       "options": [
-        { "id": "a", "text": "The GKE cluster that owns the Kubernetes environment." },
-        { "id": "b", "text": "Only the container image tag." },
-        { "id": "c", "text": "Only the billing account display name." },
-        { "id": "d", "text": "Only a Cloud Run revision." }
+        {
+          "id": "a",
+          "text": "The cluster provides the Kubernetes control plane and nodes; Deployment, Service, and Ingress are workload and traffic objects running on it."
+        },
+        {
+          "id": "b",
+          "text": "Treat the Deployment as the cluster boundary because it owns replica count and replaces failed pods."
+        },
+        {
+          "id": "c",
+          "text": "Treat the Service and Ingress together as the cluster because they expose workloads and route client traffic."
+        },
+        {
+          "id": "d",
+          "text": "Treat each node pool as a separate cluster because node machine type defines the Kubernetes API boundary."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The cluster is the Kubernetes environment where workloads run."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer separates cluster infrastructure from Kubernetes workload objects. Service, Ingress, and Deployment are important, but none of them is the cluster itself. See [Google Cloud cluster architecture documentation](https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture)."
     },
     {
-      "id": "q2",
+      "id": "autopilot-and-standard-q2",
       "type": "single",
-      "scenario": "Why does cluster region and network placement matter?",
+      "scenario": "A platform team needs GPU node pools, custom node configuration, and detailed scheduling control for a machine learning workload. Which GKE mode is the better starting point?",
       "options": [
-        { "id": "a", "text": "They affect cost, IAM, quotas, network paths, and workload placement." },
-        { "id": "b", "text": "They only change the color of the console page." },
-        { "id": "c", "text": "They replace all Kubernetes objects." },
-        { "id": "d", "text": "They make every Pod global." }
+        {
+          "id": "c",
+          "text": "Autopilot, relying on its managed defaults while accepting that the requested custom node configuration may not be available."
+        },
+        {
+          "id": "d",
+          "text": "A managed instance group outside GKE, while keeping Kubernetes scheduling policies responsible for placing pods on those VMs."
+        },
+        {
+          "id": "a",
+          "text": "Standard, because the team needs direct node pool control."
+        },
+        {
+          "id": "b",
+          "text": "Autopilot, because reduced node operations is more important than the stated need to configure specialized node pools directly."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A GKE cluster is managed, but it still lives in concrete GCP placement and network context."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer chooses Standard for node pool control. Autopilot reduces node management, and Firestore or functions are not GKE node pool platforms. See [Google Cloud node pools documentation](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pools)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which facts belong in a first GKE cluster review?",
+      "id": "when-gke-fits-q1",
+      "type": "single",
+      "scenario": "Northstar Retail must launch one stateless HTTP container in two weeks. It has no sidecars, custom controllers, specialized scheduling, or Kubernetes policy requirements, and the small team wants the lowest ongoing platform workload. The proposal chooses GKE only to preserve unspecified future options. What should the architecture review recommend first?",
       "options": [
-        { "id": "a", "text": "Project and region." },
-        { "id": "b", "text": "Cluster mode." },
-        { "id": "c", "text": "Namespaces and network path." },
-        { "id": "d", "text": "Whether every developer likes Kubernetes." }
+        {
+          "id": "d",
+          "text": "Choose Compute Engine so the team can preserve future host-level flexibility, accepting patching and scaling work that the current service does not require."
+        },
+        {
+          "id": "a",
+          "text": "Evaluate Cloud Run first because the workload looks request-driven and does not yet need Kubernetes platform features."
+        },
+        {
+          "id": "b",
+          "text": "Choose GKE Standard now to reserve Kubernetes extension points, even though no current workload or policy consumes them."
+        },
+        {
+          "id": "c",
+          "text": "Choose GKE Autopilot because reduced node management offsets the cluster layer, even though the service needs none of its Kubernetes APIs."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Cluster review should name the platform boundary and its operating context."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer tests whether a simpler request-driven platform fits before adding a cluster. The other choices treat GKE, Firestore, or disks as defaults without matching the workload. See [Google Cloud docs documentation](https://cloud.google.com/run/docs/overview)."
+    },
+    {
+      "id": "when-gke-fits-q2",
+      "type": "multiple",
+      "scenario": "A platform proposal introduces GKE for six services. The team already operates Kubernetes and needs shared admission policy, service discovery, sidecars, and GPU scheduling on a dedicated node pool. Which three facts materially support the GKE choice?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Some workloads depend on sidecars or custom controllers that use Kubernetes APIs."
+        },
+        {
+          "id": "c",
+          "text": "Specialized workloads need explicit scheduling and separation across node pools."
+        },
+        {
+          "id": "d",
+          "text": "The product team wants to avoid owning any platform operations, upgrades, or workload policy."
+        },
+        {
+          "id": "e",
+          "text": "The six services are independent HTTP containers with no Kubernetes API, scheduling, or shared policy requirement."
+        },
+        {
+          "id": "a",
+          "text": "The services need common Kubernetes rollout, policy, and discovery conventions."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Shared Kubernetes controls, Kubernetes-native extensions, and specialized scheduling are concrete GKE requirements. GKE reduces some infrastructure work but does not remove platform ownership, upgrade planning, or workload policy. See [GKE overview](https://cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Three microservices require independent rollouts, service discovery, sidecars, and Kubernetes NetworkPolicy. The platform team has staff to own upgrades and policy. Which statement most strongly supports GKE?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The workload requires Kubernetes APIs and cluster-level policy, and the team can operate that platform responsibly."
+        },
+        {
+          "id": "b",
+          "text": "The service count alone justifies GKE, even if the stated sidecar, policy, and discovery requirements can be removed from the design."
+        },
+        {
+          "id": "c",
+          "text": "NetworkPolicy removes the need to design identity, secrets, ingress, and service-to-service authorization."
+        },
+        {
+          "id": "d",
+          "text": "GKE removes the need to choose external durable data services because Deployments recreate pods after failure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The stated sidecars, rollout model, discovery, and NetworkPolicy are Kubernetes-shaped requirements, and the team has accepted the operating responsibility. Service count alone is not decisive, NetworkPolicy does not replace other security boundaries, and GKE is not a database. See [GKE overview](https://cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview)."
+    },
+    {
+      "id": "autopilot-and-standard-q1",
+      "type": "single",
+      "scenario": "A small product team wants GKE for Kubernetes APIs but does not want to manage node sizing or many node operations. Which mode should they evaluate first?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Standard, using a single default node pool and automatic upgrades while leaving node capacity and maintenance ownership unspecified."
+        },
+        {
+          "id": "d",
+          "text": "A self-managed Kubernetes installation on Compute Engine so the team controls nodes despite wanting less node-level work."
+        },
+        {
+          "id": "a",
+          "text": "Autopilot, because Google manages more node-level operations while the team still deploys Kubernetes workloads."
+        },
+        {
+          "id": "b",
+          "text": "Standard, because Standard removes all node planning by default."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer points to Autopilot for reduced node operations. Standard gives more node control, unmanaged VMs do not provide Kubernetes automatically, and Cloud Storage does not run pods. See [Google Cloud autopilot overview documentation](https://cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview)."
+    },
+    {
+      "id": "when-gke-fits-q3",
+      "type": "single",
+      "scenario": "A batch job writes temporary files and runs for four minutes every hour. It does not need service discovery or Kubernetes APIs. Which concern should be raised before choosing GKE?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Choose GKE because any recurring job benefits from cluster service discovery, even when it has no service-to-service traffic."
+        },
+        {
+          "id": "c",
+          "text": "Choose a dedicated Standard cluster so the four-minute task has reserved nodes and cannot wait for serverless startup."
+        },
+        {
+          "id": "d",
+          "text": "Keep the VM cron design permanently because moving a job from one server generally adds more operational overhead."
+        },
+        {
+          "id": "a",
+          "text": "GKE may add cluster overhead for a job that could fit a simpler batch or serverless compute option."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer questions platform overhead without claiming GKE cannot run jobs. The distractors are too absolute or assume lower cost without evidence. See [Google Cloud kubernetes engine overview documentation](https://cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview)."
     }
   ]
 }

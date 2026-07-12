@@ -1,59 +1,141 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The orders team wants to store idempotency keys so a repeated payment request can be recognized quickly. Each lookup starts with one key, the record can expire after a week, and the data is not joined to order line items. Which design fits best?",
+      "scenario": "A shopping platform wants to store cart documents in Cosmos DB. The application reads each cart by tenant and user ID thousands of times per minute, updates line items in place, and expects predictable latency during peak traffic. What should the design review start with first?",
       "options": [
         {
           "id": "a",
-          "text": "A Cosmos DB container with a partition key based on the idempotency key and a TTL that matches the retry window."
+          "text": "The expected read and write access patterns, especially the partition key path those requests will use."
         },
         {
           "id": "b",
-          "text": "A single SQL table with every retry key and every receipt file as binary columns."
+          "text": "A relational schema with joins as the default, because it can be translated into documents later if needed."
         },
         {
           "id": "c",
-          "text": "A Blob Storage prefix where each key becomes a folder name and the app scans the folder."
+          "text": "The consistency level and multi-region replication plan, because global settings should be chosen before item access paths."
         },
         {
           "id": "d",
-          "text": "A managed disk attached to the current worker so lookup latency stays local to the VM."
+          "text": "The indexing policy, because indexing choices should be finalized before the team studies which requests are most common."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Cosmos DB is a good fit when the access pattern is known and key-based. TTL also matches short-lived idempotency records."
+      "explanation": "Cosmos DB design starts from how the application will actually read and write items, because that drives the partition key and the cost of those operations. The closest distractor is starting with a relational schema, since teams often begin from familiar database modeling, but the article stresses that Cosmos DB should start from item access patterns rather than from relational normalization. Consistency and indexing choices matter, but they follow from understanding the dominant requests rather than replacing that first design step. See [Partitioning and horizontal scaling in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A developer proposes Cosmos DB for order reporting because it can store JSON documents. The report needs customer totals, date ranges, joins to product snapshots, and monthly aggregates. What should the reviewer say?",
+      "scenario": "Telemetry shows that one tenant consumes most of the request units in a shared container, and other tenants experience slower reads whenever that tenant runs a bulk import. Which design area is most likely involved?",
       "options": [
         {
-          "id": "a",
-          "text": "Document storage alone is not enough reason. The read patterns look relational or analytical, so review SQL or analytics options first."
-        },
-        {
           "id": "b",
-          "text": "Cosmos DB is always better for JSON, so move reporting there before modeling queries."
+          "text": "The consistency level, because stronger consistency usually causes one tenant to consume most of the request units in a shared container."
         },
         {
           "id": "c",
-          "text": "Use a random partition key so the write load spreads evenly and query design can wait."
+          "text": "The indexing policy, because indexing can affect RU cost even when traffic distribution across partition keys is healthy."
+        },
+        {
+          "id": "a",
+          "text": "Partition key choice and throughput distribution across logical partitions."
         },
         {
           "id": "d",
-          "text": "Store each monthly report as a blob and stop keeping order details."
+          "text": "Provisioned throughput at the database level instead of the container level, because shared throughput can make every tenant appear hot."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "NoSQL design starts with access patterns. JSON support does not make every reporting workload a good Cosmos DB fit."
+      "explanation": "One tenant starving others in a shared container is classic evidence to review partitioning and RU distribution. The closest distractor is the indexing policy, because indexing absolutely affects RU cost, but the scenario specifically describes one tenant dominating shared capacity, which points first to how requests are distributed across partitions. Consistency level and shared-throughput choices can matter, but they do not explain the skew as directly as the partition-key design. See [Request units in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/request-units)."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A team wants approval for a new Cosmos DB container but has only described the document shape so far. Which two questions have to be answered before the review can judge whether the container design is sound?",
+      "options": [
+        {
+          "id": "a",
+          "text": "What are the highest-volume read and write paths the application will use?"
+        },
+        {
+          "id": "c",
+          "text": "Which consistency level does each request path need, and what is the acceptable tradeoff for read behavior?"
+        },
+        {
+          "id": "b",
+          "text": "Which field will be the partition key, and how evenly will it distribute those requests?"
+        },
+        {
+          "id": "d",
+          "text": "Will throughput be provisioned at the container or database level, and which workloads will share it?"
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The review has to understand the main request paths and the partition key that will distribute them. The closest distractor is the throughput-sharing question, because it is an important production decision, but the article places access patterns and partitioning first because they define whether the container shape even fits the workload. Consistency also matters, but it still comes after the review understands how the app will address and distribute its items. See [Introduction to Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/introduction) and [Partitioning and horizontal scaling in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A team chooses `customerCountry` as the partition key for a global cart container. Review evidence shows that 70 percent of production traffic comes from one country. What is the strongest design warning?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Country can be a sensible partition key for regional analytics, but here the traffic distribution suggests it may concentrate too much load on one value."
+        },
+        {
+          "id": "a",
+          "text": "The partition key may create a hot partition and uneven RU consumption."
+        },
+        {
+          "id": "c",
+          "text": "The real concern is mainly query readability, because partition key choice mostly affects how easily operators browse data in the portal."
+        },
+        {
+          "id": "d",
+          "text": "The hot-tenant risk is low as long as the container has enough total RU, because partition keys matter less once throughput is provisioned generously."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If one value dominates the workload, the partition key can concentrate request units into a hot partition. The closest distractor is the regional-analytics argument, because country can sound sensible as an organizing field, but the review evidence here shows the value distribution is badly skewed for the live access pattern. Extra RU can delay the pain, but it does not remove the partitioning weakness. See [Partitioning and horizontal scaling in Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The same account stores 24-hour session documents and long-lived order records. A developer proposes enabling one common TTL policy everywhere so operations only have to remember one retention setting. What should the review say?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A common TTL policy is operationally simpler, because a single expiry rule reduces mistakes when teams add new containers."
+        },
+        {
+          "id": "c",
+          "text": "A short default TTL can still be used for all containers if durable records explicitly set item-level TTL to never expire."
+        },
+        {
+          "id": "d",
+          "text": "The account should keep one shared TTL policy, then rely on backup restore for long-lived orders that expire unexpectedly."
+        },
+        {
+          "id": "a",
+          "text": "TTL fits temporary state such as sessions, but durable records need a different retention and recovery design."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TTL is a good fit for temporary state, but it is the wrong tool for long-lived records that need durable retention and recovery. The closest distractor is overriding the default TTL at the item level for durable records, because Cosmos DB does support item-level TTL control, but the review still should not flatten temporary sessions and long-lived orders into one casual shared-retention plan without deliberate design. Backup restore is also not a substitute for getting the normal retention behavior right. See [Time to live in Azure Cosmos DB for NoSQL](https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/time-to-live) and [Azure Cosmos DB backup and restore](https://learn.microsoft.com/en-us/azure/cosmos-db/online-backup-and-restore)."
     }
   ]
 }

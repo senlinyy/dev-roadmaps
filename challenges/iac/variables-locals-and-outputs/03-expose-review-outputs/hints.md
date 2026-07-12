@@ -1,1 +1,1 @@
-The bucket resource is already in `s3.tf`. Add the module output surface in `outputs.tf` by referencing the resource attributes.
+Outputs publish selected values from the module. Use managed resource attributes, and describe what each output is for.

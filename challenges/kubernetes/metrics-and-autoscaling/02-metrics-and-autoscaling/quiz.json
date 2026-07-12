@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "cpu-baseline-q1",
+      "type": "single",
+      "scenario": "The orders API has three Pods. Each container currently uses about `350m` CPU, and the HPA target is `70%` average CPU utilization. The Deployment was released without CPU requests, and the HPA reports that it cannot calculate the desired replica count. What change addresses the missing baseline described by this evidence?",
+      "options": [
+        { "id": "a", "text": "Add a `1Gi` memory limit so CPU utilization can be calculated from the memory ceiling." },
+        { "id": "b", "text": "Add a realistic CPU request to each container so live CPU usage can be measured as a percentage of that request." },
+        { "id": "c", "text": "Raise `maxReplicas` because a larger ceiling supplies the missing CPU utilization denominator." },
+        { "id": "d", "text": "Replace the CPU target with Pod restart count because every resource HPA requires a restart metric." }
+      ],
+      "correct": ["b"],
+      "explanation": "A CPU utilization target compares live usage with the container CPU request, so a realistic request provides the required baseline. A memory limit does not define CPU utilization, the replica ceiling does not supply a denominator, and restart count is not the required replacement signal."
+    },
+    {
+      "id": "bottleneck-signal-q2",
+      "type": "single",
+      "scenario": "Checkout latency rises from `180ms` to `1.4s`. API CPU remains near `35%`, while PostgreSQL connections sit at their approved maximum. A test that adds five API replicas increases database connections but does not improve latency. Which response best follows the article's signal-first approach?",
+      "options": [
+        { "id": "a", "text": "Lower the CPU target so HPA adds API Pods sooner, because more HTTP replicas relieve every downstream bottleneck." },
+        { "id": "b", "text": "Scale to the maximum replica count immediately, then use the resulting connection growth as the long-term capacity plan." },
+        { "id": "c", "text": "Use memory utilization as the HPA signal because low CPU proves memory is the limiting resource." },
+        { "id": "d", "text": "Treat database saturation as the bottleneck and improve database capacity or queries before scaling the API further." }
+      ],
+      "correct": ["d"],
+      "explanation": "The test shows that extra API Pods do not relieve the symptom and instead consume more database connections, so database saturation needs attention first. Lowering the CPU target or forcing maximum replicas amplifies the dependency pressure, while low CPU alone does not prove memory pressure."
+    },
+    {
+      "id": "hpa-ceiling-q3",
+      "type": "single",
+      "scenario": "During a flash sale, `describe hpa` shows CPU at `82%` against a `70%` target. `AbleToScale` and `ScalingActive` are true, `ScalingLimited` is true, and the Deployment is healthy at `10/10` replicas. The HPA has `maxReplicas: 10`. What is the most accurate interpretation?",
+      "options": [
+        { "id": "a", "text": "The metric path works and demand asks for more replicas, but the configured maximum is limiting scale-up." },
+        { "id": "b", "text": "Metrics Server is unavailable, so the HPA has guessed both the current CPU value and the desired replicas." },
+        { "id": "c", "text": "The Deployment controller has ignored the HPA because all ten replicas are Ready." },
+        { "id": "d", "text": "The CPU request must be removed because a utilization target above 70 percent disables scaling." }
+      ],
+      "correct": ["a"],
+      "explanation": "The current metric, active condition, and healthy ten-replica Deployment show that the control loop is working, while `ScalingLimited` at the configured ceiling explains why it cannot add more replicas. Missing metrics would not provide this valid CPU reading, Ready replicas do not disable HPA, and CPU requests are needed for utilization."
+    },
+    {
+      "id": "external-queue-q4",
+      "type": "single",
+      "scenario": "A worker Deployment processes queued orders. Worker CPU varies with payload size, but customer delay closely follows queue depth per worker. The platform already exposes a fresh `orders_queue_depth` metric through an external metrics adapter. Which HPA design best matches the workload pressure?",
+      "options": [
+        { "id": "a", "text": "Scale the API Deployment on node memory because queue depth is outside the Kubernetes metrics APIs." },
+        { "id": "b", "text": "Scale the worker Deployment on average CPU because resource metrics are valid for every bottleneck." },
+        { "id": "c", "text": "Scale the worker Deployment with an External metric target for average queued orders per worker." },
+        { "id": "d", "text": "Scale the worker Deployment from its current replica count alone because the queue adapter already chooses capacity." }
+      ],
+      "correct": ["c"],
+      "explanation": "Queue depth per worker is closest to the work that added worker Pods can relieve, and the adapter makes it available as an External metric. Node memory targets the wrong pressure, CPU is noisy for this workload, and current replica count is not a measured demand signal."
+    },
+    {
+      "id": "guardrail-review-q5",
+      "type": "multiple",
+      "scenario": "A load test drives the orders API to `maxReplicas: 10`. CPU remains above target, p95 latency exceeds `300ms`, and PostgreSQL connections are close to their approved budget. Which two actions are supported by the article before the team simply raises the HPA ceiling?",
+      "options": [
+        { "id": "a", "text": "Remove `minReplicas` so the HPA can create extra capacity without respecting a floor." },
+        { "id": "b", "text": "Check node and PostgreSQL capacity, because a higher ceiling must fit dependency and infrastructure budgets." },
+        { "id": "c", "text": "Shorten scale-down stabilization immediately, because removing warm capacity resolves sustained ceiling pressure." },
+        { "id": "d", "text": "Alert on the combination of ceiling pressure and bad user symptoms so the state triggers a capacity decision." }
+      ],
+      "correct": ["b", "d"],
+      "explanation": "A ceiling increase is safe only when nodes and dependencies can absorb more replicas, and sustained ceiling pressure with poor latency deserves an alert and capacity decision. Removing the availability floor does not create safe headroom, and faster scale-down removes capacity while demand is still high."
+    }
+  ]
+}

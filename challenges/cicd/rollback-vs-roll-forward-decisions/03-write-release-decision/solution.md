@@ -12,6 +12,3 @@ decision:
       reason: not needed because the stable task set was already healthy
   owner: Maya
 ```
-
-The release record turns the recovery into shared memory. It shows the action, the evidence, and the paths the team intentionally did not take.
-

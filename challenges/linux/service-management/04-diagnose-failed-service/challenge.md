@@ -1,6 +1,6 @@
 ---
 title: "Diagnose a Failed Service"
-sectionSlug: failure-modes-you-will-hit
+sectionSlug: journalctl-as-service-evidence
 order: 4
 ---
 

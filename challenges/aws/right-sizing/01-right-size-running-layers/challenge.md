@@ -1,7 +1,6 @@
 ---
-title: "Right-Size Running Layers"
-sectionSlug: safe-changes
+title: "Right-Sizing"
 order: 1
 ---
 
-Use each layer-specific scenario to decide what can be tuned safely and what needs more evidence. Right-sizing should protect latency, recovery, observability, and future traffic patterns, not just lower a number.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

@@ -1,0 +1,26 @@
+{
+  "language": "yaml",
+  "filename": "notification-api.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications-prod\n  labels:\n    app.kubernetes.io/part-of: notification-platform\nspec:\n  revisionHistoryLimit: 5\n  progressDeadlineSeconds: 600\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "Deployment API version" },
+      { "path": ["kind"], "equals": "Deployment", "label": "Deployment kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api", "label": "Deployment name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications-prod", "label": "production namespace" },
+      { "path": ["spec", "replicas"], "equals": 3, "label": "desired replica count" },
+      { "path": ["spec", "selector", "matchLabels", "app.kubernetes.io/name"], "equals": "notification-api", "label": "Deployment selector" },
+      { "path": ["spec", "template", "metadata", "labels", "app.kubernetes.io/name"], "equals": "notification-api", "label": "Pod template label" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/notification-api:1.4.3", "label": "release image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "ports"], "containsObject": { "name": "http", "containerPort": 3000 }, "label": "named application port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/readyz", "label": "readiness path" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": "http", "label": "readiness port" },
+      { "path": ["spec", "strategy", "type"], "equals": "RollingUpdate", "label": "rollout strategy" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxSurge"], "equals": 1, "label": "surge capacity" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxUnavailable"], "equals": 0, "label": "availability floor" }
+    ]
+  }
+}

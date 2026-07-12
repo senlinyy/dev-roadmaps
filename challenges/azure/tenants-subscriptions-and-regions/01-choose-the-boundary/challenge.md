@@ -1,7 +1,6 @@
 ---
-title: "Choose The Boundary"
-sectionSlug: tenants
+title: "Tenants, Subscriptions, and Regions"
 order: 1
 ---
 
-Knowledge check on deciding whether a deployment question belongs to the tenant, subscription, resource group, or exact resource.
+Answer the scenarios using the linked article's Azure placement guidance.

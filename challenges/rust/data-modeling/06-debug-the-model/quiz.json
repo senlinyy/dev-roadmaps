@@ -1,59 +1,84 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A learner writes println!(\"{note:?}\") and the compiler says Note does not implement Debug. What should they add while learning?",
+      "scenario": "A notes service passes `title`, `body`, and `author` as three `String` arguments through six functions. A production export swapped body and author because both positions have the same type. The values are created, validated, and stored together. Which redesign most improves the contract?",
       "options": [
-        {
-          "id": "a",
-          "text": "#[derive(Debug)] above the Note type"
-        },
-        {
-          "id": "b",
-          "text": "A Cargo.lock file inside src/"
-        },
-        {
-          "id": "c",
-          "text": "mut before every field"
-        },
-        {
-          "id": "d",
-          "text": "A match arm named Debug"
-        }
+        { "id": "a", "text": "Introduce a `Note` struct with named fields and pass that value or a reference through the workflow" },
+        { "id": "b", "text": "Store the strings in a vector and document that indexes 0, 1, and 2 must keep their current meanings" },
+        { "id": "c", "text": "Join the values with delimiters so each function can split them back into positional data" },
+        { "id": "d", "text": "Keep three arguments and add runtime length checks because length identifies which string is the author" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Deriving Debug lets Rust print a developer-facing representation with :?."
+      "correct": ["a"],
+      "explanation": "A struct gives related data one named shape and lets field names carry meaning at construction and access sites. Vectors, delimited strings, and length conventions retain the positional contract that caused the incident. They also move validation into repeated runtime conventions. [Rust structs](https://doc.rust-lang.org/book/ch05-01-defining-structs.html) describes named product types."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "When should debug output be treated carefully?",
+      "scenario": "A method was changed to `fn summary(self) -> String`. The next build reports:\n\n```text\nerror[E0382]: borrow of moved value: `note`\n  --> src/main.rs:14:21\n12 | println!(\"{}\", note.summary());\n   |                     ---- `note` moved due to this method call\n14 | save_note(&note);\n   |           ^^^^^ value borrowed here after move\n```\n\nThe method only reads fields. Which review change is best?",
       "options": [
-        {
-          "id": "a",
-          "text": "When the output is user-facing and needs intentional formatting."
-        },
-        {
-          "id": "b",
-          "text": "Never; debug output is always the final UI."
-        },
-        {
-          "id": "c",
-          "text": "Only before any structs exist."
-        },
-        {
-          "id": "d",
-          "text": "Only when Cargo.toml is missing."
-        }
+        { "id": "a", "text": "Use `fn summary(&mut self) -> String` because returning a new String requires mutating the source note" },
+        { "id": "b", "text": "Use `fn summary(&self) -> String` so the method borrows the note and the caller retains ownership" },
+        { "id": "c", "text": "Clone the entire note before every call and keep the consuming receiver undocumented" },
+        { "id": "d", "text": "Remove `save_note` because a method call permanently ends the lifetime of every struct value" }
       ],
-      "correct": [
-        "a"
+      "correct": ["b"],
+      "explanation": "A shared receiver matches read-only behavior and preserves the caller's ownership. `&mut self` grants unnecessary mutation, while cloning hides a poor receiver contract and adds work. Consuming `self` is appropriate when the operation intentionally takes the value, which this summary method does not. [Method syntax](https://doc.rust-lang.org/book/ch05-03-method-syntax.html) explains receiver choices."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The current model stores `is_draft`, `is_published`, `is_archived`, and `publish_url: String`. Production contains a row with all three booleans true and an empty publish URL. The valid states are draft, published with a URL, or archived. Which model prevents those combinations most directly?",
+      "options": [
+        { "id": "a", "text": "Replace the booleans with three optional strings so absence can represent each invalid combination" },
+        { "id": "b", "text": "Keep the booleans and run a nightly cleanup that chooses whichever true flag appears first" },
+        { "id": "c", "text": "Use `enum NoteStatus { Draft, Published { url: String }, Archived }` as one field on Note" },
+        { "id": "d", "text": "Make every field public so callers can repair contradictory states after construction" }
       ],
-      "explanation": "Debug output is great for inspection while learning, but permanent user output should be designed intentionally."
+      "correct": ["c"],
+      "explanation": "The enum makes the states mutually exclusive, and the published variant carries the data required only in that state. Cleanup and optional fields permit invalid combinations to exist until runtime. Public mutation further weakens the invariant. [Rust enums](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html) shows how variants model alternatives with associated data."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A release adds `NoteStatus::Scheduled { publish_at: String }`. The compiler identifies five non-exhaustive `match` expressions in rendering, persistence, and notification code. The team is deciding whether to add wildcard arms that reuse Draft behavior. What is the strongest review guidance?",
+      "options": [
+        { "id": "a", "text": "Derive Debug because debug formatting automatically adds missing match behavior" },
+        { "id": "b", "text": "Add `_ => Draft` everywhere because exhaustive checks are compiler noise once an enum has more than three variants" },
+        { "id": "c", "text": "Remove Scheduled from the enum and store its timestamp in a global variable so existing matches keep compiling" },
+        { "id": "d", "text": "Review each decision point and define Scheduled behavior explicitly unless the wildcard policy is genuinely correct for future states" }
+      ],
+      "correct": ["d"],
+      "explanation": "The compiler has found every match that must make a product decision for the new state. Explicit arms preserve that review pressure. A wildcard can be intentional, but using it only to silence diagnostics may assign unsafe default behavior to future variants. Globals and Debug do not define state transitions. [The match control flow construct](https://doc.rust-lang.org/book/ch06-02-match.html) explains exhaustive handling."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A note can have no due date, and that absence is normal. A reviewer proposes `due: String` with an empty string sentinel. Another proposes `due: Option<String>` and matching `Some` or `None` when scheduling reminders. Which decision produces the clearer operational contract?",
+      "options": [
+        { "id": "a", "text": "Use Option because the type forces reminder code to acknowledge both a present date and ordinary absence" },
+        { "id": "b", "text": "Use an empty string because every caller will infer the same undocumented sentinel without validation" },
+        { "id": "c", "text": "Use Result because a note without a due date must be treated as a failed note" },
+        { "id": "d", "text": "Omit the field from Note and keep due dates in a process-global variable shared by all notes" }
+      ],
+      "correct": ["a"],
+      "explanation": "Option models an expected value-or-no-value state and makes both branches visible to callers. An empty string relies on convention, Result would misclassify normal absence as failure, and global state loses the relationship between a note and its date. [Option](https://doc.rust-lang.org/std/option/) documents this representation."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A code review examines the following model before it becomes a public library API:\n\n```rust\n#[derive(Debug)]\nstruct Note {\n    title: String,\n    status: NoteStatus,\n    due: Option<String>,\n}\n\n#[derive(Debug)]\nenum NoteStatus {\n    Draft,\n    Published { url: String },\n    Archived,\n}\n```\n\nWhich conclusions should guide the review? Select all that apply.",
+      "options": [
+        { "id": "a", "text": "The enum prevents a note from being Draft and Published at the same time" },
+        { "id": "b", "text": "Derived Debug is a stable customer-facing serialization contract suitable for long-term API compatibility" },
+        { "id": "c", "text": "Matches can require explicit behavior for each declared status" },
+        { "id": "d", "text": "Option guarantees that every non-empty due-date string is a valid calendar date" },
+        { "id": "e", "text": "The Published variant keeps its URL with the state that requires it" }
+      ],
+      "correct": ["a", "c", "e"],
+      "explanation": "The enum makes statuses exclusive, associated data ties the URL to Published, and exhaustive matches expose missing behavior. Option represents presence, not date validation. Debug is intended for developer inspection and is not a stable serialization or display contract. [Enums and pattern matching](https://doc.rust-lang.org/book/ch06-00-enums.html) and [Debug](https://doc.rust-lang.org/std/fmt/trait.Debug.html) support these distinctions."
     }
   ]
 }

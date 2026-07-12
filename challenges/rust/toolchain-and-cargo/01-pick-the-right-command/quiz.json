@@ -1,115 +1,84 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "You changed a function signature and want the fastest feedback that the project still type-checks. Which command fits best?",
+      "scenario": "A pull request changes a return type from `String` to `Result<String, LoadError>`. The repository has 180 tests that take nine minutes. The author wants the fastest useful feedback on affected call sites before running the full suite. Which first action best fits the development loop?",
       "options": [
-        {
-          "id": "a",
-          "text": "cargo check"
-        },
-        {
-          "id": "b",
-          "text": "cargo doc --open"
-        },
-        {
-          "id": "c",
-          "text": "cargo new"
-        },
-        {
-          "id": "d",
-          "text": "rustup update"
-        }
+        { "id": "a", "text": "Run `cargo check` to type-check the package and surface incompatible callers without waiting for a full build and test run" },
+        { "id": "b", "text": "Run `cargo build --release` first because optimization is required before type errors can be reported" },
+        { "id": "c", "text": "Delete Cargo.lock so Cargo can ignore callers compiled against the previous signature" },
+        { "id": "d", "text": "Run `cargo fmt` because formatting resolves mismatched return types across call sites" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "cargo check asks whether the project compiles and is usually faster than building a runnable binary."
+      "correct": ["a"],
+      "explanation": "`cargo check` is the quickest appropriate compiler pass for a signature change because it validates types without producing the final executable. Tests still matter after the code compiles, while release optimization and formatting address different concerns. Deleting the lockfile changes dependency resolution and does not repair source incompatibilities. [Cargo check](https://doc.rust-lang.org/cargo/commands/cargo-check.html) documents this feedback loop."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "You want to see the output from the binary program in src/main.rs. Which command fits?",
+      "scenario": "A dependency update pull request changes `anyhow = \"1\"` in Cargo.toml and updates Cargo.lock from `1.0.86` to `1.0.95`. CI builds successfully. A reviewer suggests reverting the lockfile because Cargo.toml already declares the dependency. What is the best response for this application repository?",
       "options": [
-        {
-          "id": "a",
-          "text": "cargo run"
-        },
-        {
-          "id": "b",
-          "text": "cargo fmt"
-        },
-        {
-          "id": "c",
-          "text": "cargo clippy"
-        },
-        {
-          "id": "d",
-          "text": "cargo new"
-        }
+        { "id": "a", "text": "Keep only Cargo.lock because the resolved graph also declares the package's public dependency requirements" },
+        { "id": "b", "text": "Keep and review both changes because the manifest states the allowed requirement and the lockfile records the exact resolved graph used by the application" },
+        { "id": "c", "text": "Revert Cargo.lock because application builds should resolve a different dependency graph on every machine" },
+        { "id": "d", "text": "Commit target/debug instead because compiled objects are the portable replacement for dependency metadata" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "cargo run builds and runs the binary target."
+      "correct": ["b"],
+      "explanation": "Cargo.toml and Cargo.lock serve different review purposes: one expresses requirements, the other captures the selected versions. For an application, committing the lockfile supports reproducible builds and makes the resolved update visible. The lockfile does not replace the manifest, and target output is generated and platform-specific. [Cargo manifests](https://doc.rust-lang.org/cargo/reference/manifest.html) and [Cargo.lock](https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html) explain the distinction."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "You added unit tests for a word-count function and want Cargo to execute them. Which command fits?",
+      "scenario": "CI reports three independent failures:\n\n```console\ncargo fmt --check: Diff in src/lib.rs\ncargo clippy -- -D warnings: needless_borrow at src/lib.rs:42\ncargo test: tests::rejects_empty_name FAILED\n```\n\nThe team wants the smallest responsible fix. Which plan follows the evidence?",
       "options": [
-        {
-          "id": "a",
-          "text": "cargo test"
-        },
-        {
-          "id": "b",
-          "text": "cargo build --release"
-        },
-        {
-          "id": "c",
-          "text": "cargo doc --open"
-        },
-        {
-          "id": "d",
-          "text": "rustc --version"
-        }
+        { "id": "a", "text": "Build in release mode because optimization removes Clippy findings and changes failing test expectations" },
+        { "id": "b", "text": "Run `cargo fmt` and treat the other failures as resolved because formatted code has passed lint and behavior checks" },
+        { "id": "c", "text": "Format the code, address or justify the lint, and correct the behavior or expectation behind the failed test" },
+        { "id": "d", "text": "Update rustup because toolchain installation state is the common cause of all three reported findings" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "cargo test builds and runs Rust tests."
+      "correct": ["c"],
+      "explanation": "The output names three separate quality gates. Formatting can fix the diff, Clippy requires a code or policy decision, and the failed test requires behavioral investigation. None of those gates subsumes the others, and optimization does not turn a failing test into a passing contract. [Cargo commands](https://doc.rust-lang.org/cargo/commands/) documents the distinct roles of formatting, linting, testing, and building."
     },
     {
       "id": "q4",
-      "type": "multiple",
-      "scenario": "Which commands are part of normal project feedback rather than project creation?",
+      "type": "single",
+      "scenario": "A release binary works on the build host, but the deployment job copied `target/debug/notes-cli` from a developer laptop into a Linux container with a different target environment. The repository can be built on the deployment runner. What should the team change first?",
       "options": [
-        {
-          "id": "a",
-          "text": "cargo fmt"
-        },
-        {
-          "id": "b",
-          "text": "cargo clippy"
-        },
-        {
-          "id": "c",
-          "text": "cargo test"
-        },
-        {
-          "id": "d",
-          "text": "cargo new rust-notes"
-        }
+        { "id": "a", "text": "Remove Cargo.toml after compilation because manifests cause binaries to require Cargo at runtime" },
+        { "id": "b", "text": "Rename the debug executable to include `release` because the filename controls optimization and target compatibility" },
+        { "id": "c", "text": "Commit the developer's entire target directory so Cargo skips target-specific compilation" },
+        { "id": "d", "text": "Build for the intended target in a controlled runner and publish the resulting release artifact with its build metadata" }
       ],
-      "correct": [
-        "a",
-        "b",
-        "c"
+      "correct": ["d"],
+      "explanation": "Native artifacts must be built for the environment in which they will run. A controlled target build and a release-profile artifact make that contract reviewable. Renaming does not alter machine code, target output is not portable source, and a compiled program does not need Cargo.toml beside it at runtime. [Cargo build](https://doc.rust-lang.org/cargo/commands/cargo-build.html) documents profiles and target selection."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A maintainer needs to understand the public `Parser`, `ParseError`, and `parse` APIs before changing call sites. The crate compiles, but the README is incomplete. Which workflow provides the most direct code-derived view without publishing the crate?",
+      "options": [
+        { "id": "a", "text": "Generate and open local API documentation with Cargo, then confirm behavior with focused tests before editing callers" },
+        { "id": "b", "text": "Inspect Cargo.lock because it contains function signatures and examples for every local public item" },
+        { "id": "c", "text": "Read target object files because generated machine code preserves the clearest module documentation" },
+        { "id": "d", "text": "Run the binary with arbitrary arguments because one execution enumerates every public library API" }
       ],
-      "explanation": "fmt, clippy, and test are normal feedback commands after the project exists. cargo new creates a project."
+      "correct": ["a"],
+      "explanation": "Local generated documentation is derived from the crate's public items and documentation comments, making it the right API map. Tests then verify the behavior that documentation alone cannot prove. Cargo.lock describes dependency resolution, object files are build artifacts, and running one binary path does not enumerate a library surface. [Cargo doc](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) documents the workflow."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A team is designing pre-merge checks for a Rust command-line application. Builds should be reproducible, compiler feedback should arrive early, and merges must reject formatting, lint, and behavior regressions. Which controls directly support that design? Select all that apply.",
+      "options": [
+        { "id": "a", "text": "Run `cargo check` before slower suites so type and borrow failures return quickly" },
+        { "id": "b", "text": "Replace tests with `cargo run -- --help` because one successful execution covers all library branches" },
+        { "id": "c", "text": "Commit and review Cargo.lock for the application so dependency resolution changes are visible" },
+        { "id": "d", "text": "Commit target artifacts from one runner so other targets do not need source compilation" },
+        { "id": "e", "text": "Run formatting, Clippy with the team's warning policy, and tests as separate gates" }
+      ],
+      "correct": ["a", "c", "e"],
+      "explanation": "Early checking, independent quality gates, and a reviewed application lockfile address the stated goals. Generated target artifacts are not a portable source of truth, and a help invocation exercises only one program path. A release build may be added for packaging, but it does not replace these checks. [The Cargo Book](https://doc.rust-lang.org/cargo/) documents the development workflow and build artifacts."
     }
   ]
 }

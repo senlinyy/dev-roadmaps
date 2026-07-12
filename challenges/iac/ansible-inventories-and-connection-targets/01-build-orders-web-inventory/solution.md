@@ -11,4 +11,4 @@ all:
           ansible_host: 10.0.10.22
 ```
 
-The inventory now gives the `orders_web` group two stable host aliases and their connection addresses.
+- The inventory now gives the `orders_web` group two stable host aliases and their connection addresses.

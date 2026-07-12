@@ -1,6 +1,6 @@
 ---
 title: "Inspect NSG Rule Evidence"
-sectionSlug: effective-rules
+sectionSlug: effective-rules-and-ip-flow-verify
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Postmortem a 502 at Checkout"
-sectionSlug: status-codes-what-the-server-tells-you-back
+sectionSlug: methods-status-codes-and-headers
 order: 1
 ---
 

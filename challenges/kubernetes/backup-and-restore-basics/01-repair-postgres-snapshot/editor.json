@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-snapshot.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshot\nmetadata:\n  name: notification-postgres-old\n  namespace: default\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "snapshot.storage.k8s.io/v1", "label": "snapshot API version" },
+      { "path": ["kind"], "equals": "VolumeSnapshot", "label": "snapshot kind" },
+      { "path": ["metadata", "name"], "equals": "notification-postgres-2026-06-28", "label": "snapshot name" },
+      { "path": ["metadata", "namespace"], "equals": "customer-notifications", "label": "snapshot namespace" },
+      { "path": ["spec", "source", "persistentVolumeClaimName"], "equals": "notification-postgres-data", "label": "source claim" }
+    ]
+  }
+}

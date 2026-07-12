@@ -21,5 +21,3 @@ pipeline {
   }
 }
 ```
-
-Three named stages give the Blue Ocean view three checkpoints, so a failure in test no longer hides behind a passing build.

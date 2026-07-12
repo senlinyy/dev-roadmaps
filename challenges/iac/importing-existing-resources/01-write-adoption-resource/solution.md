@@ -15,5 +15,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   }
 }
 ```
-
-The resource block gives Terraform an address for the existing bucket before any import mapping changes state.

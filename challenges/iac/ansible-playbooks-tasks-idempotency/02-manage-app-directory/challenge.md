@@ -1,14 +1,15 @@
 ---
 title: "Manage App Directory"
-sectionSlug: "desired-state-in-real-tasks"
+sectionSlug: "desired-state-modules"
 order: 2
 ---
 
-Add a directory task for the orders app runtime path.
+The orders app needs a stable runtime directory before later tasks write files into it. Add a desired-state task that owns the directory metadata instead of relying on an earlier manual setup.
 
-Requirements:
+Your job:
 
-1. **Path:** `/opt/devpolaris-orders`.
-2. **State:** `directory`.
-3. **Owner and group:** `root`.
-4. **Mode:** `"0755"`.
+1. **Create the app runtime path** at `/opt/devpolaris-orders`.
+2. **Manage it as a directory** owned by `root` and group `root`.
+3. **Set the directory mode** to `0755`.
+
+The grader checks the YAML task fields, not a prose explanation.

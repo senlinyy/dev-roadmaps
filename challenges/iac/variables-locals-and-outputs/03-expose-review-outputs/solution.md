@@ -25,5 +25,3 @@ output "bucket_arn" {
   value       = aws_s3_bucket.orders_invoices.arn
 }
 ```
-
-The outputs expose the selected resource attributes without making every bucket attribute part of the module contract.

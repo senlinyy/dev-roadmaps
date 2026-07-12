@@ -1,80 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Traffic reached 100 percent on the new checkout revision. What makes the next 30 minutes a watch window instead of passive waiting?",
+      "scenario": "Ten minutes into a planned watch window for `orders-api--v31`, the release owner sees Application Insights request telemetry show p95 checkout latency rising from 220 ms to 1.4 s on the candidate revision while error rate remains below the rollback threshold. The release record says the watch window should continue only if latency and failure signals stay near baseline. What should the owner do next?",
       "options": [
         {
           "id": "a",
-          "text": "Named signals, an owner, decision times, and a rollback target."
+          "text": "Pause promotion and investigate the latency signal before declaring the release healthy."
         },
         {
           "id": "b",
-          "text": "A calendar invite with no metrics."
+          "text": "Continue promotion because error rate is the only signal that matters until customer-visible failures start."
         },
         {
           "id": "c",
-          "text": "A promise to check tomorrow."
+          "text": "Ignore the telemetry for now and wait for more user complaints so the team does not overreact to an early metric swing."
         },
         {
           "id": "d",
-          "text": "A successful deployment command."
+          "text": "Hold the current traffic split, gather a few more minutes of comparison data, and decide only if latency stays above the agreed watch-window baseline."
         }
       ],
-      "correct": ["a"],
-      "explanation": "A watch window is active verification with evidence and decision points."
-    },
-    {
-      "id": "q2",
-      "type": "multiple",
-      "scenario": "Which signals belong in a checkout watch window?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Failed request rate for `POST /checkout`."
-        },
-        {
-          "id": "b",
-          "text": "p95 checkout duration."
-        },
-        {
-          "id": "c",
-          "text": "Dependency failures and exceptions."
-        },
-        {
-          "id": "d",
-          "text": "The color of the deployment badge."
-        }
+      "correct": [
+        "a"
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The useful signals connect to user impact and likely failure causes."
+      "explanation": "A watch window exists to evaluate the agreed production signals, and a large latency regression is evidence that the candidate is not yet healthy enough to promote. The closest distractor is the error-rate-only answer, because error thresholds are often formal rollback gates, but the article explicitly treats latency as part of the release decision, not background noise. See [Microsoft Learn: Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview) and [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
     },
     {
-      "id": "q3",
+      "id": "02-choose-rollback-or-fix-forward-q1",
       "type": "single",
-      "scenario": "A health endpoint is green, but Application Insights shows checkout failures rising. What should the team do?",
+      "scenario": "Release `rel-2026-07-09` shifts 10 percent of traffic to a new revision. Every candidate request fails because the app cannot load a required class, while the stable revision remains healthy and compatible with the current dependencies. The team can route traffic back immediately. What is the best first decision?",
       "options": [
         {
-          "id": "a",
-          "text": "Treat health as one layer and investigate the user-path evidence."
-        },
-        {
           "id": "b",
-          "text": "Ignore user failures because health is green."
+          "text": "Keep the candidate live and patch the code in production so the team can avoid another release cycle."
         },
         {
           "id": "c",
-          "text": "Delete the health check."
+          "text": "Leave the candidate at 10 percent and rebuild the image in place, because the stable revision is still absorbing most production traffic."
+        },
+        {
+          "id": "a",
+          "text": "Return traffic to the healthy revision first, then fix the bad candidate away from production traffic."
         },
         {
           "id": "d",
-          "text": "Close the release because the runtime is alive."
+          "text": "Pause traffic increases and debug the candidate while it continues serving a small slice, because the rollback path can wait until the next watch-window checkpoint."
         }
       ],
-      "correct": ["a"],
-      "explanation": "A health check can pass while the business path fails. Verification uses multiple layers."
+      "correct": [
+        "a"
+      ],
+      "explanation": "When the failing boundary is the new binary and a healthy previous revision already exists, rolling traffic back is the smallest, fastest reversible action. The closest distractor is the fix-forward answer, because some failures can be fixed forward, but not when every request is already failing and the safe path is immediately available. See [Microsoft Learn: Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)."
+    },
+    {
+      "id": "03-build-a-release-record-q5",
+      "type": "single",
+      "scenario": "A production release record captures the exact revision, traffic split, Application Insights query links, and the rollback timestamp. During a post-incident review, the team notices the record never says who had authority to approve the rollback. What gap remains?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The release record should add a longer telemetry retention note, because approval identity matters less than keeping the data queryable."
+        },
+        {
+          "id": "a",
+          "text": "The technical evidence is present, but the decision authority for the production action is still unclear."
+        },
+        {
+          "id": "c",
+          "text": "The release record should add the exact rollback command, because naming the approver matters less than preserving the traffic change syntax."
+        },
+        {
+          "id": "d",
+          "text": "The release record should add the staging test evidence again, because production rollback authority can be inferred from the deployment owner."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A release record needs both evidence and decision accountability. The closest distractor is the rollback-command answer, because execution detail is useful in a release record, but it still does not tell the team who had authority to make the production decision. See [Microsoft Learn: Best deployment practices for Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-best-practices)."
+    },
+    {
+      "id": "release-verification-and-rollback-decisions-02-inspect-the-evidence-q2",
+      "type": "single",
+      "scenario": "A retailer shifts 5 percent of production traffic to a new `devpolaris-orders-api` revision after build and staging checks pass. Application Insights shows only candidate requests failing, and each failing trace points to the same downstream dependency while the stable revision remains healthy. The release lead must restore checkout quickly without throwing away useful evidence. What should happen first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase candidate traffic so the team can gather a larger sample before deciding whether the dependency issue is real."
+        },
+        {
+          "id": "c",
+          "text": "Edit the dependency configuration in production immediately because correlated failures already prove the exact fix."
+        },
+        {
+          "id": "d",
+          "text": "Raise the alert threshold during the watch window so the canary can continue while the team investigates the failing dependency."
+        },
+        {
+          "id": "a",
+          "text": "Return candidate traffic to zero, preserve the correlated telemetry, and compare the candidate dependency configuration and identity with the stable revision."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Zeroing the failing candidate restores the healthy path with the smallest traffic change, and the preserved correlated traces then support a targeted comparison. The closest distractor is the immediate configuration edit, because the telemetry does identify a likely boundary, but it does not yet prove which exact candidate difference caused the failure. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "release-verification-and-rollback-decisions-02-inspect-the-evidence-q3",
+      "type": "multiple",
+      "scenario": "Checkout failures appear only in production during a change window. An engineer wants to push a configuration fix based on staging evidence, and the proposed change edits a whole resource group even though the symptom is limited to one app. Which two observations most strongly justify pausing the fix and gathering narrower production evidence first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The proposed explanation is based on staging evidence even though the failure occurs only in production."
+        },
+        {
+          "id": "b",
+          "text": "The affected dependency was not called out in the original release record, even though the current production telemetry points at a narrower issue."
+        },
+        {
+          "id": "d",
+          "text": "The fix would modify a broader Azure scope than the symptom currently describes."
+        },
+        {
+          "id": "c",
+          "text": "The engineer attached an owner name and a short note about how the change would be verified after deployment."
+        }
+      ],
+      "correct": [
+        "a",
+        "d"
+      ],
+      "explanation": "Production-only failures need production evidence, and a broader-than-necessary change increases blast radius before the team has proved the cause. The closest distractor is the missing-release-record detail, because that gap should be corrected, but it is weaker than the two direct reasons to stop a broad production change right now. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "release-verification-and-rollback-decisions-02-inspect-the-evidence-q4",
+      "type": "single",
+      "scenario": "After a failed canary, the Orders runbook contains only one note: `rollback fixed checkout`. The next on-call engineer must be able to identify the exact revision involved, reproduce the telemetry view, inspect nearby dependencies, and know which first recovery action is considered safe. Which replacement entry best supports that need?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Record the symptom, exact Azure resources, repeatable evidence queries or portal views, adjacent dependency checks, and the verified safe first recovery action."
+        },
+        {
+          "id": "a",
+          "text": "Record the incident owner, the final status, and the rollback time, then link to the team's general Azure dashboard."
+        },
+        {
+          "id": "b",
+          "text": "Record the Azure product names and the final error message so responders can search vendor documentation during the next incident."
+        },
+        {
+          "id": "d",
+          "text": "Record the rollback command and candidate revision only, then tell responders to reuse the same command if checkout fails again."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A reusable release record preserves the environment-specific evidence path and the first safe action, not just administrative metadata or a one-command shortcut. The closest distractor is the rollback-command entry, because the exact command is useful, but repeating it without proving the same failure mode can turn one incident lesson into the wrong next response. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "release-verification-and-rollback-decisions-03-choose-the-safe-fix-q2",
+      "type": "single",
+      "scenario": "A Container Apps canary returns Key Vault 403 responses while the stable revision succeeds. The candidate uses a newly assigned managed identity. One engineer proposes sending candidate traffic back to zero and repairing that identity's Key Vault access. Another proposes granting broad subscription permissions and changing health checks, alerts, and traffic settings in the same fix. Which response best limits blast radius and stays easy to verify?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Grant subscription Contributor to the candidate identity so any possible Azure permission gap is removed before the next watch window."
+        },
+        {
+          "id": "c",
+          "text": "Keep the canary live, disable the failing dependency health signal, and finish the rollout while access is repaired in parallel."
+        },
+        {
+          "id": "a",
+          "text": "Return candidate traffic to zero, correct the candidate identity's Key Vault data access, and verify dependency health again before reintroducing traffic."
+        },
+        {
+          "id": "d",
+          "text": "Copy every setting from the stable revision to the candidate without checking which settings were intentionally changed for this release."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The smallest safe fix is to remove failing traffic, repair the identified access boundary, and re-verify before exposure. The closest distractor is the copy-from-stable answer, because configuration drift between revisions can cause issues, but blindly copying everything is a broader and less verifiable change than correcting the specific 403 boundary. See [Microsoft Learn: Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)."
     }
   ]
 }

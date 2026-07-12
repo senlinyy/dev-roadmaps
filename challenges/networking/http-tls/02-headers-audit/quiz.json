@@ -4,198 +4,224 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The frontend started failing browser calls after an API deploy. Staging and prod both return `HTTP/2 200`, but their headers differ:\n\n```text\n# staging\naccess-control-allow-origin: https://app.example.com\naccess-control-allow-methods: GET,POST,OPTIONS\naccess-control-allow-headers: authorization,content-type\nx-request-id: stg-7712\n\n# prod\ncontent-type: application/json\nx-request-id: prod-8841\n```\n\nWhat is the incident finding?",
+      "scenario": "An external probe reports:\n\n```text\n$ nc -vz app.example.com 443\nConnection to app.example.com (203.0.113.25) 443 port [tcp/https] succeeded!\n```\n\nThe browser still displays a privacy warning. What has the probe actually proven?",
       "options": [
         {
           "id": "a",
-          "text": "Prod is missing the CORS response header family, starting with `access-control-allow-origin`"
+          "text": "The certificate is valid for `app.example.com` because every open port 443 listener has a trusted certificate"
         },
         {
           "id": "b",
-          "text": "Prod is broken because a successful API response cannot use status `200`"
+          "text": "The application returned HTTP 200 because the TCP service name is shown as `https`"
         },
         {
           "id": "c",
-          "text": "Staging is broken because CORS headers should appear only on failed responses"
+          "text": "DNS produced an address and TCP port 443 accepted a connection, but certificate validation and HTTP behavior still require separate checks"
         },
         {
           "id": "d",
-          "text": "The `x-request-id` values prove the browser cached an old TLS certificate"
+          "text": "Nginx successfully proxied to the upstream because TCP reachability includes backend health"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "The article explains that browser CORS enforcement depends on `Access-Control-Allow-Origin` and related headers. The HTTP status can still be 200 while the browser blocks JavaScript from reading the response."
+      "explanation": "The connection test proves basic name resolution and TCP reachability to port `443`. TLS identity, certificate trust, and HTTP response semantics happen after that connection opens. An open listener does not prove the certificate, proxy, or app is healthy. [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html) defines the TLS handshake that follows TCP setup."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A public API returns this response during a traffic spike:\n\n```text\nHTTP/2 429\ncontent-type: application/json\nx-ratelimit-limit: 60\nx-ratelimit-remaining: 0\nx-ratelimit-reset: 1713600000\nx-request-id: edge-9912\n```\n\nWhat should the client team do before retrying aggressively?",
+      "scenario": "A platform team has migrated `api.example.com` onto a shared HTTPS listener at `198.51.100.10`, but a legacy hostname remains the default virtual host. A monitoring probe reports the legacy certificate while browsers receive the API certificate. The team reproduces the difference with these commands:\n\n```text\n$ openssl s_client -connect 198.51.100.10:443 </dev/null\nsubject=CN = legacy.example.com\n\n$ openssl s_client -connect 198.51.100.10:443 -servername api.example.com </dev/null\nsubject=CN = api.example.com\n```\n\nWhich explanation identifies the monitoring defect?",
       "options": [
         {
           "id": "a",
-          "text": "Use the rate-limit headers to back off until the reset window instead of treating the response as a server crash"
+          "text": "The first probe omitted SNI, so the listener returned its default certificate instead of selecting the virtual host for `api.example.com`"
         },
         {
           "id": "b",
-          "text": "Ignore the headers because all `4xx` responses mean the server is overloaded"
+          "text": "The second probe bypassed the listener and connected to a different address selected from DNS"
         },
         {
           "id": "c",
-          "text": "Open a TLS incident because rate-limit headers are only sent during certificate failures"
+          "text": "The first probe resumed an old TLS session, so the listener ignored the currently configured certificate"
         },
         {
           "id": "d",
-          "text": "Replace the request body with HTML because `429` requires `text/html` content"
+          "text": "The listener selected certificates from the HTTP Host header, which the first probe sent only after certificate validation"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The status-code section identifies `429` as rate limiting, and the headers section shows APIs communicate limit, remaining count, and reset time through response headers. Retrying without backoff makes the problem worse."
+      "explanation": "SNI carries the requested hostname in the TLS ClientHello so a shared listener can select the matching certificate. Without SNI, the listener can return its default virtual-host certificate. `-servername` does not modify DNS, and certificate selection is deterministic rather than a forward-secrecy rotation. [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html) defines ClientHello extensions and TLS negotiation."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A mobile client fails to parse a successful API response. The capture shows:\n\n```text\nHTTP/2 200\ncontent-type: text/html; charset=utf-8\nx-request-id: api-23f7\n\n{\"id\":\"ord_123\",\"status\":\"paid\"}\n```\n\nWhich diagnosis best matches the header evidence?",
+      "scenario": "After certificate renewal, browsers on long-lived laptops succeed, but a new webhook worker fails:\n\n```text\n$ curl -v https://hooks.example.com/receive\n* SSL certificate problem: unable to get local issuer certificate\n```\n\nThe leaf certificate is current and includes `hooks.example.com`. A clean probe counts only one certificate in the server response. What should be fixed first?",
       "options": [
         {
           "id": "a",
-          "text": "The body looks like JSON, but the `Content-Type` header tells clients to interpret it as HTML"
+          "text": "The HTTP handler status because webhook clients validate the response body before TLS"
         },
         {
           "id": "b",
-          "text": "The status code is in the `2xx` family, so clients must parse the body correctly regardless of headers"
+          "text": "The DNS TTL because recursive caches store intermediate certificates with A records"
         },
         {
           "id": "c",
-          "text": "The request ID changed the JSON syntax before the client received it"
+          "text": "The webhook JSON schema because issuer validation is an application parsing error"
         },
         {
           "id": "d",
-          "text": "The response failed at the DNS layer because JSON cannot be sent over HTTP/2"
+          "text": "The server certificate file so it presents the leaf plus required intermediate certificates as a full chain"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "`Content-Type` tells the receiver how to interpret the body. A 200 status only says the request succeeded; it does not make an incorrect media type safe for clients."
+      "explanation": "A clean client cannot build trust when the server omits required intermediates. Browsers with cached intermediates can hide this server-side mistake. HTTP handlers and payloads are reached only after TLS succeeds, while DNS does not carry the certificate chain. [Let's Encrypt certificate documentation](https://letsencrypt.org/docs/certificates-for-localhost/) explains certificate trust and chain concepts."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A distributed trace investigation starts with this response header from the edge API:\n\n```text\nx-request-id: 7f2c-prod-9911\n```\n\nWhy is this header useful during incident triage?",
+      "scenario": "A checkout client sends:\n\n```text\nPOST /api/orders HTTP/1.1\nHost: app.example.com\nContent-Type: text/plain;charset=UTF-8\n\n{\"sku\":\"book-123\",\"quantity\":1}\n```\n\nThe API returns `415 Unsupported Media Type` and logs `expected application/json`. Which change addresses the evidence?",
       "options": [
         {
           "id": "a",
-          "text": "It lets teams correlate the same request across downstream logs instead of matching by timestamp alone"
+          "text": "Change the request to GET because GET is the only method allowed to carry JSON metadata"
         },
         {
           "id": "b",
-          "text": "It tells the browser which origins are allowed to call the API"
+          "text": "Send the body with `Content-Type: application/json` so the server can select the expected parser"
         },
         {
           "id": "c",
-          "text": "It carries the user's password in a reversible encoding"
+          "text": "Renew the TLS certificate because status 415 is returned during certificate validation"
         },
         {
           "id": "d",
-          "text": "It proves the response can be cached for exactly one hour"
+          "text": "Remove the Host header because virtual-host selection changes every JSON body into plain text"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "The article describes `X-Request-ID` or correlation IDs as traceability headers. They let teams search logs for a single request as it moves through services."
+      "explanation": "The request reached HTTP and the API rejected the declared media type. Labeling the JSON body as `application/json` matches the parser contract. The status is not a TLS error, POST is appropriate for creating an order, and Host is needed for virtual-host routing. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) defines HTTP methods, fields, and response semantics."
     },
     {
       "id": "q5",
-      "type": "multiple",
-      "scenario": "You are building a header-focused incident summary for an API regression. Which response headers from this capture are meaningful evidence covered by the article?\n\n```text\nHTTP/2 200\ncontent-type: application/json; charset=utf-8\ncache-control: public, max-age=60\naccess-control-allow-origin: https://app.example.com\nx-request-id: api-2026-04-15-7712\nserver: envoy\n```",
+      "type": "single",
+      "scenario": "A latency probe reports:\n\n```text\ndns=0.011s connect=0.043s tls=0.089s first_byte=4.812s total=4.836s\n```\n\nDNS, TCP, and TLS values are consistent with the healthy baseline, but users report slow API responses. Where should the investigation start?",
       "options": [
         {
           "id": "a",
-          "text": "`content-type`, because it tells clients how to parse the body"
+          "text": "The DNS zone, because every first-byte delay is caused by recursive resolution"
         },
         {
           "id": "b",
-          "text": "`cache-control`, because it controls response freshness and caching behavior"
+          "text": "The firewall handshake, because `time_starttransfer` measures SYN retransmissions only"
         },
         {
           "id": "c",
-          "text": "`access-control-allow-origin`, because browsers use it for CORS decisions"
+          "text": "The server, proxy, application, or dependency path because most delay occurs after connection and TLS setup but before the first response byte"
         },
         {
           "id": "d",
-          "text": "`x-request-id`, because it supports request tracing through logs"
-        },
-        {
-          "id": "e",
-          "text": "`server`, because it alone proves whether the JSON schema is valid"
+          "text": "The certificate issuer, because the total time proves the root CA responded slowly to each request"
         }
       ],
       "correct": [
-        "a",
-        "b",
-        "c",
-        "d"
+        "c"
       ],
-      "explanation": "Content type, cache control, CORS, and request IDs are all header concepts covered in the article. The `server` header can be operational context, but by itself it does not prove schema validity or explain these browser and cache behaviors."
+      "explanation": "The early phases are fast, while the first byte arrives several seconds later. That points to request handling, upstream work, database or dependency latency, or proxy waiting. Certificate authorities are not contacted for every normal request, and the timing separates DNS and connection setup from server response delay. [Everything curl](https://everything.curl.dev/usingcurl/verbose/writeout.html) documents timing variables and write-out diagnostics."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "A frontend error says, \"blocked by CORS policy.\" The same URL works from a backend job using `curl`, and the API returns `HTTP/2 200` to both clients. What is the best explanation?",
+      "type": "multiple",
+      "scenario": "A frontend at `https://app.example.com` calls `https://api.example.com/orders` with an Authorization header. Direct `curl` succeeds, but the browser blocks the request after an OPTIONS preflight. Which API response headers are relevant to the browser decision? Select all that apply.",
       "options": [
         {
           "id": "a",
-          "text": "CORS is enforced by browsers, so non-browser clients can succeed even when browser JavaScript is blocked by missing allow-origin headers"
+          "text": "`Server`, because the proxy brand determines which browser origins are trusted"
         },
         {
           "id": "b",
-          "text": "CORS is a TCP handshake feature, so `curl` bypasses the transport layer"
+          "text": "`Access-Control-Allow-Origin: https://app.example.com`"
         },
         {
           "id": "c",
-          "text": "A 200 response proves CORS cannot be involved"
+          "text": "`Content-Length`, because body size grants permission to use custom request headers"
         },
         {
           "id": "d",
-          "text": "The backend job works because it automatically rewrites DNS records"
+          "text": "`Access-Control-Allow-Methods` containing the intended HTTP method"
+        },
+        {
+          "id": "e",
+          "text": "`Access-Control-Allow-Headers` containing `authorization` and any other requested non-simple headers"
         }
       ],
       "correct": [
-        "a"
+        "b",
+        "d",
+        "e"
       ],
-      "explanation": "The article notes that CORS is a browser security policy. `curl`, server-side jobs, and mobile apps are not blocked by the browser's JavaScript origin checks, even if the API still needs correct headers for web clients."
+      "explanation": "Browser CORS checks compare the requesting origin, method, and requested headers with the API's allow response. Server branding and content length do not grant cross-origin permission. A non-browser `curl` request can work because CORS is enforced by browsers. [MDN CORS guidance](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) documents preflight and allow headers."
     },
     {
       "id": "q7",
       "type": "single",
-      "scenario": "Users see stale profile data for up to an hour after an API fix. The response header for the profile endpoint is:\n\n```text\ncache-control: public, max-age=3600\ncontent-type: application/json\nx-request-id: profile-4420\n```\n\nWhich header is the primary suspect?",
+      "scenario": "Two public requests both complete TLS and reach Nginx:\n\n```text\n/api/health  -> HTTP/2 502\nerror.log    -> connect() failed (111: Connection refused) while connecting to upstream\n\n/api/report  -> HTTP/2 504\nerror.log    -> upstream timed out while reading response header from upstream\n```\n\nWhich incident summary is accurate?",
       "options": [
         {
           "id": "a",
-          "text": "`cache-control: public, max-age=3600`, because it permits caches to reuse the response for one hour"
+          "text": "Both failures are DNS errors because 5xx responses mean the hostname never resolved"
         },
         {
           "id": "b",
-          "text": "`content-type: application/json`, because JSON responses are always cached permanently"
+          "text": "The 502 points to an unusable upstream connection, while the 504 means Nginx waited for the upstream response and timed out"
         },
         {
           "id": "c",
-          "text": "`x-request-id`, because request IDs force browsers to reuse old bodies"
+          "text": "The 502 proves the client certificate expired, while the 504 proves SNI selected the wrong virtual host"
         },
         {
           "id": "d",
-          "text": "No header can affect freshness, because only DNS TTL controls API response caching"
+          "text": "Both failures should be fixed first by increasing proxy timeouts because refused connections recover with more waiting"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "`Cache-Control` defines how responses can be cached and for how long. A one-hour max-age is a plausible cause of stale API data, while content type and request ID do not define freshness."
+      "explanation": "A refused upstream connection commonly produces 502 because Nginx could not obtain a usable response. A 504 with an upstream timeout means the connection path existed but the response did not arrive in time. DNS and TLS already worked, and raising timeouts does not fix a refused listener. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) defines gateway status semantics."
+    },
+    {
+      "id": "q8",
+      "type": "single",
+      "scenario": "A deployment begins redirecting forever:\n\n```text\n$ curl -L -v https://app.example.com 2>&1\n< HTTP/2 301\n< location: https://app.example.com/dashboard\n< HTTP/2 301\n< location: https://app.example.com/dashboard\n```\n\nNginx terminates TLS and proxies to the app over HTTP. What should be checked first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the public certificate includes the backend's loopback IP as a Subject Alternative Name"
+        },
+        {
+          "id": "b",
+          "text": "Whether the DNS resolver is alternating between A and MX records on each redirect"
+        },
+        {
+          "id": "c",
+          "text": "Whether Nginx forwards the original scheme and the app trusts that proxy context instead of repeatedly forcing HTTPS"
+        },
+        {
+          "id": "d",
+          "text": "Whether the client uses port 22 because redirect responses require an SSH control channel"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The repeated Location value proves an HTTP redirect loop. Behind TLS termination, an app that does not trust `X-Forwarded-Proto` can believe every proxied request arrived over HTTP and redirect it back to the same HTTPS URL. Certificate SANs, DNS record types, and SSH do not explain repeated valid HTTP 301 responses. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) defines redirects and HTTP field semantics."
     }
   ]
 }

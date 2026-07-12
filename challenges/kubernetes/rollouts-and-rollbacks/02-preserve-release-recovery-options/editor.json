@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/customer-notification/notification-api:2026.06.14-2\n          ports:\n            - name: http\n              containerPort: 8080\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "revisionHistoryLimit"], "equals": 5, "label": "revision history limit" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/notification-api:2026.06.14-2", "label": "release image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "ports"], "containsObject": { "name": "http", "containerPort": 8080 }, "label": "named application port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/health/ready", "label": "readiness path" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": "http", "label": "readiness port" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "periodSeconds"], "equals": 5, "label": "readiness period" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "timeoutSeconds"], "equals": 2, "label": "readiness timeout" },
+      { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "failureThreshold"], "equals": 3, "label": "readiness failure threshold" }
+    ]
+  }
+}

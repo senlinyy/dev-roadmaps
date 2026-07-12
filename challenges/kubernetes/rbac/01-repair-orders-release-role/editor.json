@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "orders-release-role.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: orders-release\n  labels:\n    app.kubernetes.io/part-of: orders-release\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "rbac.authorization.k8s.io/v1", "label": "RBAC API version" },
+      { "path": ["kind"], "equals": "Role", "label": "Role kind" },
+      { "path": ["metadata", "name"], "equals": "orders-release", "label": "release Role name" },
+      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["rules"], "equals": [{ "apiGroups": ["apps"], "resources": ["deployments", "replicasets"], "verbs": ["get", "list", "watch", "patch", "update"] }, { "apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"] }], "label": "least-privilege release rules" }
+    ]
+  }
+}

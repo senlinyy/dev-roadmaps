@@ -1,7 +1,7 @@
 ---
 title: "Persistent Disk and Filestore"
-description: "Use Google Cloud Persistent Disk, Hyperdisk, and Filestore for VM and legacy workloads that need block devices, mounted paths, or shared NFS directories."
-overview: "Some workloads still expect Linux paths instead of object APIs or database drivers. This article follows a VM-based rendering workload through block disks, Hyperdisk choices, formatting, mounting, snapshots, regional disks, Filestore NFS, permissions, backups, and Terraform examples."
+description: "Use Google Cloud Persistent Disk, Hyperdisk, and Filestore for VM and legacy workloads that need block devices, mounted paths, shared NFS folders, snapshots, permissions, and locking."
+overview: "Some workloads still need filesystem paths. The guide follows a media rendering workstation and legacy importer through Persistent Disk, Hyperdisk, block storage, formatting, mounting, snapshots, Filestore, NFS, permissions, locking, and AWS anchors."
 tags: ["gcp", "persistent-disk", "filestore", "attached-storage"]
 order: 6
 id: article-cloud-providers-gcp-storage-databases-persistent-disk-filestore
@@ -12,432 +12,313 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Some Workloads Need Attached Storage](#why-some-workloads-need-attached-storage)
-2. [Persistent Disk, Hyperdisk, and the VM Boundary](#persistent-disk-hyperdisk-and-the-vm-boundary)
-3. [Linux Formatting, Mounting, and Growth](#linux-formatting-mounting-and-growth)
-4. [Regional Disks, Snapshots, and Restore Practice](#regional-disks-snapshots-and-restore-practice)
-5. [Filestore for Shared NFS Paths](#filestore-for-shared-nfs-paths)
-6. [Permissions, Locking, and Operating Habits](#permissions-locking-and-operating-habits)
-7. [Terraform Blueprint for VM Storage](#terraform-blueprint-for-vm-storage)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Why Some Software Needs a Disk Path](#why-some-software-needs-a-disk-path)
+2. [Persistent Disk and Hyperdisk](#persistent-disk-and-hyperdisk)
+3. [Block Storage](#block-storage)
+4. [Formatting and Mounting](#formatting-and-mounting)
+5. [Snapshots](#snapshots)
+6. [Filestore and NFS](#filestore-and-nfs)
+7. [Permissions and Locking](#permissions-and-locking)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
 
-## Why Some Workloads Need Attached Storage
-<!-- section-summary: Attached storage gives VM workloads normal operating-system paths when the application interface expects disks, files, and directories. -->
+## Why Some Software Needs a Disk Path
+<!-- section-summary: Persistent Disk, Hyperdisk, and Filestore fit workloads that need operating-system paths rather than object APIs or database drivers. -->
 
-Most modern cloud applications talk to storage through APIs. A web service uploads images to Cloud Storage, writes relational records to Cloud SQL, stores documents in Firestore, and sends analytical events to BigQuery. That style works beautifully when the application code already understands those services.
+Many cloud-native apps can use Cloud Storage for files and Cloud SQL or Firestore for records. Some software still expects a path on a machine. A render tool writes frames to `/mnt/render-cache`. A legacy importer watches `/var/import/incoming`. A media processing workstation reads and writes shared project folders. A commercial package may only support mounted files.
 
-Older software often expects something simpler and lower-level: a path on a machine. A renderer writes frame caches to `/var/lib/render-cache`. A migration tool reads vendor files from `/mnt/incoming`. A commercial application opens lock files, renames directories, and assumes POSIX-style permissions. Rewriting that software to use object APIs can turn a small migration into a risky product rewrite.
+That is the job of attached storage and shared file storage. The app is asking the operating system for a path, not asking a cloud API for an object name. Google Cloud gives you block disks for VM-local filesystems and Filestore for shared NFS paths.
 
-**Attached storage** covers the cloud services that look familiar to the operating system. **Block storage** looks like a disk device, so Linux can format it with `ext4` or `xfs` and mount it at a local path. **File storage** looks like a shared network filesystem, so several VMs can mount the same directory tree over NFS.
+This topic exists for software that cannot easily change its storage behavior. A modern web app might call Cloud Storage with an object name. A legacy media tool may only know how to open `/mnt/media-shared/project-a/source.mov`. The cloud design has to respect that filesystem expectation while still giving the team backup, permissions, and restore controls.
 
-In this article, we will follow Northstar Shop again, but now from the operations side. The checkout platform has a legacy invoice and media renderer running on Compute Engine. Each renderer VM needs a fast local cache at `/mnt/render-cache`, and all renderer VMs need a shared handoff area at `/mnt/media-shared` for incoming source files and completed PDFs. Persistent Disk or Hyperdisk handles the local block device. Filestore handles the shared NFS path.
+The first choice is local path versus shared path. A render cache used by one VM can live on a Persistent Disk or Hyperdisk attached to that VM. A media inbox used by several workers needs a shared filesystem such as Filestore. If you choose the wrong shape, the software may run while coordination, locking, backup, and failure recovery stay unclear.
 
-The first choice is the most important one: one VM-owned disk, or one shared filesystem for many clients. That choice decides which service owns consistency, permissions, backups, and failure recovery.
+A small studio runs render workers on Compute Engine. Each worker needs a fast local cache at `/mnt/render-cache`. Several workers also need a shared handoff folder at `/mnt/media-shared` so the legacy pipeline can drop source files, claim work, and collect rendered outputs.
 
 ![Disk and file share choices](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/disk-file-share-choices.png)
-*The attached-storage choice starts with file behavior. One VM-owned filesystem points to a block disk, while many clients sharing one path points to Filestore.*
+*Use block storage for one VM that needs a disk-like device. Use shared file storage for several clients that need the same filesystem path.*
 
-## Persistent Disk, Hyperdisk, and the VM Boundary
-<!-- section-summary: Persistent Disk and Hyperdisk provide durable network-attached block devices; the VM still owns the filesystem and mount behavior. -->
+## Persistent Disk and Hyperdisk
+<!-- section-summary: Persistent Disk and Hyperdisk are durable block storage options that attach to Compute Engine workloads. -->
 
-**Persistent Disk** is durable block storage for Compute Engine and supported Google Kubernetes Engine use cases. Google Cloud presents the disk to a VM as if it were a physical disk, even though the service stores the data on Google's managed network-attached storage. The disk can outlive the VM. A team can detach it, attach it to another compatible VM, snapshot it, encrypt it, and resize it upward.
+**Persistent Disk** is Google Cloud's durable block storage for Compute Engine. A VM can attach a disk, the operating system can format it, and software can read and write normal filesystem paths. Persistent Disk has types such as balanced, SSD, and extreme choices that trade cost and performance.
 
-**Hyperdisk** is Google Cloud's newer durable block storage family. Google recommends Hyperdisk for the highest performance and advanced features when the machine series supports it. The biggest practical difference for a junior engineer is performance control. Persistent Disk performance depends on the provisioned capacity, so increasing performance often means increasing disk size. Hyperdisk lets teams configure performance separately from capacity for supported types.
+**Hyperdisk** is a newer block storage family for workloads that need more explicit performance choices. Depending on the Hyperdisk type, teams can provision performance characteristics such as IOPS or throughput separately from capacity. It fits high-performance databases, analytics scratch work, and demanding VM workloads after the team has measured what the software needs.
 
-For Northstar's renderer, the cache disk stores temporary rendered frames and a small local work database. The VM owns the filesystem, so a normal single-writer block disk fits. The team starts with a balanced Persistent Disk because the workload needs durable storage, moderate cost, and predictable behavior.
+For the render-cache example, `pd-balanced` is a reasonable starting point because the workload mostly needs durable scratch capacity and ordinary filesystem behavior. If render jobs later spend most of their time waiting on disk reads or writes, the team should measure disk latency, throughput, and queue depth before moving to Hyperdisk. The point is not "newer disk type first." The point is to match the disk family to observed workload pressure.
+
+A Hyperdisk review might say: the render worker needs 1 TiB of space, at least 20,000 IOPS during peak thumbnail generation, and enough throughput for several concurrent video segments. That is the kind of evidence that justifies a more explicit performance disk choice. Without those numbers, the simpler Persistent Disk path teaches the storage lifecycle more clearly.
+
+For AWS readers, Persistent Disk and Hyperdisk fill the block-storage job that EBS fills for EC2. The exact performance types and replication options differ, but the workflow is familiar: create a disk, attach it to a VM, format it, mount it, monitor it, snapshot it, and test restore.
+
+## Block Storage
+<!-- section-summary: Block storage gives a VM a raw disk-like device, and the operating system turns that device into a filesystem. -->
+
+**Block storage** presents storage as blocks to the operating system. The VM sees a disk device. Linux can format that device with a filesystem such as ext4 or xfs, mount it at a path, and let software use normal file operations.
+
+Cloud Storage stores named objects through an object API. A block disk gives a VM something that behaves like a disk. Use block disks for software that expects file locks, directory scans, local caches, or database files.
+
+The low-level idea is simple: the cloud gives the VM a raw device, and the operating system decides how to organize files on it. Before formatting, the device is just addressable storage blocks. After formatting and mounting, your software sees directories and files. That is why block storage feels familiar to Linux tools and older software.
+
+This also explains the responsibility boundary. Google Cloud gives durable disk storage and attachment behavior. Your team chooses filesystem, mount path, permissions, backup plan, and cleanup rules. A block disk can be the right answer, but it brings operating-system storage work with it.
+
+Create a balanced disk for a render cache:
 
 ```bash
 gcloud compute disks create render-cache \
-  --type=pd-balanced \
-  --size=200GB \
-  --zone=us-central1-a
-
-gcloud compute instances attach-disk render-vm-01 \
-  --disk=render-cache \
+  --project=studio-prod \
   --zone=us-central1-a \
-  --device-name=render-cache
-```
-
-The `device-name` matters. Inside Linux, Google creates a stable path under `/dev/disk/by-id/` from that name. Stable device names protect the mount from changing when Linux sees disks in a different order after a reboot.
-
-If the renderer later needs higher IOPS or throughput and runs on a compatible machine type, the team can evaluate Hyperdisk. For example, a render metadata database with heavier write pressure might use Hyperdisk Balanced with explicit performance settings.
-
-```bash
-gcloud compute disks create render-metadata \
-  --type=hyperdisk-balanced \
   --size=500GB \
-  --provisioned-iops=6000 \
-  --provisioned-throughput=250 \
-  --zone=us-central1-a
+  --type=pd-balanced
 ```
 
-Block storage gives the VM a raw device. Linux still needs a filesystem and a mount point before application code can use it.
+Important details in this command:
 
-After creating or resizing a disk, verify the cloud resource before logging into the VM. The `users` field shows whether a VM currently has the disk attached.
+- `--zone=us-central1-a` places the disk in one zone.
+- `--size=500GB` sets capacity and affects performance characteristics for some disk types.
+- `--type=pd-balanced` is a practical starting point for general VM workloads.
+
+Attach it to the render VM:
 
 ```bash
-gcloud compute disks describe render-cache \
+gcloud compute instances attach-disk render-worker-1 \
+  --project=studio-prod \
   --zone=us-central1-a \
-  --format='yaml(name,type,sizeGb,status,users)'
+  --disk=render-cache
 ```
 
-```yaml
-name: render-cache
-type: https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/diskTypes/pd-balanced
-sizeGb: '200'
-status: READY
-users:
-- https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/instances/render-vm-01
-```
+Important details in this command:
 
-## Linux Formatting, Mounting, and Growth
-<!-- section-summary: A block device needs a filesystem, a stable mount path, an fstab entry, and a tested resize process before an application should rely on it. -->
+- `render-worker-1` is the VM that will see the block device.
+- The disk and VM must be in the same zone for this zonal disk attachment.
+- After attachment, the operating system still needs formatting and mounting before software can use a path.
 
-A raw block device is only a stream of blocks. Linux needs a filesystem to organize those blocks into directories and files. Formatting creates that filesystem. Mounting attaches the filesystem to a path such as `/mnt/render-cache`.
+## Formatting and Mounting
+<!-- section-summary: Formatting creates a filesystem on the block device, and mounting makes that filesystem available at a path. -->
 
-After the disk attachment, the renderer VM sees the device path. The team checks the stable name first:
+**Formatting** creates a filesystem on a block device. **Mounting** attaches that filesystem to a directory path. These are Linux operations, so the VM image, filesystem choice, and boot behavior matter.
+
+Formatting is like preparing an empty drive so the operating system can store directories and files on it. Mounting is the step that connects that prepared filesystem to a path such as `/mnt/render-cache`. Until the mount exists, the render software has no normal path to use.
+
+This is a dangerous section in real operations because the commands can destroy data if the wrong device is selected. A beginner should always identify the disk first, confirm it has no existing filesystem that matters, and keep the mount process repeatable through startup automation or `/etc/fstab`.
+
+On the VM, inspect disks first:
 
 ```bash
-ls -l /dev/disk/by-id/google-render-cache
 lsblk
 ```
 
-Then the team formats the disk, creates the mount directory, mounts the filesystem, and writes an `/etc/fstab` entry so the mount returns after reboot. That sequence turns a cloud disk resource into the Linux path that the renderer expects.
-
-```bash
-sudo mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0,discard /dev/disk/by-id/google-render-cache
-
-sudo mkdir -p /mnt/render-cache
-sudo mount -o discard,defaults /dev/disk/by-id/google-render-cache /mnt/render-cache
-
-DISK_UUID=$(sudo blkid -s UUID -o value /dev/disk/by-id/google-render-cache)
-echo "UUID=${DISK_UUID} /mnt/render-cache ext4 discard,defaults,nofail 0 2" | sudo tee -a /etc/fstab
-
-findmnt /mnt/render-cache
-df -h /mnt/render-cache
-```
-
-The `nofail` option keeps the VM boot path more forgiving if the data disk has an attachment problem. Production teams still alert on missing mounts because an application that writes to an empty mount directory can fill the boot disk by accident. A simple startup check can prevent that class of incident:
-
-The `findmnt` and `df` output are the proof that the renderer is using the attached disk rather than writing into an ordinary directory on the boot disk.
+Example output:
 
 ```console
-TARGET            SOURCE                                      FSTYPE OPTIONS
-/mnt/render-cache /dev/disk/by-id/google-render-cache         ext4   rw,relatime,discard
-
-Filesystem      Size  Used Avail Use% Mounted on
-/dev/sdb        196G  1.1G  185G   1% /mnt/render-cache
+NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+sda       8:0    0   20G  0 disk
+└─sda1    8:1    0   20G  0 part /
+sdb       8:16   0  500G  0 disk
 ```
+
+Important details in this output:
+
+- `sdb` is the new 500 GB disk with no mount point yet.
+- The root disk is already mounted at `/`.
+- Formatting the wrong disk can destroy data, so device identification is a real operational step.
+
+Format and mount the new disk:
 
 ```bash
-test -d /mnt/render-cache/lost+found
-findmnt --mountpoint /mnt/render-cache
+sudo mkfs.ext4 -m 0 -F /dev/sdb
+sudo mkdir -p /mnt/render-cache
+sudo mount -o discard,defaults /dev/sdb /mnt/render-cache
+sudo chmod 775 /mnt/render-cache
 ```
 
-Persistent Disk and Hyperdisk can grow. Shrinking requires migration to a smaller replacement disk. A common production runbook increases the cloud disk first, then grows the filesystem inside the guest. For `ext4` without a partition table, the Linux side is small:
+Important details in these commands:
 
-```bash
-gcloud compute disks resize render-cache \
-  --size=300GB \
-  --zone=us-central1-a
+- `mkfs.ext4` creates the filesystem on the new disk.
+- `/mnt/render-cache` is the path the render software uses.
+- `discard` can help with space reclamation on supported disk types.
+- Permissions should match the Linux user that runs the renderer.
 
-sudo resize2fs /dev/disk/by-id/google-render-cache
-df -h /mnt/render-cache
-```
-
-If the disk uses partitions, the team grows the partition before growing the filesystem. If the filesystem uses XFS, the team uses `xfs_growfs` on the mounted path. The exact commands matter less than the habit: resize work belongs in a runbook, and the runbook should include verification before and after.
+For a durable mount across reboot, add a stable device entry to `/etc/fstab` using a persistent disk identifier rather than a device name that may change.
 
 ![Persistent Disk lifecycle](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/persistent-disk-lifecycle.png)
-*A block disk does useful work only after the VM attaches it, Linux formats and mounts it, and the team verifies the path. Snapshot and restore steps belong in the same lifecycle.*
+*The disk lifecycle includes create, attach, format, mount, monitor, snapshot, and restore.*
 
-Now the renderer has a durable local path. The next problem is recovery. A durable disk still needs snapshots, restore tests, and a plan for zone failure.
+## Snapshots
+<!-- section-summary: Snapshots keep point-in-time copies of block disks so teams can restore after corruption, deletion, or failed changes. -->
 
-## Regional Disks, Snapshots, and Restore Practice
-<!-- section-summary: Snapshots protect block-device data across time, while regional disks help with zonal failure when the application has a tested failover path. -->
+A **snapshot** is a point-in-time copy of a disk. Snapshots help after a VM script deletes files, a renderer corrupts cache metadata, an upgrade damages local state, or a restore drill needs a copy of a known-good disk.
 
-A **snapshot** is a point-in-time copy of a disk. Google Cloud snapshots store changed blocks incrementally, so later snapshots can reuse data from earlier ones. Snapshots help with deleted files, bad deployments, failed migrations, and test restores.
+Think of a snapshot as a recoverable photo of the disk at one point in time. Later, you can use that copy source to create a new disk, inspect files, or roll back a broken host path after validation.
 
-A snapshot of a busy filesystem may capture the same kind of state as a sudden power loss. The filesystem journal can recover many cases, but an application such as a database, queue, or renderer index may need its own flush or pause step. For Northstar's renderer cache, the team can rebuild many files from source media, so crash-consistent snapshots are acceptable for the cache. For local metadata databases, the team coordinates with the application first.
+Snapshots need the same seriousness as database backups. If the application is actively writing files, the snapshot may capture a crash-consistent view. That might be fine for a rebuildable cache and risky for a local database. The snapshot plan should say whether the workload must pause, flush, or use application-aware steps before the copy is taken.
 
-One manual maintenance window might look like this:
+For simple caches, a crash-consistent snapshot may be enough because the cache can rebuild some files. For application data, coordinate with the application before taking the snapshot. Stop the service, flush files, or use application-aware scripts for data with consistency requirements.
 
-```bash
-sudo systemctl stop northstar-renderer
-sudo fsfreeze -f /mnt/render-cache
-```
+Manual snapshot flow:
 
 ```bash
+sudo systemctl stop studio-renderer
+sudo sync
+
 gcloud compute snapshots create render-cache-before-upgrade \
+  --project=studio-prod \
   --source-disk=render-cache \
   --source-disk-zone=us-central1-a \
   --storage-location=us
+
+sudo systemctl start studio-renderer
 ```
+
+Important details in this flow:
+
+- Stopping the renderer reduces writes during the snapshot.
+- `sync` asks Linux to flush buffered filesystem writes.
+- `--storage-location=us` controls where snapshot data is stored.
+- Production teams usually automate scheduled snapshots and alert on failures.
+
+Restore practice should create a new disk from the snapshot and mount it on a test VM before anyone trusts the policy:
 
 ```bash
-sudo fsfreeze -u /mnt/render-cache
-sudo systemctl start northstar-renderer
+gcloud compute disks create render-cache-restore \
+  --project=studio-prod \
+  --zone=us-central1-a \
+  --source-snapshot=render-cache-before-upgrade
+
+gcloud compute instances attach-disk render-restore-test \
+  --project=studio-prod \
+  --zone=us-central1-a \
+  --disk=render-cache-restore
 ```
 
-Real teams automate that pattern carefully. Google Cloud supports snapshot schedules and guest flush scripts for Linux application-consistent disk snapshots. The team keeps the freeze period short, tests the pre- and post-snapshot scripts, and alerts when a scheduled snapshot fails. A backup with no restore test is only a hopeful file in another place.
+Important details in these commands:
 
-The snapshot read-back should show `READY`, source disk, and storage locations. A restore drill then creates a new disk from the snapshot and mounts it on a test VM before trusting the snapshot policy.
+- The restored disk is new, so the team can inspect it without replacing production.
+- The test VM should be isolated from the production renderer so no worker accidentally writes to the restored data.
+- The snapshot name should match the incident timeline or scheduled snapshot policy.
+
+On the test VM, mount the restored disk read-only first:
 
 ```bash
-gcloud compute snapshots describe render-cache-before-upgrade \
-  --format='yaml(name,status,sourceDisk,storageLocations)'
+sudo mkdir -p /mnt/render-cache-restore
+sudo mount -o ro /dev/sdb /mnt/render-cache-restore
+find /mnt/render-cache-restore -maxdepth 2 -type f | head
+du -sh /mnt/render-cache-restore
 ```
 
-```yaml
-name: render-cache-before-upgrade
-status: READY
-sourceDisk: https://www.googleapis.com/compute/v1/projects/northstar/zones/us-central1-a/disks/render-cache
-storageLocations:
-- us
+Example output:
+
+```console
+/mnt/render-cache-restore/jobs/job_8842/frame_0001.tmp
+/mnt/render-cache-restore/jobs/job_8842/frame_0002.tmp
+/mnt/render-cache-restore/manifests/render-state.json
+487G    /mnt/render-cache-restore
 ```
 
-Regional disks solve a different problem. A **zonal disk** lives in one zone. A **regional Persistent Disk** synchronously replicates data between two zones in the same region. If `us-central1-a` has a problem, the team can fail over to a VM in the replica zone and attach the regional disk as part of the failover process. The application still needs a tested startup and recovery procedure.
+That output proves the restored disk mounts, expected files exist, and the size roughly matches the known workload. The application owner should still inspect a few files or run a renderer validation before any production replacement.
+
+## Filestore and NFS
+<!-- section-summary: Filestore provides managed NFS file shares for workloads that need the same mounted path from multiple clients. -->
+
+**Filestore** is Google Cloud's managed file storage service. It exposes file shares over **NFS**, Network File System. Several clients can mount the same share and read or write files through normal filesystem paths.
+
+The studio uses Filestore for `/mnt/media-shared`. Ingest workers write source media into `incoming/`. Render workers claim files into `processing/`. Completed outputs land in `complete/`. Support tools can open the same shared tree without copying every file through object storage first.
+
+Create a Filestore instance for the shared media path:
 
 ```bash
-gcloud compute disks create render-cache-regional \
-  --region=us-central1 \
-  --replica-zones=us-central1-a,us-central1-f \
-  --type=pd-balanced \
-  --size=300GB
-```
-
-Regional disks help when one VM owns a stateful path and the business needs faster recovery from a zone outage. The filesystem still follows the single-owner block-storage pattern. When many VMs need to read and write the same directory at the same time, Northstar reaches for Filestore.
-
-## Filestore for Shared NFS Paths
-<!-- section-summary: Filestore gives multiple clients a managed NFS filesystem for shared directories, handoff files, and applications that need file locking. -->
-
-**Filestore** is Google Cloud's managed file storage service. It runs managed file servers that clients can mount over NFS. A Filestore instance exposes a file share, such as `media`, at an IP address. Each VM mounts that share to a local directory path.
-
-Northstar uses Filestore for `/mnt/media-shared`. The ingest worker writes raw source files into `incoming/`. Renderer VMs claim files into `processing/`, write output PDFs into `complete/`, and move broken inputs into `error/`. Every worker sees the same directory tree.
-
-The team creates a zonal Filestore instance for the local rendering fleet. A regional tier would make sense for more critical shared state that needs regional resilience. Enterprise multishares fit GKE-heavy designs that need high availability and multiple shares. Basic HDD and Basic SSD still exist for legacy and simpler file-sharing cases.
-
-```bash
-gcloud filestore instances create render-shared \
-  --location=us-central1-a \
-  --tier=ZONAL \
+gcloud filestore instances create media-shared \
+  --project=studio-prod \
+  --zone=us-central1-a \
+  --tier=BASIC_SSD \
   --file-share=name=media,capacity=1TiB \
-  --network=name=default
+  --network=name=studio-vpc
 ```
 
-After creation, the team reads the instance IP address and mounts the share on each renderer VM:
+Important details in this command:
+
+- `--file-share=name=media,capacity=1TiB` names the exported share and sets capacity.
+- `--network=name=studio-vpc` makes the share reachable inside the chosen VPC.
+- The tier choice should match performance, availability, and cost needs.
+
+Mount the share on a VM after you know the Filestore IP address:
 
 ```bash
-gcloud filestore instances describe render-shared \
-  --location=us-central1-a \
-  --format="value(networks.ipAddresses[0])"
-```
-
-```console
-10.0.1.2
-```
-
-```bash
-sudo apt-get update
-sudo apt-get install -y nfs-common
 sudo mkdir -p /mnt/media-shared
-sudo mount -t nfs \
-  -o hard,timeo=600,retrans=3,rsize=524288,wsize=524288,resvport,tcp \
-  10.0.1.2:/media \
-  /mnt/media-shared
+sudo mount -t nfs 10.42.0.18:/media /mnt/media-shared
 ```
 
-The Filestore mounting guide recommends NFS options such as `hard`, `timeo=600`, `retrans=3`, tuned read and write sizes, and privileged source ports. For supported newer Linux kernels and tiers, `nconnect` can improve throughput by opening multiple TCP connections between the client and server. The exact mount options should match the tier, kernel, and workload, so the team measures with the renderer's real file sizes and avoids relying on a tiny test file.
+Important details in these commands:
 
-After mounting, use `findmnt` and a small write-read-delete test from at least two renderer VMs. That proves the path is mounted and shared, not a local directory with the same name.
+- `10.42.0.18:/media` is the Filestore export path.
+- `/mnt/media-shared` is the local path seen by the application.
+- Persistent mounts should be added carefully to `/etc/fstab` with boot behavior tested.
+
+For AWS readers, Filestore is the GCP anchor for shared NFS-style storage, close to EFS for many Linux shared-file designs. FSx is the broader AWS family for teams that need specific filesystem engines.
+
+## Permissions and Locking
+<!-- section-summary: Shared filesystems need Linux permissions, application ownership, and locking behavior designed before multiple clients write the same path. -->
+
+Shared storage adds coordination work. Linux file permissions decide which users and groups can read or write paths. Application ownership decides which process should create, move, and delete files. Locking behavior decides how two workers avoid processing the same file at the same time.
+
+Locks are agreements between processes. Some software uses operating-system file locks. Some software uses a lock file such as `job_913.lock`. Some pipelines avoid separate lock files and use an atomic move or rename as the claim operation. The important point is that every worker must follow the same rule. A lock file helps little if another worker ignores it and opens the source file directly.
+
+A safe shared workflow usually uses directories with clear meaning:
+
+| Directory | Owner | Purpose |
+|---|---|---|
+| `/mnt/media-shared/incoming` | Ingest worker | New files arrive here |
+| `/mnt/media-shared/processing` | Render workers | Claimed files move here |
+| `/mnt/media-shared/complete` | Render workers | Finished outputs land here |
+| `/mnt/media-shared/error` | Render workers | Failed files move here with logs |
+
+The application should use atomic operations where possible. For example, a worker can move a file from `incoming/` to `processing/worker-17/` to claim it. Keep the source and destination on the same Filestore share so Linux can use a rename operation instead of a copy-and-delete flow.
+
+A tiny worker claim flow might look like this:
 
 ```bash
-findmnt /mnt/media-shared
-echo "render-vm-01 $(date -u +%FT%TZ)" | sudo tee /mnt/media-shared/incoming/mount-check.txt
-cat /mnt/media-shared/incoming/mount-check.txt
+worker_id="worker-17"
+mkdir -p "/mnt/media-shared/processing/${worker_id}"
+
+for source in /mnt/media-shared/incoming/*.mov; do
+  file_name="$(basename "$source")"
+  claimed="/mnt/media-shared/processing/${worker_id}/${file_name}"
+
+  if mv -n "$source" "$claimed"; then
+    echo "claimed ${file_name} for ${worker_id}"
+    ./render-media "$claimed" "/mnt/media-shared/complete/${file_name%.mov}.mp4" \
+      && rm "$claimed"
+  else
+    echo "skipped ${file_name}; another worker claimed it first"
+  fi
+done
 ```
 
-```console
-TARGET            SOURCE        FSTYPE OPTIONS
-/mnt/media-shared 10.0.1.2:/media nfs4   rw,hard,timeo=600,retrans=3
-render-vm-01 2026-06-14T10:45:00Z
-```
+Important details in this flow:
 
-The boot-time mount belongs in `/etc/fstab` or `autofs`. `autofs` is helpful when a VM should boot even if the network filesystem has a temporary issue and only mount the share on first access. A simple `/etc/fstab` entry looks like this:
+- The move from `incoming/` to `processing/worker-17/` is the claim signal.
+- Each worker writes to its own processing directory, which makes stuck work easier to inspect.
+- The command checks the result of `mv`; a failed move means the worker should skip that file.
+- Finished output lands in `complete/`, and failed work should move to `error/` with a log file.
 
-```bash
-echo "10.0.1.2:/media /mnt/media-shared nfs hard,timeo=600,retrans=3,rsize=524288,wsize=524288,resvport,tcp,_netdev,nofail 0 0" | sudo tee -a /etc/fstab
-```
-
-Now several VMs can see the same files. That shared power also creates shared responsibility: permissions, locks, and naming rules need care.
-
-## Permissions, Locking, and Operating Habits
-<!-- section-summary: Filestore access combines Google Cloud IAM for managing instances, POSIX permissions for files, and application rules for safe multi-writer behavior. -->
-
-Filestore uses two access layers that beginners often mix up. Google Cloud **IAM** controls who can create, update, view, or delete Filestore resources. POSIX permissions inside the file share control who can read, write, or execute files after a client mounts the share. Granting someone Filestore Editor still leaves Linux file ownership and mode bits in charge of writes to `/mnt/media-shared`.
-
-For Northstar, the renderer VMs run processes as the `renderer` Linux user and group. The team sets matching users and groups across all renderer VMs so files have consistent ownership everywhere. Then it creates shared directories with group ownership and the setgid bit, which makes new files inherit the directory group.
-
-```bash
-sudo groupadd --gid 2200 mediaworkers
-sudo usermod -aG mediaworkers renderer
-
-sudo mkdir -p /mnt/media-shared/incoming /mnt/media-shared/processing /mnt/media-shared/complete /mnt/media-shared/error /mnt/media-shared/locks
-sudo chgrp -R mediaworkers /mnt/media-shared/incoming /mnt/media-shared/processing /mnt/media-shared/complete /mnt/media-shared/error /mnt/media-shared/locks
-sudo chmod -R 2770 /mnt/media-shared/incoming /mnt/media-shared/processing /mnt/media-shared/complete /mnt/media-shared/error /mnt/media-shared/locks
-```
-
-File locking needs the same production attitude. Filestore supports POSIX features such as file locking, and NFSv4.1 adds richer security options on supported tiers. The application still needs to use locks correctly. A worker can use `flock` around one order or asset:
-
-```bash
-flock /mnt/media-shared/locks/order-o_7818.lock ./render-invoice o_7818
-```
-
-A simple staging protocol also helps. The ingest process writes to `incoming/order-o_7818.tmp`, closes the file, then renames it to `incoming/order-o_7818.ready`. A renderer moves the ready file to `processing/order-o_7818.render-vm-01`, renders it, then writes the result to `complete/order-o_7818.pdf`. Atomic rename operations make partial files much less likely to fool another worker.
-
-Backups finish the shared filesystem story. Filestore backups capture file share data and metadata as point-in-time copies. Standard backups and enhanced backups have different management features, and support varies by tier and restore target. The important production habit is the same as disks: restore a backup into a test instance before an incident forces the first restore attempt.
-
-```bash
-gcloud filestore backups create render-shared-before-import \
-  --instance=render-shared \
-  --instance-location=us-central1-a \
-  --file-share=media \
-  --location=us-central1
-```
-
-The backup output should lead to a read-back. `READY` means the backup exists; it does not prove the application can use restored files. The drill should restore into a separate test instance or share, mount it, and read a known file.
-
-```bash
-gcloud filestore backups describe render-shared-before-import \
-  --location=us-central1 \
-  --format='yaml(name,state,sourceInstance,sourceFileShare,capacityGb)'
-```
-
-```yaml
-name: projects/northstar/locations/us-central1/backups/render-shared-before-import
-state: READY
-sourceInstance: projects/northstar/locations/us-central1-a/instances/render-shared
-sourceFileShare: media
-capacityGb: '1024'
-```
+This file-based claim pattern fits small importers and simple media pipelines. Use a queue or database for coordination once the workflow needs retries, priorities, deadlines, duplicate detection, idempotency keys, worker heartbeats, or human-visible job state. In that design, Filestore stores the bytes and the queue or database owns the work status.
 
 ![Filestore shared workflow](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/filestore-shared-workflow.png)
-*Filestore adds a shared NFS path, but the team still has to manage POSIX users, staging directories, locks, and backup read-backs.*
+*Shared file storage needs workflow rules alongside the mounted path.*
 
-The team now has the operational pieces. The final section shows how the same design usually lands in infrastructure as code.
+## Putting It Together
+<!-- section-summary: Attached and shared storage fit VM-era software that depends on filesystem paths, block devices, snapshots, and NFS semantics. -->
 
-## Terraform Blueprint for VM Storage
-<!-- section-summary: Infrastructure as code keeps disks, attachments, and Filestore instances reviewable, repeatable, and tied to the workload that uses them. -->
+Persistent Disk and Hyperdisk fit software that needs a disk-like device attached to a VM. The required order is create, attach, format, mount, monitor, snapshot, and restore. Filestore fits software that needs a shared NFS path across clients, with permissions and locking designed as part of the workflow.
 
-Manual commands teach the moving parts. Production teams usually encode the storage layout in Terraform or another infrastructure-as-code tool so changes go through review. The Terraform below sketches the same Northstar design: one VM, one attached block disk, and one Filestore share.
+Use Cloud Storage for whole objects if the app can work through an object API. Use Cloud SQL, Firestore, or BigQuery for records, documents, or analytics. Use attached or shared filesystems for software that truly needs operating-system paths.
 
-```hcl
-resource "google_compute_disk" "render_cache" {
-  name = "render-cache"
-  zone = "us-central1-a"
-  type = "pd-balanced"
-  size = 200
+## References
 
-  labels = {
-    app  = "renderer"
-    data = "cache"
-  }
-}
-
-resource "google_compute_instance" "renderer" {
-  name         = "render-vm-01"
-  zone         = "us-central1-a"
-  machine_type = "e2-standard-4"
-
-  boot_disk {
-    initialize_params {
-      image = "debian-cloud/debian-12"
-    }
-  }
-
-  attached_disk {
-    source      = google_compute_disk.render_cache.id
-    device_name = "render-cache"
-    mode        = "READ_WRITE"
-  }
-
-  network_interface {
-    network = "default"
-  }
-}
-
-resource "google_filestore_instance" "render_shared" {
-  name     = "render-shared"
-  location = "us-central1-a"
-  tier     = "ZONAL"
-
-  file_shares {
-    name        = "media"
-    capacity_gb = 1024
-  }
-
-  networks {
-    network = "default"
-    modes   = ["MODE_IPV4"]
-  }
-
-  labels = {
-    app  = "renderer"
-    data = "shared-media"
-  }
-}
-```
-
-Terraform creates the cloud resources, and guest configuration still handles disk formatting, mount directories, and `/etc/fstab` unless the team adds a configuration-management step. In real environments, teams often pair Terraform with startup scripts, Ansible, cloud-init, image baking, or a Kubernetes CSI driver depending on the compute platform. The same rule keeps the design reliable: cloud resource creation, guest OS mounting, application ownership, and restore testing all need ownership.
-
-The Terraform plan is consumed by the platform pipeline, while the VM startup script or configuration-management tool consumes the device name and Filestore IP. A useful review checks both halves: the cloud resources exist, and the guest has a repeatable way to mount them.
-
-```bash
-terraform plan -out=tfplan
-terraform show -no-color tfplan | sed -n '/google_compute_disk.render_cache/,/google_filestore_instance.render_shared/p'
-```
-
-```console
-+ google_compute_disk.render_cache
-+ size = 200
-+ type = "pd-balanced"
-+ google_filestore_instance.render_shared
-+ tier = "ZONAL"
-+ capacity_gb = 1024
-```
-
-## Putting It All Together
-<!-- section-summary: Persistent Disk, Hyperdisk, and Filestore solve different attached-storage jobs, so the right design starts with the application's file behavior. -->
-
-Northstar's renderer needed two storage shapes. The local cache needed a block device owned by one VM, so the team used Persistent Disk and kept Hyperdisk available for higher performance needs. Linux formatted the device, mounted it by a stable `/dev/disk/by-id/` name, persisted the mount in `/etc/fstab`, and included resize checks in the runbook.
-
-The shared media handoff needed one directory tree across many VMs, so the team used Filestore. The VMs mounted the NFS share at `/mnt/media-shared`, used group ownership and setgid directories for predictable permissions, and followed a staging protocol so workers avoided half-written files. IAM controlled Filestore resource management, while POSIX permissions controlled file access.
-
-Recovery ties both choices together. Disk snapshots help restore block-device state. Regional disks help with zonal failure when the application has a failover process. Filestore backups and snapshots protect shared file data. Every protection mechanism needs a restore test, because a backup process that nobody has restored from still leaves a question mark in the incident room.
-
-The practical selection rule is plain. Use a block disk when one VM or workload instance owns a filesystem. Use Filestore when multiple clients need the same shared filesystem. Use Cloud Storage when the application can work with object APIs and can live without POSIX filesystem behavior.
-
-## What's Next
-<!-- section-summary: Attached storage still needs broader retention, restore, and disaster recovery planning across the whole storage module. -->
-
-Persistent Disk and Filestore explain the VM-facing storage pieces. The next article zooms out to backups and retention across storage services, including what teams keep, how long they keep it, where they restore it, and how they prove recovery works before production data is at risk.
-
----
-
-**References**
-
-- [Google Cloud: Choose a disk type](https://cloud.google.com/compute/docs/disks)
-- [Google Cloud: Persistent Disk documentation](https://cloud.google.com/compute/docs/disks/persistent-disks)
-- [Google Cloud: Hyperdisk overview](https://cloud.google.com/compute/docs/disks/hyperdisks)
-- [Google Cloud: Create and manage regional disks](https://cloud.google.com/compute/docs/disks/regional-persistent-disk)
-- [Google Cloud: Format and mount a non-boot disk on Linux](https://cloud.google.com/compute/docs/disks/format-mount-disk-linux)
-- [Google Cloud: Change the size of a Persistent Disk](https://cloud.google.com/compute/docs/disks/resize-persistent-disk)
-- [Google Cloud: Create disk snapshots](https://cloud.google.com/compute/docs/disks/create-snapshots)
-- [Google Cloud: Create Linux application-consistent disk snapshots](https://cloud.google.com/compute/docs/disks/creating-linux-application-consistent-pd-snapshots)
-- [Google Cloud: Filestore overview](https://cloud.google.com/filestore/docs/overview)
-- [Google Cloud: Filestore service tiers](https://cloud.google.com/filestore/docs/service-tiers)
-- [Google Cloud: Create a Filestore instance](https://cloud.google.com/filestore/docs/creating-instances)
-- [Google Cloud: Mount Filestore file shares](https://cloud.google.com/filestore/docs/mounting-fileshares)
-- [Google Cloud: Filestore supported protocols](https://cloud.google.com/filestore/docs/about-supported-protocols)
-- [Google Cloud: Filestore access control](https://cloud.google.com/filestore/docs/access-control)
-- [Google Cloud: Filestore backups](https://cloud.google.com/filestore/docs/backups)
+- [Persistent Disk documentation](https://cloud.google.com/compute/docs/disks/persistent-disks) - Documents durable block storage for Compute Engine VMs.
+- [Hyperdisk documentation](https://cloud.google.com/compute/docs/disks/hyperdisks) - Documents Hyperdisk options for performance and capacity planning.
+- [Format and mount a persistent disk](https://cloud.google.com/compute/docs/disks/format-mount-disk-linux) - Documents Linux formatting and mount steps for attached disks.
+- [Persistent Disk snapshots](https://cloud.google.com/compute/docs/disks/snapshots) - Documents disk snapshot creation and restore behavior.
+- [Filestore documentation](https://cloud.google.com/filestore/docs) - Official documentation for managed NFS file shares.
+- [Mount Filestore file shares](https://cloud.google.com/filestore/docs/mounting-fileshares) - Documents client mount steps for Filestore shares.
+- [Filestore access control](https://cloud.google.com/filestore/docs/access-control) - Documents network and permissions controls for Filestore access.

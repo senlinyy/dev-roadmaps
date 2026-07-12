@@ -1,0 +1,23 @@
+{
+  "language": "yaml",
+  "filename": "ingress.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: checkout-web\n  namespace: checkout\n  labels:\n    app.kubernetes.io/part-of: checkout\n    app.kubernetes.io/managed-by: platform-team\n  annotations:\n    devpolaris.io/owner: checkout-team\nspec:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "networking.k8s.io/v1", "label": "Ingress API version" },
+      { "path": ["kind"], "equals": "Ingress", "label": "Ingress kind" },
+      { "path": ["metadata", "name"], "equals": "checkout-web", "label": "Ingress name" },
+      { "path": ["metadata", "namespace"], "equals": "checkout", "label": "checkout namespace" },
+      { "path": ["spec", "ingressClassName"], "equals": "public", "label": "public Ingress class" },
+      { "path": ["spec", "rules", 0, "host"], "equals": "shop.devpolaris.example", "label": "public checkout hostname" },
+      { "path": ["spec", "rules", 0, "http", "paths", 0, "path"], "equals": "/checkout", "label": "checkout path" },
+      { "path": ["spec", "rules", 0, "http", "paths", 0, "pathType"], "equals": "Prefix", "label": "path family matching" },
+      { "path": ["spec", "rules", 0, "http", "paths", 0, "backend", "service", "name"], "equals": "checkout-web", "label": "checkout Service backend" },
+      { "path": ["spec", "rules", 0, "http", "paths", 0, "backend", "service", "port", "name"], "equals": "http", "label": "named Service port" },
+      { "path": ["spec", "tls", 0, "hosts"], "includes": "shop.devpolaris.example", "label": "TLS hostname" },
+      { "path": ["spec", "tls", 0, "secretName"], "equals": "shop-devpolaris-example-tls", "label": "TLS Secret" }
+    ]
+  }
+}

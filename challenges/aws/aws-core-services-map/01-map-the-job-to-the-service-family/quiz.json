@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "The DevPolaris orders team has a working container behind an internal test endpoint. Product now wants customers to reach `orders.devpolaris.com` over HTTPS without talking directly to app tasks. Which service family should the team map first?",
-      "options": [
-        { "id": "a", "text": "Traffic: DNS, VPC routing, and a load balancer as the public entry point." },
-        { "id": "b", "text": "Compute: a larger place for the Node.js process to run." },
-        { "id": "c", "text": "Data: a database or bucket to hold checkout records." },
-        { "id": "d", "text": "Signals: logs and alarms for runtime evidence." }
-      ],
-      "correct": ["a"],
-      "explanation": "The job is reachability from a public name to a controlled front door, so the traffic family comes first. Compute is already running the code, data stores records, and signals explain behavior after the request path exists."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A review says the DevPolaris orders API already builds a Docker image and should run as a steady backend service. The team wants AWS to manage the host capacity while they define CPU, memory, environment, networking, and logs. Which map box fits the job?",
-      "options": [
-        { "id": "a", "text": "Compute, using ECS with Fargate to run container tasks." },
-        { "id": "b", "text": "Storage, using S3 to hold the container image and task settings." },
-        { "id": "c", "text": "Access, using IAM as the place where application code executes." },
-        { "id": "d", "text": "Cost, using Budgets to choose where the process runs." }
-      ],
-      "correct": ["a"],
-      "explanation": "A long-running containerized service is a compute decision, and ECS with Fargate matches the article's first fit. S3 stores objects, IAM grants permissions, and Budgets warn on spend, but none of those run the application process."
-    },
-    {
-      "id": "q3",
-      "type": "single",
-      "scenario": "The DevPolaris orders API creates `prod/2026-05/orders.csv` every night so finance can download it later. The file does not need SQL joins or a mounted server disk. Which service family and shape fit best?",
-      "options": [
-        { "id": "a", "text": "Data: object storage such as S3 for files addressed by bucket and key." },
-        { "id": "b", "text": "Compute: Lambda because every file belongs in a function." },
-        { "id": "c", "text": "Traffic: Route 53 because finance needs a friendly name." },
-        { "id": "d", "text": "Access: IAM because permissions replace storage." }
-      ],
-      "correct": ["a"],
-      "explanation": "The job is storing and fetching a generated file by key, so S3 in the data family is the natural fit. Lambda may produce a file but is not the storage location, Route 53 names endpoints, and IAM controls who can write or read the object."
-    },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "During startup, the DevPolaris orders task logs this error:\n\n```text\nAccessDeniedException: assumed-role/orders-api-task-role is not authorized to perform secretsmanager:GetSecretValue on orders/prod/database-url\n```\n\nWhich map layer should the team inspect first?",
+      "scenario": "The orders container starts successfully and then application code uses the AWS SDK to retrieve the current database credential. The call fails with:\n\n```log\nAccessDeniedException: assumed-role/orders-api-task-role is not authorized to perform secretsmanager:GetSecretValue on orders/prod/database-url\n```\n\nWhich access path should the team inspect first?",
       "options": [
-        { "id": "a", "text": "Access: the IAM role, action, resource, and whether the task should read that secret." },
-        { "id": "b", "text": "Traffic: the DNS record for `orders.devpolaris.com`." },
-        { "id": "c", "text": "Compute: replace ECS with EC2 because roles do not apply to containers." },
-        { "id": "d", "text": "Cost: the monthly budget for the production account." }
+        {
+          "id": "b",
+          "text": "Access: inspect only the secret resource policy, even though the denial names the task role's missing action."
+        },
+        {
+          "id": "c",
+          "text": "Inspect the task execution role used by the ECS agent, even though this denied SDK call names the application task role."
+        },
+        {
+          "id": "a",
+          "text": "Inspect the application task role, the denied action and secret resource, and whether this task should read that secret."
+        },
+        {
+          "id": "d",
+          "text": "Access: attach the managed SecretsManagerReadWrite policy to the task role to restore service quickly."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The error names a caller, action, and resource, which is the IAM access sentence from the article. DNS would matter if users could not reach the front door, EC2 would not remove the need for permissions, and budget data does not explain an authorization failure."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application code made this Secrets Manager call after the container started, and the denial names the task-role session. The task role therefore needs narrowly scoped permission to the required secret. The task execution role is the relevant identity when the ECS agent injects a referenced secret before startup, not when application code calls the AWS API at runtime. Broad Secrets Manager administration permission would exceed the workload's requirement.\n\nLearn more in [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)."
     },
     {
-      "id": "q5",
-      "type": "multiple",
-      "scenario": "The DevPolaris orders team wants a first health dashboard that follows the article's map instead of listing random AWS products. Which signals match the map for a load-balanced ECS service backed by RDS?",
+      "id": "q-pick-compute-and-data-services-3",
+      "type": "single",
+      "scenario": "When a receipt image lands in an S3 bucket, DevPolaris needs a small job to resize it and write a thumbnail. The work is short, event-driven, and does not need a long-running web process. Which compute service fits best?",
       "options": [
-        { "id": "a", "text": "Application logs in a CloudWatch log group such as `/ecs/orders-api`." },
-        { "id": "b", "text": "Load balancer 5xx metrics and target group health." },
-        { "id": "c", "text": "ECS task CPU, memory, desired count, and running count." },
-        { "id": "d", "text": "A list of every AWS service released this year." }
+        {
+          "id": "b",
+          "text": "Run a continuously available Fargate worker that polls an SQS queue fed by S3 events."
+        },
+        {
+          "id": "c",
+          "text": "Run the existing image-processing package on a small EC2 Auto Scaling group triggered through SQS."
+        },
+        {
+          "id": "d",
+          "text": "Use an S3 Batch Operations job with Lambda only after collecting uploads into scheduled batches."
+        },
+        {
+          "id": "a",
+          "text": "Lambda, because a small function can run when the upload event arrives."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The useful signals follow the boxes that traffic and code actually pass through: app logs, load balancer health, and ECS task health. A broad service-release list might be interesting, but it does not show whether this architecture is healthy."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Lambda matches a small event-driven job like reacting to an upload. ECS and EC2 can run workers, so they are plausible, but they add a long-running service or server model that the scenario does not need. DynamoDB stores key-based records and does not execute resize code.\n\nLearn more in [AWS Lambda concepts](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)."
+    },
+    {
+      "id": "q-read-access-and-signals-5",
+      "type": "single",
+      "scenario": "A CI pipeline for DevPolaris deploys the orders API and fails while registering a task definition:\n\n```log\nUser: arn:aws:iam::123456789012:role/devpolaris-deploy-role is not authorized to perform iam:PassRole on arn:aws:iam::123456789012:role/orders-api-task-role\n```\n\nWhich explanation best fits the article's access model?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The deployment role is the caller, `iam:PassRole` is the action, and the task role is the resource being passed."
+        },
+        {
+          "id": "b",
+          "text": "The deployment role can pass the task role, but the trust policy on the task role does not name ECS tasks."
+        },
+        {
+          "id": "c",
+          "text": "The task execution role lacks permission to pull the image, so ECS reports the denial as `iam:PassRole`."
+        },
+        {
+          "id": "d",
+          "text": "The deployment role lacks `ecs:RegisterTaskDefinition`, which IAM reports using the role referenced by the task definition."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "IAM decisions can be read as caller, action, resource, and conditions. Here the deploy role lacks permission to pass the task role. The other options reuse real AWS nouns, but they do not match the actors or action named in the error.\n\nLearn more in [Granting permissions to pass an IAM role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html)."
+    },
+    {
+      "id": "q-debug-with-the-map-5",
+      "type": "multiple",
+      "scenario": "The DevPolaris orders service had a one-zone incident. A review finds one app task, one subnet, no tested database restore, and no owner tag on the production resources. Which comments correctly use the cost and resilience part of the map?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep backups and test restore steps before treating the recovery plan as real."
+        },
+        {
+          "id": "d",
+          "text": "Increase the desired task count in the same subnet and treat the database backup schedule as sufficient recovery evidence."
+        },
+        {
+          "id": "a",
+          "text": "Run at least two app tasks across more than one Availability Zone for a better first production shape."
+        },
+        {
+          "id": "c",
+          "text": "Add service, environment, and owner tags so cost and ownership are easier to trace."
+        },
+        {
+          "id": "e",
+          "text": "Add a second Availability Zone for the tasks but keep the database, backups, and restore procedure unchanged."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "The article's first resilience shape includes multiple tasks, multiple AZs, backups, restore testing, and useful tags for ownership and cost review. Removing logs is wrong because observability still gives evidence when resilience mechanisms fail or recover.\n\nLearn more in [AWS disaster recovery options](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html)."
+    },
+    {
+      "id": "q-debug-with-the-map-4",
+      "type": "single",
+      "scenario": "The finance export job logs `upload complete`, but finance cannot find the CSV. The log line says:\n\n```text\nbucket=devpolaris-orders-export\nkey=prod/2026-05/orders.csv\n```\n\nThe documented bucket is `devpolaris-orders-exports`. What is the best next check?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Data and configuration: verify whether the application account has a second approved export bucket with the singular name."
+        },
+        {
+          "id": "a",
+          "text": "Data and configuration: compare the bucket and key the app wrote with the expected S3 location."
+        },
+        {
+          "id": "c",
+          "text": "Data and configuration: inspect S3 replication status before confirming which bucket and key the worker actually used."
+        },
+        {
+          "id": "d",
+          "text": "Signals: search other task streams for the same request before treating this one successful upload line as authoritative."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence shows a data-location mismatch: the app wrote to a similarly named bucket without the final `s`. Compute replacement, load balancer checks, and deleting logs are plausible distractions from other map boxes, but the log already gives the concrete storage clue.\n\nLearn more in [Amazon S3 object keys](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html)."
+    },
+    {
+      "id": "q-follow-the-domain-path-1",
+      "type": "single",
+      "scenario": "A customer opens `https://orders.devpolaris.com`. The intended path is:\n\nRoute 53 hosted zone is devpolaris.com. Alias target is dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com. ALB listener is HTTPS 443. Target group is devpolaris-orders-api-tg.\n\nWhat does DNS prove in this path?",
+      "options": [
+        {
+          "id": "b",
+          "text": "It proves the alias target currently resolves to an AWS load balancer name, but not that the listener or certificate is correct."
+        },
+        {
+          "id": "c",
+          "text": "It proves Route 53 health evaluation considers the alias target available when evaluate-target-health is enabled."
+        },
+        {
+          "id": "d",
+          "text": "It proves clients can resolve an address for the entry point, but not that security groups permit the connection."
+        },
+        {
+          "id": "a",
+          "text": "It tells the browser which entry point the friendly name should reach."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "DNS answers the location question: where should this name go? TLS answers the identity and trust question, and target health comes later in the path. Keeping those promises separate makes custom-domain debugging much easier.\n\nLearn more in [Route 53 concepts](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html)."
+    },
+    {
+      "id": "q-prove-the-name-with-tls-4",
+      "type": "single",
+      "scenario": "An engineer verifies the public name with hostname checking enabled:\n\n```text\n$ openssl s_client -connect orders.devpolaris.com:443 -servername orders.devpolaris.com -verify_hostname orders.devpolaris.com\nsubject=CN = orders.devpolaris.com\nX509v3 Subject Alternative Name: DNS:orders.devpolaris.com\nVerify return code: 0 (ok)\n```\n\nWhat does this evidence prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The server presented a certificate trusted for `orders.devpolaris.com` during the TLS handshake."
+        },
+        {
+          "id": "b",
+          "text": "It proves the ALB selected the certificate whose subject matches the requested SNI name, but not that the client trusted its chain."
+        },
+        {
+          "id": "c",
+          "text": "It proves the certificate chain was accepted, but hostname authorization still requires matching `orders.devpolaris.com` against the SAN."
+        },
+        {
+          "id": "d",
+          "text": "It proves TCP and TLS negotiation reached a listener, while application and target health remain untested."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The explicit hostname check, matching SAN, and `Verify return code: 0` together show that the server presented a chain accepted for `orders.devpolaris.com`. SNI or a matching subject alone would not prove hostname validation, and this handshake still says nothing about the HTTP route, target health, or database path.\n\nLearn more in [OpenSSL certificate verification](https://docs.openssl.org/master/man1/openssl-s_client/)."
     }
   ]
 }

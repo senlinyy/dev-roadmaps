@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Swap Usage"
-sectionSlug: swap-when-it-helps-and-when-it-kills-you
+sectionSlug: swap-and-memory-pressure
 order: 5
 ---
 

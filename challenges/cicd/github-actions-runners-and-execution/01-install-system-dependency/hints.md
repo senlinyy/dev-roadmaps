@@ -1,1 +1,1 @@
-Ubuntu runners use `apt-get` as their package manager. The package that provides `pg_config` for PostgreSQL C extensions is `libpq-dev`. Remember that you should update the package index first with `apt-get update` before installing.
+This failure is below Python: the runner needs the PostgreSQL client development headers before `pip install` compiles the dependency. Put the operating-system package step before dependency installation and refresh the package index first.

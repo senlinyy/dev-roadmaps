@@ -1,6 +1,6 @@
 ---
 title: "Write the Release Runbook"
-sectionSlug: what-a-deployment-runbook-does
+sectionSlug: from-checklist-to-executable-runbook
 order: 1
 ---
 

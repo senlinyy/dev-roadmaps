@@ -36,5 +36,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   tags   = local.common_tags
 }
 ```
-
-The bucket is now the resource Terraform owns, while the name and tags remain easy to review in locals.

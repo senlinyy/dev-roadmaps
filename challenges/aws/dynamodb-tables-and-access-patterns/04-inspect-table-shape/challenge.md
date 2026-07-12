@@ -1,6 +1,6 @@
 ---
 title: "Inspect Table Shape"
-sectionSlug: sample-table-shape
+sectionSlug: tables-items-and-keys
 order: 4
 ---
 

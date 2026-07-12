@@ -1,6 +1,6 @@
 ---
 title: "Open, Edit, Save, Quit"
-sectionSlug: survival-basics-open-edit-save-quit
+sectionSlug: open-edit-save-and-quit
 order: 1
 ---
 

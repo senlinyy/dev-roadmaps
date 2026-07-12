@@ -1,7 +1,7 @@
 ---
 title: "GKE"
-description: "Understand when Google Kubernetes Engine is the right compute shape for containers that need Kubernetes as their operating layer."
-overview: "GKE is Kubernetes-shaped compute on GCP. This article explains clusters, Autopilot and Standard modes, Pods, Deployments, Services, Ingress, Workload Identity, node responsibility, and the tradeoff against Cloud Run."
+description: "Understand the Google Kubernetes Engine fit for containers that need Kubernetes as their operating layer."
+overview: "GKE is Kubernetes-shaped compute on GCP through core vocabulary, Autopilot and Standard modes, rollout flow, identity, networking, policy, and tradeoffs against simpler runtimes."
 tags: ["gcp", "gke", "kubernetes", "containers", "pods"]
 order: 5
 id: article-cloud-providers-gcp-compute-application-hosting-gke
@@ -13,241 +13,150 @@ aliases:
 
 ## Table of Contents
 
-1. [Why the Team Reaches for GKE](#why-the-team-reaches-for-gke)
-2. [What GKE Is](#what-gke-is)
-3. [Autopilot and Standard](#autopilot-and-standard)
-4. [Clusters, Control Plane, and Nodes](#clusters-control-plane-and-nodes)
-5. [Pods and Deployments](#pods-and-deployments)
-6. [Services, Ingress, and Gateway](#services-ingress-and-gateway)
-7. [Workload Identity Federation for GKE](#workload-identity-federation-for-gke)
-8. [Sidecars and Co-Location](#sidecars-and-co-location)
-9. [Policy, Security, and Node Responsibility](#policy-security-and-node-responsibility)
-10. [A Sample Orders Platform Manifest](#a-sample-orders-platform-manifest)
-11. [Rollout and Verification](#rollout-and-verification)
-12. [The Cloud Run Tradeoff](#the-cloud-run-tradeoff)
-13. [Putting It All Together](#putting-it-all-together)
+1. [Why a Team Reaches for GKE](#why-a-team-reaches-for-gke)
+2. [Kubernetes and GKE](#kubernetes-and-gke)
+3. [Cluster, Control Plane, and Node](#cluster-control-plane-and-node)
+4. [Pod, Deployment, Service, and Ingress](#pod-deployment-service-and-ingress)
+5. [Autopilot and Standard](#autopilot-and-standard)
+6. [A Multi-Service Platform Example](#a-multi-service-platform-example)
+7. [Rollout and Verification](#rollout-and-verification)
+8. [Workload Identity and Secrets](#workload-identity-and-secrets)
+9. [Policy, Sidecars, and Custom Controllers](#policy-sidecars-and-custom-controllers)
+10. [The Cloud Run Tradeoff](#the-cloud-run-tradeoff)
+11. [Putting It All Together](#putting-it-all-together)
+12. [References](#references)
 
-## Why the Team Reaches for GKE
-<!-- section-summary: GKE earns its place when the team needs Kubernetes as the shared platform API for many containers, policies, and controllers. -->
+## Why a Team Reaches for GKE
+<!-- section-summary: A managed Kubernetes platform fits many services that need shared platform rules; one simple app usually needs only a smaller runtime. -->
 
-Imagine the checkout team started with one **Cloud Run** service called `checkout-api`. It accepted HTTPS requests, talked to a database, emitted logs, and scaled without anyone thinking about servers. That was a good first shape because the team had one stateless web service and the main goal was shipping quickly.
+One service can be simple. A small contact-form API may run happily on Cloud Run with a container, endpoint, scaling rules, identity, and logs. Many services with shared platform rules may need a different operating layer.
 
-Six months later, the same product has a different operating problem. Checkout now has an `orders-api`, a `pricing-api`, an `inventory-sync` worker, a fraud scoring adapter, and a payment webhook handler. The platform team also wants a service mesh proxy, consistent network policy, internal path routing, Kubernetes-native deployment checks, and a custom controller that creates per-team database resources from a YAML file.
+The difference is not about Kubernetes being "more advanced." The difference is about the work the organization wants the platform to do. One app needs a place to run. A platform of many apps may need shared rules for rollout, network policy, service identity, sidecars, namespaces, admission checks, and internal traffic.
 
-This is the moment where **Kubernetes itself** is the reason to choose the runtime. Kubernetes is an open source platform API for running containers, connecting them, updating them, and attaching policy to them. Teams describe the desired state of their workloads as Kubernetes objects, and controllers keep working until the live system matches those objects.
+Imagine an internal commerce platform with a catalog API, pricing API, checkout API, fraud scoring service, async workers, shared traffic policy, strict namespace boundaries, and a platform team that already reviews every workload through standard deployment files. The application teams need more than a container host. They need a common API for rollout, service discovery, policy, identity, and platform extensions.
 
-**Google Kubernetes Engine**, usually shortened to **GKE**, is Google Cloud's managed Kubernetes service. Google manages the Kubernetes control plane, integrates the cluster with Google Cloud networking, identity, logging, monitoring, and release channels, and gives your team a standard Kubernetes API surface. The team still designs the application platform, but it does that through Kubernetes objects instead of one-off scripts around individual containers.
+That is where **GKE**, Google Cloud's managed Kubernetes service, can make sense. GKE is valuable for production contracts that require Kubernetes itself; a simple app usually fits a smaller runtime such as Cloud Run first.
 
-The beginner-friendly rule is simple enough for the first decision: **start with Cloud Run when one stateless container service is enough, and consider GKE when the platform needs Kubernetes features as part of the product architecture**. Those features include multiple cooperating services, shared namespace policy, Kubernetes Services and Ingress or Gateway routing, sidecar containers, custom controllers and operators, and common governance across teams.
+The decision should feel practical. If the team mainly wants "run this container behind HTTPS," Cloud Run is usually the cleaner path. If the team wants "every service follows the same Kubernetes deployment, network, identity, and policy rules," GKE gives the shared operating layer for that contract.
+
+## Kubernetes and GKE
+<!-- section-summary: Kubernetes is the orchestration API, and GKE is Google's managed Kubernetes service. -->
+
+**Kubernetes** is an orchestration system for running containerized applications through a declarative API. Declarative means you send desired state to the platform, such as "run three copies of this app image," and controllers work to keep reality aligned with that desired state.
+
+**GKE** is Google Cloud's managed Kubernetes service. Google runs and integrates major parts of the Kubernetes platform for you, including the managed control plane. GKE also connects Kubernetes to Google Cloud networking, IAM, logging, monitoring, load balancing, node options, and security features.
+
+The commerce platform uses GKE because the organization wants one Kubernetes-based way to deploy many internal services. The platform team can create namespaces, require labels, enforce policy, attach identity, inject helpers, and expose HTTP routes with a consistent review process.
+
+This is a platform decision. If your team only needs one public API and no Kubernetes policy or extension layer, Cloud Run is usually easier to operate.
+
+For AWS readers, GKE maps most directly to EKS. ECS and Fargate are useful comparison points for managed containers without the Kubernetes API surface. EKS and GKE both give Kubernetes, while Cloud Run and App Runner usually ask for less platform operations work.
 
 ![GKE as a shared platform API](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/gke-platform-api.png)
-*GKE earns its place when the team wants a shared platform vocabulary for many containers, policy, ingress, workload identity, and platform controls.*
+*GKE makes sense for teams that use Kubernetes as the shared platform language for many services, policies, and release controls.*
 
-## What GKE Is
-<!-- section-summary: GKE is managed Kubernetes on Google Cloud, so the team works with Kubernetes objects while Google operates major cluster components. -->
+## Cluster, Control Plane, and Node
+<!-- section-summary: A GKE cluster has a managed control plane and worker capacity where application workloads run. -->
 
-A **container** packages an application process with its runtime dependencies. Kubernetes gives those containers a control system: it places them on machines, restarts them when they fail, scales them, connects them with stable network names, and lets teams manage that behavior through the Kubernetes API. Google Cloud's GKE documentation describes GKE as a managed implementation of Kubernetes, which itself came from Google's long experience operating large production workloads.
+A **cluster** is the boundary where Kubernetes resources live. The commerce platform might create a production cluster named `commerce-prod` in `us-central1`. Teams deploy their application objects into that cluster under approved namespaces.
 
-In our checkout story, GKE is the shared place where the platform team can say, "Here is how backend services run in production." The orders team brings a container image. The platform gives them namespaces, service accounts, ingress rules, network policy, rollout checks, and guardrails that every team uses in the same way.
+The **control plane** is the management layer of the cluster. It exposes the Kubernetes API, stores cluster state, runs controllers, and schedules work. In GKE, Google manages the control plane for both Autopilot and Standard clusters.
 
-The main object types show up quickly. These names will keep appearing as the checkout platform grows from one container into several coordinated services:
+A **node** is worker capacity that runs application containers. In GKE Standard, nodes are Compute Engine VMs in your project, grouped into node pools that the platform team manages. In GKE Autopilot, Google manages the nodes and provisions capacity around the workloads you submit.
 
-| Concept | Beginner definition | Checkout example |
+Use the checkout API to see the pieces working together. The developer sends a Deployment manifest to the cluster. The Kubernetes API receives that manifest and the control plane stores the desired state: three Pods should run image `checkout-api:2026.07.04` in the `checkout` namespace. The scheduler then chooses suitable worker capacity for each Pod based on resource requests, policy, and available capacity. Finally, nodes pull the image and run the containers.
+
+```bash
+kubectl apply -f k8s/checkout-api.yaml
+
+kubectl get deployment checkout-api \
+  --namespace checkout
+
+kubectl get pods \
+  --namespace checkout \
+  --selector app=checkout-api \
+  --output wide
+```
+
+Healthy output should show the desired replica count and the nodes running the Pods:
+
+```console
+deployment.apps/checkout-api configured
+NAME           READY   UP-TO-DATE   AVAILABLE
+checkout-api   3/3     3            3
+
+NAME                            READY   STATUS    NODE
+checkout-api-6f8f7d7d7b-2m9zx   1/1     Running   gke-commerce-prod-pool-a-1
+checkout-api-6f8f7d7d7b-q7t4p   1/1     Running   gke-commerce-prod-pool-b-3
+checkout-api-6f8f7d7d7b-z81rk   1/1     Running   gke-commerce-prod-pool-c-2
+```
+
+The interpretation is the whole beginner story. The Deployment is the desired state. The control plane stores and watches that desired state. The scheduler found places for the Pods. The nodes are the worker machines that actually run the containers. If the Deployment says `3/3` and each Pod is `Running` and `Ready`, the platform reached the first layer of the request.
+
+Those three terms explain the platform shape. The cluster is the boundary. The control plane accepts desired state. Nodes provide the worker capacity. Next comes the workload vocabulary inside that cluster.
+
+## Pod, Deployment, Service, and Ingress
+<!-- section-summary: These Kubernetes objects describe how app containers run, update, receive internal traffic, and receive HTTP traffic. -->
+
+A **Pod** is the smallest deployable unit Kubernetes manages. It usually contains one application container, and it can also include tightly coupled helper containers that share networking and storage with the main app.
+
+A **Deployment** is a Kubernetes object that keeps the requested number of Pods running and handles updates. The checkout API Deployment might ask for three replicas of image `checkout-api:2026.07.04`.
+
+A **Service** gives a stable internal network name to a changing set of Pods. Pods can be replaced during rollouts or failures, so other applications should call the Service name instead of individual Pod IPs.
+
+An **Ingress** is a Kubernetes object for HTTP routing into Services. In GKE, Ingress can provision Google Cloud Application Load Balancers. Many newer platform designs also evaluate Gateway API, which gives a more expressive shared gateway model for HTTP routing.
+
+Walk one request and one rollout through those objects. A user calls `https://commerce.example.com/checkout`. The Ingress or Gateway receives the HTTP route and points it at the `checkout-api` Service. The Service uses its selector, `app=checkout-api`, to find the current ready Pods. The caller uses the stable Service name while Kubernetes updates the Pod list behind it.
+
+Now picture a release. The Deployment changes from image `2026.07.04` to `2026.07.05`. Kubernetes creates a new ReplicaSet for the new Pod template, starts new Pods, waits for their readiness probes, and reduces the old Pods after the new ones can receive traffic. If a node fails, the Deployment still owns the desired count, so replacement Pods are scheduled somewhere else. The Service keeps selecting Pods with `app=checkout-api`, so the route can keep pointing at the same Service while Pod membership changes underneath it.
+
+The ownership chain is the key practical detail:
+
+| Object | What it owns | Evidence a beginner can check |
 |---|---|---|
-| **Cluster** | A Kubernetes environment with a control plane and worker capacity. | `gke-checkout-prod` hosts the checkout backend services. |
-| **Namespace** | A named space inside the cluster for grouping resources and applying policy. | `checkout` holds the orders API, pricing API, and their policies. |
-| **Pod** | The smallest deployable unit in Kubernetes, usually one application container plus any tightly coupled helper containers. | One `orders-api` Pod runs the app container and a database proxy sidecar. |
-| **Deployment** | A controller-backed object that keeps the requested number of Pods running and handles updates. | `orders-api` asks for three replicas during normal traffic. |
-| **Service** | A stable network name and virtual IP that points to matching Pods. | `orders-api.checkout.svc.cluster.local` routes to healthy orders Pods. |
-| **Ingress or Gateway** | A Kubernetes way to route external HTTP traffic into Services. | `checkout.example.com/orders` routes to the orders Service. |
-| **ServiceAccount** | A Kubernetes identity that a Pod can run as. | `orders-api-ksa` identifies the orders workload inside the cluster. |
+| **Deployment** | Desired Pod template, replica count, rollout history | `kubectl rollout status deployment/checkout-api --namespace checkout` |
+| **Pod** | One running copy of the app container and any helper containers | `kubectl get pods --namespace checkout --selector app=checkout-api` |
+| **Service** | Stable internal name and selector for ready Pods | `kubectl describe service checkout-api --namespace checkout` |
+| **Ingress or Gateway** | External HTTP route into a Service | `kubectl describe ingress checkout-api --namespace checkout` |
 
-Notice how the runtime has grown beyond "run this image." The platform now has a vocabulary for identity, rollout, networking, and policy. That vocabulary matters because the checkout team wants every service to follow the same production rules instead of inventing those rules again for each container.
+The basic request path now has clear layers:
+
+| Layer | Commerce platform example | Job |
+|---|---|---|
+| **Ingress or Gateway** | `commerce.example.com/checkout` | Routes external HTTP traffic into the platform. |
+| **Service** | `checkout-api.checkout.svc.cluster.local` | Gives the checkout app a stable internal name. |
+| **Deployment** | `checkout-api` with three replicas | Manages rollout and desired replica count. |
+| **Pod** | One app container plus a local proxy helper | Runs the actual application process. |
 
 ![Kubernetes request and rollout path through Deployment, Pods, Service, and Ingress](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/kubernetes-request-rollout-path.png)
-*The Deployment creates Pods, the Service gives those Pods a stable name, and Ingress or Gateway routes customer traffic only after readiness checks pass.*
+*Ingress or Gateway routes to a Service, the Service selects Pods, and the Deployment manages the Pods through rollout.*
 
 ## Autopilot and Standard
-<!-- section-summary: Autopilot shifts node operations to Google, while Standard keeps more infrastructure control with your platform team. -->
+<!-- section-summary: Autopilot shifts node management to Google, while Standard gives the platform team more direct node control. -->
 
-GKE has two main modes: **Autopilot** and **Standard**. The mode decides how much node and infrastructure responsibility your team keeps. This choice should happen before the first production cluster exists, because it affects security defaults, scaling, node access, operating system choices, upgrade work, and cost planning.
+GKE has two main operating modes: **Autopilot** and **Standard**. The mode decides how much node responsibility your team keeps.
 
-**GKE Autopilot** is the managed mode where Google manages the nodes, node scaling, many security settings, and infrastructure configuration. You still submit normal Kubernetes manifests, but Google provisions and manages worker capacity based on the workload requirements in those manifests. For an application team that wants Kubernetes APIs without a large cluster operations team, Autopilot is usually the clean starting point.
+**GKE Autopilot** lets the team submit Kubernetes workloads while Google manages nodes, scaling of worker capacity, and many infrastructure settings. Application and platform teams still own manifests, namespaces, policy, identity, resource requests, rollout health, and app behavior.
 
-**GKE Standard** gives the team more direct control over node pools. A node pool is a group of worker nodes with a shared configuration, such as machine type, operating system image, labels, taints, accelerators, or upgrade behavior. Standard makes sense when the team needs specific Compute Engine machine families, GPUs or TPUs with particular scheduling rules, privileged platform agents, custom node-level configuration, or a migration path that already depends on hand-tuned Kubernetes nodes.
+**GKE Standard** gives the platform team direct control over node pools. That can matter for special machine types, GPUs, local SSDs, privileged agents, custom node configuration, or migration patterns that already depend on node-level control.
 
 | Decision area | Autopilot | Standard |
 |---|---|---|
-| **Node management** | Google manages node configuration, scaling, and many security constraints. | The platform team creates and manages node pools, or selectively uses Autopilot workloads inside Standard where supported. |
-| **Scaling** | GKE scales node quantity and size around Pods in the cluster. | The team configures node pools, Cluster Autoscaler, node auto-provisioning, and workload autoscaling. |
-| **Security defaults** | Workload Identity Federation for GKE and several hardening settings are preconfigured. | Shielded GKE Nodes are default, while Workload Identity Federation and other controls need deliberate configuration. |
-| **Hardware control** | Autopilot supports many production workloads and offers ComputeClasses for some needs. | Standard gives the broadest control over machine types, node operating systems, GPUs, TPUs, Local SSDs, and specialized node pools. |
-| **Cost conversation** | Planning focuses on requested running Pod resources and the current Autopilot pricing rules. | Planning focuses on node capacity, utilization, and the cost of resources on nodes. |
+| **Node work** | Google manages nodes and many infrastructure defaults. | The platform team manages node pools and more infrastructure choices. |
+| **Hardware control** | Good default for many services. | Broader control over machine families, accelerators, node labels, and taints. |
+| **Security defaults** | Several hardening choices are managed by the platform. | More direct responsibility for cluster and node configuration. |
+| **Cost review** | Focus on requested workload resources and Autopilot pricing. | Focus on node capacity, utilization, and unused headroom. |
 
-For the checkout platform, Autopilot is a strong first production choice. The team wants Kubernetes policy, Services, Ingress or Gateway routing, sidecars, and Workload Identity Federation, while custom kernel modules and hand-managed node images sit outside the current requirement. If a later fraud model needs a specialized GPU node pool, that specific requirement can justify Standard or a separate cluster.
+For the commerce platform, Autopilot is a strong first choice if the team needs Kubernetes APIs and policy without a large node-operations burden. Standard is justified for real node-control requirements.
 
-## Clusters, Control Plane, and Nodes
-<!-- section-summary: A GKE cluster has a Google-managed control plane and worker capacity that runs Pods, with node responsibility depending on the mode. -->
+## A Multi-Service Platform Example
+<!-- section-summary: GKE earns its complexity through shared platform policy, network rules, identity, and extensions across several services. -->
 
-A **cluster** is the boundary where Kubernetes resources live. It has a **control plane**, which is the management layer that exposes the API server, schedules Pods, runs controllers, and stores cluster state. It also has **nodes**, which are the worker machines that actually run application Pods.
+The commerce platform has enough shared rules to justify Kubernetes. The checkout API needs to call pricing and catalog. The fraud service needs restricted access to sensitive data. The platform team wants every service to carry labels, resource requests, health probes, network policy, logging sidecars or agents, and workload identity. A custom controller may register approved services with an internal portal.
 
-In GKE, Google manages the control plane in both Autopilot and Standard. That means Google operates the API server and core control plane components for the cluster. In Autopilot, Google also manages the worker nodes. In Standard, the nodes are Compute Engine virtual machines in your Google Cloud project, and the platform team manages node pools, upgrades, sizing, and special configuration.
+Those requirements explain why GKE enters the design. The goal is not "run one container." The goal is a shared platform where many teams deploy through the same API and inherit the same guardrails.
 
-For a beginner, the easiest way to picture a rollout is to follow one `orders-api` Deployment. A developer changes the image tag in YAML and applies it. The Kubernetes API server accepts the desired state. The Deployment controller creates a new ReplicaSet. The scheduler chooses nodes for the new Pods. On each node, the kubelet asks the container runtime to start the containers.
-
-That chain explains why GKE is useful and why it adds responsibility. The team gets a powerful control loop for many services, but the team also needs clear ownership for cluster access, namespaces, image policy, upgrades, resource requests, alerts, and emergency rollback. Autopilot reduces the node work, while Standard gives more control and asks for more operational maturity.
-
-## Pods and Deployments
-<!-- section-summary: Pods group tightly connected containers, and Deployments keep the desired number of Pods running through rollouts and rollback. -->
-
-A **Pod** is the smallest deployable unit Kubernetes manages. A Pod contains one or more containers that share network and storage context. In normal web-service work, one Pod usually has one main application container. Multiple containers in one Pod make sense when they form one tightly coupled unit, such as an app plus a local proxy or log shipper.
-
-A **Deployment** manages a set of Pods for an application workload. The Deployment says which image to run, how many replicas should exist, which labels identify the Pods, and how updates should roll out. Kubernetes creates ReplicaSets behind the scenes and replaces Pods gradually when the Pod template changes.
-
-For the checkout team, the Deployment is the daily unit of change. The team updates through Kubernetes rather than through SSH sessions on nodes. A normal release changes the `orders-api` image from `2026-06-01` to `2026-06-14`, applies the manifest, watches the rollout, checks logs, and rolls back if the new version fails readiness checks.
-
-The common verification flow looks like this in a real terminal session. The useful part is seeing which Kubernetes object each command checks during a release:
-
-```bash
-gcloud container clusters get-credentials gke-checkout-prod --location=us-central1
-kubectl apply -f k8s/orders-api.yaml
-kubectl rollout status deployment/orders-api --namespace checkout
-kubectl get deployment,pods --namespace checkout --selector app=orders-api
-kubectl logs deployment/orders-api --namespace checkout --container app --tail=100
-```
-
-A healthy first pass shows the cluster credentials updated, the Deployment configured, the rollout completed, and Pods ready. The `kubectl logs` line should show the application startup message or recent request logs from the new Pods.
-
-```console
-Fetching cluster endpoint and auth data.
-kubeconfig entry generated for gke-checkout-prod.
-deployment.apps/orders-api configured
-deployment "orders-api" successfully rolled out
-deployment.apps/orders-api   3/3     3            3           4m
-pod/orders-api-6f8f7d7d7b-2m9zx   1/1   Running   0   2m
-2026-06-27T20:32:11Z INFO orders-api listening port=8080 version=2026.06.27.1
-```
-
-The important habit is reading the Deployment status before celebrating a release. `READY 3/3` means three requested replicas are ready. `AVAILABLE 3` means three replicas are available to serve traffic. A Pod stuck in `CrashLoopBackOff`, `ImagePullBackOff`, or `Pending` points the team toward app crashes, image permissions, or scheduling and resource problems.
-
-## Services, Ingress, and Gateway
-<!-- section-summary: Services give changing Pods a stable internal address, and Ingress or Gateway connects HTTP traffic from load balancers to those Services. -->
-
-Pods are replaceable. A Pod can disappear because a node drains, a rollout replaces it, autoscaling changes capacity, or the container crashes. Because each Pod has its own IP address, other workloads should avoid calling Pod IPs directly.
-
-A **Service** solves that problem by giving a stable network identity to a changing group of Pods. The Service uses labels to find matching Pods and publishes a stable DNS name and virtual IP. In our checkout platform, the pricing API can call `http://orders-api.checkout.svc.cluster.local` and let Kubernetes route the request to one healthy orders Pod.
-
-An **Ingress** is a Kubernetes object for HTTP routing into Services. In GKE, an Ingress controller can provision a Google Cloud Application Load Balancer and route paths or hostnames to Kubernetes Services. **Gateway API** is a newer Kubernetes networking API that separates shared gateway infrastructure from the route rules application teams own. Google Cloud documentation now says GKE Ingress is in maintenance mode and recommends evaluating Gateway API for new functionality, so many production teams keep supporting existing Ingress resources while designing new traffic entry points with Gateway.
-
-Here is the practical routing path for the checkout team. Each layer gives the next layer a stable target, even while Pods come and go during scaling and rollouts:
-
-| Layer | What it does | Checkout example |
-|---|---|---|
-| **Application Load Balancer** | Receives external HTTP(S) traffic. | `checkout.example.com` receives user traffic. |
-| **Ingress or Gateway** | Defines host and path routing. | `/orders` routes to the orders Service. |
-| **Service** | Gives a stable internal target. | `orders-api` selects Pods with `app=orders-api`. |
-| **Pod** | Runs the application containers. | Three replicas handle requests on port `8080`. |
-
-This is a big reason GKE fits multi-service platforms. The team can manage traffic routing, internal discovery, health, and policy with Kubernetes objects. Cloud Run can still host simple public services, but GKE gives the platform team a shared cluster-level routing language when many Services need to cooperate.
-
-## Workload Identity Federation for GKE
-<!-- section-summary: Workload Identity Federation lets Pods call Google Cloud APIs through Kubernetes-linked IAM principals instead of static service account keys. -->
-
-Most real applications need Google Cloud APIs. The orders API might read a Secret Manager secret, write to Pub/Sub, pull images from Artifact Registry, or connect to Cloud SQL through a proxy. The old risky pattern was a JSON service account key copied into a Kubernetes Secret or baked into a container image.
-
-**Workload Identity Federation for GKE** gives a better path. A Pod runs as a Kubernetes ServiceAccount, and Google Cloud IAM can recognize that Kubernetes identity as an IAM principal. The workload receives short-lived credentials through the GKE metadata server, so the container can use Google client libraries without a static key file.
-
-Autopilot clusters always have Workload Identity Federation for GKE enabled. Standard clusters need the feature enabled on the cluster and on the relevant node pools. The setup usually has three parts: choose the Kubernetes ServiceAccount, grant that workload principal the narrow IAM role it needs, and reference the ServiceAccount from the Pod spec.
-
-The command shape for direct IAM principal access looks like this. The project and cluster names are placeholders, but the important idea is the IAM member string that points at one namespace and one Kubernetes ServiceAccount:
-
-```bash
-gcloud container clusters update gke-checkout-prod \
-  --location=us-central1 \
-  --workload-pool=PROJECT_ID.svc.id.goog
-
-kubectl create namespace checkout
-
-kubectl create serviceaccount orders-api-ksa \
-  --namespace checkout
-
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --role=roles/secretmanager.secretAccessor \
-  --member="principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/orders-api-ksa" \
-  --condition=None
-```
-
-The expected output should show the cluster update accepted, the namespace and Kubernetes ServiceAccount created, and the IAM policy updated. If the IAM member string has the wrong project number, namespace, or service account name, the Pod may start but fail when the client library tries to read the secret.
-
-```console
-Updating gke-checkout-prod...done.
-namespace/checkout created
-serviceaccount/orders-api-ksa created
-Updated IAM policy for project [PROJECT_ID].
-bindings:
-- members:
-  - principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/orders-api-ksa
-  role: roles/secretmanager.secretAccessor
-```
-
-In production, the IAM binding should target the narrowest resource that supports the needed role. If the orders API only needs one Secret Manager secret, the team should avoid granting broad project-wide access. Some organizations also use the alternative service account impersonation pattern, where the Kubernetes ServiceAccount can impersonate a Google service account that already fits the company's IAM review process.
-
-This matters because the cluster now has many services. The pricing API needs its own Google Cloud access path rather than the orders API's permissions. Workload Identity Federation lets the platform team give each Kubernetes workload its own cloud access path, audit it through IAM, and remove static keys from the deployment story.
-
-## Sidecars and Co-Location
-<!-- section-summary: Sidecars let tightly coupled helper containers share a Pod with the main app when local networking, shared storage, or lifecycle ordering matters. -->
-
-A **sidecar container** is a helper container that runs beside the main application container in the same Pod. Kubernetes Pods share networking and can share volumes, so the main app can talk to the sidecar over `localhost` or exchange files through an `emptyDir` volume. This is useful when the helper process belongs to the app's runtime shape rather than to the whole node.
-
-In the checkout platform, the `orders-api` Pod might run two containers. The main `app` container handles HTTP requests. A `cloud-sql-proxy` sidecar opens a local port and handles secure database connectivity. The application code connects to `127.0.0.1:5432`, while the proxy owns the database connection behavior.
-
-Service mesh is another common sidecar example. A mesh proxy such as Envoy can sit beside the app container, observe traffic, apply mutual TLS, and participate in retries or routing policy. The platform team usually injects that sidecar through mesh tooling instead of asking every application developer to hand-write proxy configuration.
-
-One helper container alone might still fit Cloud Run, depending on the current Cloud Run feature set and the app shape. GKE has a stronger case when sidecars come with Kubernetes lifecycle control, shared volumes, network policy, Service discovery, mesh injection, and custom controllers. The real production reason is the whole platform contract around the Pod, with the second process as one piece of that contract.
-
-## Policy, Security, and Node Responsibility
-<!-- section-summary: GKE production work combines IAM, Kubernetes RBAC, network policy, Pod security, and clear node ownership. -->
-
-A GKE platform has two access systems that work together. **IAM** controls Google Cloud resources and access to Google Cloud APIs. **Kubernetes RBAC** controls what users and service accounts can do inside the Kubernetes API, such as reading Pods, creating Deployments, or changing NetworkPolicies in a namespace.
-
-For our checkout team, IAM might allow the CI/CD system to deploy to the cluster and allow the `orders-api-ksa` workload principal to read a specific secret. Kubernetes RBAC might allow the orders team to update Deployments in the `checkout` namespace, while only the platform team can edit cluster-wide admission policies. This separation keeps cloud permissions and in-cluster permissions understandable.
-
-A **NetworkPolicy** is a Kubernetes object that controls Pod-to-Pod traffic. By default, Pods in a cluster can usually communicate freely. Network policies let the platform team add Pod-level firewall rules, such as allowing `checkout-web` to call `orders-api` while blocking unrelated workloads from reaching the orders port.
-
-Here is a small NetworkPolicy shape for the checkout namespace. It allows Pods labeled `app=checkout-web` to reach the orders API port, which is enough to show the selector-based pattern:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-checkout-web-to-orders
-  namespace: checkout
-spec:
-  podSelector:
-    matchLabels:
-      app: orders-api
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: checkout-web
-      ports:
-        - protocol: TCP
-          port: 8080
-```
-
-Security also reaches the Pod and node layers. A **security context** controls process-level settings such as user IDs, privilege escalation, and Linux capabilities. **Pod Security Admission**, **Gatekeeper**, **Binary Authorization**, and image scanning can help a platform team reject unsafe manifests or unapproved images before they reach production.
-
-Node responsibility depends on the GKE mode. In Autopilot, Google manages worker nodes and applies many hardening choices for you. In Standard, the platform team owns node pools, maintenance planning, machine choices, node autoscaling, DaemonSets, and special hardware. That control is useful, but it also means someone must watch node health, upgrades, capacity, and privileged workloads with the same seriousness as application health.
-
-## A Sample Orders Platform Manifest
-<!-- section-summary: A realistic GKE app manifest combines namespace, workload identity, Deployment, Service, and HTTP routing resources. -->
-
-The first useful manifest for the checkout team should show the shape of the platform contract. A small first version can still include the core pieces: namespace, Kubernetes ServiceAccount, Deployment, sidecar, Service, and an HTTP entry object.
-
-The sidecar image in this example assumes the platform team mirrors and pins approved images in Artifact Registry. In a real production pipeline, image tags should usually resolve to immutable digests, and security policy should verify that the image passed the company's build and scan process.
+The first useful manifest for the checkout API might combine namespace, service account, Deployment, Service, and Ingress:
 
 ```yaml
 apiVersion: v1
@@ -258,211 +167,385 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: orders-api-ksa
+  name: checkout-api
   namespace: checkout
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: orders-api
+  name: checkout-api
   namespace: checkout
   labels:
-    app: orders-api
+    app: checkout-api
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: orders-api
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
+      app: checkout-api
   template:
     metadata:
       labels:
-        app: orders-api
-        tier: backend
+        app: checkout-api
     spec:
-      serviceAccountName: orders-api-ksa
+      serviceAccountName: checkout-api
       containers:
         - name: app
-          image: us-central1-docker.pkg.dev/PROJECT_ID/apps/orders-api:2026-06-14
+          image: us-central1-docker.pkg.dev/commerce-prod/apps/checkout-api:2026.07.04
           ports:
-            - name: http
-              containerPort: 8080
-          env:
-            - name: DATABASE_HOST
-              value: "127.0.0.1"
-            - name: DATABASE_PORT
-              value: "5432"
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
           resources:
             requests:
               cpu: "250m"
-              memory: "512Mi"
+              memory: "256Mi"
             limits:
+              cpu: "1"
               memory: "512Mi"
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-        - name: cloud-sql-proxy
-          image: us-central1-docker.pkg.dev/PROJECT_ID/platform/cloud-sql-proxy:2.15.0
-          args:
-            - "--structured-logs"
-            - "--port=5432"
-            - "PROJECT_ID:us-central1:orders-db"
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              memory: "128Mi"
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: orders-api
+  name: checkout-api
   namespace: checkout
 spec:
-  type: ClusterIP
   selector:
-    app: orders-api
+    app: checkout-api
   ports:
-    - name: http
-      port: 80
-      targetPort: http
+    - port: 80
+      targetPort: 8080
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: checkout-ingress
+  name: checkout-api
   namespace: checkout
 spec:
   rules:
-    - host: checkout.example.com
+    - host: commerce.example.com
       http:
         paths:
-          - path: /orders
+          - path: /checkout
             pathType: Prefix
             backend:
               service:
-                name: orders-api
+                name: checkout-api
                 port:
                   number: 80
 ```
 
-A few details are doing real work here. `serviceAccountName` links the Pods to the Kubernetes identity that IAM can recognize through Workload Identity Federation. The readiness probe keeps a new Pod out of Service traffic until the app says it is ready. The Service maps stable port `80` to the Pod's named `http` port. The Ingress gives HTTP routing a Kubernetes resource that the GKE ingress controller can translate into Google Cloud load balancing behavior.
+Important parts:
 
-This manifest is also a good place to see the Autopilot habit. Resource requests are part of the workload contract. In Autopilot, those requests help GKE provision capacity. In Standard, those same requests help the scheduler place Pods and help the platform team size node pools.
+- The Namespace gives the checkout team a bounded area for resources and policy.
+- The Kubernetes ServiceAccount identifies the workload inside the cluster.
+- The Deployment asks for three replicas and defines the app container.
+- The readiness probe tells Kubernetes whether a Pod can receive traffic.
+- Resource requests give the scheduler capacity information.
+- The Service gives other workloads a stable target.
+- The Ingress defines the external HTTP route into the Service.
+
+In production, the platform team would also add image digests, policy checks, secret handling, network policy, observability configuration, and a clearer Gateway API design if the organization has moved beyond Ingress.
 
 ## Rollout and Verification
-<!-- section-summary: A production GKE rollout checks API access, Deployment progress, Pod health, Service selection, routing, logs, events, and rollback. -->
+<!-- section-summary: GKE rollout work checks the Deployment, Pods, Service, route, logs, and rollback path. -->
 
-The daily production workflow should leave evidence. The platform team wants a CI/CD log that shows which cluster received the release, which namespace changed, whether the Deployment finished, whether Pods reached ready state, and how the team can roll back. The commands below are the kind of sequence a beginner should recognize when reading a real release job.
+A normal release updates Kubernetes desired state and then watches whether the platform reaches it. The useful habit is to verify each layer instead of assuming that applying YAML means the app is healthy.
 
-```bash
-gcloud container clusters get-credentials gke-checkout-prod --location=us-central1
-kubectl config set-context --current --namespace=checkout
-kubectl apply -f k8s/orders-api.yaml
-kubectl rollout status deployment/orders-api --timeout=180s
-kubectl wait --for=condition=available deployment/orders-api --timeout=180s
-kubectl get pods --selector app=orders-api --output=wide
-kubectl get service orders-api --output=wide
-kubectl get ingress checkout-ingress
-kubectl describe deployment orders-api
-kubectl describe pod --selector app=orders-api
-kubectl logs deployment/orders-api --container app --tail=100
-kubectl get events --sort-by=.lastTimestamp
-```
+In GKE, a release has more layers than a single Cloud Run deploy. The manifest may apply successfully, yet the new Pods can still fail readiness checks, the Service selector can point at the wrong labels, the Ingress can route to the wrong backend, or the app can start and then fail on a dependency. A beginner should treat rollout verification as a walk down the request path, not as one green command.
 
-The output tells a story. If `kubectl rollout status` finishes successfully, Kubernetes accepted the new ReplicaSet and the Deployment reached its rollout condition. If `kubectl wait` times out, the team should inspect readiness probes, application logs, image pulls, scheduling events, and IAM access. Empty Service endpoints usually point to labels on the Pods and selectors on the Service that do not line up.
-
-Useful rollout output gives the release job enough evidence to explain the current state without opening the cluster dashboard. The Deployment reports success, Pods report readiness, the Service has endpoints, the Ingress has an address, and the logs show the app starting on the expected port.
-
-```console
-deployment.apps/orders-api configured
-deployment "orders-api" successfully rolled out
-deployment.apps/orders-api condition met
-
-NAME                              READY   STATUS    RESTARTS   AGE   IP           NODE
-orders-api-6f8f7d7d7b-2m9zx       1/1     Running   0          2m    10.12.3.18   gke-node-pool-1
-orders-api-6f8f7d7d7b-lq8tc       1/1     Running   0          2m    10.12.4.21   gke-node-pool-2
-orders-api-6f8f7d7d7b-v7pks       1/1     Running   0          2m    10.12.5.13   gke-node-pool-3
-
-NAME         TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)
-orders-api   ClusterIP   10.96.12.44   <none>        80/TCP
-
-2026-06-27T20:32:11Z INFO orders-api listening port=8080 version=2026.06.27.1
-```
-
-Rollback should also be boring and practiced. A Deployment keeps rollout history, so the team can move back to the previous revision when a release fails after deployment. The rollback command shape is:
+For checkout, the release question is practical: did Kubernetes accept the desired state, did the Deployment create healthy Pods, does the Service still find those Pods, does the route still point at the Service, and do logs show the new version answering requests? Each command below answers one part of that chain.
 
 ```bash
-kubectl rollout history deployment/orders-api
-kubectl rollout undo deployment/orders-api
-kubectl rollout status deployment/orders-api --timeout=180s
+gcloud container clusters get-credentials commerce-prod \
+  --location=us-central1
+
+kubectl apply -f k8s/checkout-api.yaml
+
+kubectl rollout status deployment/checkout-api \
+  --namespace checkout
+
+kubectl get deployment,pods \
+  --namespace checkout \
+  --selector app=checkout-api
+
+kubectl get service checkout-api \
+  --namespace checkout
+
+kubectl get ingress checkout-api \
+  --namespace checkout
+
+kubectl logs deployment/checkout-api \
+  --namespace checkout \
+  --container app \
+  --tail=100
 ```
+
+Important parts:
+
+- `get-credentials` configures local `kubectl` access for the cluster.
+- `kubectl apply` sends the desired state from the manifest.
+- `rollout status` waits for the Deployment update to complete.
+- The selector-based `get` checks the Deployment and Pods that share the app label.
+- The explicit Service and Ingress checks prove the stable internal route and external route exist even if those objects use different labels.
+- `logs` checks the app container output from the Deployment.
+
+Healthy output should show the rollout completed and Pods ready:
 
 ```console
-deployment.apps/orders-api
-REVISION  CHANGE-CAUSE
-12        image=orders-api:2026.06.26.3
-13        image=orders-api:2026.06.27.1
-
-deployment.apps/orders-api rolled back
-deployment "orders-api" successfully rolled out
+Fetching cluster endpoint and auth data.
+kubeconfig entry generated for commerce-prod.
+deployment.apps/checkout-api configured
+deployment "checkout-api" successfully rolled out
+deployment.apps/checkout-api   3/3     3            3           4m
+pod/checkout-api-6f8f7d7d7b-2m9zx   1/1   Running   0   2m
+service/checkout-api   ClusterIP   10.44.8.21   <none>   80/TCP   4m
+NAME           CLASS    HOSTS                  ADDRESS        PORTS   AGE
+checkout-api   <none>   checkout.example.com   203.0.113.42   80      4m
+2026-07-04T10:14:07Z INFO checkout-api listening port=8080 version=2026.07.04
 ```
+
+Rollback uses the Deployment history:
+
+```bash
+kubectl rollout undo deployment/checkout-api \
+  --namespace checkout
+```
+
+Important parts:
+
+- Kubernetes rolls the Deployment back to the previous Pod template revision.
+- Operators should still watch readiness, logs, and downstream error rates after rollback.
+- A good release record includes the image tag or digest, Deployment revision, and incident notes if rollback was needed.
 
 ![GKE rollout evidence board](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/gke-rollout-evidence.png)
-*A production GKE rollout leaves evidence across the Deployment, replicas, Pod readiness, Service endpoints, Ingress, events, and container logs.*
+*A GKE release review checks desired state, running Pods, stable Service routing, external route behavior, and application logs.*
 
-This is one of the practical benefits of using a Kubernetes Deployment. The team updates through a controller that understands replicas, progress, and rollback. The same release pattern can apply to `orders-api`, `pricing-api`, and `inventory-sync`, which gives the platform a shared operational rhythm.
+## Workload Identity and Secrets
+<!-- section-summary: Workload Identity Federation lets Kubernetes workloads call Google Cloud APIs without static service account keys. -->
+
+GKE workloads often need Google Cloud APIs. The checkout API may read Secret Manager, publish to Pub/Sub, connect to Cloud SQL, or pull images from Artifact Registry. Static JSON service account keys inside Kubernetes Secrets are risky because they can leak and live too long.
+
+**Workload Identity Federation for GKE** lets a Kubernetes ServiceAccount map to a Google Cloud IAM principal. The workload receives short-lived credentials through the GKE metadata server, so Google client libraries can call APIs without a downloaded key file.
+
+A direct IAM principal binding can look like this:
+
+```bash
+kubectl create serviceaccount checkout-api \
+  --namespace checkout
+
+gcloud secrets add-iam-policy-binding payment-provider-token \
+  --project=PROJECT_ID \
+  --role=roles/secretmanager.secretAccessor \
+  --member="principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/checkout-api" \
+  --condition=None
+```
+
+Important parts:
+
+- The Kubernetes ServiceAccount name matches the workload identity used by the Deployment.
+- The IAM member string names one project, namespace, and Kubernetes ServiceAccount.
+- The role is granted on one secret, not the whole project, because the checkout API only needs the payment provider token.
+- A wrong project number, namespace, or service account name can let the Pod run while Google API calls fail.
+
+Verify the secret-level policy before trusting the rollout:
+
+```bash
+gcloud secrets get-iam-policy payment-provider-token \
+  --project=PROJECT_ID \
+  --format=yaml
+```
+
+Example output:
+
+```yaml
+bindings:
+- members:
+  - principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/checkout/sa/checkout-api
+  role: roles/secretmanager.secretAccessor
+```
+
+That output proves the access sits on the specific secret. If the app later needs a second secret, grant the second secret explicitly and record why the workload needs it.
+
+The path has four steps. The Pod runs with the Kubernetes ServiceAccount `checkout/checkout-api`. GKE represents that service account as an IAM principal string that includes the project number, namespace, and service account name. The GKE metadata server gives the Pod short-lived Google credentials for that principal. The application uses Google client libraries or ADC to call Secret Manager, and IAM decides whether that principal can access the requested secret version.
+
+For the checkout API, the first useful secret check is a log line from the app after it reads the payment provider secret:
+
+```bash
+kubectl logs deployment/checkout-api \
+  --namespace checkout \
+  --container app \
+  --tail=50
+```
+
+Good output should show the secret path and the Kubernetes service account while keeping the secret value out of logs:
+
+```console
+2026-07-04T10:42:10Z INFO secret access ok secret=projects/PROJECT_ID/secrets/payment-provider-token version=5 ksa=checkout/checkout-api
+2026-07-04T10:42:11Z INFO checkout-api listening port=8080 revision=2026.07.04
+```
+
+The interpretation is practical. The Pod used its Kubernetes ServiceAccount, received credentials through the GKE metadata path, and passed the Secret Manager IAM check for the payment secret. If the log shows `PERMISSION_DENIED` for `secretmanager.versions.access`, the next review target is the IAM principal binding above, especially the project number, namespace, and service account name.
+
+Secrets should stay in Secret Manager or a platform-approved secret path. The Kubernetes manifest should reference secret access through workload identity and application configuration rather than embedding raw secret values.
+
+## Policy, Sidecars, and Custom Controllers
+<!-- section-summary: GKE platform value often comes from shared policy, helper containers, and Kubernetes extensions. -->
+
+GKE earns its complexity for platforms that use Kubernetes features across many services. **Kubernetes RBAC** controls who can read or change objects in the Kubernetes API. **NetworkPolicy** controls which workloads can talk to each other. Admission policy tools can reject unsafe manifests before they run.
+
+For the commerce platform, RBAC can give the checkout on-call group read access to Pods and logs in the `checkout` namespace while keeping deployment changes in the release pipeline. The evidence is a permission check against the Kubernetes API:
+
+```bash
+kubectl auth can-i get pods \
+  --namespace checkout \
+  --subresource=log \
+  --as=user:maya@example.com \
+  --as-group=checkout-oncall
+
+kubectl auth can-i update deployments \
+  --namespace checkout \
+  --as=user:maya@example.com \
+  --as-group=checkout-oncall
+```
+
+Expected output:
+
+```console
+yes
+no
+```
+
+The interpretation is direct. On-call can inspect logs during an incident, and normal Deployment changes still go through the reviewed release path.
+
+Admission policy checks manifests before Pods run. A platform might require `owner` labels, resource requests, non-root containers, and approved image registries. A server-side dry run gives early evidence:
+
+```bash
+kubectl apply --dry-run=server -f k8s/checkout-api.yaml
+```
+
+Useful output should either accept the manifest or explain the policy failure:
+
+```console
+deployment.apps/checkout-api configured (server dry run)
+```
+
+If the output says an `owner` label is missing, the fix belongs in the manifest before the workload reaches the cluster. That review point is one reason teams choose GKE: the platform can enforce shared rules at the Kubernetes API instead of relying on every team to remember them.
+
+A **sidecar** is a helper container inside the same Pod as the main app container. It shares the Pod's network context with the app. A platform might inject a service mesh proxy sidecar so traffic uses mutual TLS, shared retries, telemetry, or policy. Sidecars make sense for helper processes that belong tightly with the app runtime.
+
+For checkout, a mesh sidecar such as `istio-proxy` can sit beside the `app` container. The app still listens on `8080`, while the sidecar handles mesh traffic policy and telemetry for calls to pricing and catalog. The evidence is visible on the Pod:
+
+```bash
+kubectl get pod checkout-api-6f8f7d7d7b-2m9zx \
+  --namespace checkout \
+  --output=jsonpath='{.spec.containers[*].name}'
+```
+
+Expected output:
+
+```console
+app istio-proxy
+```
+
+The sidecar justifies GKE for organizations that want the same helper behavior across many services. Cloud Run can run sidecars for some service designs. Kubernetes adds a broad API for injection, policy, rollout, and inspection across namespaces.
+
+A **custom controller** extends Kubernetes behavior. It watches Kubernetes objects and takes action as desired state changes. The commerce platform might have a controller that registers approved Services in an internal catalog or applies standard alert rules based on labels.
+
+One practical controller can watch Services with `platform.devpolaris.com/catalog=true` and create an internal `ServiceRegistration` record. Application teams keep using normal Kubernetes objects, and the controller keeps the service catalog aligned with cluster state.
+
+```bash
+kubectl get serviceregistration checkout-api \
+  --namespace checkout \
+  --output=yaml
+```
+
+Useful output:
+
+```yaml
+apiVersion: platform.devpolaris.com/v1
+kind: ServiceRegistration
+metadata:
+  name: checkout-api
+  namespace: checkout
+spec:
+  service: checkout-api
+  owner: commerce-checkout
+  route: https://commerce.example.com/checkout
+status:
+  registered: true
+```
+
+The controller example shows the platform value. GKE gives the team a place to add organization-specific behavior around normal workload objects. A simpler runtime is usually better for one service, while GKE earns its operating cost for many services that need the same RBAC, admission, sidecar, network, and controller rules.
+
+A small NetworkPolicy shows the selector pattern:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-web-to-checkout
+  namespace: checkout
+spec:
+  podSelector:
+    matchLabels:
+      app: checkout-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              team: web
+      ports:
+        - protocol: TCP
+          port: 8080
+```
+
+Important parts:
+
+- `podSelector` chooses the checkout Pods receiving traffic.
+- `policyTypes: Ingress` controls inbound Pod traffic.
+- `namespaceSelector` allows callers from approved namespaces.
+- The port rule limits the allowed destination port.
+
+These controls are the real GKE reason. A single simple service may not need them. A platform with many teams and shared rules often does.
 
 ## The Cloud Run Tradeoff
-<!-- section-summary: Cloud Run stays the simpler home for stateless container services, while GKE fits workloads that need Kubernetes control and governance. -->
+<!-- section-summary: Cloud Run is simpler for one container service, while GKE is stronger for teams that require Kubernetes platform features. -->
 
-Cloud Run still deserves a serious first look for many container workloads. It runs containers directly on managed infrastructure, gives fast deployment, scales automatically, and avoids cluster creation and node operations. A stateless public API, webhook receiver, background job, or event-driven handler may have a cleaner home there.
+Cloud Run and GKE can coexist in one company. Cloud Run is a strong fit for a stateless container service that needs managed request scaling, traffic control, identity, and logs with less platform surface. GKE is a strong fit for teams that need Kubernetes APIs, shared policy, sidecars, mesh behavior, custom controllers, or cluster-level platform rules.
 
-GKE is the better fit when the runtime requirement includes Kubernetes control. The checkout team wants namespace policy, Services, Ingress or Gateway routing, Workload Identity Federation per Kubernetes ServiceAccount, sidecar lifecycle, custom controllers, and shared cluster governance. Those requirements are about a platform with many moving parts, so GKE gives the team a common API and operating surface.
+The tradeoff is easiest to explain through team responsibility. Cloud Run asks the team to package a container and configure the service. GKE asks the team to understand Kubernetes objects and the platform rules around them. That extra vocabulary can pay off for a shared platform, but it also creates more things a new team has to inspect during an incident.
 
-The two services can also work together. A lightweight marketing frontend might stay on Cloud Run while the checkout backend moves to GKE. Google Cloud supports hybrid patterns with shared container images, Cloud Logging, Cloud Monitoring, Cloud Deploy, and load balancing designs that can route traffic across runtimes.
+For one checkout API, Cloud Run may be enough: container, endpoint, revision, traffic split, identity, logs. For a commerce platform with many teams, Kubernetes policy, namespace boundaries, mesh sidecars, and custom controllers may justify GKE. The service choice follows the operating contract the team wants to own.
 
-The tradeoff is operational weight. Cloud Run asks for less platform machinery when the service fits its model. GKE gives more control and more Kubernetes-native building blocks, but the team must own cluster design, access, resource governance, rollout practices, and incident response. The right answer comes from the workload's needs and the team's ability to operate the platform.
+Use this comparison after the workload is clear:
+
+| Need | Usually simpler | Why |
+|---|---|---|
+| One HTTP container service | Cloud Run | Fewer Kubernetes objects and less platform operations work. |
+| Many services with shared Kubernetes policy | GKE | Kubernetes gives a common API for workloads, networking, policy, and extensions. |
+| Host-level VM control | Compute Engine | The workload needs a server, not an orchestration API. |
+| Small event handler | Cloud Run functions | The job fits one handler and one trigger. |
+
+The important discipline is avoiding GKE by habit. Choose it only for a real Kubernetes platform problem.
 
 ## Putting It All Together
-<!-- section-summary: The GKE decision is strongest when Kubernetes gives the team a shared way to run, connect, secure, and update many services. -->
+<!-- section-summary: GKE is a platform choice for teams that intentionally want Kubernetes as the operating layer. -->
 
-Let's return to the checkout team one last time. The first Cloud Run service solved the original problem well because the team had one stateless container with straightforward HTTP traffic. Growth changed the problem into platform coordination across several services, shared policy, service-to-service networking, sidecars, identity, and custom automation.
+GKE is managed Kubernetes on Google Cloud. Kubernetes gives the desired-state API. GKE integrates that API with Google-managed control plane operations, node modes, networking, identity, logging, monitoring, and security controls.
 
-GKE gives that team managed Kubernetes on Google Cloud. Google manages the control plane, and Autopilot can also manage the worker nodes for most application workloads. Kubernetes gives the team Pods, Deployments, Services, Ingress or Gateway resources, NetworkPolicies, ServiceAccounts, and the controller pattern.
+The required vocabulary has a clear order. Kubernetes is the orchestration system. GKE is Google's managed Kubernetes service. A cluster is the resource boundary. The control plane accepts desired state. Nodes provide worker capacity. Pods run containers. Deployments manage Pod rollout. Services give stable internal networking. Ingress or Gateway routes HTTP traffic toward Services.
 
-The practical production shape is concrete. The orders API runs as a Deployment with three Pods. Each Pod uses a Kubernetes ServiceAccount tied to Google Cloud IAM through Workload Identity Federation. A Service gives the Pods a stable internal name. An Ingress or Gateway routes external HTTP traffic to that Service. NetworkPolicy and RBAC keep access scoped. Rollout commands verify progress and provide a known rollback path.
+That vocabulary is worth learning for platforms that need it. For one simple service, Cloud Run may carry the workload with far less operating surface. For many services with shared platform rules, GKE gives the common language that lets teams deploy, route, secure, observe, and extend workloads together.
 
-That is the reason GKE belongs at the end of this compute module. It is the container runtime for teams that need Kubernetes as the operating layer. When the application needs only a simple managed container endpoint, Cloud Run keeps the path shorter. When the application platform needs Kubernetes objects, controllers, policy, and shared governance, GKE gives the team the right set of tools.
+## References
 
----
-
-**References**
-
-- [Google Cloud: GKE overview](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview) - Defines GKE as managed Kubernetes, explains clusters, nodes, Pods, control plane management, modes, benefits, and cost differences between Autopilot and Standard.
-- [Google Cloud: GKE Autopilot overview](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview) - Explains Autopilot as the GKE mode where Google manages infrastructure configuration, nodes, scaling, security, and preconfigured settings.
-- [Google Cloud: Compare Autopilot and Standard clusters](https://docs.cloud.google.com/kubernetes-engine/docs/resources/autopilot-standard-feature-comparison) - Compares node management, scaling, security defaults, networking, releases, and compute configuration across the two GKE modes.
-- [Google Cloud: Authenticate to Google Cloud APIs from GKE workloads](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) - Shows how Workload Identity Federation for GKE maps Kubernetes workloads to IAM principals and how to configure clusters, node pools, namespaces, and Kubernetes ServiceAccounts.
-- [Google Cloud: GKE security overview](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/security-overview) - Covers IAM and RBAC, control plane security, node security, Workload Identity Federation, network policy, Pod security, and layered workload protection.
-- [Google Cloud: GKE Ingress for Application Load Balancers](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/ingress) - Explains how GKE Ingress provisions Application Load Balancers and notes that GKE Ingress is in maintenance mode with Gateway API recommended for new functionality.
-- [Google Cloud: Control communication using network policies](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/network-policy) - Explains GKE network policy enforcement and how NetworkPolicies create Pod-level firewall rules for Pod and Service communication.
-- [Google Cloud: GKE and Cloud Run](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/gke-and-cloud-run) - Compares the two runtimes, describes hybrid deployment patterns, and explains where Cloud Run or GKE fits different workload shapes.
-- [Kubernetes: Pods](https://kubernetes.io/docs/concepts/workloads/pods/) - Defines Pods as the smallest deployable Kubernetes unit, explains shared networking and storage, and describes multi-container Pod patterns.
-- [Kubernetes: Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Defines Deployments, ReplicaSets, desired state, rolling updates, rollout status, rollback, and common Deployment commands.
-- [Kubernetes: Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Defines Services as stable network abstractions for dynamic Pods and explains selectors, ports, ClusterIP, Ingress, and Gateway context.
-- [Kubernetes: Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/) - Defines sidecar containers, lifecycle behavior, shared network and storage, and supporting-service use cases.
-- [Kubernetes: Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) - Explains how operators use custom resources and controllers to automate application-specific operations in Kubernetes.
+- [Google Kubernetes Engine documentation](https://docs.cloud.google.com/kubernetes-engine/docs) - Official GKE documentation hub.
+- [Deploying workloads](https://docs.cloud.google.com/kubernetes-engine/docs/get-started/deploy-workloads) - Official overview for deploying workloads on GKE clusters.
+- [About cluster configuration choices](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/configuration-overview) - Official guide for GKE cluster configuration choices.
+- [GKE Ingress for Application Load Balancers](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/ingress) - Official overview of GKE Ingress and load balancer behavior.
+- [Authenticate to Google Cloud APIs from GKE workloads](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) - Official guide for Workload Identity Federation for GKE.
+- [Control communication between Pods and Services using network policies](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/network-policy) - Official guide for GKE network policy enforcement.

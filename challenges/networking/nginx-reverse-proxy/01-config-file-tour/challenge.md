@@ -1,6 +1,6 @@
 ---
 title: "Tour the /etc/nginx Tree"
-sectionSlug: nginx-config-file-structure
+sectionSlug: installing-nginx-and-finding-the-config
 order: 1
 ---
 

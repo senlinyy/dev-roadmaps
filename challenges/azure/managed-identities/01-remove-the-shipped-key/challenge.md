@@ -1,7 +1,6 @@
 ---
-title: "Remove The Shipped Key"
-sectionSlug: the-problem
+title: "Workload Identities, Service Principals, And Managed Identities"
 order: 1
 ---
 
-Practice spotting when an app is carrying a credential that should instead be replaced by workload identity and scoped access.
+Use the article to answer the workload identity scenarios with the evidence given in each case.

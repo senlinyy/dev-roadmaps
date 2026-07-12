@@ -1,7 +1,6 @@
 ---
-title: "Choose File Module"
-sectionSlug: "choosing-copy-file-template-or-lineinfile"
+title: "Files and Templates"
 order: 3
 ---
 
-Choose the most direct Ansible module for each file-management need.
+Use file ownership, rendered content, validation, and rollout evidence to choose safe Ansible file operations.

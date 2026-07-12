@@ -1,13 +1,15 @@
 ---
 title: "Define Role Defaults"
-sectionSlug: "defaults-are-the-role-contract"
+sectionSlug: "defaults-as-the-role-interface"
 order: 2
 ---
 
-Define clear role defaults for the orders web role contract.
+The role needs a small default contract so callers can see and override the normal orders web values. Fill the role defaults with the service, port, and server name used by this training fleet.
 
-Requirements:
+Your job:
 
-1. **Service:** `orders_service_name: devpolaris-orders-api`.
-2. **Port:** `orders_api_port: 8080`.
-3. **Server name:** `orders_server_name: orders.devpolaris.internal`.
+1. **Set the default service name** to `devpolaris-orders-api`.
+2. **Set the default API port** to `8080`.
+3. **Set the default server name** to `orders.devpolaris.internal`.
+
+The grader checks the defaults file, not a prose explanation.

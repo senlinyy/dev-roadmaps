@@ -1,7 +1,6 @@
 ---
-title: "Choose Resource or Data Source"
-sectionSlug: ownership
+title: "Resources"
 order: 4
 ---
 
-Knowledge check on deciding whether Terraform should own an object as a resource or read it as a data source.
+Use ownership, provider, state, and plan evidence to decide what Terraform should manage and how managed objects should relate.

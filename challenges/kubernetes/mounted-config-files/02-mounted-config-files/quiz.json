@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "structured-config-q1",
+      "type": "single",
+      "scenario": "The notification worker receives provider routing rules with nested channel settings, timeout values, and fallback behavior. Its existing parser reads `/etc/notification/routing.yaml`, and reviewers need to assess the structure as one unit. Which delivery design best preserves that application contract?",
+      "options": [
+        { "id": "a", "text": "Split every nested value into an unrelated Pod annotation and let the process query the Kubernetes API." },
+        { "id": "b", "text": "Store the YAML under a ConfigMap key and mount it as a file at the path the parser already reads." },
+        { "id": "c", "text": "Flatten the entire YAML document into one environment variable and rebuild line breaks in application code." },
+        { "id": "d", "text": "Write the routing rules to an `emptyDir` from the application each time the worker starts." }
+      ],
+      "correct": ["b"],
+      "explanation": "A ConfigMap-backed file preserves the structured YAML, keeps it reviewable, and matches the parser's existing path contract. Annotations require unnecessary API access, one large environment string obscures structure, and `emptyDir` is writable ephemeral storage rather than the configuration source."
+    },
+    {
+      "id": "items-contract-q2",
+      "type": "single",
+      "scenario": "ConfigMap `notification-worker-files` contains `routing.yaml`, `limits.yaml`, and `support.txt`. A legacy worker must receive only the routing content under filename `provider-routing.yaml` in its mounted directory. Which volume source expresses that narrow mapping?",
+      "options": [
+        { "id": "a", "text": "Mount the whole ConfigMap, then ask the worker to rename every file during startup." },
+        { "id": "b", "text": "Change the ConfigMap key itself to an absolute container path and omit a volume mount." },
+        { "id": "c", "text": "Use `envFrom` with a prefix so the key becomes a file after the process starts." },
+        { "id": "d", "text": "Use `items` with key `routing.yaml` and path `provider-routing.yaml`." }
+      ],
+      "correct": ["d"],
+      "explanation": "The `items` list selects only the required key and maps it to the filename expected inside the mounted directory. Mounting everything broadens the contract, ConfigMap keys do not replace the volume path chain, and `envFrom` creates environment variables rather than files."
+    },
+    {
+      "id": "subpath-update-q3",
+      "type": "single",
+      "scenario": "An older worker image already contains `/app/config/defaults.yaml`. The team mounts only `routing.yaml` at `/app/config/routing.yaml` using `subPath` so the image default remains visible. Later the ConfigMap changes, but the running Pod still reads the old routing content. What is the most accurate explanation?",
+      "options": [
+        { "id": "a", "text": "The `subPath` mount preserves the old file view, so the Pod must restart to receive the changed routing file." },
+        { "id": "b", "text": "ConfigMap file content never updates under any mount type, so every projected directory always requires image rebuilds." },
+        { "id": "c", "text": "The image default blocks kubelet updates only because `readOnly: true` was omitted from the mount." },
+        { "id": "d", "text": "The worker must convert the ConfigMap to a Secret before Kubernetes can refresh a mounted file." }
+      ],
+      "correct": ["a"],
+      "explanation": "A `subPath` mount does not receive projected ConfigMap or Secret updates, so restart-based delivery is required. Full directory projections can refresh after kubelet synchronization. Read-only intent and source sensitivity do not change the `subPath` update caveat."
+    },
+    {
+      "id": "mount-shadow-q4",
+      "type": "single",
+      "scenario": "The worker image ships `/app/config/defaults.yaml` and `/app/config/schema.json`. A Deployment mounts a ConfigMap directory containing only `routing.yaml` at `/app/config`. After rollout, the process reports that its defaults file is missing. What change best avoids the collision while keeping directory projection behavior?",
+      "options": [
+        { "id": "a", "text": "Make the ConfigMap writable so Kubernetes merges its keys with the image directory at runtime." },
+        { "id": "b", "text": "Increase `defaultMode` so the image files become visible through the projected volume." },
+        { "id": "c", "text": "Mount the ConfigMap at a dedicated path such as `/etc/notification` and configure the process to read it there." },
+        { "id": "d", "text": "Move `defaults.yaml` into a Secret because Secret volumes merge with image files instead of covering them." }
+      ],
+      "correct": ["c"],
+      "explanation": "A directory mount replaces the container's view of the image directory, so a dedicated projected-config path avoids hiding bundled files. Write access and file modes do not merge directory views, and Secret volumes cover mount paths in the same way."
+    },
+    {
+      "id": "safe-file-operations-q5",
+      "type": "multiple",
+      "scenario": "A routing ConfigMap and a TLS Secret are mounted into a worker. The team wants changed routing rules to reach running Pods and needs to diagnose a certificate startup failure without leaking private material. Which two review comments are correct?",
+      "options": [
+        { "id": "a", "text": "Use a `subPath` mount for routing because it receives ConfigMap changes sooner than a full directory mount." },
+        { "id": "b", "text": "Confirm the worker watches or reloads the routing file because refreshed bytes do not make the process consume them automatically." },
+        { "id": "c", "text": "Print the private key during diagnosis so responders can prove the Secret projection contains valid bytes." },
+        { "id": "d", "text": "Check the TLS filenames, modes, mount path, and safe application errors without printing the Secret file contents." }
+      ],
+      "correct": ["b", "d"],
+      "explanation": "A full directory projection can refresh, but the application still needs a watcher, reload endpoint, or restart strategy to consume new content. Secret diagnostics should verify names, permissions, paths, and safe errors without exposing bytes. `subPath` prevents live projected updates, and printing a private key creates a new leak."
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 ---
-title: "Choose the Tool Boundary"
-sectionSlug: "what-ansible-changes"
+title: "What Is Ansible"
 order: 1
 ---
 
-Choose whether a change belongs in Terraform, Ansible, or a manual break-glass path.
+Use realistic host, playbook, and run evidence to choose safe Ansible responsibilities and operating decisions.

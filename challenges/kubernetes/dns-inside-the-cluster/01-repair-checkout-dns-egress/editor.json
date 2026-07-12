@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "allow-dns-egress.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-dns-egress\n  namespace: checkout\n  labels:\n    app.kubernetes.io/part-of: checkout\n    app.kubernetes.io/managed-by: platform-team\n  annotations:\n    devpolaris.io/change-ticket: NET-1842\nspec:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "networking.k8s.io/v1", "label": "NetworkPolicy API version" },
+      { "path": ["kind"], "equals": "NetworkPolicy", "label": "NetworkPolicy kind" },
+      { "path": ["metadata", "name"], "equals": "allow-dns-egress", "label": "policy name" },
+      { "path": ["metadata", "namespace"], "equals": "checkout", "label": "checkout namespace" },
+      { "path": ["spec", "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "checkout-web", "label": "checkout caller selector" },
+      { "path": ["spec", "policyTypes"], "includes": "Egress", "label": "egress policy type" },
+      { "path": ["spec", "egress", 0, "to"], "containsObject": { "namespaceSelector": { "matchLabels": { "kubernetes.io/metadata.name": "kube-system" } }, "podSelector": { "matchLabels": { "k8s-app": "kube-dns" } } }, "label": "CoreDNS destination selectors" },
+      { "path": ["spec", "egress", 0, "ports"], "containsObject": { "protocol": "UDP", "port": 53 }, "label": "UDP DNS port" },
+      { "path": ["spec", "egress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 53 }, "label": "TCP DNS port" }
+    ]
+  }
+}

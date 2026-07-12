@@ -1,1 +1,1 @@
-`parameters` is a sibling of `stages` directly under `pipeline`. Inside it, each parameter is its own statement, e.g. `choice(name: 'DEPLOY_ENV', choices: ['staging', 'production'], description: '')`. The `when` block goes inside `stage('Deploy') { ... }` (next to `steps`). Use `allOf { branch 'main'; expression { params.DEPLOY_ENV == 'production' } }` to combine the two conditions.
+Put user choices at the pipeline level and the deployment guard inside the Deploy stage. The guard needs both the branch condition and the selected environment condition to be true.

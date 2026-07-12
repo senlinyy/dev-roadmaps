@@ -1,7 +1,6 @@
 ---
-title: "Read The Access Sentence"
-sectionSlug: what-is-gcp-iam
+title: "What Is GCP IAM"
 order: 1
 ---
 
-Use each scenario to rebuild the IAM sentence before choosing a fix. The questions focus on the principal, action, role, resource, and scope.
+Review production scenarios covering reading GCP IAM as principal, role, resource, scope, condition, and evidence before applying fixes.

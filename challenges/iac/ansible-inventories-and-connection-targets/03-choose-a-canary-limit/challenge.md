@@ -1,7 +1,6 @@
 ---
-title: "Choose a Canary Limit"
-sectionSlug: "patterns-limits-and-canary-runs"
+title: "Inventories"
 order: 3
 ---
 
-Choose the target pattern that limits the first production run on purpose.
+Use inventory, connection, and target evidence to decide whether an Ansible run has a safe host map.

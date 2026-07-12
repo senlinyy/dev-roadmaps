@@ -23,4 +23,4 @@ jobs:
       - run: ./deploy.sh production
 ```
 
-The `environment` key tells GitHub to only inject secrets scoped to that specific environment. The `test` job does not have an `environment` key, so it cannot access any environment-scoped secrets, even if it tries. This isolation prevents a test job from accidentally using production credentials.
+- The `environment` key tells GitHub to only inject secrets scoped to that specific environment. The `test` job does not have an `environment` key, so it cannot access any environment-scoped secrets, even if it tries. This isolation prevents a test job from accidentally using production credentials.

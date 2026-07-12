@@ -1,6 +1,6 @@
 ---
 title: "Run a Step Inside a Docker Container"
-sectionSlug: execution-environments-shell-vs-container
+sectionSlug: containers-and-services
 order: 2
 ---
 

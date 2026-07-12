@@ -1,7 +1,6 @@
 ---
-title: "Name The Dataset"
-sectionSlug: datasets
+title: "BigQuery"
 order: 1
 ---
 
-Practice reading a BigQuery dataset as an ownership, location, and access boundary for analytical tables.
+Review production scenarios covering BigQuery analytics shape through datasets, tables, loading, queries, partitioning, clustering, cost habits, and data quality.

@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A bad release wrote wrong status values for two hours. Which question does recovery point answer?",
+      "scenario": "A Cloud SQL instance takes one automated backup each day. Point-in-time recovery is disabled, and the team keeps no other recovery copies. The product owner requires no more than 15 minutes of lost committed writes after an operator deletes data. What should the readiness review require?",
       "options": [
-        { "id": "a", "text": "Which moment in time can the data be restored to?" },
-        { "id": "b", "text": "Which bucket name is prettiest?" },
-        { "id": "c", "text": "Can SQL be avoided forever?" },
-        { "id": "d", "text": "Which VM has the most CPU?" }
+        {
+          "id": "d",
+          "text": "Add a second automated backup twelve hours after the first and treat the two daily restore points as meeting the requirement."
+        },
+        {
+          "id": "a",
+          "text": "Enable and retain point-in-time recovery for the required window, then test a restore to a timestamp no more than 15 minutes before the incident."
+        },
+        {
+          "id": "b",
+          "text": "Enable regional high availability because synchronous failover provides an earlier logical recovery point after committed data is deleted."
+        },
+        {
+          "id": "c",
+          "text": "Reduce connection-pool lifetime to 15 minutes so new sessions read the database state that existed before the deletion."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The recovery point is the moment the restored data represents."
+      "correct": [
+        "a"
+      ],
+      "explanation": "With point-in-time recovery disabled, daily backups cannot meet a 15-minute recovery point objective. Point-in-time recovery must be configured with enough log retention and verified through a timestamp restore. A second daily backup still leaves a recovery gap measured in hours. High availability protects service from infrastructure failure but preserves a committed logical deletion, while connection settings do not create historical database state. See [Cloud SQL point-in-time recovery](https://cloud.google.com/sql/docs/mysql/backup-recovery/pitr)."
     },
     {
-      "id": "q2",
+      "id": "safe-deletion-q1",
       "type": "single",
-      "scenario": "A temporary export can be recreated, but paid order records cannot be casually lost. What should drive different recovery targets?",
+      "scenario": "Northstar Health is retiring exports under `patient-audit/2024/` to reduce storage cost. The automated deletion starts tonight, but the compliance owner has not confirmed whether an investigation hold still covers those objects, and the team has not recorded the bucket's retention, lifecycle, or soft-delete state. What must the release manager do before the job runs?",
       "options": [
-        { "id": "a", "text": "Business impact of the data." },
-        { "id": "b", "text": "Alphabetical order of service names." },
-        { "id": "c", "text": "Whether the file name has a slash." },
-        { "id": "d", "text": "Whether dashboards use colors." }
+        {
+          "id": "b",
+          "text": "Export the prefix inventory, then delete after confirming soft delete is enabled, without resolving the legal hold or obtaining owner approval."
+        },
+        {
+          "id": "c",
+          "text": "Confirm that no bucket retention policy blocks deletion, then proceed without checking object holds, lifecycle state, or the accountable owner."
+        },
+        {
+          "id": "d",
+          "text": "Copy the objects to a second bucket and delete the source prefix, without confirming whether the copy preserves the required hold and retention controls."
+        },
+        {
+          "id": "a",
+          "text": "Pause deletion and verify retention, legal hold, lifecycle, and owner approval."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Recovery point needs should follow business impact, not service defaults."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The deletion must pause until the team verifies retention policy, object holds, lifecycle behavior, and accountable approval. Soft delete can help recovery but does not authorize deletion under an unresolved legal hold. Checking only one retention control misses other protections, and an uncontrolled copy can weaken or change the compliance boundary. See [Cloud Storage object holds](https://cloud.google.com/storage/docs/object-holds) and [lifecycle management](https://cloud.google.com/storage/docs/lifecycle)."
+    },
+    {
+      "id": "restore-drills-q3",
+      "type": "single",
+      "scenario": "Northstar Finance restores `orders_mart.transactions` to its 09:55 state after a faulty load. Row counts and the table schema match the incident record, but the month-end dashboard still reads through an authorized view that points at the damaged table. The recovery objective requires finance reports to return correct totals before the incident can close. What did the drill miss?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Swap the restored table into production after validating its row count, without testing authorized views, scheduled queries, or dashboard references."
+        },
+        {
+          "id": "d",
+          "text": "Update the dashboard data source to the restored table and defer validation of scheduled queries and shared views until the next reporting cycle."
+        },
+        {
+          "id": "a",
+          "text": "End-to-end validation of consumers after restoring the table."
+        },
+        {
+          "id": "b",
+          "text": "Validate schema and row count in the restore sandbox, then treat data-level checks as sufficient without exercising downstream consumers."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A technically successful restore is incomplete until dependent views, scheduled queries, permissions, and dashboards are exercised against the intended target. Row count and schema checks are necessary but do not prove consumer compatibility. Swapping or redirecting production before those checks increases impact, while delaying consumer validation leaves the recovery objective unproven. See [BigQuery time travel](https://cloud.google.com/bigquery/docs/time-travel)."
+    },
+    {
+      "id": "restore-drills-q2",
+      "type": "multiple",
+      "scenario": "A quarterly Cloud SQL drill clones production to clinic-restore-20260704 and completes in 47 minutes. Before the temporary instance is removed, which three details make the exercise reproducible and auditable?",
+      "options": [
+        {
+          "id": "d",
+          "text": "A screenshot showing that some backup existed, without the source, recovery point, or validation result."
+        },
+        {
+          "id": "a",
+          "text": "The source instance and exact backup or point-in-time recovery point."
+        },
+        {
+          "id": "b",
+          "text": "The restore target or sandbox identity and the controls that isolated it from production."
+        },
+        {
+          "id": "c",
+          "text": "Validation results, elapsed time, owner, cleanup deadline, and any failed steps."
+        },
+        {
+          "id": "e",
+          "text": "The current production instance uptime and failover count, without the restore command, recovery point, or sandbox validation."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful drill record connects source and recovery point to the isolated target, validation, timing, ownership, and cleanup. A generic screenshot cannot reproduce the restore or prove the recovered data was usable. See [Cloud SQL backup and recovery documentation](https://cloud.google.com/sql/docs/mysql/backup-recovery/backups)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which data might need different recovery point expectations?",
+      "type": "single",
+      "scenario": "Northstar Manufacturing takes nightly snapshots of the boot disk for `planner-vm-01`. During a recovery review, the latest snapshot shows `READY`, but the team has never created a replacement disk, started an isolated VM from it, or confirmed that the planning service reaches a healthy state. The recovery objective requires a bootable application within 60 minutes. What evidence is missing?",
       "options": [
-        { "id": "a", "text": "Paid order records." },
-        { "id": "b", "text": "Temporary exports." },
-        { "id": "c", "text": "Raw analytics events." },
-        { "id": "d", "text": "The shape of a button in the UI." }
+        {
+          "id": "d",
+          "text": "Boot a validation VM from the current golden image and treat that success as evidence for the separate disk snapshot."
+        },
+        {
+          "id": "a",
+          "text": "A restore validation that proves the snapshot produces usable application state."
+        },
+        {
+          "id": "b",
+          "text": "Verify snapshot status and checksum metadata only, treating control-plane completion as evidence that the guest and application are usable."
+        },
+        {
+          "id": "c",
+          "text": "Attach the restored disk read-only to an inspection VM and validate files, but skip the required boot and application-start checks."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Different data shapes and business impact lead to different recovery targets."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Snapshot creation and disk attachment prove that the storage artifact exists, not that the restored operating system boots or the application reaches a usable state. File inspection can be useful, but it does not satisfy a boot-and-start recovery objective. The drill must create a restored disk in an isolated validation path and exercise the required application checks. See [Restore a disk from a snapshot](https://cloud.google.com/compute/docs/disks/restore-snapshot)."
+    },
+    {
+      "id": "safe-deletion-q5",
+      "type": "single",
+      "scenario": "After a cost-reduction change, Northstar Health discovers that several Compute Engine snapshots were deleted and its database recovery window may have shortened. The change record says only \"unused snapshots removed\" and does not identify the snapshots, source disks, approval, or restore effect. What evidence must the next snapshot-deletion record contain?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Record the total snapshot count and deletion timestamp, omitting the exact snapshots and source disks to keep the ticket concise."
+        },
+        {
+          "id": "c",
+          "text": "Record only the project display name because snapshot identifiers can be reconstructed later from billing exports."
+        },
+        {
+          "id": "d",
+          "text": "Record the cleanup script version without its selected snapshot IDs, owner approval, or effect on recovery windows."
+        },
+        {
+          "id": "a",
+          "text": "Snapshot IDs, source disks, retention reason, owner approval, and restore impact."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer makes deletion auditable. Counts, display names, and script preference do not prove which recovery points were removed. See [Google Cloud create snapshots documentation](https://cloud.google.com/compute/docs/disks/create-snapshots)."
+    },
+    {
+      "id": "restore-drills-q5",
+      "type": "single",
+      "scenario": "A restore sandbox contains copied production customer records. Validation finished two days ago, but the instance still has broad analyst access and no expiry label or cleanup ticket. What should the drill owner do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Apply restricted access and data-handling rules, record an expiry, and remove the sandbox after required evidence is preserved."
+        },
+        {
+          "id": "b",
+          "text": "Keep the sandbox indefinitely because restored data is no longer governed as production data."
+        },
+        {
+          "id": "c",
+          "text": "Grant the project viewer group access so more people can confirm that the restore succeeded."
+        },
+        {
+          "id": "d",
+          "text": "Move the sandbox to a general analytics project and rely on that project's existing access, without defining an expiry or cleanup owner."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Restored production data remains sensitive and should have narrow access, a defined purpose, an expiry, and verified cleanup. A restore does not remove governance obligations, and wider access or an arbitrary move increases exposure. See [Firestore backup documentation](https://cloud.google.com/firestore/docs/backups)."
     }
   ]
 }

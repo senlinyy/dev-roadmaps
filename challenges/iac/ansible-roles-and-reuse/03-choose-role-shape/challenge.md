@@ -1,7 +1,6 @@
 ---
-title: "Choose Role Shape"
-sectionSlug: "the-smallest-useful-role-shape"
+title: "Structuring Roles"
 order: 3
 ---
 
-Choose the role directory shape that gives a beginner enough structure without noise.
+Use module boundaries, defaults, validation, and side effects to decide whether an Ansible role is safe to reuse.

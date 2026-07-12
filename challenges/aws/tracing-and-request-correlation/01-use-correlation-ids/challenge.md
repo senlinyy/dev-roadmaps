@@ -1,7 +1,6 @@
 ---
-title: "Use Correlation IDs"
-sectionSlug: correlation-ids
+title: "X-Ray and OpenTelemetry"
 order: 1
 ---
 
-Use the scenarios to decide how one checkout request should keep a safe identity across logs, traces, and side jobs. Focus on request IDs, order IDs, consistent field names, and avoiding private data as identifiers.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

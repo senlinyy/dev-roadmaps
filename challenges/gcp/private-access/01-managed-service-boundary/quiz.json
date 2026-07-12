@@ -1,44 +1,184 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "The team says Cloud SQL should be \"in the app subnet.\" What is the better review question?",
-      "options": [
-        { "id": "a", "text": "Which private access pattern connects the workload's VPC path to Cloud SQL?" },
-        { "id": "b", "text": "Which VM tag should be copied onto Cloud SQL?" },
-        { "id": "c", "text": "Which SSH port opens the Cloud SQL host?" },
-        { "id": "d", "text": "Which frontend branch owns the database?" }
-      ],
-      "correct": ["a"],
-      "explanation": "Managed services are reached through supported service access patterns, not by treating them as ordinary VMs in a subnet."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A private VM calls Cloud Storage. What kind of destination is Cloud Storage from the network review perspective?",
+      "scenario": "A batch VM in subnet `orders-private` has no external IP. Its default route reaches Cloud NAT, but policy requires calls to `storage.googleapis.com` to remain on Google networking without depending on NAT. DNS already resolves the Google API hostname. Which change best matches that requirement?",
       "options": [
-        { "id": "a", "text": "A Google API/service endpoint that needs an approved reachability path and IAM." },
-        { "id": "b", "text": "A VM network interface inside the app subnet." },
-        { "id": "c", "text": "A firewall rule priority number." },
-        { "id": "d", "text": "A local file on the VM disk." }
+        {
+          "id": "b",
+          "text": "Allocate a service networking range and create a Private Services Access connection for the Cloud Storage API."
+        },
+        {
+          "id": "a",
+          "text": "Enable Private Google Access on `orders-private`, then verify the VM can reach the required Google API with its service account."
+        },
+        {
+          "id": "c",
+          "text": "Create a Private Service Connect endpoint for the batch VM itself and remove the VM service account."
+        },
+        {
+          "id": "d",
+          "text": "Keep the NAT path and add a private DNS zone that maps `storage.googleapis.com` to the VM's own address."
+        }
       ],
       "correct": ["a"],
-      "explanation": "Cloud Storage is a managed API service, so reachability and IAM should both be reviewed."
+      "explanation": "Private Google Access lets VMs without external IP addresses reach supported Google APIs and services from an enabled subnet. Private Services Access is used for producer services that receive private addresses from an allocated range, such as Cloud SQL private IP. Private Service Connect creates consumer endpoints for supported services, not an endpoint for the calling VM, and private DNS alone cannot create a valid API path or replace runtime identity. See [Private Google Access](https://cloud.google.com/vpc/docs/private-google-access)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which questions fit a managed service boundary review?",
+      "id": "private-services-access-q1",
+      "type": "single",
+      "scenario": "The database team is creating a Cloud SQL instance with private IP in `orders-prod-vpc`. The change plan shows an allocated range named `google-managed-services-orders-prod`, but no service networking connection. Instance creation reports that the network has no private services connection. What should the reviewer request?",
       "options": [
-        { "id": "a", "text": "What is the workload?" },
-        { "id": "b", "text": "What managed service is being reached?" },
-        { "id": "c", "text": "Which private or API access pattern is used?" },
-        { "id": "d", "text": "Can we assume every managed service lives in our subnet?" }
+        {
+          "id": "a",
+          "text": "Create the Private Services Access connection between `orders-prod-vpc` and the service producer using the allocated range."
+        },
+        {
+          "id": "b",
+          "text": "Enable Private Google Access on the application subnet because it consumes the allocated producer range for Cloud SQL."
+        },
+        {
+          "id": "c",
+          "text": "Create a Private Service Connect endpoint for the Cloud SQL Admin API and use its endpoint IP as the database address."
+        },
+        {
+          "id": "d",
+          "text": "Add a custom route whose next hop is the allocated range so Cloud SQL can claim an address from it."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The review starts by naming caller, destination, and supported access pattern."
+      "correct": ["a"],
+      "explanation": "Cloud SQL private IP uses Private Services Access: an allocated consumer range plus a service networking connection to the producer network. Private Google Access concerns reaching Google APIs from VMs without external IPs. A Private Service Connect endpoint for an API does not supply the database instance address, and an allocated range is not a route next hop. See [Private Services Access](https://cloud.google.com/vpc/docs/private-services-access)."
+    },
+    {
+      "id": "iam-still-applies-q3",
+      "type": "single",
+      "scenario": "A Cloud Run revision calls a supported managed API through a Private Service Connect endpoint at `10.40.8.5`. Private DNS resolves the service hostname to that address, and flow logs show accepted connections. The API returns `403 PERMISSION_DENIED` for `orders-api@prod.iam.gserviceaccount.com`. What is the best next action?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Replace the endpoint with Private Services Access because a 403 proves the current private path cannot carry authenticated API calls."
+        },
+        {
+          "id": "c",
+          "text": "Add a broader route to `10.40.8.5` because an accepted TCP connection can still be corrected by route priority."
+        },
+        {
+          "id": "a",
+          "text": "Inspect the denied permission and grant the runtime service account the narrow service-specific role at the required resource scope."
+        },
+        {
+          "id": "d",
+          "text": "Change the private DNS record to the public API address so the runtime identity inherits the public service policy."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The resolved endpoint, accepted connection, and service-generated 403 show that the request reached the authorization boundary. The next step is to identify the exact denied permission and fix IAM narrowly. Switching private-access patterns or changing routes does not grant authorization, and public name resolution does not give the caller a different identity. See [Private Service Connect](https://cloud.google.com/vpc/docs/private-service-connect) and [Policy Troubleshooter](https://cloud.google.com/policy-intelligence/docs/troubleshoot-access)."
+    },
+    {
+      "id": "iam-still-applies-q2",
+      "type": "multiple",
+      "scenario": "A release adds a Private Service Connect endpoint for a managed API. The endpoint is `10.52.0.10`, private DNS returns that address, and the runtime uses `orders-api@prod.iam.gserviceaccount.com`. Which two checks directly prove both the intended network path and authorized application access before rollout?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Confirm that the endpoint resource is in READY state from an administrator workstation, without testing workload DNS or identity."
+        },
+        {
+          "id": "a",
+          "text": "Resolve the production service hostname from the workload environment and confirm it returns the approved endpoint address."
+        },
+        {
+          "id": "d",
+          "text": "Confirm that a user with Project Owner can call the API through its public hostname."
+        },
+        {
+          "id": "b",
+          "text": "Call a required API operation as the runtime service account and record the successful service response without logging sensitive payloads."
+        },
+        {
+          "id": "e",
+          "text": "Run a TCP connection test to the endpoint IP from a different subnet whose firewall and DNS policy do not match production."
+        }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Production DNS resolution proves that the workload selects the approved endpoint, while a real API operation under the runtime service account proves service authorization over that path. Endpoint readiness alone does not verify workload DNS or IAM. An Owner user's public call exercises different identity and network boundaries, and a test from a differently controlled subnet is not representative evidence. See [Private Service Connect verification](https://cloud.google.com/vpc/docs/private-service-connect)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A security review finds that an internal analytics API is reachable only through a Private Service Connect endpoint, but its IAM policy grants invocation to `allAuthenticatedUsers`. The team argues that the private endpoint makes the broad binding harmless. What is the best review finding?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep the binding and restrict the endpoint subnet further because network scope is sufficient authorization for every identity on that subnet."
+        },
+        {
+          "id": "c",
+          "text": "Replace Private Service Connect with Private Google Access because that feature automatically limits API calls to authorized service accounts."
+        },
+        {
+          "id": "d",
+          "text": "Keep the binding but remove private DNS so only callers that know the endpoint IP can invoke the service."
+        },
+        {
+          "id": "a",
+          "text": "Narrow the IAM binding to approved workload principals because private reachability and service authorization are independent controls."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The endpoint reduces network exposure, but the target service still evaluates its authorization policy. The broad binding should be narrowed to intended principals. Subnet membership is not a substitute for application authorization, Private Google Access does not rewrite IAM, and hiding DNS is not an access control. See [Private Service Connect](https://cloud.google.com/vpc/docs/private-service-connect)."
+    },
+    {
+      "id": "private-services-access-q4",
+      "type": "single",
+      "scenario": "An application VM resolves `orders-db.internal` to `10.90.1.7` and completes a TCP handshake to port 5432. PostgreSQL then returns `password authentication failed for user orders_app`. Which investigation should come next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect the database credential and database-level privileges for `orders_app`, because the connection reached PostgreSQL."
+        },
+        {
+          "id": "b",
+          "text": "Recreate the Private Services Access connection because an application authentication error means the producer route was not established."
+        },
+        {
+          "id": "c",
+          "text": "Lower the private DNS TTL because PostgreSQL uses TTL to accept or reject a database password."
+        },
+        {
+          "id": "d",
+          "text": "Broaden the VPC firewall rule to all TCP ports because port 5432 accepted the handshake but may block authentication packets."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The resolved private address, successful TCP handshake, and PostgreSQL response prove that the network path reached the database. The failure is now at database authentication or authorization. Rebuilding the private connection, changing DNS TTL, or opening more ports does not correct a rejected database credential. See [Cloud SQL private IP](https://cloud.google.com/sql/docs/postgres/private-ip)."
+    },
+    {
+      "id": "iam-still-applies-q4",
+      "type": "single",
+      "scenario": "After a private endpoint rollout, the application times out. From the same subnet, DNS resolves the approved endpoint IP, but a connection test cannot complete and no managed-service request appears in audit logs. Which next check has the highest diagnostic value?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect endpoint status, subnet routes, and firewall policy for the workload-to-endpoint path before changing IAM."
+        },
+        {
+          "id": "b",
+          "text": "Grant the runtime service account a broader service role because timeouts are the normal response to missing API permissions."
+        },
+        {
+          "id": "c",
+          "text": "Rotate the application's API credential because a new credential changes how packets reach the endpoint IP."
+        },
+        {
+          "id": "d",
+          "text": "Move the endpoint to a public subnet so audit logs can identify the request before private routing is restored."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A timeout before any service request is recorded points first to endpoint readiness or the network path. IAM failures normally require the request to reach the service and produce an authorization response. Credential rotation does not repair routing, and moving to a public path changes the design instead of diagnosing the intended private path. See [Private Service Connect troubleshooting](https://cloud.google.com/vpc/docs/private-service-connect)."
     }
   ]
 }

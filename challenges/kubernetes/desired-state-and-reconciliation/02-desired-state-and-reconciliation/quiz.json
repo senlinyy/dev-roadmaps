@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "spec-status-gap-q1",
+      "type": "single",
+      "scenario": "A production Deployment reports `spec.replicas: 3`, `status.replicas: 3`, and `status.readyReplicas: 2`. The API server accepted the manifest ten minutes ago. What is the most accurate operational reading?",
+      "options": [
+        { "id": "a", "text": "Desired state asks for three Pods, but current useful state has only two ready replicas, so status and events should be checked for the remaining gap." },
+        { "id": "b", "text": "Desired and current state match because three Pod records exist, so readiness cannot affect reconciliation or traffic." },
+        { "id": "c", "text": "The Deployment spec has been overwritten by status because both fields are stored on the same API object." },
+        { "id": "d", "text": "The replica count belongs to the Service, so the Deployment controller has no action to take." }
+      ],
+      "correct": ["a"],
+      "explanation": "The spec records the requested count, while status reports observed progress. Three existing replicas do not make the third Pod ready for traffic. The fields have different roles, and replica control belongs to the Deployment rather than the Service."
+    },
+    {
+      "id": "deleted-pod-q2",
+      "type": "single",
+      "scenario": "An operator deletes one unhealthy notification API Pod from a Deployment that still declares three replicas. No manifest or Deployment spec is changed. What should happen next if the controller path is healthy?",
+      "options": [
+        { "id": "a", "text": "The desired count automatically changes to two because deleting a Pod edits its parent Deployment." },
+        { "id": "b", "text": "The Service creates a replacement Pod because it owns every endpoint selected by its labels." },
+        { "id": "c", "text": "The ReplicaSet controller notices the current count is below desired state and creates a replacement Pod for scheduling." },
+        { "id": "d", "text": "The kubelet moves the deleted Pod object to another node while preserving its name and identity." }
+      ],
+      "correct": ["c"],
+      "explanation": "Deleting one Pod changes current state only. The Deployment and ReplicaSet still request three replicas, so the ReplicaSet controller creates another Pod object. Services manage stable access, and kubelets do not move deleted Pod identities between nodes."
+    },
+    {
+      "id": "readiness-traffic-q3",
+      "type": "single",
+      "scenario": "A newly rolled out notification API container is running, but `/readyz` fails while its database connection pool recovers. The Deployment has enough replicas and the Service selector matches the Pod label. Which behavior best reflects the declared traffic contract?",
+      "options": [
+        { "id": "a", "text": "The scheduler should delete the Pod because readiness is a node placement requirement." },
+        { "id": "b", "text": "The API server should reject the original Deployment because status cannot differ from spec." },
+        { "id": "c", "text": "The Service should keep sending traffic because a running container always counts as ready." },
+        { "id": "d", "text": "The Pod should remain out of the Service endpoint set until readiness succeeds, while controllers continue reporting rollout progress." }
+      ],
+      "correct": ["d"],
+      "explanation": "Readiness represents whether a running Pod can safely receive requests. A failed check withholds it from Service traffic without redefining scheduler placement or invalidating the stored Deployment. Rollout status can remain incomplete until enough new Pods become ready."
+    },
+    {
+      "id": "rollout-stall-q4",
+      "type": "single",
+      "scenario": "A three-replica API uses `maxSurge: 1` and `maxUnavailable: 0`. During an image update, one new Pod starts but never becomes ready. What should the team conclude from a stalled rollout rather than the earlier `configured` response?",
+      "options": [
+        { "id": "a", "text": "The API request was accepted, but reconciliation has not reached the required available state, so status, events, Pod logs, and dependency health need investigation." },
+        { "id": "b", "text": "The rollout completed because the controller created one new Pod, even though that Pod never joined traffic." },
+        { "id": "c", "text": "The strategy requires one existing ready Pod to be removed immediately so the unready replacement can receive traffic." },
+        { "id": "d", "text": "The Service should change desired replicas to four because maxSurge permanently increases the Deployment size." }
+      ],
+      "correct": ["a"],
+      "explanation": "API acceptance is only the start. The rollout remains incomplete because the new Pod has not become available. MaxUnavailable zero protects existing capacity, while maxSurge allows temporary capacity and does not permanently change desired replicas."
+    },
+    {
+      "id": "drift-review-q5",
+      "type": "multiple",
+      "scenario": "During an incident, an engineer scales the live `notification-api` Deployment from three to five replicas. The repository manifest still says three, and the Git-managed deployment pipeline will run again after the incident. Which two review comments correctly distinguish desired state and drift?",
+      "options": [
+        { "id": "a", "text": "The live scale changed the Deployment desired state in the cluster, not merely the current count of existing Pods." },
+        { "id": "c", "text": "The ReplicaSet controller will ignore the live Deployment spec and always restore the value from Git by itself." },
+        { "id": "b", "text": "The repository and live cluster now disagree, so the reviewed manifest should be updated if five replicas should persist." },
+        { "id": "d", "text": "Deleting two Pods is equivalent to recording five replicas in the repository because both actions permanently change desired state." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Scaling the Deployment edits live desired state. Because Git still requests three, the two sources have drifted and the next managed apply may restore three. Kubernetes controllers follow API objects, not Git directly, and deleting Pods changes current state without recording a lasting replica target."
+    }
+  ]
+}

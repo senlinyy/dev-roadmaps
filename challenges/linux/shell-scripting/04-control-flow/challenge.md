@@ -1,6 +1,6 @@
 ---
 title: "If/Else and For Loops"
-sectionSlug: simple-control-flow-ifelse-and-for-loops
+sectionSlug: a-safer-deploy-script
 order: 4
 ---
 

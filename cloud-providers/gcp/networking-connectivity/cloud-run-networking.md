@@ -1,7 +1,7 @@
 ---
 title: "Cloud Run Networking"
-description: "Understand Cloud Run ingress, IAM invocation, Direct VPC egress, Serverless VPC Access connectors, routing modes, DNS behavior, firewall targeting, and startup debugging."
-overview: "Cloud Run networking has two separate sides: inbound requests to the service and outbound requests from the container. This article follows the checkout API as it accepts traffic through the load balancer and reaches private dependencies through a deliberate egress path."
+description: "Understand Cloud Run ingress, IAM invocation, egress, Direct VPC egress, Serverless VPC Access connectors, DNS, firewall evidence, and startup debugging."
+overview: "Cloud Run networking has an inbound side for callers and an outbound side for dependencies. The example follows a learning API that receives traffic through a load balancer and reaches private services through a deliberate egress path."
 tags: ["gcp", "cloud-run", "ingress", "egress", "vpc"]
 order: 4
 id: article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress
@@ -12,298 +12,338 @@ aliases:
 
 ## Table of Contents
 
-1. [Ingress, Egress, and IAM](#ingress-egress-and-iam)
-2. [Public and Authenticated Invocation](#public-and-authenticated-invocation)
-3. [Cloud Run Ingress Settings](#cloud-run-ingress-settings)
-4. [Direct VPC Egress](#direct-vpc-egress)
-5. [Serverless VPC Access Connectors](#serverless-vpc-access-connectors)
-6. [Routing Modes and DNS Behavior](#routing-modes-and-dns-behavior)
-7. [Firewall Targeting and Debug Evidence](#firewall-targeting-and-debug-evidence)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Two Sides of Cloud Run Networking](#two-sides-of-cloud-run-networking)
+2. [Ingress](#ingress)
+3. [IAM Invocation](#iam-invocation)
+4. [Egress](#egress)
+5. [Direct VPC Egress](#direct-vpc-egress)
+6. [Serverless VPC Access](#serverless-vpc-access)
+7. [DNS and Firewall Evidence](#dns-and-firewall-evidence)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
 
-## Ingress, Egress, and IAM
-<!-- section-summary: Cloud Run networking has an inbound side, an outbound side, and an IAM gate for invocation. -->
+## Two Sides of Cloud Run Networking
+<!-- section-summary: Cloud Run already runs the service, and networking decides who can call it and where it can call out. -->
 
-In the previous article, the checkout API received a stable public entry path: `checkout.devpolaris.com` pointed to an external Application Load Balancer, the load balancer used HTTPS, the URL map selected a backend service, and the backend service reached Cloud Run through a serverless NEG. That explains how the public request arrives at the service boundary.
+Cloud Run already gives your container a managed compute service. It can run a web API, scale instances, serve requests, record logs, and create revisions for each deploy. Networking answers two different questions around that running service.
 
-Now we zoom in on the Cloud Run service itself. A Cloud Run service has two network directions, and they answer different questions.
+The first question is inbound: who can call the Cloud Run service, and through which network path? The second question is outbound: where can the container send traffic during calls to a private cache, database endpoint, Google API, or public payment provider?
 
-**Ingress** is the inbound side. It controls which network paths can reach the service endpoint. For example, a service might accept requests from the public internet, accept requests only from internal sources, or accept public internet requests only when they arrive through an external Application Load Balancer.
+For the learning platform, public users call `https://learn.example.com/api/courses` through an external Application Load Balancer. The Cloud Run service is `learn-api`. It should reject random direct internet calls to the generated `run.app` URL, and it should reach a private cache at `10.60.3.15:6379` through the VPC.
 
-**Egress** is the outbound side. It controls how traffic leaves the container when your code calls another system. For example, the checkout API might call a public payment provider over the internet, a private Memorystore instance through a VPC, or a Google API through private Google access patterns.
+These three controls stay separate:
 
-**IAM invocation** is the identity gate. Cloud Run services are secured by Identity and Access Management by default. A caller needs permission to invoke the service unless the service allows unauthenticated access. This applies even after the network path is allowed, so a request can pass the ingress setting and still fail IAM.
-
-These three pieces are easiest to read separately:
-
-| Question | Cloud Run control | Example |
+| Question | Cloud Run control | Example decision |
 |---|---|---|
-| Which network paths may reach the service? | **Ingress setting** | Only the external load balancer and internal sources |
-| Which identities may call the service? | **IAM / Cloud Run Invoker** | Only the load balancer identity, a scheduler job, or another service |
-| How does the service reach dependencies? | **Egress configuration** | Direct VPC egress to a private database subnet |
+| Which network paths can reach the service? | **Ingress** | Public traffic arrives through the load balancer |
+| Which identities can invoke it? | **IAM invocation** | Anonymous users or selected callers need an intentional policy |
+| How does the container reach dependencies? | **Egress** | Private cache calls use VPC egress |
 
 ![A generated infographic showing Cloud Run inbound ingress and IAM invocation as two separate request gates.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/ingress-iam-gates.png)
-*Inbound access has a network gate and an identity gate, so a request can reach Cloud Run and still fail authorization.*
+*Inbound access has a network gate and an identity gate, and outbound dependency calls have a separate path.*
 
-For the checkout API, the desired design might be: public users enter through `checkout.devpolaris.com`, direct calls to the generated `run.app` URL fail, authenticated internal jobs can invoke the service, and outbound database calls travel through the VPC. That design uses ingress, IAM, and egress together, but each piece still has its own job. Invocation comes first because public and private access are often confused with authentication.
+## Ingress
+<!-- section-summary: Ingress controls which network paths Cloud Run accepts before IAM finishes the request decision. -->
 
-## Public and Authenticated Invocation
-<!-- section-summary: Network reachability and IAM permission are separate gates on Cloud Run requests. -->
+**Ingress** is the inbound network filter for a Cloud Run service. It decides which network paths can reach the service endpoint. Cloud Run supports settings for broad public reachability, internal reachability, and external load balancer reachability combined with internal paths.
 
-A **Cloud Run invocation** is a request that reaches a Cloud Run service endpoint. Cloud Run services require authentication by default. In practical terms, that means the caller needs an identity token and the right permission, commonly the Cloud Run Invoker role, unless the service is configured to allow unauthenticated access.
+Think of ingress as the service's network doorway. It answers a different question from application login. Application login asks whether the user is allowed to use a feature. Cloud Run ingress asks whether this network path may even reach the service endpoint. A request can fail at the doorway before the app code sees it.
 
-This is separate from whether the endpoint is reachable on the network. A service can be reachable from the internet and still require IAM. A service can be restricted to load balancer ingress and still allow unauthenticated requests after the load balancer path reaches it. The first choice is network path. The second choice is caller identity.
+For the learning API, the intended doorway is the external Application Load Balancer. That keeps `https://learn.example.com/api/courses` as the public path and reduces accidental reliance on the generated `run.app` URL. The generated URL still exists for the service resource, but ingress controls whether direct public callers can use it.
 
-For a public marketing site, unauthenticated invocation might make sense. The whole point is anonymous users reading pages. For an internal admin API, authenticated invocation is usually required. For the checkout API, teams often put the public identity check at an API gateway, an application session layer, or an Identity-Aware Proxy-supported load balancer path, while the Cloud Run service itself is still protected from random direct calls by ingress settings.
+The setting you choose should match the supported entry path. If users should enter through `learn.example.com` and the external Application Load Balancer, `internal-and-cloud-load-balancing` is a common production choice. It lets external load balancer traffic reach the service while rejecting direct public calls to the generated `run.app` URL.
 
-Here are the common combinations:
-
-| Ingress path | IAM setting | What users experience |
-|---|---|---|
-| All | Allows unauthenticated | Anyone on the internet can call the service URL |
-| All | Requires authentication | Internet clients can reach the endpoint, but only authorized callers invoke it successfully |
-| Internal and Cloud Load Balancing | Allows unauthenticated | Public users can call through the external load balancer, while direct `run.app` internet calls fail |
-| Internal and Cloud Load Balancing | Requires authentication | Public load balancer path exists, and the request still needs an accepted identity at Cloud Run |
-| Internal | Requires authentication | Internal callers need both an internal path and IAM permission |
-
-The key production habit is to write down both answers. "This service is private" is too vague for an incident review. A clearer statement is: "The service uses `internal-and-cloud-load-balancing` ingress, direct `run.app` internet requests are blocked, and unauthenticated Cloud Run invocation is disabled."
-
-With invocation separated from reachability, the ingress settings make much more sense. The ingress setting is where the service says which network doors are allowed to reach it.
-
-## Cloud Run Ingress Settings
-<!-- section-summary: Ingress settings decide which network entry paths Cloud Run accepts before IAM finishes the access decision. -->
-
-Cloud Run exposes a service through endpoint paths such as the default `run.app` URL, configured domain mappings, and load balancer paths. The **ingress setting** is the service-level network filter applied to those paths.
-
-Cloud Run has three main ingress settings:
-
-| Setting | Plain meaning | Good fit |
-|---|---|---|
-| **All** | Requests from the internet can reach the service endpoint | Public services that intentionally expose the generated URL or direct domain mapping |
-| **Internal** | Only internal sources accepted by Cloud Run can reach the service | Worker APIs, internal automation, and services called from internal Google Cloud paths |
-| **Internal and Cloud Load Balancing** | Internal sources plus external Application Load Balancer traffic can reach the service | Public services that should enter through the load balancer instead of the raw service URL |
-
-For our checkout API, `internal-and-cloud-load-balancing` is the usual production fit. Internet traffic arrives through the external Application Load Balancer at `checkout.devpolaris.com`. Direct internet traffic to `https://checkout-api-abc123-uc.a.run.app` is rejected by the Cloud Run ingress gate. Internal jobs can still call the service when they use a path Cloud Run treats as internal and IAM allows the request.
-
-This is the setting that lines up with the previous article's public entry path. The load balancer remains the public contract, and the generated service URL stops acting like an alternate customer endpoint.
-
-A `gcloud` deployment might include the ingress setting like this:
+A deployment can set the ingress value:
 
 ```bash
-gcloud run deploy checkout-api \
-  --image=us-docker.pkg.dev/devpolaris-prod/apps/checkout-api:2026-06-14 \
+gcloud run deploy learn-api \
+  --project=learn-prod \
+  --image=us-docker.pkg.dev/learn-prod/apps/learn-api:2026-06-14 \
   --region=us-central1 \
   --ingress=internal-and-cloud-load-balancing
 ```
 
-The important flag is `--ingress=internal-and-cloud-load-balancing`. It keeps the generated service URL from acting as a second internet entry path while still allowing the external Application Load Balancer path. A healthy deploy output should name the service URL and finish ready:
+Important fields:
+
+- `--ingress=internal-and-cloud-load-balancing` keeps the external Application Load Balancer as the public path.
+- `--region=us-central1` must match the region used by the Cloud Run service and serverless NEG.
+- The generated service URL can still appear in output, but direct public access depends on ingress and IAM settings.
+
+Example deploy output:
 
 ```yaml
-Service [checkout-api] revision [checkout-api-00042-kvp] has been deployed and is serving 100 percent of traffic.
-URL: https://checkout-api-abc123-uc.a.run.app
+Service [learn-api] revision [learn-api-00042-web] has been deployed and is serving 100 percent of traffic.
+URL: https://learn-api-abc123-uc.a.run.app
 ```
 
-For infrastructure as code, the same intent appears in the Cloud Run service configuration. The exact resource syntax depends on the provider version your repo uses, but the important value is the ingress annotation or field that maps to `internal-and-cloud-load-balancing`.
+Ingress is network reachability. It does not replace caller identity. The next check is IAM invocation.
 
-```yaml
-apiVersion: serving.knative.dev/v1
-kind: Service
-metadata:
-  name: checkout-api
-  annotations:
-    run.googleapis.com/ingress: internal-and-cloud-load-balancing
-spec:
-  template:
-    spec:
-      containers:
-        - image: us-docker.pkg.dev/devpolaris-prod/apps/checkout-api:2026-06-14
-```
+## IAM Invocation
+<!-- section-summary: IAM invocation decides which identities may call the service after the network path reaches Cloud Run. -->
 
-Ingress controls who can reach the service from the outside. The checkout container also has to call other systems. That is the egress side.
+**IAM invocation** is the identity gate for Cloud Run requests. Cloud Run services are secured by IAM by default. A caller needs permission to invoke the service unless the service intentionally allows unauthenticated invocation.
 
-## Direct VPC Egress
-<!-- section-summary: Direct VPC egress lets Cloud Run send outbound traffic to a VPC without a Serverless VPC Access connector. -->
+This is separate from ingress. A request can reach the service through an allowed network path and still receive a `403` if the caller lacks permission. Another service can allow unauthenticated invocation and still restrict direct internet access through the ingress setting.
 
-**Direct VPC egress** lets a Cloud Run service send outbound traffic to a VPC network without using a Serverless VPC Access connector. Google Cloud currently recommends Direct VPC egress for Cloud Run VPC egress because it has simpler setup, lower latency, higher throughput, no extra connector VM charges, and revision-level network tags.
+For the learning API, the team needs to write down where user authentication happens. If the public API uses application sessions or an API gateway layer, the Cloud Run service may allow unauthenticated invocation from the load balancer path while relying on application-level auth for users. If only internal automation should call the service, the callers should have identities with `roles/run.invoker`.
 
-The phrase "outbound traffic" matters. Direct VPC egress handles connections started by the Cloud Run service. Inbound requests from a VPC to Cloud Run still use Cloud Run ingress, service URLs, internal load balancers, Private Service Connect patterns, and IAM.
+Useful review combinations:
 
-For the checkout API, Direct VPC egress is useful when the service needs to call a dependency with a private address. Common examples include a private Memorystore cache, a private Compute Engine service, a self-managed database on a VM, or an internal load balancer in the same VPC environment.
+| Ingress setting | IAM posture | Practical meaning |
+|---|---|---|
+| All | Unauthenticated allowed | Direct public service URL can invoke the service |
+| All | Authenticated callers only | Public network path exists, and caller identity is still checked |
+| Internal and Cloud Load Balancing | Unauthenticated allowed | Public users enter through load balancer, direct public service URL is blocked by ingress |
+| Internal and Cloud Load Balancing | Authenticated callers only | Load balancer path exists, and Cloud Run still requires an accepted caller identity |
+| Internal | Authenticated callers only | Internal callers need both internal reachability and IAM permission |
 
-The service chooses a VPC network, a subnet, optional network tags, and an egress routing mode. Cloud Run revisions use IP addresses from the selected subnet for VPC egress. That means subnet sizing matters for services with high scale or rapid scale-up. A tiny subnet can run out of usable addresses while the application code looks perfectly healthy.
+The important production statement should be explicit: "The service uses `internal-and-cloud-load-balancing` ingress, direct public `run.app` access is blocked, and invocation is intentionally unauthenticated because user auth happens in the application." Another service may use the same ingress setting and require IAM invocation for every caller.
 
-Here is the shape of a Direct VPC egress deployment:
+Verification should describe both controls:
 
 ```bash
-gcloud run deploy checkout-api \
-  --image=us-docker.pkg.dev/devpolaris-prod/apps/checkout-api:2026-06-14 \
+gcloud run services describe learn-api \
+  --project=learn-prod \
   --region=us-central1 \
-  --network=prod-apps \
+  --format="yaml(metadata.annotations['run.googleapis.com/ingress'],status.url)"
+
+gcloud run services get-iam-policy learn-api \
+  --project=learn-prod \
+  --region=us-central1
+```
+
+Healthy output should match the service design:
+
+```yaml
+metadata:
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+status:
+  url: https://learn-api-abc123-uc.a.run.app
+```
+
+The IAM policy then tells you who can invoke the service. A public service that still uses the Cloud Run Invoker IAM check might show `allUsers` on `roles/run.invoker`:
+
+```yaml
+bindings:
+- members:
+  - allUsers
+  role: roles/run.invoker
+etag: BwYJ9example=
+version: 1
+```
+
+`allUsers` means any internet caller can pass the IAM invocation gate after the network path reaches Cloud Run. That can be valid for a public API if user authentication happens inside the application or at the load balancer layer. The team should still write that decision down because it is a deliberate public access grant.
+
+An internal caller policy should name the calling service account instead:
+
+```yaml
+bindings:
+- members:
+  - serviceAccount:course-worker@app-course-prod.iam.gserviceaccount.com
+  role: roles/run.invoker
+etag: BwYJ8example=
+version: 1
+```
+
+`roles/run.invoker` grants the permission to invoke the receiving Cloud Run service. It does not grant permission to deploy revisions, edit environment variables, change ingress, or read secrets. For service-to-service calls, the caller also needs to send an identity token for the receiving service URL or audience, otherwise the request reaches Cloud Run and fails authorization.
+
+The error shape helps separate network blocks from IAM blocks. A direct public request to a service with `internal-and-cloud-load-balancing` ingress should fail before application handling, often as `HTTP/2 404`. A request that reaches Cloud Run but lacks an accepted identity usually returns `HTTP/2 403` with an authentication or permission message. A timeout to a private dependency points at egress, DNS, route, firewall, or service health instead of Cloud Run invocation.
+
+## Egress
+<!-- section-summary: Egress controls outbound traffic from the Cloud Run container to dependencies. -->
+
+**Egress** is outbound traffic from the Cloud Run container. Your code starts these connections as it calls another service. The destination might be a private cache, a private database endpoint, a Google API, a public SaaS API, or an internal load balancer.
+
+Egress has its own design because inbound success proves only that users can reach your service. A healthy request to `/healthz` through the load balancer does not prove that the container can reach Redis, Cloud SQL, or Secret Manager. Dependency calls need separate DNS, route, firewall, IAM, and service evidence.
+
+Cloud Run has two main VPC egress paths:
+
+| Egress path | Plain meaning | Typical use |
+|---|---|---|
+| Direct VPC egress | Cloud Run sends outbound traffic directly into a VPC subnet | New services that need private VPC destinations |
+| Serverless VPC Access connector | Cloud Run sends outbound traffic through a connector resource | Existing services and connector-based designs |
+
+The egress routing mode also matters. `private-ranges-only` sends private destination ranges through the VPC and keeps other traffic on Cloud Run's normal internet path. `all-traffic` sends all outbound traffic through the VPC, which often pairs with Cloud NAT for public internet calls that need a stable outbound path.
+
+## Direct VPC Egress
+<!-- section-summary: Direct VPC egress sends Cloud Run outbound traffic into a VPC without a connector resource. -->
+
+**Direct VPC egress** lets Cloud Run send outbound traffic to a VPC network without a Serverless VPC Access connector. Google Cloud recommends Direct VPC egress for many Cloud Run VPC egress designs because it has simpler setup, lower latency, higher throughput, no connector VM charges, and revision-level network tags.
+
+For the learning API, Direct VPC egress is useful for service calls to the private cache at `10.60.3.15:6379` or an internal API behind an internal load balancer. The service chooses a VPC network, subnet, optional network tags, and an egress mode.
+
+```bash
+gcloud run deploy learn-api \
+  --project=learn-prod \
+  --image=us-docker.pkg.dev/learn-prod/apps/learn-api:2026-06-14 \
+  --region=us-central1 \
+  --network=learn-prod-vpc \
   --subnet=run-egress-us-central1 \
-  --network-tags=checkout-api \
+  --network-tags=learn-api \
   --vpc-egress=private-ranges-only
 ```
 
-The `--network` and `--subnet` values choose where egress traffic enters the VPC. The `--network-tags` value gives firewall rules something specific to target. The `--vpc-egress` value decides which destination traffic uses the VPC path.
+Important fields:
+
+- `--network` and `--subnet` choose where outbound VPC traffic enters the network.
+- `--network-tags=learn-api` gives firewall rules a precise target for this Cloud Run revision.
+- `--vpc-egress=private-ranges-only` sends private ranges through the VPC while leaving ordinary public API calls on the default path.
+- The selected subnet needs enough free IP space for Cloud Run scale and revision behavior.
+
+Subnet size is not a cosmetic detail. Direct VPC egress allocates ephemeral IP addresses from the subnet, and Cloud Run can reserve addresses during scale-up and revision replacement. Do not write firewall policy for one individual Cloud Run IP. Use the subnet range, network tags, service identity, and destination rules that describe the workload path.
+
+In Shared VPC or centrally owned networks, the deploy can fail before the application starts if the Cloud Run service agent or deployment identity cannot use the chosen network or subnet. Keep that permission check separate from application IAM. A service can have Secret Manager access and still fail deployment because the network project rejected the subnet attachment.
+
+Startup also deserves its own check. If the app tries to connect to a private dependency during startup, a DNS or firewall problem can make the revision look unhealthy before it serves traffic. Use a startup probe or a clear dependency log so the failure says `cache.internal.example.com:6379 timed out` instead of only saying the container failed to start.
+
+Example output:
 
 ```yaml
-Service [checkout-api] revision [checkout-api-00043-vpc] has been deployed and is serving 100 percent of traffic.
+Service [learn-api] revision [learn-api-00043-vpc] has been deployed and is serving 100 percent of traffic.
 Traffic:
-  checkout-api-00043-vpc: 100%
+  learn-api-00043-vpc: 100%
 ```
 
 ![A generated infographic showing Cloud Run egress choices for public APIs, private VPC targets, Direct VPC egress, and connector paths.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/egress-route-choice.png)
-*Outbound design starts with the destination: public API calls, private IP calls, and centrally routed traffic can use different egress paths.*
+*Outbound design follows the destination: public APIs, private VPC targets, and centrally routed traffic can use different paths.*
 
-This setup gives the checkout API a VPC-aware outbound path while keeping the inbound story unchanged. Users still enter through the load balancer. The service still uses Cloud Run ingress settings and IAM for invocation. Direct VPC egress only affects packets that leave the service.
+Direct VPC egress affects outbound connections. Inbound calls to Cloud Run still use ingress settings, service URLs, load balancer paths, and IAM invocation.
 
-There is an older alternate path that many existing systems still use, so it deserves its own section. Understanding that path helps during migrations because many production services were built before Direct VPC egress was the default recommendation.
+## Serverless VPC Access
+<!-- section-summary: Serverless VPC Access connectors provide another VPC egress path and still appear in many existing systems. -->
 
-## Serverless VPC Access Connectors
-<!-- section-summary: Serverless VPC Access connectors also provide VPC egress, but they add connector resources and different firewall boundaries. -->
+A **Serverless VPC Access connector** is a managed connector resource that lets serverless products send outbound traffic to a VPC network. Many production services use connectors because they were built before Direct VPC egress was available or because the organization already has connector capacity, monitoring, and firewall rules.
 
-A **Serverless VPC Access connector** is a managed connector resource that lets serverless products send outbound traffic to a VPC network. Before Direct VPC egress, connectors were the common path for Cloud Run services that needed private VPC access.
+The connector path adds a separate resource to operate. It has its own scaling behavior, IP range, capacity, and firewall boundary. With connectors, firewall rules usually allow traffic from connector ranges or connector instances. With Direct VPC egress, firewall rules can use Cloud Run revision network tags.
 
-Connectors still appear in production for good reasons. A service may have been built before Direct VPC egress was available. A team may prefer connectors because they use fewer IP addresses in some cases. A shared connector may already have firewall rules, monitoring, and capacity controls around it.
-
-The tradeoff is operational. Google Cloud's comparison shows Direct VPC egress has lower latency, higher throughput, no additional VM charges, and finer-grained network tags. Connectors have their own scaling behavior and firewall targeting model. With a connector, firewall rules usually target connector instances or connector ranges. With Direct VPC egress, firewall rules can target the Cloud Run revision tags directly.
-
-Here is the connector-style deployment shape:
+Create and inspect the connector before wiring a service to it:
 
 ```bash
-gcloud run deploy checkout-api \
-  --image=us-docker.pkg.dev/devpolaris-prod/apps/checkout-api:2026-06-14 \
+gcloud compute networks vpc-access connectors create learn-api-connector \
+  --project=learn-prod \
   --region=us-central1 \
-  --vpc-connector=checkout-connector \
+  --network=learn-prod-vpc \
+  --range=10.60.12.0/28 \
+  --min-instances=2 \
+  --max-instances=6 \
+  --machine-type=e2-micro
+
+gcloud compute networks vpc-access connectors describe learn-api-connector \
+  --project=learn-prod \
+  --region=us-central1 \
+  --format="yaml(name,state,network,ipCidrRange,minInstances,maxInstances,machineType)"
+```
+
+Healthy evidence:
+
+```yaml
+name: learn-api-connector
+state: READY
+network: learn-prod-vpc
+ipCidrRange: 10.60.12.0/28
+minInstances: 2
+maxInstances: 6
+machineType: e2-micro
+```
+
+The IP range is connector capacity and firewall evidence, not an application subnet for Cloud Run instances. A `/28` gives the connector a small dedicated range, so it should be reserved away from VM subnets, GKE secondary ranges, Private Services Access ranges, and hybrid networks. If connector throughput or connection count grows, the team reviews connector sizing and scale settings instead of only changing the Cloud Run container.
+
+Firewall targeting differs from Direct VPC egress. With Direct VPC egress, the Cloud Run revision can carry a network tag such as `learn-api`, and egress rules can target that tag. With a connector, VPC resources usually see traffic from the connector range or connector instances, so allow rules often use source range `10.60.12.0/28`, connector-created tags where the organization relies on them, or destination VM targets. The firewall review should name which pattern the environment uses.
+
+Connector-style deployment looks like this:
+
+```bash
+gcloud run deploy learn-api \
+  --project=learn-prod \
+  --image=us-docker.pkg.dev/learn-prod/apps/learn-api:2026-06-14 \
+  --region=us-central1 \
+  --vpc-connector=learn-api-connector \
   --vpc-egress=private-ranges-only
 ```
 
-`--vpc-connector` points at the connector resource that will carry outbound traffic. The same `--vpc-egress` choice still matters, because it decides whether only private ranges or all destinations use the connector path.
+Important fields:
 
-For new Cloud Run services, teams should usually evaluate Direct VPC egress first. For existing services, a migration should compare latency, throughput, subnet IP capacity, firewall rules, tags, cost, and rollback steps. The best migration plan proves the new path with a canary revision before moving all traffic.
+- `--vpc-connector` selects the connector resource that carries outbound traffic.
+- `--vpc-egress` still decides whether private ranges or all outbound traffic use the connector.
+- Existing firewall rules may target the connector range rather than a Cloud Run network tag.
 
-Both egress methods still leave one major design choice: which destinations should route through the VPC. The answer depends on private dependencies, public SaaS calls, Google API access, and whether the organization requires centralized outbound inspection.
+For AWS readers, the broad idea is close to Lambda VPC configuration or App Runner VPC connectors: the managed runtime needs an explicit path into private networking. The differences matter in details. GCP separates Cloud Run ingress, IAM invocation, Direct VPC egress, connector egress, and firewall targeting. AWS security groups, private subnets, and IAM authorization follow their own service-specific rules.
 
-## Routing Modes and DNS Behavior
-<!-- section-summary: Private-ranges-only and all-traffic decide which destinations use VPC egress, and DNS decides which IP range a name points to. -->
+## DNS and Firewall Evidence
+<!-- section-summary: DNS answers, egress mode, firewall targets, and logs prove whether outbound Cloud Run traffic follows the intended path. -->
 
-Cloud Run VPC egress has two routing modes.
+DNS decides which IP address the container tries to reach. The egress mode then decides whether traffic to that IP range uses the VPC. If `cache.internal.example.com` resolves to `10.60.3.15`, `private-ranges-only` sends the connection through the VPC. If `api.payment.example` resolves to a public IP, `private-ranges-only` keeps it on the normal Cloud Run outbound path.
 
-**Private ranges only** routes traffic for private IP address ranges through the VPC. This is the default style for many services because calls to internal addresses use the VPC, while ordinary public internet calls keep using Cloud Run's normal outbound path. Private ranges include familiar RFC 1918 ranges such as `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.
+Google APIs need careful DNS design. Names such as `storage.googleapis.com` resolve through public Google API names by default. If the service needs private access to Google APIs through a VPC path, the team must pair the egress setting with Private Google Access and DNS that maps the API names to the documented private or restricted Google API VIPs.
 
-**All traffic** routes every outbound connection through the VPC. This is useful when the team needs central egress inspection, a static outbound IP through Cloud NAT, or a consistent path for public internet dependencies. When all traffic goes through the VPC and the service still needs public internet access, Cloud NAT or another allowed egress path is usually part of the design.
-
-The routing choice interacts with DNS. DNS answers names with IP addresses, and the egress mode then decides how traffic to that IP range leaves the service. If `redis.internal.devpolaris.com` resolves to `10.20.3.15`, private-ranges-only sends that connection through the VPC. If `api.stripe.com` resolves to a public IP, private-ranges-only keeps it on the default outbound path, while all-traffic sends it through the VPC.
-
-Google APIs need extra care because they use public names such as `storage.googleapis.com`. A service that uses private-ranges-only and needs private access to Google APIs has to combine the egress setting with Private Google Access and DNS configuration that maps the Google API name to the documented private address ranges. Without the DNS piece, the name can still resolve to public addresses, and the traffic will follow the routing mode for those addresses.
-
-Here is a practical review table for the checkout API:
-
-| Destination | DNS answer | Egress mode | Expected path |
-|---|---|---|---|
-| `redis.internal.devpolaris.com` | `10.20.3.15` | `private-ranges-only` | VPC subnet |
-| `storage.googleapis.com` with Private Google Access DNS | Private Google API range | `private-ranges-only` | VPC subnet |
-| `api.payment.example` | Public IP | `private-ranges-only` | Default Cloud Run internet path |
-| `api.payment.example` | Public IP | `all-traffic` | VPC subnet, then Cloud NAT or approved egress |
-
-This is why DNS belongs in network debugging. The application might only show `ECONNREFUSED` or `timeout`. The platform evidence needs the resolved IP, the egress mode, the route, and the firewall decision.
-
-That leads to the last operational piece: firewall targeting and startup evidence. The routing mode can be correct while a firewall rule, missing tag, exhausted subnet, or DNS answer still breaks the application.
-
-## Firewall Targeting and Debug Evidence
-<!-- section-summary: Revision tags, logs, subnet capacity, and startup checks tell teams whether Cloud Run networking is configured correctly. -->
-
-VPC firewall rules decide which traffic is allowed inside the VPC. With Direct VPC egress, Cloud Run can apply **network tags** at the revision level. A network tag is a label that firewall rules can match. This lets a firewall rule allow `checkout-api` to reach a private cache while blocking another service that uses the same subnet.
-
-For example, the checkout API might need TCP port 6379 to a Memorystore-like private endpoint range. A firewall rule can allow only sources with the `checkout-api` network tag. The shape looks like this:
+Firewall rules decide whether the VPC path allows the packet. With Direct VPC egress, a rule can use the Cloud Run revision tag:
 
 ```bash
-gcloud compute firewall-rules create allow-checkout-to-cache \
-  --network=prod-apps \
+gcloud compute firewall-rules create allow-learn-api-to-cache \
+  --project=learn-prod \
+  --network=learn-prod-vpc \
   --direction=EGRESS \
-  --action=ALLOW \
-  --rules=tcp:6379 \
-  --destination-ranges=10.20.3.0/24 \
-  --target-tags=checkout-api
+  --priority=900 \
+  --allow=tcp:6379 \
+  --destination-ranges=10.60.3.15/32 \
+  --target-tags=learn-api
 ```
 
-This rule is an egress rule, so it applies to packets leaving resources with the `checkout-api` network tag. The important fields are destination range, port, direction, and target tag. A matching describe output should show the same target tag that Cloud Run applied to the revision:
+Important fields:
 
-```yaml
-allowed:
-- IPProtocol: tcp
-  ports:
-  - '6379'
-direction: EGRESS
-destinationRanges:
-- 10.20.3.0/24
-name: allow-checkout-to-cache
-targetTags:
-- checkout-api
-```
+- `--direction=EGRESS` applies to packets leaving the tagged revision through VPC egress.
+- `--destination-ranges=10.60.3.15/32` names the private cache endpoint in this example.
+- `--target-tags=learn-api` must match the Cloud Run network tag set on the revision.
 
-Revision-level tags matter during rollouts. If a new revision deploys without the expected tag, the service may start, accept inbound traffic, and then fail only when it calls the private dependency. That failure can look like an application bug until someone checks the Cloud Run Networking tab or revision YAML.
+Cloud Run Direct VPC egress has an evidence caveat that trips people up. Firewall Rules Logging is not supported for Direct VPC egress, and VPC Flow Logs do not identify the exact Cloud Run revision name. Keep the firewall rule as configuration evidence, then combine it with revision settings, subnet capacity, DNS results, Connectivity Tests, Flow Analyzer or VPC Flow Logs where available, and dependency logs from the application.
 
-Good startup and debug evidence usually includes these checks:
+Useful debug evidence includes:
 
 | Evidence | Why it matters |
 |---|---|
-| Cloud Run revision networking settings | Confirms ingress, VPC network, subnet, tags, and egress mode |
-| Subnet free IP capacity | Catches scale-up failures caused by address exhaustion |
-| Firewall rule target and logs | Proves whether the revision tag is allowed to reach the destination |
-| DNS lookup from a similar environment | Shows whether the target name resolves to private or public ranges |
-| Application startup logs | Shows whether dependency checks fail before the service is ready |
-| Cloud Run request logs | Separates inbound delivery problems from outbound dependency problems |
-| VPC Flow Logs or firewall logs where enabled | Gives packet-level evidence for accepted or denied egress |
+| Cloud Run revision settings | Confirms ingress, network, subnet, tags, and egress mode |
+| Subnet capacity | Catches address exhaustion during scale-up |
+| DNS lookup from a similar runtime path | Shows whether the target name resolves to private or public ranges |
+| Firewall rule target | Shows whether the revision tag, connector range, or subnet path is allowed |
+| Connectivity Tests or Flow Analyzer | Helps prove the network path without relying on unsupported Direct VPC firewall logs |
+| Cloud Run request logs | Separates inbound delivery from application errors |
+| Startup logs for dependencies | Shows which private dependency failed and the failure time |
+| VPC Flow Logs where enabled | Gives packet-level evidence for VPC egress traffic, although not the exact Cloud Run revision name |
 
 ![A generated infographic separating Cloud Run 403 IAM failures, blocked ingress, private IP timeouts, and DNS answer checks.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/cloud-run-debug-sides.png)
-*A `403`, a blocked direct URL, and a private dependency timeout point to different sides of the Cloud Run networking story.*
+*A `403`, a blocked direct URL, and a private dependency timeout point to different sides of Cloud Run networking.*
 
-For a container that checks its database or cache during startup, useful logs include the target hostname, the resolved family if your runtime exposes it safely, the connection timeout, and the dependency name. Secrets, tokens, and full connection strings should stay out of logs. A message such as `cache dependency check failed for redis.internal.devpolaris.com:6379 after 3000ms` gives the network team enough to start without exposing credentials.
+Application logs should include dependency names, hostnames, ports, timeout length, and sanitized error codes. They should avoid secrets, tokens, passwords, and full connection strings. A message such as `cache dependency check failed for cache.internal.example.com:6379 after 3000ms` gives the network team a useful starting point.
 
-The most common debugging mistake is mixing inbound and outbound evidence. A successful request to `checkout.devpolaris.com/healthz` proves the load balancer and Cloud Run ingress path. Database reachability needs its own egress evidence. A successful `redis` connection from startup proves egress, DNS, route, and firewall for that dependency. User invocation needs its own ingress evidence. The two evidence trails need separate review.
+## Putting It Together
+<!-- section-summary: A production Cloud Run service states ingress, invocation, egress, DNS, firewall, and evidence decisions clearly. -->
 
-## Putting It All Together
-<!-- section-summary: A production Cloud Run service states its ingress, IAM, egress route, DNS expectations, and debug evidence clearly. -->
+The learning API now has a clear network statement. Public users call `https://learn.example.com`. DNS points that name to the external Application Load Balancer. The load balancer handles HTTPS, URL map routing, and the serverless NEG handoff. Cloud Run ingress uses `internal-and-cloud-load-balancing`, so the supported public path is the load balancer path.
 
-Let's bring the checkout API together.
+The invocation policy is written down separately. If unauthenticated invocation is allowed, the team states where user authentication happens. If IAM invocation is required, the callers and `roles/run.invoker` bindings are part of the release review.
 
-For inbound traffic, public users call `https://checkout.devpolaris.com`. DNS points that name to the external Application Load Balancer. The load balancer handles HTTPS, URL map routing, and the serverless NEG handoff. The Cloud Run service uses `internal-and-cloud-load-balancing` ingress so internet clients cannot bypass the load balancer by calling the generated `run.app` URL.
+Outbound traffic uses Direct VPC egress through `learn-prod-vpc` and subnet `run-egress-us-central1`. The revision tag `learn-api` lets the firewall allow TCP `6379` to the private cache endpoint. The service uses `private-ranges-only` because private dependencies should use the VPC, while ordinary public API calls can use the default Cloud Run outbound path. If a vendor requires a static outbound IP, the team can evaluate `all-traffic` with Cloud NAT.
 
-For invocation, the team writes down whether Cloud Run allows unauthenticated calls or requires IAM. If IAM is required, callers need the accepted identity token and invoker permission. If unauthenticated invocation is allowed, the team should still explain where user-level authentication happens, such as application sessions, API gateway policy, IAP where supported, or another identity layer.
-
-For outbound traffic, the service uses Direct VPC egress to the `prod-apps` VPC and `run-egress-us-central1` subnet. The `checkout-api` network tag lets firewall rules allow only this service to reach the private cache range. The service chooses `private-ranges-only` because cache and internal service calls should use the VPC, while ordinary public payment API calls can use the default outbound path. If the payment provider requires a static outbound IP, the team can revisit `all-traffic` plus Cloud NAT.
-
-The final production review statement sounds like this:
+The final review table gives on-call engineers concrete checks:
 
 | Area | Decision |
 |---|---|
-| Public entry | `checkout.devpolaris.com` through external Application Load Balancer |
-| Direct service URL | Blocked from direct internet calls by Cloud Run ingress |
-| Invocation | Documented as authenticated or intentionally unauthenticated |
-| VPC egress | Direct VPC egress through `prod-apps/run-egress-us-central1` |
+| Public entry | `learn.example.com` through external Application Load Balancer |
+| Direct service URL | Blocked from direct public access by Cloud Run ingress |
+| Invocation | Authenticated or unauthenticated policy documented |
+| VPC egress | Direct VPC egress through `learn-prod-vpc/run-egress-us-central1` |
 | Routing mode | `private-ranges-only` for private dependencies |
-| Firewall | Egress allowed from revision tag `checkout-api` to required private ranges and ports |
-| DNS | Internal names resolve to private ranges; Google API private access has matching DNS when needed |
-| Evidence | DNS, certificate, load balancer logs, Cloud Run logs, revision settings, firewall logs, and dependency startup checks |
+| Firewall | Egress allowed from revision tag `learn-api` to required private ranges and ports |
+| DNS | Internal names resolve to private ranges; Google API private access has matching DNS if used |
+| Evidence | DNS, certificate, load balancer logs, Cloud Run logs, revision settings, firewall rule configuration, Connectivity Tests or Flow Analyzer, dependency checks |
 
-That is a much clearer service than "Cloud Run is public" or "Cloud Run is private." The team knows which door users use, which identities can invoke the service, which path outbound packets follow, and which logs prove each layer.
+## References
 
-## What's Next
-<!-- section-summary: The next article moves from Cloud Run egress into private access patterns for managed services and Google APIs. -->
-
-Cloud Run now has an inbound access plan and an outbound VPC plan. The remaining networking questions usually involve managed services: Cloud SQL, Cloud Storage, Google APIs, private service producer networks, Private Service Connect, and DNS for private Google access.
-
-The next article moves into those private access patterns. The focus shifts from "Can Cloud Run send traffic into a VPC?" to "Which private endpoint pattern should this dependency use, and how do DNS and IAM support it?"
-
----
-
-**References**
-
-- [Google Cloud: Restrict network endpoint ingress for Cloud Run services](https://docs.cloud.google.com/run/docs/securing/ingress) - Documents Cloud Run ingress paths, ingress settings, and the layered use of ingress plus IAM.
-- [Google Cloud: Cloud Run authentication overview](https://docs.cloud.google.com/run/docs/authenticating/overview) - Explains default private deployment, IAM-secured invocation, Cloud Run Invoker access, and unauthenticated access options.
-- [Google Cloud: Direct VPC with a VPC network](https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc) - Documents Direct VPC egress, network and subnet selection, revision-level tags, routing settings, and the lack of Direct VPC ingress for services.
-- [Google Cloud: Compare Direct VPC egress and VPC connectors](https://docs.cloud.google.com/run/docs/configuring/connecting-vpc) - Compares Direct VPC egress with Serverless VPC Access connectors and identifies Direct VPC egress as the recommended path.
-- [Google Cloud: Private networking and Cloud Run](https://docs.cloud.google.com/run/docs/securing/private-networking) - Explains private request paths and the role of VPC routing for internal Cloud Run access.
-- [Google Cloud: Best practices for Cloud Run networking](https://docs.cloud.google.com/run/docs/configuring/networking-best-practices) - Covers Direct VPC egress performance, all-traffic routing with Cloud NAT, private-ranges-only routing, Private Google Access, DNS, and connection practices.
+- [Restrict network ingress for Cloud Run services](https://docs.cloud.google.com/run/docs/securing/ingress) - Documents Cloud Run ingress paths and ingress settings.
+- [Cloud Run authentication overview](https://docs.cloud.google.com/run/docs/authenticating/overview) - Explains IAM-secured invocation, Cloud Run Invoker access, and unauthenticated access options.
+- [Direct VPC with a VPC network](https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc) - Documents Direct VPC egress, network and subnet selection, revision-level tags, and routing settings.
+- [Connect to a VPC network](https://docs.cloud.google.com/run/docs/configuring/connecting-vpc) - Compares Direct VPC egress and Serverless VPC Access connectors.
+- [Private networking and Cloud Run](https://docs.cloud.google.com/run/docs/securing/private-networking) - Explains private request paths and VPC routing patterns for Cloud Run.
+- [Best practices for Cloud Run networking](https://docs.cloud.google.com/run/docs/configuring/networking-best-practices) - Covers egress routing, Cloud NAT, Private Google Access, DNS, and connection practices.
+- [Private Google Access](https://docs.cloud.google.com/vpc/docs/private-google-access) - Explains private access from internal-IP resources to Google APIs and services.

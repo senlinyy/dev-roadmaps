@@ -1,80 +1,141 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The same image works in staging but production checkout writes receipts to the wrong storage account. Which layer is most likely involved?",
+      "scenario": "The same tested container image succeeds in staging but production writes receipt files to `stdevpolarisdev` instead of `stdevpolarisprod`. The release record shows no image change between the environments, only different runtime settings. Which layer should the incident review inspect first?",
       "options": [
         {
           "id": "a",
-          "text": "Runtime configuration."
+          "text": "Runtime configuration, because the artifact stayed the same while the environment-specific target changed."
         },
         {
           "id": "b",
-          "text": "The image build step only."
+          "text": "Container image build arguments, because the storage account target should be baked into the tested artifact instead of varying at runtime."
         },
         {
           "id": "c",
-          "text": "The Azure region name only."
+          "text": "The App Configuration label or deployment-slot setting mapping that decides which environment-specific values production receives at runtime."
         },
         {
           "id": "d",
-          "text": "The markdown release note."
+          "text": "The managed identity or shared credential used to authenticate to the intended storage account."
         }
       ],
-      "correct": ["a"],
-      "explanation": "The same artifact can behave differently when production receives different runtime values."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Runtime configuration is the right first check because the artifact is unchanged and only the environment values differ. The closest distractor is inspecting the identity or credential, because bad auth can also break storage access, but the scenario points first to the wrong target name being selected rather than a failed login to the right target. Baking the target into build arguments is the opposite of the article's one-artifact design. See [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common) and [Best practices for Azure App Configuration](https://learn.microsoft.com/en-us/azure/azure-app-configuration/howto-best-practices)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "Which values are runtime configuration for `devpolaris-orders-api`?",
+      "type": "single",
+      "scenario": "A release owner enables `CheckoutV2` for all production users by changing one live setting at 14:00. At 14:02, checkout errors double and support cannot tell whether the right fallback value is `false`, `internal-only`, or `pilot-users`. What was missing from the rollout plan?",
       "options": [
         {
-          "id": "a",
-          "text": "`ORDERS_DB_SERVER`."
-        },
-        {
           "id": "b",
-          "text": "`RECEIPTS_STORAGE_ACCOUNT`."
+          "text": "A named fallback value and rollback procedure captured before the flag change, even if the team still plans to enable all users at once."
         },
         {
           "id": "c",
-          "text": "`CHECKOUT_PAYMENTS_ENABLED`."
+          "text": "A requirement to move the flag into a database table, because rollback is safer when flags are stored outside application configuration."
+        },
+        {
+          "id": "a",
+          "text": "A staged feature-flag rollout with ownership, telemetry, and a known rollback value captured before the change."
         },
         {
           "id": "d",
-          "text": "The course article title."
+          "text": "A separate production slot swap, because live flag changes should only happen by moving users between deployment slots."
         }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Database targets, storage targets, and feature flags are runtime values the app receives outside source code."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The missing control is a staged flag plan with clear rollback evidence. The closest distractor is capturing a fallback value without staging, because that is materially better than the current plan, but it still leaves the team doing an all-at-once blast-radius change with weak telemetry gates. Moving flags into a database or relying on slot swaps does not solve the rollout-design gap by itself. See [Best practices for Azure App Configuration](https://learn.microsoft.com/en-us/azure/azure-app-configuration/howto-best-practices)."
     },
     {
       "id": "q3",
-      "type": "single",
-      "scenario": "A setting is saved in the portal, but checkout still fails. What should the team remember?",
+      "type": "multiple",
+      "scenario": "The production approval for revision `ca-orders--20260709-2` includes three configuration patterns in the same release package: a database password in a plain app setting, a Key Vault reference resolved with managed identity, and a service principal secret committed to a deployment helper script. Which patterns should block promotion until they are corrected?",
       "options": [
         {
           "id": "a",
-          "text": "Saving configuration is not the same as proving the app received it and behaves correctly."
-        },
-        {
-          "id": "b",
-          "text": "Portal settings always apply without restart or runtime effects."
+          "text": "A database password stored directly in a plain app setting."
         },
         {
           "id": "c",
-          "text": "The issue cannot be configuration after a value is saved."
+          "text": "A Key Vault reference resolved by the runtime through a managed identity with scoped access."
+        },
+        {
+          "id": "b",
+          "text": "A service principal secret committed to a deployment helper script."
         },
         {
           "id": "d",
-          "text": "The safest fix is to add duplicate settings with similar names."
+          "text": "A queue connection value stored in Azure App Configuration, with the secret resolved through Key Vault and referenced by the runtime."
         }
       ],
-      "correct": ["a"],
-      "explanation": "The app still needs to receive the value and prove behavior through safe evidence."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Both reusable credentials in plain settings and committed scripts should block promotion. The closest distractor is the Key Vault reference, because it still involves secret use, but it is the preferred pattern when the runtime resolves the secret through managed identity and scoped access rather than embedding the secret value in code or settings. A queue connection routed through App Configuration and Key Vault is also a valid secret-handling pattern rather than a promotion blocker. See [Use Key Vault references as app settings in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references) and [Managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A configuration-only release changes the database server, queue name, and one feature flag in the same deployment. Failures begin immediately, but the release owner did not capture the previous values anywhere in the approval record. What is the main rollback problem?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Azure prevents settings from being changed back after the deployment is marked successful."
+        },
+        {
+          "id": "a",
+          "text": "The team cannot quickly restore the known-good runtime values."
+        },
+        {
+          "id": "c",
+          "text": "The team must redeploy the previous image first, because configuration-only rollback is not a supported response."
+        },
+        {
+          "id": "d",
+          "text": "The failure is probably unrelated to configuration, because runtime values do not usually break a healthy artifact."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The core rollback failure is missing known-good values. The closest distractor is rolling back the previous image, because that can be part of some incidents, but this scenario is configuration-only and the article stresses that config changes need their own rollback evidence. Azure does allow setting changes, and runtime values can absolutely break a healthy artifact. See [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A canary release note says only `deploy orders-api` and `watch errors for ten minutes`. It does not name the image digest, App Service slot, or Container Apps revision that should receive traffic. What is the first production review finding?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The release note should at least name the slot or revision, because the exact image digest can be recovered later from platform logs if needed."
+        },
+        {
+          "id": "c",
+          "text": "The release note should at least name the image digest, because that alone is enough to identify the production candidate during rollout and rollback."
+        },
+        {
+          "id": "d",
+          "text": "The release note should at least name the service and deployment time, because operators can infer the exact slot or revision from telemetry after the change."
+        },
+        {
+          "id": "a",
+          "text": "The candidate is not identified precisely enough to promote or roll back safely."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Safe rollout evidence starts by naming the exact candidate. The closest distractor is naming only the image digest, because artifact identity is critical, but the approval record still needs the runtime target such as the slot or revision that should receive traffic. Naming only the slot, or only the service and time, still leaves rollback slower and more ambiguous than it should be. See [Deployment best practices for Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-best-practices) and [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)."
     }
   ]
 }

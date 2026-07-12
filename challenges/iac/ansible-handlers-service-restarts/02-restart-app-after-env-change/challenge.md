@@ -1,6 +1,6 @@
 ---
 title: "Restart App After Env Change"
-sectionSlug: "restarting-a-systemd-service-after-environment-changes"
+sectionSlug: reload-restart-and-daemon_reload
 order: 2
 ---
 

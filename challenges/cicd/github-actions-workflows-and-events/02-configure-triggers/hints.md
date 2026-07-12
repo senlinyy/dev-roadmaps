@@ -1,1 +1,1 @@
-Each event type in the `on` block can have a `branches` key that accepts an array of branch names or patterns. For `pull_request`, the branches filter refers to the base (target) branch, not the source branch.
+Configure each event separately. The push branch filter applies to the branch being pushed; the pull request branch filter applies to the PR base branch.

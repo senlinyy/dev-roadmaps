@@ -1,7 +1,6 @@
 ---
-title: "Read The Packet Rule"
-sectionSlug: network-security-groups
+title: "Network Security Groups"
 order: 1
 ---
 
-Use the questions to understand what an NSG rule says and what it does not say. The scenario stays around `devpolaris-orders-api` traffic.
+Use the article to answer the NSG review scenarios with the evidence given in each case.

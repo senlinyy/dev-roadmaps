@@ -1,1 +1,1 @@
-The root provider setup is already in `main.tf`. Add the child module call there too.
+A module call names a source and then passes values for the child module's variables. Think like a caller, not like the module author.

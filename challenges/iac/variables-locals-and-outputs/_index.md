@@ -1,5 +1,5 @@
 ---
-title: "Variables, Locals, and Outputs"
+title: "Input Variables"
 description: "Practice moving outside choices into variables, naming module decisions with locals, exposing review outputs, and judging sensitive values."
 articleId: article-iac-terraform-values-input-variables
 difficulty: easy

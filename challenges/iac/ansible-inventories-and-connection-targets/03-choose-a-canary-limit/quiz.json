@@ -4,29 +4,192 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The production group has `orders-web-01` and `orders-web-02`. You want the first run to touch only `orders-web-01` while still using the production inventory. Which target choice is safest?",
+      "scenario": "The instance behind `10.42.10.11` was rebuilt and now uses `10.42.10.31`. Deployment records, monitoring, and runbooks still refer to `orders-web-01`. Which inventory change preserves the useful operational identity?",
       "options": [
         {
-          "id": "a",
-          "text": "`--limit orders-web-01` with the normal production inventory."
-        },
-        {
           "id": "b",
-          "text": "`--limit all` because the playbook has only one role."
+          "text": "Keep `orders-web-01` as the inventory name and update its `ansible_host` to `10.42.10.31`."
         },
         {
           "id": "c",
-          "text": "Remove `orders-web-02` from inventory and put it back after the run."
+          "text": "Put the new IP directly in every play that targets the web tier."
         },
         {
           "id": "d",
-          "text": "Run against `localhost` first because that proves the remote hosts will work."
+          "text": "Add both IP addresses as separate inventory hosts until the next release."
+        },
+        {
+          "id": "a",
+          "text": "Rename the host to `10.42.10.31` so the inventory name and connection address cannot differ."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The stable inventory name remains meaningful to people and appears in Ansible output, while `ansible_host` carries the current network destination. Renaming the host to an IP loses that abstraction, copying addresses into plays mixes host data with task logic, and keeping the retired address creates an unsafe duplicate target. See [inventory aliases and connection variables](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The baseline play should configure every production server, while the Nginx release should configure only production web servers. Inventory contains child groups `prod_web`, `prod_workers`, and `prod_reporting` under `prod`. Which targeting design best uses that map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "List the current IP addresses in each play so group membership cannot affect a run."
+        },
+        {
+          "id": "c",
+          "text": "Target `prod` for the baseline and `prod_web` for the Nginx release."
+        },
+        {
+          "id": "d",
+          "text": "Move web hosts out of `prod` before the baseline run, then add them back for the release."
+        },
+        {
+          "id": "b",
+          "text": "Target `all` for both plays and let task names communicate which hosts should change."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Child groups let the broader `prod` pattern include every production role while `prod_web` expresses the smaller release boundary. Hardcoded addresses and temporary membership changes make the real fleet harder to review. A task name does not narrow Ansible's selected hosts."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A pull request adds `orders-web-03` to `inventories/prod/hosts.yml`. The fleet is small and host additions require review. What is the strongest reason to keep this inventory static for now?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The file automatically updates when cloud instances are replaced by autoscaling."
+        },
+        {
+          "id": "c",
+          "text": "Static inventory removes the need for group and host variables."
+        },
+        {
+          "id": "a",
+          "text": "The reviewed diff shows the host name, connection address, and production group it will join."
+        },
+        {
+          "id": "b",
+          "text": "Static inventory guarantees that every connection succeeds before a playbook starts."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "`--limit orders-web-01` keeps the inventory honest and narrows only this run. Editing production inventory to create a canary hides the real fleet shape."
+      "explanation": "For a small stable fleet, a static file makes membership changes explicit in version control. It does not prove connectivity, remove variable scoping, or follow autoscaling automatically. Those last requirements are reasons to consider dynamic inventory later."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An EC2 inventory plugin returns `orders-web-01`, `orders-web-02`, and decommissioned `orders-web-old`. The plugin groups instances from `Environment=prod` and `Tier=web` tags. What should happen before the release play runs?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Use `ignore_unreachable` so stale cloud metadata cannot fail the release."
+        },
+        {
+          "id": "a",
+          "text": "Run the play and rely on service tasks to ignore the decommissioned instance."
+        },
+        {
+          "id": "d",
+          "text": "Inspect the compiled inventory, correct the stale tag or plugin filter, refresh it, and verify the target group again."
+        },
+        {
+          "id": "b",
+          "text": "Convert the result to a permanent static host list without investigating the source metadata."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Dynamic inventory is only as accurate as its filters, credentials, region, cache, and source tags. Fixing the source and re-inspecting the compiled map removes the stale target. Ignoring it or freezing an unexplained result hides the targeting defect. See [working with dynamic inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_dynamic_inventory.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "CI is about to deploy `deploy-orders-web.yml`. The job prints no target preview, and a reviewer suspects the wrong inventory directory was selected. Which check answers the reviewer's immediate question without changing a host?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Open the playbook and count the tasks because task count determines inventory selection."
+        },
+        {
+          "id": "a",
+          "text": "Run the playbook with `--list-hosts` against the selected inventory and compare the resolved host set with the release scope."
+        },
+        {
+          "id": "d",
+          "text": "Inspect only `group_vars` because the variable directory defines every selected host."
+        },
+        {
+          "id": "b",
+          "text": "Run the complete playbook in check mode and treat any output as proof that the host set is correct."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`--list-hosts` reveals the playbook's resolved target set before task execution. Check mode can still use the wrong targets, task count says nothing about membership, and group variables do not replace the compiled inventory graph. See the [ansible-playbook CLI reference](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "The first production run must touch only `orders-web-01`. Before approval, the team wants evidence that the alias resolves correctly and that Ansible can transfer and execute a module. Which two checks directly provide that evidence?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Run the whole deployment with `ignore_errors` so connection evidence is collected during changes."
+        },
+        {
+          "id": "d",
+          "text": "Run `ansible.builtin.ping` against the limited production host before the deployment."
+        },
+        {
+          "id": "b",
+          "text": "Inspect `ansible-inventory --host orders-web-01` for the final connection variables."
+        },
+        {
+          "id": "a",
+          "text": "Remove every other web host from the production inventory for the duration of the canary."
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "The compiled host view proves the final address and connection settings, while the ping module proves Ansible can connect, transfer a module, execute it, and receive a response. Editing inventory distorts the real fleet, and `ignore_errors` mixes diagnosis with a live change. See [ansible-inventory](https://docs.ansible.com/projects/ansible/latest/cli/ansible-inventory.html) and [the ping module](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/ping_module.html)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A staging run unexpectedly changed `orders-web-03` in production. The compiled inventory shows that host under both `staging_web` and `prod_web` because of a YAML indentation error. What is the safest recovery path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rename `orders-web-03` so future recap output no longer shows the production identity."
+        },
+        {
+          "id": "d",
+          "text": "Move all inventory variables into the playbook so group membership has less influence."
+        },
+        {
+          "id": "c",
+          "text": "Stop the rollout, correct and re-inspect group membership, assess the unintended host, then rerun with an explicit reviewed limit."
+        },
+        {
+          "id": "b",
+          "text": "Keep the map unchanged and add `ignore_errors` to the staging playbook."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The targeting map is wrong, so the team should stop, repair and verify it, assess the unintended production change, and use a narrow retry. Renaming the host or hiding errors does not correct membership. Moving connection data into the playbook would make the boundary harder to audit."
     }
   ]
 }

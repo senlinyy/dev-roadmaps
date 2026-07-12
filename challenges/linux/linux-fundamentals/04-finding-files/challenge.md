@@ -1,6 +1,6 @@
 ---
 title: "Hunt Down Files"
-sectionSlug: finding-files-find-locate-and-tree
+sectionSlug: find-files-when-you-do-not-know-the-path
 order: 4
 ---
 

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "caller-proof-q1",
+      "type": "single",
+      "scenario": "Checkout reports that order history is unavailable. An engineer wants to begin by restarting CoreDNS because the application log says `request failed`. No request has yet been reproduced from the checkout namespace. What is the best first move?",
+      "options": [
+        { "id": "a", "text": "Restart CoreDNS and then inspect the orders Deployment if the symptom remains." },
+        { "id": "b", "text": "Capture the exact request from the real caller context, including URL, timeout, source namespace, and source labels." },
+        { "id": "c", "text": "Inspect the public Ingress because every internal Service failure begins at the edge controller." },
+        { "id": "d", "text": "Scale the orders Deployment to add capacity before collecting network evidence." }
+      ],
+      "correct": ["b"],
+      "explanation": "The first caller proof defines the failing path and preserves the source context that DNS and policy checks depend on. Restarting DNS, inspecting the edge, or scaling capacity changes or expands the investigation before the failure has been reproduced."
+    },
+    {
+      "id": "service-backends-q2",
+      "type": "single",
+      "scenario": "From a checkout debug Pod, `orders-api.orders` resolves to `10.96.42.18`. The Service publishes port 80, but its EndpointSlice contains no addresses. Orders Pods are `Running` and carry `app.kubernetes.io/name=orders-api`; the Service selector is `app.kubernetes.io/name=order-api`. What is the smallest supported fix?",
+      "options": [
+        { "id": "a", "text": "Change the caller to use a current Pod IP because DNS resolution has already proved the Service path." },
+        { "id": "b", "text": "Change the Service to NodePort so Kubernetes creates EndpointSlice addresses." },
+        { "id": "c", "text": "Restart the running Pods so the existing mismatched selector is reevaluated." },
+        { "id": "d", "text": "Align the Service selector with the stable orders API Pod label, then confirm ready addresses appear in EndpointSlices." }
+      ],
+      "correct": ["d"],
+      "explanation": "The empty backend list follows directly from the selector mismatch. Aligning the selector and then checking EndpointSlices repairs and proves the failed layer. Direct Pod IPs bypass the stable contract, Service type does not repair selection, and restarts do not change mismatched labels."
+    },
+    {
+      "id": "listener-proof-q3",
+      "type": "single",
+      "scenario": "DNS resolves, the Service maps port 80 to target port 3000, and EndpointSlices list two ready Pod IPs on port 3000. The Service request times out. A direct request to `10.244.4.31:3000` returns `Connection refused`, and the app log says `Listening on 127.0.0.1:3000`. Which diagnosis best matches the evidence?",
+      "options": [
+        { "id": "a", "text": "The application listener is bound only to loopback and should listen on an address reachable through the Pod network." },
+        { "id": "b", "text": "CoreDNS returned the wrong ClusterIP because a refused Pod IP request is a DNS failure." },
+        { "id": "c", "text": "The Service selector is empty because EndpointSlices with ready addresses are generated before selection." },
+        { "id": "d", "text": "The edge route has the wrong host because direct Pod traffic passes through the Ingress controller." }
+      ],
+      "correct": ["a"],
+      "explanation": "The direct Pod request reaches the backend address but finds no listener available to other Pods, and the log confirms a loopback bind. DNS is bypassed by the Pod IP test, ready EndpointSlices prove backend selection, and direct Pod traffic does not traverse the edge route."
+    },
+    {
+      "id": "policy-evidence-q4",
+      "type": "single",
+      "scenario": "A labeled checkout debug Pod resolves the Service and sees ready EndpointSlices, but both the Service request and direct Pod IP request time out. A new ingress policy protects orders API Pods and expects the checkout namespace label `kubernetes.io/metadata.name=checkout`. Which evidence should be compared next?",
+      "options": [
+        { "id": "a", "text": "The public TLS certificate and Ingress host, because timeouts from inside the cluster are edge failures." },
+        { "id": "b", "text": "The orders image digest and CPU request, because policy cannot affect direct Pod IP traffic." },
+        { "id": "c", "text": "The actual checkout namespace label, caller Pod label, destination Pod label, policy direction, and destination port." },
+        { "id": "d", "text": "Only the Service ClusterIP, because NetworkPolicy selects Services rather than Pods." }
+      ],
+      "correct": ["c"],
+      "explanation": "Policy debugging compares the real source and destination identities, direction, and port used by the flow. Internal direct Pod traffic bypasses the edge but can still be blocked by policy. NetworkPolicy selects Pods, so the Service ClusterIP alone cannot prove the rule matches."
+    },
+    {
+      "id": "recovery-evidence-q5",
+      "type": "multiple",
+      "scenario": "The team fixes an orders Service selector after proving it matched zero Pods. Which two pieces of evidence best close the incident without widening the change?",
+      "options": [
+        { "id": "a", "text": "EndpointSlices now list ready orders API Pod addresses selected by the corrected Service." },
+        { "id": "b", "text": "The orders Deployment was restarted even though its Pod labels and listener did not change." },
+        { "id": "c", "text": "The original checkout caller request now succeeds from the same namespace and label context." },
+        { "id": "d", "text": "The public Ingress controller logs contain no errors, even though the incident involved an internal call." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Ready EndpointSlice addresses prove the selector now builds a usable backend list, and repeating the original caller request closes the same path that failed. An unrelated restart adds change without proof, while edge logs do not validate this internal Service incident."
+    }
+  ]
+}

@@ -1,14 +1,16 @@
 ---
 title: "Build Common Locals"
-sectionSlug: locals
+sectionSlug: consuming-variables-in-locals-and-resources
 order: 2
 ---
 
-Move naming and tags into `locals.tf`, then update `s3.tf` to consume them.
+The resource repeats naming and tag logic that should live in one local expression. Shape the service and environment inputs once, then let the bucket consume those local values.
 
-Requirements:
+Your job:
 
-1. **Local:** `name_prefix = "${var.service_name}-${var.environment}"`.
-2. **Local:** `common_tags` with `service = var.service_name`, `environment = var.environment`, `managed_by = "terraform"`, merged with `var.extra_tags`.
-3. **Bucket name:** `dp-${local.name_prefix}-invoices`.
-4. **Resource tags:** use `local.common_tags`.
+1. **Create a local name prefix** from the service and environment inputs.
+2. **Create common tags** from service, environment, managed-by, and caller-provided extra tags.
+3. **Use the local name prefix** when building the invoice bucket name.
+4. **Use the local tag map** on the bucket resource.
+
+The grader checks the locals and resource references in HCL.

@@ -1,6 +1,6 @@
 ---
 title: "Building Pipelines"
-sectionSlug: building-pipelines
+sectionSlug: build-incident-pipelines
 order: 6
 ---
 

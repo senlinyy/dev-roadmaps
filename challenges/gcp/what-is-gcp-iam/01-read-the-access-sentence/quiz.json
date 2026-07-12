@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Cloud Run fails with `Permission 'secretmanager.versions.access' denied` on `projects/devpolaris-orders-prod/secrets/orders-db-url`. What is the best first framing?",
+      "scenario": "Northstar Analytics is granting temporary read access for a quarter-end audit. Only group `analytics-readers@example.com` may read dataset `orders_mart` in project `analytics-prod`, and access must expire on September 30 without a manual cleanup ticket. Which implementation best preserves the approved principal, role, resource scope, and time constraint?",
       "options": [
-        { "id": "a", "text": "Rebuild the access sentence: which principal needs which role on which resource." },
-        { "id": "b", "text": "Grant project Owner immediately because the error mentions production." },
-        { "id": "c", "text": "Move the secret into the container image so IAM is not involved." },
-        { "id": "d", "text": "Delete the secret because denied requests prove it is unused." }
+        {
+          "id": "b",
+          "text": "Grant the group `roles/bigquery.dataViewer` at project scope and use a calendar reminder to remove it after September 30."
+        },
+        {
+          "id": "c",
+          "text": "Bind the role to the individual auditors on the dataset and remove them manually when the audit team reports completion."
+        },
+        {
+          "id": "d",
+          "text": "Grant the group `roles/bigquery.jobUser` on the project with an expiry condition, treating query-job creation as equivalent to reading dataset rows."
+        },
+        {
+          "id": "a",
+          "text": "Bind `roles/bigquery.dataViewer` to the group on `orders_mart` and add an IAM Condition that expires the binding on September 30."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article teaches IAM as a relationship. The team should identify principal, permission, resource, role, binding, and scope before changing access."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The dataset-level Data Viewer binding gives the approved group read access at the required resource scope, and an IAM Condition enforces the expiry without relying on manual cleanup. Project scope is broader than requested, individual bindings change the approved principal and still need manual removal, and BigQuery Job User permits job creation but does not replace dataset data access. See [IAM Conditions](https://cloud.google.com/iam/docs/conditions-overview) and [BigQuery IAM roles](https://cloud.google.com/bigquery/docs/access-control)."
+    },
+    {
+      "id": "choose-role-and-scope-q1",
+      "type": "single",
+      "scenario": "A deployer only needs to update one Cloud Run service in project orders-prod. The proposed grant is roles/owner at project scope. What should the reviewer request?",
+      "options": [
+        {
+          "id": "d",
+          "text": "A project-level Cloud Run Admin role plus Service Account Admin, even if the workflow only updates one existing service."
+        },
+        {
+          "id": "a",
+          "text": "A role containing the needed Cloud Run update permissions at the narrowest practical service or project scope."
+        },
+        {
+          "id": "b",
+          "text": "Project Owner with a 30-day condition, postponing identification of the service update and service-account-use permissions."
+        },
+        {
+          "id": "c",
+          "text": "Cloud Run Viewer on the service because read access to configuration should permit revision creation and traffic changes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Role and scope should match the needed action. Owner is far too broad, storage administration is unrelated unless the workflow needs it, and a service URL does not grant update permission. See [Cloud Run IAM roles and deployment permissions](https://cloud.google.com/run/docs/reference/iam/roles)."
+    },
+    {
+      "id": "fix-narrowly-q1",
+      "type": "single",
+      "scenario": "orders-api gets permission denied on secretmanager.versions.access for secret stripe-key. The caller is service account orders-api-prod@. What is the narrow fix to evaluate first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant orders-api-prod@ a secret accessor role on stripe-key or the narrowest scope that covers that secret."
+        },
+        {
+          "id": "b",
+          "text": "Grant Secret Manager Admin at project scope so the runtime can access this secret and manage future rotations itself."
+        },
+        {
+          "id": "c",
+          "text": "Grant Secret Accessor to the deployment principal because it created the revision that uses the runtime service account."
+        },
+        {
+          "id": "d",
+          "text": "Grant Secret Accessor on every secret in the project to avoid another denied request when the service adds dependencies."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The denied permission names the needed action and target secret, so the fix should grant the caller only the required secret access. Owner is excessive, logging secret values is unsafe, and folder placement does not automatically grant access. See [managing access to Secret Manager secrets](https://cloud.google.com/secret-manager/docs/manage-access-to-secrets)."
+    },
+    {
+      "id": "fix-narrowly-q4",
+      "type": "multiple",
+      "scenario": "During an incident, orders-api receives PERMISSION_DENIED for secretmanager.versions.access. An engineer proposes temporary Project Owner for the runtime service account. Which two facts must be recorded before making a narrower IAM change?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The number of engineers in the incident channel and the age of the service account display name."
+        },
+        {
+          "id": "d",
+          "text": "A promise to reduce Owner later without naming the permission, resource, or rollback condition."
+        },
+        {
+          "id": "a",
+          "text": "The exact caller principal and denied permission from the runtime evidence."
+        },
+        {
+          "id": "b",
+          "text": "The full target secret resource and the current or missing binding being changed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "A narrow IAM fix starts from caller, permission, resource, and policy evidence. Chat size and an unspecified future cleanup do not prove the grant is necessary, scoped, or reversible. See [Policy Troubleshooter](https://cloud.google.com/policy-intelligence/docs/troubleshoot-access)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The request was made by `serviceAccount:orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com`. In the IAM sentence, what is this?",
+      "scenario": "Northstar Retail's Cloud Run service uses runtime service account `receipts-api@orders-prod.iam.gserviceaccount.com`. Production logs show `storage.objects.get` denied on bucket `orders-receipts-prod`, while a developer can read the object under a different identity. Which missing policy element should the responder verify first?",
       "options": [
-        { "id": "a", "text": "The principal." },
-        { "id": "b", "text": "The protected resource." },
-        { "id": "c", "text": "The role bundle." },
-        { "id": "d", "text": "The audit log sink." }
+        {
+          "id": "b",
+          "text": "Grant Storage Object Viewer to the developer group because their local access proves the runtime service account inherits it."
+        },
+        {
+          "id": "c",
+          "text": "Grant Project Viewer to the service account because broad read visibility includes storage object payload access."
+        },
+        {
+          "id": "d",
+          "text": "Add an env=prod label to the bucket because policy evaluation uses resource labels as role bindings."
+        },
+        {
+          "id": "a",
+          "text": "A binding that grants the service account a role containing storage.objects.get at the bucket or inherited scope."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A service account is a principal: the actor making the request."
+      "correct": [
+        "a"
+      ],
+      "explanation": "IAM decisions depend on principal, permission, role, policy, and scope. Labels, CPU, and console URLs do not grant storage.objects.get to the runtime service account. See [Cloud Storage IAM](https://cloud.google.com/storage/docs/access-control/iam)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which pieces belong in the access sentence review?",
+      "id": "choose-role-and-scope-q5",
+      "type": "single",
+      "scenario": "During a quarter-end incident, Northstar Analytics granted `roles/editor` to service account `report-exporter@analytics-prod` so it could read one BigQuery dataset and write objects to one export bucket. The incident is closed, audit logs now show the operations actually used, and the service must continue running. What should the access review do next?",
       "options": [
-        { "id": "a", "text": "Principal that made the request." },
-        { "id": "b", "text": "Action or missing permission." },
-        { "id": "c", "text": "Exact resource and scope of the binding." },
-        { "id": "d", "text": "A broad role chosen before reading the error." }
+        {
+          "id": "d",
+          "text": "Delete the service account immediately and recreate it with the same broad role, avoiding analysis of existing dependencies."
+        },
+        {
+          "id": "a",
+          "text": "Identify the actual permissions used and replace Editor with narrower predefined or custom roles where appropriate."
+        },
+        {
+          "id": "b",
+          "text": "Keep Editor but add a time limit, because a temporary broad role removes the need to identify permissions actually used."
+        },
+        {
+          "id": "c",
+          "text": "Replace Editor with several service Admin roles at project scope so every likely API remains available to the account."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A useful review starts from evidence. A broad role chosen before reading the sentence is a guess."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A broad emergency grant should be reduced once the required permissions are understood. Keeping Editor forever, expanding it to the organization, or deleting the identity without dependency checks are all unsafe review outcomes. See [IAM roles and permissions](https://cloud.google.com/iam/docs/roles-overview)."
+    },
+    {
+      "id": "fix-narrowly-q3",
+      "type": "single",
+      "scenario": "A group receives BigQuery Admin through a project-level inherited binding, but only one analyst needs query read access to one dataset. Which remediation is most precise?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Rename the group to analytics-readers because inherited permissions follow principal display names rather than policy members."
+        },
+        {
+          "id": "d",
+          "text": "Move the dataset to another region because data location limits project-level IAM inheritance to the original region."
+        },
+        {
+          "id": "a",
+          "text": "Remove or replace the broad inherited binding and add a dataset-scoped read role for the analyst or approved group."
+        },
+        {
+          "id": "b",
+          "text": "Add a dataset-level read role while keeping the inherited BigQuery Admin binding, because the narrower grant takes precedence."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The problem is a broad inherited role, so remediation should reduce that binding and add the narrow dataset access needed. More admin access worsens the issue, display names do not define inheritance, and dataset location does not fix a project-level IAM grant. See [Google Cloud resource hierarchy access control documentation](https://cloud.google.com/iam/docs/resource-hierarchy-access-control)."
     }
   ]
 }

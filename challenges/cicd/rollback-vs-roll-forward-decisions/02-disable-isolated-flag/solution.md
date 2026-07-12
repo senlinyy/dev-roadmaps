@@ -9,6 +9,3 @@ production:
     updated_by: maya
     reason: canary discount errors returned to baseline after disabling v2
 ```
-
-The recovery changes runtime behavior, not the deployed artifact. Keeping the old path enabled gives checkout a known-good fallback while the discount bug is fixed.
-

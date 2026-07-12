@@ -1,7 +1,6 @@
 ---
-title: "Multibranch Pipelines and Pull Requests"
-sectionSlug: multibranch-pipelines-branches-and-pull-requests
+title: "Pipelines and Jenkinsfile"
 order: 5
 ---
 
-Each scenario tests how multibranch pipelines actually discover and run jobs. Pick the most accurate answer.
+Review Pipeline style, stages, parallel capacity, cleanup, branch gates, and multibranch trust as one delivery contract.

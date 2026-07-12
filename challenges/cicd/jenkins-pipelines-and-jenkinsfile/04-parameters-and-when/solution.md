@@ -28,4 +28,4 @@ pipeline {
 }
 ```
 
-The `when { allOf { ... } }` block makes both conditions hold before the stage runs: pull requests skip Deploy, and a `staging` build on `main` also skips it. `branch` is a built-in `when` directive; `expression` lets you embed any Groovy boolean (here, the user's selected parameter).
+- The `when { allOf { ... } }` block makes both conditions hold before the stage runs: pull requests skip Deploy, and a `staging` build on `main` also skips it. `branch` is a built-in `when` directive; `expression` lets you embed any Groovy boolean (here, the user's selected parameter).

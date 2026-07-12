@@ -1,15 +1,15 @@
 ---
 title: "Replace Shell Package Install"
-sectionSlug: "desired-state-in-real-tasks"
+sectionSlug: "desired-state-modules"
 order: 1
 ---
 
-Replace the shell-shaped nginx install with an idempotent Ansible package task.
+The orders web playbook still installs Nginx through a shell command. Replace that task with package desired state so a repeat run can settle cleanly.
 
-Requirements:
+Your job:
 
-1. **Module:** use `ansible.builtin.apt`.
-2. **Package:** `name: nginx`.
-3. **State:** `state: present`.
-4. **Cache:** `update_cache: true`.
-5. **Do not use:** `ansible.builtin.shell` for package install.
+1. **Use the apt module** to manage the `nginx` package.
+2. **Keep the package present** and refresh the package cache for this install task.
+3. **Remove the shell-based package install** from the play.
+
+The grader checks the parsed playbook structure, not command output.

@@ -1,7 +1,6 @@
 ---
-title: "Name Recovery Points"
-sectionSlug: recovery-points
+title: "Backups and Retention"
 order: 1
 ---
 
-Practice asking how far back the team can restore after data is corrupted, overwritten, or deleted.
+Review production scenarios covering recovery points, service-specific restore options, retention, safe deletion, and restore drills for GCP data.

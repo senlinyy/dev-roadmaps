@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "controller-chain-q1",
+      "type": "single",
+      "scenario": "The notification API Deployment requests three replicas. One Pod is deleted during node maintenance, and a replacement appears with a new name while the Deployment manifest remains unchanged. Which controller relationship best explains the replacement?",
+      "options": [
+        { "id": "a", "text": "The Deployment manages a ReplicaSet, and that ReplicaSet creates a Pod to restore the desired count." },
+        { "id": "b", "text": "The Service creates a Pod because its selector found only two ready endpoints." },
+        { "id": "c", "text": "The scheduler edits the deleted Pod and assigns the same object to another node." },
+        { "id": "d", "text": "The kubelet recreates the Deployment after observing that one container stopped." }
+      ],
+      "correct": ["a"],
+      "explanation": "The Deployment manages ReplicaSets, and the active ReplicaSet maintains the requested number of matching Pods. A Service selects endpoints but does not create Pods. The scheduler assigns Pods to nodes, and the kubelet manages containers on its node rather than recreating Deployments."
+    },
+    {
+      "id": "selector-contract-q2",
+      "type": "single",
+      "scenario": "A proposed Deployment selector is `app.kubernetes.io/name: notification-api`, but the Pod template label is `app.kubernetes.io/name: notifications-api`. The container image and replica count are correct. What should the reviewer request before approval?",
+      "options": [
+        { "id": "c", "text": "Remove the template label because the Deployment selector is copied onto Pods automatically." },
+        { "id": "b", "text": "Keep both values because the ReplicaSet converts close label spellings into one identity." },
+        { "id": "a", "text": "Make the selector and template label match the same stable application identity." },
+        { "id": "d", "text": "Replace the selector with the container image tag so each release owns its own Pods." }
+      ],
+      "correct": ["a"],
+      "explanation": "The selector must match labels on the Pod template. Kubernetes does not normalize similar label values or copy selector labels into the template. An image tag is release identity, not the stable workload identity used for controller ownership."
+    },
+    {
+      "id": "template-revision-q3",
+      "type": "single",
+      "scenario": "An operator changes the notification API image from `2026.06.14-1` to `2026.06.14-2` inside `spec.template`. Soon afterward, old and new ReplicaSets both have Pods. What is the most accurate interpretation?",
+      "options": [
+        { "id": "c", "text": "The old ReplicaSet is independently scaling because ReplicaSets do not remain under Deployment control." },
+        { "id": "b", "text": "The Deployment lost ownership of the old Pods because image tags cannot coexist in one namespace." },
+        { "id": "d", "text": "The Service duplicated the Deployment so it could compare the two container images." },
+        { "id": "a", "text": "A Pod template change created a new revision, so the Deployment is shifting capacity between ReplicaSets." }
+      ],
+      "correct": ["a"],
+      "explanation": "A meaningful Pod template change creates a new ReplicaSet revision. During a rolling update, old and new ReplicaSets can coexist while capacity moves safely. ReplicaSets remain managed by the Deployment, and Services do not duplicate workloads."
+    },
+    {
+      "id": "scale-separation-q4",
+      "type": "single",
+      "scenario": "The public API receives a traffic spike, but queue depth for the notification worker stays flat. The API and worker currently run in separate Deployments. Which response best preserves the operating model described in the article?",
+      "options": [
+        { "id": "b", "text": "Increase replicas on both Deployments because workloads in one namespace must share a replica count." },
+        { "id": "a", "text": "Increase replicas on the API Deployment while leaving the worker Deployment at its current count." },
+        { "id": "c", "text": "Edit the active ReplicaSet directly so the Deployment cannot reconcile the API count afterward." },
+        { "id": "d", "text": "Combine API and worker containers into every Pod so either traffic signal scales both processes." }
+      ],
+      "correct": ["a"],
+      "explanation": "Separate Deployments let the API and worker scale for different demand signals and fail independently. Namespace membership does not couple replica counts. Teams normally change desired state through the Deployment, and combining the workloads would remove the useful scaling boundary."
+    },
+    {
+      "id": "production-review-q5",
+      "type": "multiple",
+      "scenario": "A three-replica user-facing API is preparing for a controlled image update. Cluster capacity can hold one temporary Pod. Which two manifest choices directly protect availability and make a stalled rollout visible?",
+      "options": [
+        { "id": "a", "text": "Set `maxSurge: 1` and `maxUnavailable: 0` for the RollingUpdate." },
+        { "id": "c", "text": "Remove readiness checks so every started container counts as available immediately." },
+        { "id": "d", "text": "Change the Deployment selector for each image so old and new Pods cannot share workload identity." },
+        { "id": "b", "text": "Set `progressDeadlineSeconds` so lack of rollout progress produces a Deployment condition." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "The rollout settings allow one extra Pod while keeping all desired replicas available, and the progress deadline surfaces a rollout that stops advancing. Removing readiness weakens traffic safety. Changing the selector per release breaks the stable ownership contract and is not the normal revision mechanism."
+    }
+  ]
+}

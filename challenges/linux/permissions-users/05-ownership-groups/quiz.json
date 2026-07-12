@@ -1,0 +1,227 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deploy user cannot update a shared config:\n\n```text\n$ id deploy\nuid=1001(deploy) gid=1001(deploy) groups=1001(deploy),1002(web)\n\n$ ls -l /srv/app/config.yml\n-rw-r----- 1 root web 1842 Jul 5 09:15 /srv/app/config.yml\n```\n\nWhy can `deploy` read but not modify this file?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The file name ends in `.yml`, so Linux permits group reads but denies every group write"
+        },
+        {
+          "id": "b",
+          "text": "`deploy` is in group `web`, and the group triplet is `r--`, which grants read without write"
+        },
+        {
+          "id": "c",
+          "text": "The primary group matches the username, so the owner triplet `rw-` applies to every file opened by `deploy`"
+        },
+        {
+          "id": "d",
+          "text": "Files under `/srv` are always read-only unless the process runs as root"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The process is not the owner, but it belongs to the file's `web` group. Linux therefore applies the group bits, which are read-only. File extensions and parent path names do not create special access rules. The [id manual](https://man7.org/linux/man-pages/man1/id.1.html) and [inode permissions manual](https://man7.org/linux/man-pages/man7/inode.7.html) document identity and mode fields."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "`package.json` is mode `0644`, but the app user still receives `Permission denied` when opening `/srv/web/current/package.json`. The path inspection shows:\n\n```text\ndrwxr-xr-x root root /srv\ndrwxr-x--- root deploy /srv/web\ndrwxr-xr-x deploy web /srv/web/current\n```\n\nThe app user belongs to group `web`, not `deploy`. What is the blocking control?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app cannot traverse `/srv/web` because that directory grants access to group `deploy`, not group `web`"
+        },
+        {
+          "id": "b",
+          "text": "The file needs execute permission because every JSON file must be executable before it can be read"
+        },
+        {
+          "id": "c",
+          "text": "The final directory must be world-writable because read access requires creating a directory entry"
+        },
+        {
+          "id": "d",
+          "text": "The kernel ignores parent directories after confirming the file itself is mode `0644`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Opening a file requires execute, or traversal, permission on every parent directory. The app user does not match the owner or `deploy` group for `/srv/web`, and others have no permissions there. The file's own read bit cannot override a blocked parent path. The [path resolution manual](https://man7.org/linux/man-pages/man7/path_resolution.7.html) explains directory search permission."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A secret environment file should be editable by root, readable by members of group `web`, and inaccessible to all other users. It is owned by `root:web`. Which mode expresses that policy?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`0666`, because secrets need matching read and write access for every identity class"
+        },
+        {
+          "id": "b",
+          "text": "`0600`, because group ownership automatically bypasses an empty group permission triplet"
+        },
+        {
+          "id": "c",
+          "text": "`0640`, because owner gets read and write, group gets read, and others get no access"
+        },
+        {
+          "id": "d",
+          "text": "`0750`, because every readable configuration file must also be executable by its group"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Octal `6` is owner read plus write, `4` is group read, and `0` denies others. Mode `0600` would block the service group, while `0666` exposes the secret and `0750` adds inappropriate execute permission. The [chmod manual](https://man7.org/linux/man-pages/man1/chmod.1.html) documents symbolic and octal modes."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "New release files under `/srv/web/releases` sometimes inherit the creator's private primary group, so the app service loses access after deploys. The directory should remain owned by `deploy:web`. Which change best stabilizes group inheritance without opening it to everyone?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Set the directory to mode `2775` so the setgid bit makes new children inherit group `web` while owner and group keep the required access"
+        },
+        {
+          "id": "b",
+          "text": "Set mode `0777` because world write is the only way to keep group ownership consistent"
+        },
+        {
+          "id": "c",
+          "text": "Change every new file owner to root because root-owned files inherit all groups simultaneously"
+        },
+        {
+          "id": "d",
+          "text": "Remove execute permission from the directory so creators cannot choose a primary group"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The directory setgid bit preserves the directory's group on new children, making shared release trees predictable. World write is unnecessarily broad, root ownership does not grant multiple group identities, and removing execute blocks traversal. The [chmod manual](https://man7.org/linux/man-pages/man1/chmod.1.html) covers special mode bits."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A small production host currently runs the app as `root`, and the deploy automation also uses that account. Which redesign best follows least privilege?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep root for the app but remove file permissions so a privileged process cannot access the deployment tree"
+        },
+        {
+          "id": "b",
+          "text": "Use one shared human account for Nginx, deployments, and the app so every process has identical ownership"
+        },
+        {
+          "id": "c",
+          "text": "Give the deploy user unrestricted sudo because separating accounts matters only when neither can become root"
+        },
+        {
+          "id": "d",
+          "text": "Run the app as a non-login service user, use a separate deploy user, and share only the required release paths through a dedicated group"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Separate service and deploy identities limit what a compromised app or mistaken deployment can change. A shared group can grant the narrow file access both jobs need. Root and unrestricted sudo collapse those boundaries, while removing permissions cannot meaningfully restrict root. The [useradd manual](https://man7.org/linux/man-pages/man8/useradd.8.html) and [systemd execution manual](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html) cover service identities."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "`config.env` is correctly owned `root:web` with mode `0640`. During an incident, one on-call user needs temporary read access but should not join the long-lived `web` group. What is the narrowest mechanism?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Change the file to `0644` so the on-call user and every other local account can read it"
+        },
+        {
+          "id": "b",
+          "text": "Add a named-user read ACL, verify the ACL mask and effective permission, then remove the entry when access ends"
+        },
+        {
+          "id": "c",
+          "text": "Change the file owner to the on-call user, leaving the service group without a stable owner"
+        },
+        {
+          "id": "d",
+          "text": "Copy the secret into the user's home directory because copies are outside the original permission model"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A POSIX ACL can grant one named user read access without changing the primary owner, group, or public bits. The ACL mask must permit the requested access. World readability, ownership churn, and unmanaged secret copies are broader and harder to revoke. The [ACL manual](https://man7.org/linux/man-pages/man5/acl.5.html) documents named entries and masks."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "The deploy pipeline needs to restart only `app.service`, check its status, validate Nginx, and reload Nginx. A proposed sudoers rule grants `deploy ALL=(ALL) NOPASSWD: ALL`. What should replace it?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A command-specific rule using verified absolute paths and exact service arguments, tested with `visudo` and confirmed with `sudo -l -U deploy`"
+        },
+        {
+          "id": "b",
+          "text": "A wildcard rule for `/usr/bin/systemctl *` because service names do not affect privilege scope"
+        },
+        {
+          "id": "c",
+          "text": "A full root shell with a shorter timeout because temporary unrestricted access is equivalent to exact commands"
+        },
+        {
+          "id": "d",
+          "text": "No sudoers rule and world-writable service unit files so the deploy user can bypass systemctl"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The deploy job needs a small set of privileged commands, not arbitrary root access. Exact paths and arguments reduce scope, `visudo` protects syntax, and `sudo -l` verifies the effective grant. Wildcards and writable unit files enable much broader system control. The [sudoers manual](https://www.sudo.ws/docs/man/sudoers.man/) documents command matching and policy syntax."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "A deployment service writes versioned builds to `/srv/web/releases`, and a non-root application process reads them after a symlink switch. Both identities belong to group `web`; the release directory is owned by `deploy:web` with mode `2775`. The application also reads `config.env`, owned by `root:web` with mode `0640`. Which conclusions should the access review record? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Users outside group `web` can update existing releases because directory mode `2775` grants write through the others triplet"
+        },
+        {
+          "id": "b",
+          "text": "The setgid release directory helps new children inherit group `web`"
+        },
+        {
+          "id": "c",
+          "text": "The app can read `config.env` through the `web` group but cannot edit it through mode `0640`"
+        },
+        {
+          "id": "d",
+          "text": "Running the app as `app` limits its access to the permissions and groups granted to that service identity"
+        },
+        {
+          "id": "e",
+          "text": "The setgid directory removes the need to review the deploy process's creation mode and umask when group write is required"
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "Mode `2775` gives directory write access to owner and group, not others, and setgid makes new children inherit group `web`. It does not force group-write bits on every new file; the creator's mode and umask still matter. Mode `0640` lets the app read the config through `web` while only root can write it, and the non-root service identity limits the process to its granted access. [The chmod manual](https://man7.org/linux/man-pages/man1/chmod.1.html) and [umask manual](https://man7.org/linux/man-pages/man2/umask.2.html) document these controls."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 title: "Read a tcpdump Capture of a TCP Handshake"
-sectionSlug: seeing-the-layers-with-tcpdump
+sectionSlug: watching-layers-with-real-tools
 order: 3
 ---
 

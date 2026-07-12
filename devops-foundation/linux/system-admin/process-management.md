@@ -9,459 +9,611 @@ id: article-devops-foundation-linux-system-admin-process-management
 
 ## Table of Contents
 
-1. [Linux Processes and Running Programs](#linux-processes-and-running-programs)
-2. [What a Process Is](#what-a-process-is)
-3. [PID, PPID, and the Process Tree](#pid-ppid-and-the-process-tree)
-4. [Inspect Processes with `ps`, `pgrep`, and `top`](#inspect-processes-with-ps-pgrep-and-top)
-5. [Signals and Graceful Shutdown](#signals-and-graceful-shutdown)
-6. [Foreground, Background, and Jobs](#foreground-background-and-jobs)
-7. [Priority, Nice Values, and I/O Priority](#priority-nice-values-and-io-priority)
-8. [Inspect Live State in `/proc`](#inspect-live-state-in-proc)
-9. [Failure Patterns](#failure-patterns)
+1. [From Terminal Commands to Processes](#from-terminal-commands-to-processes)
+2. [PID and PPID Badges](#pid-and-ppid-badges)
+3. [The Process Tree and Exit Status](#the-process-tree-and-exit-status)
+4. [PID 1 and Services Started by systemd](#pid-1-and-services-started-by-systemd)
+5. [Ask Linux What Is Running](#ask-linux-what-is-running)
+6. [Signals: Polite Messages Before Hard Stops](#signals-polite-messages-before-hard-stops)
+7. [Foreground, Background, and SSH Sessions](#foreground-background-and-ssh-sessions)
+8. [Priority, Nice Values, and `/proc`](#priority-nice-values-and-proc)
+9. [Worked Failure Diagnoses](#worked-failure-diagnoses)
 10. [References](#references)
 
-## Linux Processes and Running Programs
-<!-- section-summary: Processes are the running programs that make services, shells, maintenance commands, and background work actually execute. -->
+## From Terminal Commands to Processes
+<!-- section-summary: Every command, shell, server, and background task is a running program that Linux tracks as a process. -->
 
-An operations question often starts with something simple: "Is the app actually running?" The answer lives in the process table. Nginx, your SSH shell, `curl`, `grep`, `journalctl`, backup jobs, and deployment scripts all appear there while they are doing work.
+You have already started processes if you have opened Terminal, connected to a server with SSH, run `nano`, launched `curl`, or started a Node app. The command may feel like one small line of text, but Linux has to run something real behind that line. While that thing is running, Linux tracks it as a **process**.
 
-A program file on disk is only the recipe. A process is the live run of that recipe. Once the program is running, Linux can track who owns it, how long it has been alive, how much CPU and memory it uses, which files it has open, and which parent launched it.
+A process is one running copy of a program. The file `/usr/bin/curl` can sit on disk all day doing nothing. When you type `curl https://example.com`, Linux starts a live copy of that program, gives it memory, connects it to your terminal, lets it open network connections, and tracks it until it exits.
 
-Process management helps you answer everyday questions. Is the service alive? Who owns it? Did systemd launch it, or did someone run it from a shell? Can it stop cleanly, or is it stuck? Which parent process is responsible for it?
+The same program can have many running copies at the same time. Two people can run `nano` in two SSH sessions. A web server can have several worker processes handling requests. Each copy gets its own process identity, its own memory, and its own live state.
 
-Systemd manages long-running services, but the process layer is still the ground truth for what is alive right now. When a dashboard says a service is unhealthy, process commands let you look at the live Linux objects behind that symptom.
-
-The reason this layer exists is control. Linux cannot manage "a web app" as an idea. It manages concrete running objects with IDs, memory, open files, users, and state. Once you can inspect those objects, service failures stop looking like mystery crashes and start looking like specific processes doing specific things.
-
-## What a Process Is
-<!-- section-summary: A process is a running program with its own PID, memory, file descriptors, environment, and security identity. -->
-
-Two processes can run the same file and still behave differently. One Node process may run production config as user `app`, while another test process runs from a developer shell with different environment variables. The file path alone does not explain the live behavior.
-
-A process is the live execution of a program. The first important detail is the process ID, or PID, because Linux uses that number to inspect, signal, and account for the running object.
-
-The next detail is live state. The process has memory, open files, environment variables, a current directory, a user identity, and kernel bookkeeping. Under the hood, the kernel keeps an address space, security credentials, file descriptor table, signal handlers, and scheduling state for it. The program file supplies the code; the process holds the runtime facts.
-
-Find a Node process by name:
+Try a tiny command that stays alive long enough to inspect:
 
 ```bash
-pgrep -a node
+sleep 60
 ```
 
-Example output:
-
-```console
-1842 node /srv/app/current/server.js
-```
-
-`1842` is the process ID, usually called the PID. The rest is the command line. If the service restarts, the new process usually gets a new PID even though it runs the same file.
-
-Every process also has an owner. The owner controls which files the process can read, which ports it can bind, and which other processes it can signal. Long-running application services should usually run as a dedicated service account, with root reserved for system setup and the service manager.
-
-Processes also have file descriptors. A file descriptor is a small number pointing at an open file, socket, pipe, or device. Standard input is descriptor `0`, standard output is `1`, and standard error is `2`. Log files, network sockets, and pipes get other descriptor numbers. Many production issues show up as too many open descriptors, a deleted log file still held open, or a socket attached to the wrong process.
-
-The practical next decision after identifying a process is to ask what part of its live state matters. For a high-CPU process, inspect command line and logs. For a network listener, inspect sockets and owner. For a disk-space issue, inspect file descriptors. For a config question, inspect the service unit and environment rather than guessing from the program name.
-
-## PID, PPID, and the Process Tree
-<!-- section-summary: Parent-child relationships explain who started a process and who should reap it when it exits. -->
-
-A common surprise appears after an SSH session closes and a manually launched service disappears with it. The process was alive, yet its parent was the login shell, so its lifetime was tied to that session.
-
-That is why PID and PPID matter. The PID identifies the process itself. The PPID identifies the parent that launched it. A shell starts commands, Nginx has a master that starts workers, and systemd starts managed services.
-
-On a systemd-based server, PID `1` is systemd. A production service usually belongs under systemd because PID `1` can track the process, collect its exit status, restart it according to policy, and keep it independent from a human SSH session.
-
-Show a process tree:
+In another terminal, ask Linux to find it:
 
 ```bash
-ps -eo pid,ppid,user,stat,cmd --forest | grep -E "systemd|nginx|app|node"
+pgrep -a sleep
+
+# Example output:
+# 2409 sleep 60
 ```
 
-Example output:
+The output tells you two useful things:
 
-```console
-    PID    PPID USER     STAT CMD
-      1       0 root     Ss   /sbin/init
-    912       1 root     Ss    nginx: master process /usr/sbin/nginx -g daemon on; master_process on;
-    913     912 www-data S      \_ nginx: worker process
-   1842       1 app      Ssl  /usr/bin/node /srv/app/current/server.js
+- `2409` is the process ID for this running copy.
+- `sleep 60` is the command line that launched it.
+- If you run another `sleep 60`, Linux gives that second copy a different process ID.
+
+Under the hood, the kernel stores more than the command name. It tracks the process owner, current directory, environment variables, open files, signal rules, memory, CPU scheduling information, and parent process. The simplest handle is the process ID.
+
+## PID and PPID Badges
+<!-- section-summary: PID names the running process itself, while PPID names the process that started it. -->
+
+You open an SSH session and type `nano notes.txt`. The editor appears in your terminal, and your shell waits for it to finish. Linux does not remember that situation as a vague idea like "the editor is open." It gives the running editor an ID badge so other parts of the system can talk about that exact process.
+
+The **PID** is the process ID badge. It identifies one running process right now. The **PPID** is the parent process ID badge. It points to the process that started this one, usually your shell for interactive commands or systemd for managed services.
+
+Run a command that starts another program from your shell:
+
+```bash
+ps -o pid,ppid,user,stat,cmd -p $$
+
+# Example output:
+#     PID    PPID USER     STAT CMD
+#    2310    2309 deploy   Ss   -bash
 ```
 
-What to notice:
+The important lines are small but powerful:
 
-- PID `1` is systemd, the root of the service tree on this server.
-- Nginx has a root-owned master and a `www-data` worker.
-- The application process is owned by `app` and parented by systemd.
-- `STAT` shows state. `S` means sleeping, which is normal for a server waiting for requests. `R` means running on CPU. `Z` means zombie. `D` means uninterruptible sleep, often I/O wait.
+- `PID 2310` is the shell you are using.
+- `PPID 2309` is the process that started that shell, often the SSH session process.
+- `CMD -bash` tells you this process is your shell.
 
-The parent tells you how the process was started. If a production service is parented by `bash` or `zsh`, someone may have started it manually. It may die when the SSH session ends, and systemd may know nothing about it.
+Now start `nano`, `curl`, or a Node script from that shell. The child process gets its own PID, and its PPID points back to the shell. A concrete example might look like this while `nano` is open:
 
-The next decision is supervision. A service under PID `1` usually belongs to systemd, so use `systemctl` and `journalctl`. A service under a login shell needs cleanup: stop the stray process, move the command into a proper unit, and make sure it starts through the same path after reboot.
+```bash
+ps -eo pid,ppid,user,stat,cmd --forest | grep -E "sshd|bash|nano"
 
-## Inspect Processes with `ps`, `pgrep`, and `top`
-<!-- section-summary: Process inspection commands show identity, command line, resource use, and runtime state. -->
+# Example output:
+#    2309       1 root     Ss    sshd: deploy [priv]
+#    2310    2309 deploy   Ss     \_ -bash
+#    2468    2310 deploy   S+         \_ nano notes.txt
+```
 
-A high-CPU alert usually needs two answers fast: which process is using the CPU, and whether that process is the service you expected. Use the process tools in layers instead of staring at a full table.
+The tree runs from the SSH session down to the editor:
 
-`ps` gives a snapshot. It is useful when you want a pasteable view for an incident note or when you need to sort by CPU or memory.
+- `sshd` accepted the remote login and started the session.
+- `bash` is the shell inside that SSH session.
+- `nano` is the child process launched by the shell.
+- The `+` in `S+` means `nano` is in the foreground process group for the terminal.
+
+This is why PPID is more than a trivia field. If a process belongs to your shell, its life is tied to that interactive session unless you take special steps. If a production service belongs to systemd, it has a service manager watching it after you disconnect.
+
+![Process anatomy infographic showing PID, PPID, user, state, CPU, memory, command, and child processes](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-anatomy.png)
+
+_The image turns a process row into named fields so `ps` output is easier to inspect._
+
+## The Process Tree and Exit Status
+<!-- section-summary: Parent processes start child processes and collect their small exit reports after they finish. -->
+
+You have probably seen a command fail and then checked `$?`, or watched a shell prompt return after a command finishes. That little return to the prompt hides an important process habit. The child finished, and the parent shell collected its ending result.
+
+A parent process starts a child process, then later collects the child's **exit status**. Think of exit status as a tiny report card. `0` means the command says it succeeded. A nonzero number means the command reports some kind of failure, and the exact number depends on the program.
+
+Run one successful command and one failing command:
+
+```bash
+true
+echo $?
+false
+echo $?
+
+# Example output:
+# 0
+# 1
+```
+
+The output means:
+
+- `true` exited with status `0`, so the shell treats it as success.
+- `false` exited with status `1`, so the shell treats it as failure.
+- Scripts, deploy commands, and health checks use this same success-or-failure signal.
+
+Parents also have a cleanup job. After a child exits, the parent collects the exit status so the kernel can finish cleaning up the child's process record. If a child exits and the parent has not collected that status yet, `ps` may show the child as a zombie with state `Z`.
+
+Here is what a small process tree can look like on a web server:
+
+```bash
+ps -eo pid,ppid,user,stat,cmd --forest | grep -E "systemd|nginx|node|bash"
+
+# Example output:
+#     PID    PPID USER     STAT CMD
+#       1       0 root     Ss   /sbin/init
+#     912       1 root     Ss    nginx: master process /usr/sbin/nginx -g daemon on; master_process on;
+#     913     912 www-data S      \_ nginx: worker process
+#    1842       1 app      Ssl  /usr/bin/node /srv/app/current/server.js
+#    2310    2309 deploy   Ss   -bash
+```
+
+The tree gives you the story:
+
+- Nginx has a master process that started worker processes.
+- The Node app has PID `1842` and parent PID `1`.
+- Your interactive shell has its own place in the tree.
+- `STAT` shows current state: `S` is sleeping, `R` is running, `Z` is zombie, and `D` usually points to uninterruptible I/O wait.
+
+Under the hood, Linux keeps this parent-child shape so resources and endings can be accounted for. You do not need to memorize kernel data structures. In daily operations, the useful question is simpler: who started this process, and who is responsible for cleaning it up or restarting it?
+
+## PID 1 and Services Started by systemd
+<!-- section-summary: On modern Linux servers, systemd usually runs as PID 1 and starts the long-running services that should survive your SSH session. -->
+
+Now picture a more painful beginner moment. You SSH into a server, run `node server.js`, see the app respond, close the laptop, and later the site is down. The program worked while your terminal was alive, but it was living under your login shell instead of under the service manager.
+
+On most modern Linux servers, **systemd** is the first long-lived parent process. It runs as PID `1`. Services that should survive logouts and reboots usually sit under systemd so there is one clear manager for start, stop, restart, logs, and exit collection.
+
+Check PID `1`:
+
+```bash
+ps -p 1 -o pid,ppid,user,stat,cmd
+
+# Example output:
+#     PID    PPID USER     STAT CMD
+#       1       0 root     Ss   /sbin/init
+```
+
+On many distributions, `/sbin/init` points to systemd:
+
+```bash
+readlink -f /sbin/init
+
+# Example output:
+# /usr/lib/systemd/systemd
+```
+
+Those two checks tell you:
+
+- PID `1` is the root process for normal service management on this host.
+- systemd starts services from unit files instead of from your shell history.
+- When a managed service exits, systemd can collect its exit status and apply restart policy.
+
+This is the bridge from process management to service management. Processes are the live running objects. systemd is the parent and manager you usually want for long-running server work. If you find an app process parented by `bash`, treat that as a clue that someone started it by hand.
+
+## Ask Linux What Is Running
+<!-- section-summary: `ps`, `pgrep`, and `top` let you inspect the process table from quick lookup to live resource view. -->
+
+Suppose the server feels slow. You do not need to guess which program is busy. Start by asking Linux for the process table, then narrow the answer until you know the process, owner, parent, command line, and resource use.
+
+`ps` gives a snapshot. Use it when you need a stable view for troubleshooting notes or a sorted list of current CPU and memory users.
 
 ```bash
 ps -eo pid,ppid,user,%cpu,%mem,etime,stat,cmd --sort=-%cpu | head
+
+# Example output:
+#     PID    PPID USER     %CPU %MEM     ELAPSED STAT CMD
+#    1842       1 app      187.4 18.6    03:14:22 Ssl  /usr/bin/node /srv/app/current/server.js
+#     913     912 www-data  12.3  1.1    14-03:12 S    nginx: worker process
+#    2409    2310 deploy     6.8  0.4       12:01 R    tar -czf /var/backups/app.tgz /srv/app
 ```
 
-Example output:
+Use the fields like a checklist:
 
-```console
-    PID    PPID USER     %CPU %MEM     ELAPSED STAT CMD
-   1842       1 app      187.4 18.6    03:14:22 Ssl  /usr/bin/node /srv/app/current/server.js
-    913     912 www-data  12.3  1.1    14-03:12 S    nginx: worker process
-   2409    2310 root       6.8  0.4       12:01 R    tar -czf /var/backups/app.tgz /srv/app
-```
+- `PID` names the process you can inspect or signal.
+- `PPID` tells you who started it.
+- `USER` tells you which Linux account owns it.
+- `%CPU` and `%MEM` show current resource pressure.
+- `ETIME` tells you how long it has been alive.
+- `STAT` gives a compact state code.
 
-The fields answer simple questions:
-
-- `PID` is the process to inspect or signal.
-- `PPID` tells you the parent.
-- `USER` tells you the security identity.
-- `%CPU` and `%MEM` show current resource use.
-- `ETIME` shows how long the process has been alive.
-- `STAT` shows the process state.
-
-`pgrep` finds matching processes without scanning a full table:
-
-```bash
-pgrep -a nginx
-```
-
-Example output:
-
-```console
-912 nginx: master process /usr/sbin/nginx -g daemon on; master_process on;
-913 nginx: worker process
-914 nginx: worker process
-```
-
-Limit by user when the process name is common:
+`pgrep` is the faster tool when you already know part of the name:
 
 ```bash
 pgrep -a -u app node
+
+# Example output:
+# 1842 node /srv/app/current/server.js
 ```
 
-Example output:
+The options matter:
 
-```console
-1842 node /srv/app/current/server.js
-```
+- `-a` prints the full command line, which helps distinguish two copies of the same program.
+- `-u app` limits the search to processes owned by the `app` account.
+- `node` is the process name pattern you are searching for.
 
-`top` gives a live view:
+`top` gives a live view that updates while you watch:
 
 ```bash
 top
+
+# Example output:
+# top - 10:42:15 up 14 days,  3:22,  1 user,  load average: 1.84, 1.62, 1.20
+# Tasks: 128 total,   2 running, 126 sleeping,   0 stopped,   0 zombie
+# %Cpu(s): 82.0 us,  6.0 sy,  0.0 ni,  9.0 id,  2.0 wa,  0.0 hi,  1.0 si,  0.0 st
+#     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+#    1842 app       20   0 1840420 742312  45120 S 187.4  18.6  34:10.23 node
+#     913 www-data  20   0  151248  45224  12140 S  12.3   1.1   2:18.40 nginx
 ```
 
-Example output:
+Inside `top`, press `P` to sort by CPU, `M` to sort by memory, `1` to show per-CPU lines, and `c` to toggle full command lines. Many teams install `htop` too, but `top` is the reliable baseline on minimal servers.
 
-```console
-top - 10:42:15 up 14 days,  3:22,  1 user,  load average: 1.84, 1.62, 1.20
-Tasks: 128 total,   2 running, 126 sleeping,   0 stopped,   0 zombie
-%Cpu(s): 82.0 us,  6.0 sy,  0.0 ni,  9.0 id,  2.0 wa,  0.0 hi,  1.0 si,  0.0 st
-    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-   1842 app       20   0 1840420 742312  45120 S 187.4  18.6  34:10.23 node
-    913 www-data  20   0  151248  45224  12140 S  12.3   1.1   2:18.40 nginx
-```
+Once you identify the process, the next question is usually control. If it is healthy but busy, keep gathering evidence. If it needs to stop or reload, send the right message instead of reaching straight for the harshest option.
 
-Inside `top`, `P` sorts by CPU, `M` sorts by memory, `1` shows per-CPU lines, and `c` toggles full command lines. Many servers also have `htop`, but `top` is the safer baseline because it is present on many minimal systems.
+## Signals: Polite Messages Before Hard Stops
+<!-- section-summary: Signals are small messages to processes, and graceful stop signals should come before forced termination. -->
 
-## Signals and Graceful Shutdown
-<!-- section-summary: Signals are small messages Linux sends to processes to ask for actions such as reload, stop, or immediate termination. -->
+During a deploy, you may need an old process to stop so a new one can start. During a config change, you may want a server to reread files without dropping active work. Linux handles these requests with **signals**, which are small messages sent to a process.
 
-During a deploy, you often need a running process to stop cleanly or reread config. Pulling the plug with an immediate kill can interrupt requests and skip cleanup. Linux gives you a gentler path first: send a signal.
-
-A signal is a small message sent to a process. `TERM` asks the process to shut down cleanly. `HUP` often asks a server to reload config or reopen logs. `KILL` is the hard stop handled by the kernel.
-
-The `kill` command sends these signals, even though the name sounds more dramatic than most signal use. The kernel delivers the signal, and the process either handles it, ignores it, or receives the default behavior. Some signals, such as `KILL`, cannot be caught by the process.
+A signal asks a process to do something. `TERM` asks for a clean shutdown. `INT` is similar to pressing `Ctrl+C` in a terminal. `HUP` often tells server programs to reload config or reopen logs. `KILL` is the hard stop that the kernel applies immediately.
 
 Common signals:
 
-| Signal | Number | Meaning |
+| Signal | Number | Typical use |
 |---|---:|---|
-| `TERM` | 15 | Ask the process to terminate gracefully |
-| `INT` | 2 | Interrupt, similar to pressing `Ctrl+C` |
-| `HUP` | 1 | Often used to reload config or reopen logs |
-| `KILL` | 9 | Immediate kernel-level termination |
-| `USR1` / `USR2` | varies | Application-defined behavior |
+| `TERM` | 15 | Ask the process to shut down cleanly |
+| `INT` | 2 | Interrupt from a terminal, usually `Ctrl+C` |
+| `HUP` | 1 | Reload config or reopen logs for programs that support it |
+| `KILL` | 9 | Force immediate termination through the kernel |
+| `USR1` / `USR2` | varies | Application-specific behavior |
 
-Ask a process to stop gracefully:
+Ask a process to stop cleanly:
 
 ```bash
 sudo kill -TERM 1842
 ```
 
-No output usually means the signal was sent. Now check whether the PID remains:
+The command usually prints no output when the signal is sent. Check whether the process exited:
 
 ```bash
 ps -p 1842 -o pid,stat,etime,cmd
+
+# Example output:
+#     PID STAT     ELAPSED CMD
+#    1842 Ssl      03:15:10 /usr/bin/node /srv/app/current/server.js
 ```
 
-Example output:
+This output means the process still exists:
 
-```console
-    PID STAT     ELAPSED CMD
-   1842 Ssl      03:15:10 /usr/bin/node /srv/app/current/server.js
-```
+- `PID 1842` is still present.
+- `STAT Ssl` says it is sleeping with multiple threads and a session-leading process state.
+- The command line confirms you are still looking at the Node service.
 
-If the process still exists after a reasonable wait, inspect its state and logs. A process in `D` state may be stuck on I/O. A process in `S` state may still be running shutdown code.
+If it does not exit after a reasonable wait, inspect logs and state before using a harder signal. A process may be finishing requests, flushing data, or stuck on storage. Jumping straight to `KILL` can skip cleanup code and remove the final application log line that would have explained the problem.
 
-`KILL` ends the process immediately:
+Use `KILL` only after the graceful path has failed:
 
 ```bash
 sudo kill -KILL 1842
 ```
 
-`KILL` gives the process no chance to clean up. It can interrupt requests, skip shutdown hooks, and leave temporary files behind. A common escalation is `TERM`, wait, inspect, then `KILL` only after you know the process will not exit.
-
-For managed services, prefer service-aware controls:
+For managed services, use the service-aware command when possible:
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
+
+# Example output:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
 ```
 
-Example output:
+The lines matter because they show a safer path:
 
-```console
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-```
+- `nginx -t` validates the config before the live process reloads it.
+- `systemctl reload nginx` asks systemd to use the service's reload behavior.
+- If reload is unsupported, `systemctl restart service-name` is usually clearer than sending random signals by hand.
 
-Nginx knows how to reload configuration and replace workers gracefully. systemd knows how to stop, restart, and track managed services. Direct signals are useful, but service managers often provide the safer path.
+Signals are process-level control. Services add another layer above that control, which is why the parent relationship from earlier keeps paying off.
 
-The next decision is escalation. Use `TERM` or a service reload when the process can clean up. Check logs and state if it does not exit. Use `KILL` only after collecting enough evidence, because it skips shutdown handlers, open-request cleanup, and application-level final logs.
+![Process incident evidence infographic showing process tree, PID and PPID, signals, priority, nice values, proc evidence, SIGTERM, and SIGKILL](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-incident-evidence.png)
 
-## Foreground, Background, and Jobs
-<!-- section-summary: Shell job control explains what happens when commands run in your terminal versus under a service manager. -->
+_The image shows the evidence path for a process incident before reaching for a hard kill._
 
-A common SSH surprise is a long report command that stops as soon as the laptop sleeps or the network drops. Another version is worse: someone starts a web worker with `&`, logs out, and later nobody knows whether that process still belongs to a terminal, systemd, or nothing at all.
+## Foreground, Background, and SSH Sessions
+<!-- section-summary: Foreground and background jobs explain why shell-launched work can disappear with an SSH session. -->
 
-When you type a command in a terminal, it usually runs in the foreground. Your shell waits until it finishes. Adding `&` runs it in the background under that same shell session.
+A very normal beginner move is to start a long command over SSH, then worry about closing the laptop. Maybe it is a database export, a tar backup, or a script that takes twenty minutes. The command is a process, but it is also attached to a terminal session unless another tool takes ownership.
 
-Job control exists for interactive work. The shell tracks foreground and background jobs so you can pause, resume, and move commands while using one terminal. The important production detail is ownership: a background job still belongs to that shell session unless another supervisor takes over.
+When a command runs in the **foreground**, your shell waits for it and your terminal input goes to that command. When you add `&`, the command runs in the **background** and the shell gives you the prompt back. It is still a child of that shell, so the SSH session is still part of the story.
+
+Start a background job:
 
 ```bash
 long-report-generator &
+
+# Example output:
+# [1] 2409
 ```
 
-Example output:
+The two numbers are easy to mix up at first:
 
-```console
-[1] 2409
-```
-
-The first number is the shell job number. The second number is the PID.
+- `[1]` is the shell's job number for this terminal session.
+- `2409` is the Linux PID for the running process.
+- Another terminal cannot use `%1` because that job number belongs to this shell.
 
 Show background jobs from the current shell:
 
 ```bash
 jobs
+
+# Example output:
+# [1]+  Running                 long-report-generator &
 ```
 
-Example output:
-
-```console
-[1]+  Running                 long-report-generator &
-```
-
-Bring a job back to the foreground:
+Bring the job back to the foreground:
 
 ```bash
 fg %1
+
+# Example output:
+# long-report-generator
 ```
 
-Example output:
+This is useful for personal terminal work. It is risky for production services because closing the SSH session can send a hangup signal, remove the terminal, or leave a process nobody expects. Tools such as `tmux` can help with long interactive sessions, but a web server or worker should live under systemd.
 
-```console
-long-report-generator
-```
-
-Shell jobs are useful for short personal work. They are a poor home for production services because they belong to your terminal session. When the SSH session closes, the process may receive a hangup signal or lose its terminal.
-
-Managed services belong under systemd:
+Compare a service process:
 
 ```bash
 systemctl status app.service --no-pager
+
+# Example output:
+# app.service - Application service
+#      Active: active (running) since Wed 2026-06-24 10:18:36 UTC; 24min ago
+#    Main PID: 1842 (node)
 ```
 
-Example output:
+The status output ties the process to a service:
 
-```console
-app.service - Application service
-     Active: active (running) since Wed 2026-06-24 10:18:36 UTC; 24min ago
-   Main PID: 1842 (node)
-```
+- `Active: active (running)` tells you systemd is managing it.
+- `Main PID: 1842` connects the service back to the process table.
+- The service keeps a clear owner after you disconnect from SSH.
 
-If a long-running service is parented by a shell instead of systemd, treat that as a deployment or operations problem.
+Keep shell jobs for short interactive work. Move long-running services, workers, and scheduled production tasks into systemd units or timers so logs, restarts, and boot behavior are written down.
 
-The next decision is lifetime. Short commands can live in a shell job. Long-running services, workers, and scheduled jobs need a service manager or scheduler so they have logs, restart policy, boot behavior, and a clear owner.
+## Priority, Nice Values, and `/proc`
+<!-- section-summary: Nice values influence CPU scheduling, while `/proc/<pid>` exposes the live process details behind command output. -->
 
-## Priority, Nice Values, and I/O Priority
-<!-- section-summary: Nice values and I/O priority influence scheduling, but they are tuning tools after the real workload is understood. -->
+Picture a backup job compressing old releases at noon while the web app is serving users. Both jobs need CPU, and the backup is less urgent. Linux lets you mark that backup as lower priority so request handling has a better chance to run first.
 
-Picture a backup job compressing old releases at noon while the web service is also handling user traffic. Both need CPU, and the backup is less urgent. Priority tools let you make that maintenance work more polite.
+A **nice value** influences CPU scheduling. Normal processes usually start at nice `0`. A higher nice value, such as `10`, makes the process more polite to other CPU work. Lower nice values raise priority and usually require elevated privileges.
 
-A nice value influences CPU scheduling. Normal processes use nice `0`. Positive values, such as `10`, lower the process priority so other CPU work gets preference. Lower nice values raise priority and usually require elevated privileges.
-
-Disk-heavy work has a similar concern. A backup can also compete for I/O, so `ionice` lets you lower its disk priority while it runs.
-
-Run a maintenance task with lower CPU priority:
+Run a maintenance command with lower CPU priority:
 
 ```bash
 nice -n 10 tar -czf /var/backups/app.tgz /srv/app
 ```
 
-The command may produce no output while it runs. Confirm the nice value from another terminal:
+This command may not print anything while it runs. Check the nice value from another terminal:
 
 ```bash
-ps -C tar -o pid,ni,cmd
+ps -C tar -o pid,ppid,ni,stat,cmd
+
+# Example output:
+#     PID    PPID  NI STAT CMD
+#    2409    2310  10 R    tar -czf /var/backups/app.tgz /srv/app
 ```
 
-Example output:
+The fields explain the setup:
 
-```console
-    PID  NI CMD
-   2409  10 tar -czf /var/backups/app.tgz /srv/app
-```
+- `NI 10` confirms the lower CPU priority.
+- `PPID 2310` says the backup came from the shell with PID `2310`.
+- `STAT R` says the process is currently runnable or running.
 
-Change an already running process:
+Change a process that is already running:
 
 ```bash
 sudo renice 10 -p 2409
+
+# Example output:
+# 2409 (process ID) old priority 0, new priority 10
 ```
 
-Example output:
+Disk-heavy work has the same kind of concern, only the shared resource is storage instead of CPU. A backup that reads a large release directory and writes a compressed archive can slow request logs, database files, or upload handling on the same disk. `ionice` lets you tell the kernel that this process can wait behind more urgent disk work.
 
-```console
-2409 (process ID) old priority 0, new priority 10
-```
-
-Disk I/O has its own priority through `ionice`:
+Apply a low I/O priority to the running backup:
 
 ```bash
 sudo ionice -c2 -n7 -p 2409
 ```
 
-Confirm CPU priority again:
+The command often prints no output on success:
+
+- `-c2` selects the best-effort I/O scheduling class, which is suitable for normal work that can share the disk.
+- `-n7` uses the lowest priority inside that class, so the backup should yield to other best-effort disk users.
+- `-p 2409` applies the setting to the running backup process.
+
+Check the I/O scheduling class after setting it:
 
 ```bash
-ps -p 2409 -o pid,ni,cmd
+sudo ionice -p 2409
+
+# Example output:
+# best-effort: prio 7
 ```
 
-Example output:
+That output proves the process now has best-effort I/O priority `7`. It does not prove the backup is harmless, so pair it with disk metrics such as `iostat`, `iotop`, or `/proc/<pid>/io` when the server is still slow.
 
-```console
-    PID  NI CMD
-   2409  10 tar -czf /var/backups/app.tgz /srv/app
-```
+When process commands leave you with a missing detail, inspect `/proc/<pid>`. `/proc` is a live filesystem view from the kernel. It is not a normal directory full of saved files. Linux creates entries there to expose what the kernel currently knows about processes, memory, mounts, devices, and other runtime state. Each running process gets its own directory, so PID `1842` has `/proc/1842`.
 
-Priority tools help when a backup, compression job, or report export competes with a service. They do not replace capacity work. If the main service always needs more CPU, the real fix may be code changes, scheduling changes, caching, or a larger machine.
+A beginner usually checks `/proc/<pid>` for questions that normal command output only hints at:
 
-The next decision is temporary tuning versus real capacity work. Use `nice` or `ionice` to reduce the impact of maintenance jobs. If normal request handling still saturates the host, tune the application, move background work, scale out, or resize the machine.
+- Which exact command and arguments started this process?
+- Which environment variables did the process receive?
+- Which resource limits apply right now?
+- Which files, sockets, and pipes are still open?
+- Which working directory is the process using?
 
-## Inspect Live State in `/proc`
-<!-- section-summary: `/proc/<pid>` exposes live kernel details about a process, including command line, limits, environment, and open files. -->
-
-A mystery process is easier to handle once you ask concrete questions. What exact command launched it? Which environment did it receive? How much memory does the kernel see? What open-file limit applies? Which files or sockets does it still hold?
-
-`/proc/<pid>` answers those questions from the kernel's live view. For PID `1842`, `/proc/1842` contains details about that process. Tools such as `ps`, `top`, and `free` use this kernel data too, and operators can inspect it directly during an incident.
-
-Useful paths:
-
-| Path | What it shows |
-|---|---|
-| `/proc/1842/cmdline` | Command used to start the process |
-| `/proc/1842/environ` | Environment variables, separated by null bytes |
-| `/proc/1842/status` | State, memory summary, UIDs, GIDs, threads |
-| `/proc/1842/limits` | Resource limits such as open files |
-| `/proc/1842/fd` | Open file descriptors |
-| `/proc/1842/cwd` | Current working directory symlink |
-
-Make the command line readable:
+The command line is a gentle first check because it connects a PID to the program you recognize:
 
 ```bash
 tr '\0' ' ' < /proc/1842/cmdline
+
+# Example output:
+# /usr/bin/node /srv/app/current/server.js
 ```
 
-Example output:
+The strange `tr '\0' ' '` part is there because the kernel stores command-line arguments separated by NUL bytes. Converting those separators to spaces makes the output readable in the terminal.
 
-```console
-/usr/bin/node /srv/app/current/server.js
+Some useful `/proc` paths answer different operational questions:
+
+- `/proc/1842/cmdline` shows the exact command that launched this process.
+- `/proc/1842/environ` shows the environment variables the process received.
+- `/proc/1842/status` shows state, memory, UIDs, GIDs, and thread count from the kernel.
+- `/proc/1842/limits` shows resource limits such as maximum open files.
+- `/proc/1842/fd` shows the process's open file descriptors.
+- `/proc/1842/cwd` points to the working directory the process is using.
+
+Check process state and memory from `/proc`:
+
+```bash
+grep -E 'State|Threads|VmRSS|VmSize' /proc/1842/status
+
+# Example output:
+# State:  S (sleeping)
+# VmSize: 1840420 kB
+# VmRSS:   742312 kB
+# Threads:      18
 ```
 
 Pull one environment variable safely:
 
 ```bash
 sudo tr '\0' '\n' < /proc/1842/environ | grep '^NODE_ENV='
+
+# Example output:
+# NODE_ENV=production
 ```
 
-Example output:
+The `fd` directory deserves a slower look because it explains many production surprises. A **file descriptor** is a small number a process uses for something it has opened. It can point to a regular file, a log file, a socket, a pipe, `/dev/null`, or another kernel object. Programs usually reserve descriptor `0` for standard input, `1` for standard output, and `2` for standard error. Higher numbers are files and connections the program opened later.
 
-```console
-NODE_ENV=production
-```
-
-Check process state and memory:
-
-```bash
-grep -E 'State|Threads|VmRSS|VmSize' /proc/1842/status
-```
-
-Example output:
-
-```console
-State:  S (sleeping)
-VmSize: 1840420 kB
-VmRSS:   742312 kB
-Threads:      18
-```
-
-Check open files:
+Check open file descriptors:
 
 ```bash
 ls -lah /proc/1842/fd | head
+
+# Example output:
+# lrwx------ 1 app app 64 Jun 24 10:45 0 -> /dev/null
+# l-wx------ 1 app app 64 Jun 24 10:45 1 -> /var/log/app/stdout.log
+# l-wx------ 1 app app 64 Jun 24 10:45 2 -> /var/log/app/stderr.log
+# lrwx------ 1 app app 64 Jun 24 10:45 18 -> socket:[48122]
 ```
 
-Example output:
+Read each line from right to left:
 
-```console
-lrwx------ 1 app app 64 Jun 24 10:45 0 -> /dev/null
-l-wx------ 1 app app 64 Jun 24 10:45 1 -> /var/log/app/stdout.log
-l-wx------ 1 app app 64 Jun 24 10:45 2 -> /var/log/app/stderr.log
-lrwx------ 1 app app 64 Jun 24 10:45 18 -> socket:[48122]
+- `0 -> /dev/null` means standard input is connected to `/dev/null`, so the service is not waiting for keyboard input.
+- `1 -> /var/log/app/stdout.log` means standard output is being written to that log file.
+- `2 -> /var/log/app/stderr.log` means errors written to stderr go to a separate log file.
+- `18 -> socket:[48122]` means descriptor `18` is a socket. The bracketed number is a kernel socket identifier, not a path on disk.
+- `l-wx------` means descriptor `1` and `2` are symbolic links and the process has write access through them.
+
+This check helps with concrete problems. If disk space stays full after you remove a log file, `/proc/<pid>/fd` or `lsof` may show that a service still holds the deleted file open. If an app cannot write logs, the descriptor target may reveal the wrong path or permissions. If a service should listen on a socket, socket descriptors help confirm it opened network connections.
+
+Environment variables can contain secrets, so inspect `/proc/<pid>/environ` with care. Use targeted filters, avoid pasting full environment output into tickets or chat, and prefer service config files or secret managers for normal review.
+
+Priority tools are useful for maintenance jobs. `/proc` is useful for live facts. Both are part of the same habit: inspect the process you actually have, then choose the smallest action that fits the evidence.
+
+## Worked Failure Diagnoses
+<!-- section-summary: Process clues help you diagnose high CPU, stray manual services, stuck shutdown, zombies, and memory kills. -->
+
+Troubleshooting usually starts with a human symptom. Someone says the site is slow, a deploy hangs, or a health check disagrees with the service status. The process table helps turn that broad symptom into a specific running object.
+
+**The site is slow and one process is burning CPU.** A sorted snapshot shows the busiest process first:
+
+```bash
+ps -eo pid,ppid,user,%cpu,%mem,etime,stat,cmd --sort=-%cpu | head
+
+# Example output:
+#     PID    PPID USER     %CPU %MEM     ELAPSED STAT CMD
+#    1842       1 app      197.0 22.1    04:02:11 Rsl  /usr/bin/node /srv/app/current/server.js
 ```
 
-Environment variables can contain secrets, so handle `/proc/<pid>/environ` carefully. Use targeted filters, avoid pasting full output into chat systems, and prefer service configuration files or secret managers for normal review.
+Work the clue in order:
 
-The next decision is which live fact you need. Use `/proc/<pid>/fd` when disk space, sockets, or deleted files are involved. Use `/proc/<pid>/limits` when the process hits "too many open files." Use `/proc/<pid>/status` when memory, threads, or state needs confirmation. Use `/proc/<pid>/environ` sparingly because it may expose secrets.
+- `PID 1842` is the target for deeper inspection.
+- `PPID 1` says systemd started it, so use `systemctl status app.service` and `journalctl -u app.service`.
+- `%CPU 197.0` means it is using about two CPU cores.
+- Capture logs, current route traffic, and any recent deploy details before restarting.
 
-## Failure Patterns
-<!-- section-summary: Common process failures include runaway CPU, stuck shutdown, zombies, orphaned manual processes, and OOM kills. -->
+**The health check passes, but `systemctl status` shows the service failed.** Look for a stray manual process holding the port:
 
-A troubleshooting session usually starts from symptoms, then maps each symptom to a process clue.
+```bash
+ss -ltnp | grep ':3000'
+pgrep -a node
+ps -o pid,ppid,user,cmd -p 2601
 
-Take one worked diagnosis. Users report intermittent timeouts, and `systemctl status app.service` says the service is healthy. `ss -ltnp` shows port `3000` owned by a `node` process whose parent is `bash`, not systemd. `pgrep -a node` shows two app processes: the managed service and a manual copy launched from an old release directory. At that point, the fix is not another restart. Stop the stray process, confirm the listener belongs to `app.service`, and review the deploy path so long-running work cannot launch outside the service manager again.
+# Example output:
+# LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=2601,fd=18))
+# 1842 node /srv/app/current/server.js
+# 2601 node /home/deploy/app/server.js
+#     PID    PPID USER     CMD
+#    2601    2310 deploy   node /home/deploy/app/server.js
+```
 
-If the host CPU stays high, use `top` or sorted `ps` to find the process near a full core or more. Capture the PID, command line, and logs before restarting so the team has evidence for the root cause.
+This diagnosis has a clear story:
 
-If a restart hangs, the old process may be blocked on I/O, stuck in cleanup, or ignoring `TERM`. Inspect `STAT`, service logs, and open files before escalating to `KILL`.
+- PID `2601` owns the port that the health check reaches.
+- Its PPID is the deploy user's shell, not systemd.
+- The service unit may have failed while a manual copy kept answering checks.
+- Stop the stray process, start the managed service, and fix the deploy path so long-running work starts through systemd.
 
-If `ps` shows `Z`, the process already exited and the parent has not collected its status. One short-lived zombie may disappear quickly. A growing number points at a parent process bug.
+**A stop or restart hangs.** Ask whether the old process is still alive and what state it reports:
 
-If health checks disagree with `systemctl status`, look for a stray manual process. Someone may have launched long-running work outside systemd, and that process may still listen on a port. `ss -ltnp`, `pgrep -a`, and the process tree help find the actual listener.
+```bash
+ps -p 1842 -o pid,ppid,stat,etime,cmd
+journalctl -u app.service -n 30 --no-pager
 
-If a service vanishes without a clean application error, check for an OOM kill. The CPU and memory article shows how to confirm that path with `journalctl -k`, `free`, `vmstat`, and process RSS.
+# Example output:
+#     PID    PPID STAT     ELAPSED CMD
+#    1842       1 Dsl      04:15:44 /usr/bin/node /srv/app/current/server.js
+```
 
-These patterns all point to a next check. Runaway CPU needs the owner, command line, and logs. Stuck shutdown needs state, open files, and service logs. Zombies need the parent process. Orphans need the listener and parent tree. OOM kills need kernel logs and memory history. The process table gives the live clue, then the matching subsystem explains why it happened.
+The important detail is `D` in the state field. That often means uninterruptible I/O wait, such as a stuck disk or network filesystem operation. Sending `KILL` may not remove it immediately because the kernel is waiting for the I/O path. Check storage, mounts, and recent kernel logs before assuming the app ignored shutdown.
 
-Process management gives you the live view. systemd adds the long-running service contract on top of it.
+**A zombie appears in `ps`.** A zombie is already dead as a running program, but its parent has not collected the exit report yet:
+
+```bash
+ps -eo pid,ppid,stat,cmd | grep ' Z'
+
+# Example output:
+#    2712    1842 Z    [node] <defunct>
+```
+
+Use the PPID to find the parent:
+
+```bash
+ps -p 1842 -o pid,user,stat,cmd
+
+# Example output:
+#     PID USER     STAT CMD
+#    1842 app      Ssl  /usr/bin/node /srv/app/current/server.js
+```
+
+One short-lived zombie may vanish quickly. A growing list of zombies points toward a parent process that is failing to collect child exit statuses. That is usually an application bug or process supervisor bug, not a reason to signal the zombie itself.
+
+**A service vanishes with no clean application error.** Check whether the kernel killed it because memory was exhausted:
+
+```bash
+journalctl -k --since "1 hour ago" --no-pager | grep -i 'killed process'
+
+# Example output:
+# Jun 24 11:03:18 web-01 kernel: Out of memory: Killed process 1842 (node) total-vm:1840420kB, anon-rss:742312kB
+```
+
+This output points away from normal application shutdown:
+
+- `Out of memory` says the kernel selected a process during memory pressure.
+- `Killed process 1842 (node)` ties the event to the PID you were investigating.
+- The next checks are memory history, service limits, traffic spike, and recent code paths that allocate large objects.
+
+Each diagnosis follows the same shape. Start from the symptom, find the PID, check the parent, inspect state, then choose the next tool. That habit keeps process management practical instead of turning it into a pile of commands to memorize.
+
+![Process management summary infographic showing processes, PID trees, systemd, ps, signals, background jobs, nice values, proc, and diagnosis](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-management-summary.png)
+
+_The summary image collects the process-management checks into one incident review map._
 
 ## References
 

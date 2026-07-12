@@ -1,142 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "A deployment log shows this target:\n\n`/subscriptions/sub-prod-001/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarisordersprod`\n\nWhich fact can you read directly from the resource ID?",
-      "options": [
-        {
-          "id": "a",
-          "text": "The subscription, resource group, provider namespace, resource type, and resource name."
-        },
-        {
-          "id": "b",
-          "text": "The resource owner's phone number and on-call schedule."
-        },
-        {
-          "id": "c",
-          "text": "The exact monthly cost and whether the resource is safe to delete."
-        },
-        {
-          "id": "d",
-          "text": "The app's runtime language and current image tag."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "A resource ID gives scope and type evidence. It does not replace tags, cost reports, ownership records, or runtime details."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The team has two resources named `orders-prod`: one is a resource group and one is an Application Insights component. A script author wants to use only the visible name because both resources belong to the same app. Why is name-only automation risky?",
+      "scenario": "An on-call engineer receives an alert that says `orders-prod` is failing. In the same subscription, `orders-prod` is both the name of a resource group and the name of an Application Insights component used by another team. The engineer wants to automate the first response by passing only the visible name to a script. Why is that unsafe?",
       "options": [
         {
           "id": "a",
-          "text": "Names are scoped differently by service, so automation should include resource type, subscription, resource group, and ideally the full resource ID."
+          "text": "Azure resource names are scoped differently by resource type and scope, so safe automation should confirm the subscription, resource group, provider type, and preferably the full resource ID."
         },
         {
           "id": "b",
-          "text": "Azure forbids two resources from sharing any visible name anywhere in a tenant."
+          "text": "Azure prevents two resources from sharing the same visible name anywhere in a subscription, so the script would fail before it could touch the wrong target."
         },
         {
           "id": "c",
-          "text": "Application Insights names are not real resource names."
+          "text": "The script can rely on the visible name if it also checks the current region, because Azure names are effectively unique within a region."
         },
         {
           "id": "d",
-          "text": "Resource group names are useful context, so a matching group name is enough for human review but not for automation."
+          "text": "The script only needs the resource group and resource name, because the provider type rarely changes which object Azure will target."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Azure naming rules vary by service and scope. A human-friendly name is not enough for safe automation. Full IDs reduce ambiguity."
-    },
-    {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "A review tool shows a resource name, tags, and the full Azure resource ID for each production resource. The reviewer wants to know which piece of evidence to use for human recognition, inventory, and exact automation scope. Which statements describe the different jobs of names, tags, and resource IDs?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Names help humans recognize a resource quickly."
-        },
-        {
-          "id": "b",
-          "text": "Tags help inventory, ownership, cost, environment, and search when teams use them consistently."
-        },
-        {
-          "id": "c",
-          "text": "Resource IDs give exact Azure scope and type for automation, RBAC, policy, and logs."
-        },
-        {
-          "id": "d",
-          "text": "Tags grant runtime permission to read secrets without RBAC or managed identity."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c"
-      ],
-      "explanation": "Names, tags, and IDs complement each other. Tags are metadata, not permission grants. Runtime access still needs identity and authorization."
+      "explanation": "The safe habit is to treat the friendly name as a search clue, not as the final identity. The full resource ID and provider type remove ambiguity across similarly named resources. The closest distractor is the resource-group answer, because resource groups are important context, but they still do not uniquely identify a specific object when different providers and child resources are involved. See [Microsoft Learn: Azure Resource Manager overview](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A resource is tagged `env=prod`, but its ID is under `/subscriptions/sub-dev-001/`. The change request says it is safe because the tag is the value the dashboard uses. What should a reviewer do before approving a production change?",
+      "scenario": "A production change request targets a vault tagged `env=prod`, but its resource ID path starts with `/subscriptions/sub-dev-001/`. The requester says the dashboard keys off tags, so the production tag should be trusted. What should a reviewer do before approving any change?",
       "options": [
         {
-          "id": "a",
-          "text": "Treat the mismatch as a warning and verify subscription, resource group, owner, and intended environment before changing anything."
-        },
-        {
           "id": "b",
-          "text": "Trust the tag first, because the dashboard and cost reports use tags to decide environment."
+          "text": "Trust the production tag and confirm only the resource group, because governance metadata is usually the clearest production signal."
         },
         {
           "id": "c",
-          "text": "Trust the subscription first, but open a follow-up ticket to repair the misleading tag after the change."
+          "text": "Trust the subscription path and proceed, then fix the misleading tag later because tags are not part of identity evidence."
+        },
+        {
+          "id": "a",
+          "text": "Pause the change and verify the subscription, resource group, full resource ID, tags, and recent activity until the mismatch is explained."
         },
         {
           "id": "d",
-          "text": "Ignore the mismatch if the resource name contains `orders`."
+          "text": "Approve the change if the recent activity log shows the same operator usually works on production vaults, because behavior history can resolve ambiguous metadata."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Mismatched evidence is exactly why names, tags, and IDs should be read together. Neither tag nor subscription should be blindly ignored without review."
+      "explanation": "Conflicting evidence is exactly when the team should stop and prove the target before changing it. The closest distractor is the subscription-first answer, because the resource ID is strong evidence, but the article's review habit is to investigate disagreement, not pick one field and continue. See [Microsoft Learn: Azure Resource Manager overview](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview) and [Microsoft Learn: Use tags to organize your Azure resources and management hierarchy](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "An incident ticket says `restart orders api`, but there are resources named `orders-api` in dev, staging, and prod. What is the safest target format for an automation runbook?",
+      "scenario": "An incident ticket says only `restart orders api`, but the subscription contains `orders-api` resources in dev, staging, and prod. The automation owner is rewriting the runbook so an operator can target the production workload without guessing. Which target format is strongest?",
       "options": [
         {
-          "id": "a",
-          "text": "The full resource ID for the intended production resource, plus tags or owner notes as human confirmation."
+          "id": "b",
+          "text": "Record the visible resource name with the `env=prod` tag, because that is usually enough for an experienced operator."
         },
         {
-          "id": "b",
-          "text": "The visible resource name plus the environment tag, because that is usually enough for an operator to recognize the target."
+          "id": "a",
+          "text": "Record the full production resource ID and resource type, then keep tags or owner notes as human confirmation."
         },
         {
           "id": "c",
-          "text": "A name prefix such as `orders`, as long as the runbook says production in the title."
+          "text": "Record the public URL and the resource group, because responders are most likely to recognize the customer-facing endpoint."
         },
         {
           "id": "d",
-          "text": "The public URL plus the resource group name, because those are the clues most responders see first."
+          "text": "Record the resource group, provider type, and resource name, because that combination is usually enough to identify the intended object."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Runbooks should remove ambiguity. A full resource ID is much safer than a partial name or public URL when several environments share similar names."
+      "explanation": "A full resource ID plus the provider type identifies the exact Azure object the automation should touch. The closest distractor is the name-plus-tag approach, because operators often do rely on both, but tags are mutable and names are not unique enough to authorize a production action by themselves. See [Microsoft Learn: Azure Resource Manager overview](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview)."
+    },
+    {
+      "id": "06-avoid-the-wrong-target-q1",
+      "type": "single",
+      "scenario": "A release script currently discovers the target with `name contains orders-api`. In the active subscription, that filter returns both staging and production Container Apps. The intended change is staging only, and the team wants the script to fail closed instead of guessing. What should the script require before it applies a change?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The first match returned after sorting by resource group name, because the naming convention usually places staging before production."
+        },
+        {
+          "id": "c",
+          "text": "The app name plus region, because two active environments rarely share both values."
+        },
+        {
+          "id": "d",
+          "text": "The exact resource name and staging hostname, because that combination is usually specific enough for environment-targeted automation."
+        },
+        {
+          "id": "a",
+          "text": "The exact resource ID, expected subscription, expected resource group, expected provider type, and a matching staging tag check."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Fail-closed automation should verify immutable scope and exact identity before mutation. The closest distractor is the app-name-plus-region answer, because it sounds more specific than a partial name match, but it still allows collisions and does not prove the exact Azure resource. See [Microsoft Learn: Azure resource naming rules and restrictions](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules)."
+    },
+    {
+      "id": "06-avoid-the-wrong-target-q2",
+      "type": "multiple",
+      "scenario": "A production incident runbook may restart one Azure resource when telemetry proves that a single app instance is unhealthy. The estate contains many resources with `orders` in the name across dev, staging, and prod. Which two guardrails most directly prevent the automation from touching the wrong object?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Require the expected subscription and resource group before the automation can continue."
+        },
+        {
+          "id": "c",
+          "text": "Use tags such as `service`, `env`, and `owner` as the only authorization signal for the restart."
+        },
+        {
+          "id": "b",
+          "text": "Compare the discovered target's full resource ID and provider type against the runbook's intended target."
+        },
+        {
+          "id": "d",
+          "text": "Continue when multiple resources match, but print the full match list to the logs for later audit."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Scope checks narrow discovery, and exact ID plus type verification proves the mutation target. The closest distractor is the tags-only check, because tags are valuable supporting evidence, but mutable metadata should not replace immutable identity in production automation. Continuing after multiple matches defeats the fail-closed requirement. See [Microsoft Learn: Azure resource naming rules and restrictions](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) and [Microsoft Learn: Use tags to organize your Azure resources and management hierarchy](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources)."
+    },
+    {
+      "id": "06-avoid-the-wrong-target-q3",
+      "type": "single",
+      "scenario": "A storage account is approved to move from `rg-devpolaris-orders-temp` to `rg-devpolaris-orders-prod`. The storage account name will remain the same, and the move is meant to align the resource with production ownership. After the move, what should the team review carefully?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Any RBAC assignments, dashboards, alert rules, scripts, policies, and documents that referenced the old resource group or old resource ID path."
+        },
+        {
+          "id": "b",
+          "text": "Only the display name and tags, because the stable storage account name means existing references will continue to work."
+        },
+        {
+          "id": "c",
+          "text": "The public endpoint first, because moving a resource group changes the storage account hostname that clients use."
+        },
+        {
+          "id": "d",
+          "text": "Whether the resource should be recreated instead, because a move makes the resource identity too unstable for production use."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A move changes the resource ID path, which can affect any control-plane reference scoped to the old location. The closest distractor is the stable-name answer, because the resource's visible name may stay the same, but many Azure integrations and runbooks key off scope and ID rather than just the name. See [Microsoft Learn: Move resources to a new resource group or subscription](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/move-resource-group-and-subscription)."
+    },
+    {
+      "id": "06-avoid-the-wrong-target-q5",
+      "type": "single",
+      "scenario": "A production runbook says only `Rotate secrets for Key Vault orders-prod.` During an incident review, the team notices there are two similarly named vaults in different subscriptions, and both have production-looking tags because one was cloned from a template. What should be corrected in the runbook before the next incident?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep the short name, but add the vault URI and secret names so responders can confirm they are rotating the intended dependency."
+        },
+        {
+          "id": "c",
+          "text": "Tell responders to prefer the vault whose recent activity log shows the latest production secret writes if the names are close."
+        },
+        {
+          "id": "a",
+          "text": "Replace the vague target with the exact Key Vault resource ID, subscription, resource group, and owner context for the intended production vault."
+        },
+        {
+          "id": "d",
+          "text": "Tell responders to use the vault in the expected production subscription and resource group, then confirm the matching short name before rotating."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A production runbook should remove guesswork before the incident starts, so the exact Azure identity belongs in the procedure. The closest distractor is the expected-subscription-and-resource-group answer, because that is stronger than a short name alone, but it still leaves room for confusion when similarly named resources exist inside the same scope. See [Microsoft Learn: Azure Resource Manager overview](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/overview)."
     }
   ]
 }

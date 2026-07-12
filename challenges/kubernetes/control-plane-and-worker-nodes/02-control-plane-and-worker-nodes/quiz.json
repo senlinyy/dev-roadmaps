@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "accepted-request-q1",
+      "type": "single",
+      "scenario": "A release pipeline reports `deployment.apps/notification-api configured`. Thirty seconds later, no new Pods exist and customer traffic is still served by the old image. What does the pipeline result prove, and where should the team investigate next?",
+      "options": [
+        { "id": "a", "text": "It proves the new containers passed readiness, so the Service selector must be wrong." },
+        { "id": "b", "text": "It proves the scheduler placed every new Pod, so the kubelet logs are the only useful evidence." },
+        { "id": "c", "text": "It proves the API server accepted and stored the Deployment update, so controller creation of the new ReplicaSet and Pods is the next handoff to inspect." },
+        { "id": "d", "text": "It proves etcd directly started the new containers, so application logs should already contain startup records." }
+      ],
+      "correct": ["c"],
+      "explanation": "The configured response confirms API acceptance and storage, not rollout health. Controllers still need to create the new ReplicaSet and Pods. Readiness and kubelet evidence occur later, while etcd stores cluster records and does not start containers."
+    },
+    {
+      "id": "pending-placement-q2",
+      "type": "single",
+      "scenario": "Three new notification worker Pods remain `Pending`. Their events say `0/4 nodes are available: 4 Insufficient memory`, and the Pods have no node assignment. Which component is currently unable to complete its responsibility?",
+      "options": [
+        { "id": "a", "text": "The scheduler cannot select a worker node that satisfies the Pods' resource requirements." },
+        { "id": "b", "text": "The container runtime cannot authenticate to the image registry after receiving a start request." },
+        { "id": "c", "text": "The kubelet cannot run the readiness endpoint on containers that are already serving traffic." },
+        { "id": "d", "text": "etcd cannot store customer notification rows because the application database is full." }
+      ],
+      "correct": ["a"],
+      "explanation": "An unassigned Pending Pod with insufficient memory events is blocked during scheduler filtering. The runtime and kubelet have not received node-local work yet. Customer notification rows belong in the application database, not etcd."
+    },
+    {
+      "id": "image-pull-q3",
+      "type": "single",
+      "scenario": "A new Pod is assigned to `worker-02`, but its status becomes `ImagePullBackOff`. The image tag was mistyped in the Deployment. Which handoff has already succeeded, and which layer is reporting the failure?",
+      "options": [
+        { "id": "a", "text": "API authentication failed, and etcd is reporting that the caller lacks permission." },
+        { "id": "b", "text": "Service routing succeeded, and the readiness probe is reporting a database outage." },
+        { "id": "c", "text": "Controller reconciliation failed before a Pod object existed, and the scheduler is reporting a missing ReplicaSet." },
+        { "id": "d", "text": "Scheduling succeeded, and the kubelet with the container runtime is reporting a node-local image pull failure." }
+      ],
+      "correct": ["d"],
+      "explanation": "A named worker node proves the scheduler completed placement. ImagePullBackOff appears after the kubelet asks the runtime to fetch the image. API authorization, controller creation, and Service readiness are different handoffs."
+    },
+    {
+      "id": "etcd-outage-q4",
+      "type": "single",
+      "scenario": "A self-managed cluster loses etcd quorum. Existing notification API containers continue handling some requests, but new deploys, scale changes, and new Pod bindings stop. Which explanation best matches the architecture?",
+      "options": [
+        { "id": "a", "text": "etcd stores application request rows, so running containers can serve only data already cached in memory." },
+        { "id": "b", "text": "Running processes can continue on worker nodes, but control plane changes stall because Kubernetes cannot reliably persist and coordinate cluster state." },
+        { "id": "c", "text": "The scheduler runs inside etcd, so losing quorum removes every existing node assignment from the running Pods." },
+        { "id": "d", "text": "The container runtime requires a live etcd connection for every HTTP request handled by an existing container." }
+      ],
+      "correct": ["b"],
+      "explanation": "etcd is the control plane store for Kubernetes objects. Existing worker-node processes may continue temporarily, but new API writes and coordination cannot progress safely without quorum. Business data belongs in the application database, and neither the scheduler nor runtime runs inside etcd."
+    },
+    {
+      "id": "managed-responsibility-q5",
+      "type": "multiple",
+      "scenario": "A team moves the notification platform to managed Kubernetes. The provider operates the control plane and etcd, while the team owns workloads and node pools. Which two responsibilities still belong directly to the application and platform team?",
+      "options": [
+        { "id": "a", "text": "Design resource requests and readiness probes that let scheduling and traffic decisions reflect application needs." },
+        { "id": "b", "text": "Write customer notification records directly into the provider-managed etcd cluster." },
+        { "id": "c", "text": "Operate the hidden control plane machines and take manual etcd snapshots with server certificates." },
+        { "id": "d", "text": "Choose suitable node-pool capacity and investigate kubelet, runtime, networking, and application failures on worker nodes." }
+      ],
+      "correct": ["a", "d"],
+      "explanation": "Managed control planes do not remove workload design or worker capacity responsibilities. The team still supplies truthful resource and health contracts and operates its node-facing application path. The provider manages control plane machines and etcd, while business records remain in the application database."
+    }
+  ]
+}

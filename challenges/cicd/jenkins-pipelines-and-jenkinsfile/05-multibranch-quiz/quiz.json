@@ -4,67 +4,197 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A team has one Pipeline job pointed at `main`. Feature branches do not get their own CI jobs, and pull requests are easy to miss. What does a Multibranch Pipeline add?",
+      "scenario": "A service needs a linear Build, Test, Package, and Deploy flow with parameters, a timeout, branch gates, and failure cleanup. Most contributors are not Groovy specialists. Which pipeline style is the best default?",
       "options": [
-        { "id": "a", "text": "It scans the Git source, finds branches and pull requests with a Jenkinsfile, and creates a job for each one." },
-        { "id": "b", "text": "It moves all Jenkinsfiles into `$JENKINS_HOME` so branches no longer need one." },
-        { "id": "c", "text": "It runs every branch on the controller so agents are not needed." },
-        { "id": "d", "text": "It replaces Git webhooks with manual Build Now clicks." }
+        {
+          "id": "a",
+          "text": "A Scripted Pipeline that builds every stage from runtime maps."
+        },
+        {
+          "id": "b",
+          "text": "A Declarative Pipeline with explicit pipeline, options, parameters, stages, when, and post blocks."
+        },
+        {
+          "id": "c",
+          "text": "A Declarative wrapper that delegates the entire flow to one Scripted `script` block for flexibility."
+        },
+        {
+          "id": "d",
+          "text": "A Scripted Pipeline stored in source control with helper methods for timeout, branch, and cleanup behavior."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article defines Multibranch Pipeline as the job type that scans a source repository and creates branch or PR sub-jobs for every branch or pull request that has a Jenkinsfile."
+      "correct": [
+        "b"
+      ],
+      "explanation": "Declarative Pipeline gives this straightforward application flow a fixed, lintable shape that non-Groovy specialists can review. A fully Scripted design can implement the same behavior, but adds flexibility the workload does not require. Hiding the flow inside one `script` block also removes most of the review advantage of choosing Declarative syntax. See [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A long-lived feature branch stops getting CI after the team added a Jenkinsfile on `main`. The branch still exists on GitHub, but the multibranch project does not list it. What is the most likely explanation?",
+      "scenario": "One stage runs compile, unit tests, image build, and registry push in a single shell block. The build turns red, but the UI cannot show whether tests or registry access failed. Which refactor gives the most useful operating evidence?",
       "options": [
-        { "id": "a", "text": "The feature branch does not contain the Jenkinsfile at the configured path, so branch indexing skips it." },
-        { "id": "b", "text": "Jenkins never builds branches with slashes in their names." },
-        { "id": "c", "text": "Only `main` can use declarative pipelines." },
-        { "id": "d", "text": "The branch needs a production deploy before it can appear." }
+        {
+          "id": "a",
+          "text": "Keep one stage and add more echo statements around each command."
+        },
+        {
+          "id": "b",
+          "text": "Create one stage per shell line, including directory changes and variable assignments."
+        },
+        {
+          "id": "c",
+          "text": "Keep one stage but publish structured markers so external log processing identifies the failed phase."
+        },
+        {
+          "id": "d",
+          "text": "Split it into a few stages matching build, test, package, and publish failures."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article calls this out directly: the Jenkinsfile must exist on every branch you want built. If a branch does not have the file yet, indexing has no pipeline entry point to create."
+      "correct": [
+        "d"
+      ],
+      "explanation": "Stages should match how engineers diagnose the pipeline. A few meaningful boundaries make status, retries, and alerts useful without turning every command into UI noise. Extra echoes do not create Jenkins stage evidence. See [Using a Jenkinsfile](https://www.jenkins.io/doc/book/pipeline/jenkinsfile/)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which considerations belong in a review of fork pull-request builds?",
+      "type": "single",
+      "scenario": "Unit tests, lint, and dependency scanning are placed in parallel branches, but all request the only linux-general executor. The pipeline duration does not improve. What is the real bottleneck?",
       "options": [
-        { "id": "a", "text": "A malicious fork can modify the Jenkinsfile, so deploy credentials must not be exposed to arbitrary PR builds." },
-        { "id": "b", "text": "The safer default is to keep untrusted fork PRs away from privileged deploy stages." },
-        { "id": "c", "text": "The detailed trust model is security-sensitive enough that the credentials article covers it separately." },
-        { "id": "d", "text": "HTTPS cloning makes secrets safe to inject into every fork PR." }
+        {
+          "id": "a",
+          "text": "The pipeline has no matching executor capacity to run the branches concurrently."
+        },
+        {
+          "id": "b",
+          "text": "The branches share one workspace, so Jenkins serializes them to prevent file conflicts."
+        },
+        {
+          "id": "c",
+          "text": "The dependency scanner waits for unit-test artifacts, so Jenkins serializes all three branches automatically."
+        },
+        {
+          "id": "d",
+          "text": "The three branches are waiting on the same external test-data lock rather than on Jenkins scheduling capacity."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The article says fork PRs are sandboxed by default and points to the credentials article for the trust model. The core principle is still visible here: PRs from forks are untrusted, so deploy credentials need stronger gates than ordinary branch builds."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Parallel syntax expresses independent work, but the scheduler still needs free matching executors. The scenario directly states that every branch requests the only executor, which is sufficient to explain serialization. Jenkins does not automatically serialize parallel branches because of workspace or artifact assumptions, and no external lock evidence is present. See [Jenkins Pipeline parallel syntax](https://www.jenkins.io/doc/book/pipeline/syntax/#parallel)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A repository has thousands of stale branches. Branch indexing now consumes noticeable controller memory and time. Which practice best fits the article?",
+      "scenario": "A unit-test stage fails before publishing JUnit results, and its temporary workspace remains on a persistent agent. Which Jenkinsfile placement makes reporting and cleanup reliable across outcomes?",
       "options": [
-        { "id": "a", "text": "Configure stale-branch retention to a short, intentional window and prune old branches." },
-        { "id": "b", "text": "Disable branch indexing forever." },
-        { "id": "c", "text": "Move branch indexing onto agents." },
-        { "id": "d", "text": "Put every branch's Jenkinsfile in a different directory." }
+        {
+          "id": "a",
+          "text": "Use a `failure` post condition for reports and cleanup so they run when the test stage fails."
+        },
+        {
+          "id": "b",
+          "text": "Use `always` for test reports but perform cleanup in a separate downstream maintenance job."
+        },
+        {
+          "id": "c",
+          "text": "Use an always post condition for reports and cleanup, with failure-specific notification where needed."
+        },
+        {
+          "id": "d",
+          "text": "Archive reports from the test command before it returns its failing exit code, then clean the workspace in `failure`."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article names branch indexing cost as an operational concern and recommends configuring stale-branch retention to a few weeks for large repositories."
+      "correct": [
+        "c"
+      ],
+      "explanation": "`post { always { ... } }` preserves reports and cleans the workspace after success, failure, or other outcomes, with failure notification added separately. A `failure` block handles this incident but not successful or aborted builds. A downstream cleanup job leaves stale state in place, while archiving inside the test command can be skipped when the command exits early. See [Jenkins Declarative post conditions](https://www.jenkins.io/doc/book/pipeline/syntax/#post)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A multibranch project builds every branch, but all branches share almost identical Jenkinsfile logic. The team wants less duplication while keeping Jenkinsfile as the branch entry point. Which boundary is reasonable?",
+      "scenario": "Pull requests should compile and test, while production deployment should run only from main after an explicit DEPLOY request. The deploy token is currently bound at pipeline level. What should change?",
       "options": [
-        { "id": "a", "text": "Keep a thin Jenkinsfile in each branch and move repeated pipeline logic into a shared library global step." },
-        { "id": "b", "text": "Delete every Jenkinsfile because shared libraries replace multibranch discovery." },
-        { "id": "c", "text": "Copy the same 200-line Jenkinsfile into every branch and accept the duplication." },
-        { "id": "d", "text": "Store the Jenkinsfile in the Jenkins UI instead of Git." }
+        {
+          "id": "a",
+          "text": "Keep the token at pipeline scope but gate every shell step that could reference it with the same branch condition."
+        },
+        {
+          "id": "b",
+          "text": "Gate the deploy stage with branch and parameter conditions, then bind the credential only inside that stage."
+        },
+        {
+          "id": "c",
+          "text": "Move deployment into a second main-only job but keep the token bound globally in the original multibranch job."
+        },
+        {
+          "id": "d",
+          "text": "Gate deployment by branch only and treat the explicit parameter as unnecessary once code reaches `main`."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article frames the Jenkinsfile as the branch's pipeline contract. A thin wrapper can preserve that contract while delegating repeatable logic to a shared library, which the shared-libraries article expands in detail."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The branch and parameter gate controls release intent, while narrow credential binding keeps deploy power out of ordinary checks. A global secret remains reachable by commands that do not need it. See [Jenkins Pipeline when syntax](https://www.jenkins.io/doc/book/pipeline/syntax/#when) and [credentials binding](https://www.jenkins.io/doc/pipeline/steps/credentials-binding/)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A multibranch project discovers main and pull requests. A fork can modify application tests and the Jenkinsfile. Which design preserves review feedback without giving the fork a production path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow fork checks to load production credentials but run them on a network-isolated agent."
+        },
+        {
+          "id": "b",
+          "text": "Use a second project for forks, but allow its successful build to trigger the existing credential-bearing deployment job."
+        },
+        {
+          "id": "c",
+          "text": "Keep one multibranch project but require a maintainer comment before any fork build, including compile and test, begins."
+        },
+        {
+          "id": "d",
+          "text": "Keep compile and test available, but keep deployment and credentials behind trusted branch and repository controls."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Multibranch makes branch code executable, so untrusted change requests need a low-privilege compile-and-test path while deployment remains behind trusted repository and branch controls. Network isolation does not make production credentials safe to expose. A fork project that can trigger a credential-bearing deployment preserves the escalation path, while approval before all fork tests unnecessarily removes routine review feedback. See [Jenkins multibranch Pipeline](https://www.jenkins.io/doc/book/pipeline/multibranch/) and [SCM credential security](https://www.jenkins.io/doc/book/security/securing-org-folders-and-multibranch-pipelines/)."
+    },
+    {
+      "id": "q7",
+      "type": "multiple",
+      "scenario": "A retailer's checkout Jenkins job is configured partly in the UI, uses one long stage, and runs the same credential-bearing deployment path for feature branches and the release branch. Failed builds regularly lose the evidence needed for incident review. Which practices would turn its Jenkinsfile into a reliable delivery contract?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Store it with application code so pipeline changes receive pull request review."
+        },
+        {
+          "id": "b",
+          "text": "Keep a small number of stages but move failure reporting to an external log processor."
+        },
+        {
+          "id": "c",
+          "text": "Use meaningful stages, bounded options, and post actions that preserve evidence."
+        },
+        {
+          "id": "d",
+          "text": "Use branch-aware stages but bind production credentials at pipeline scope for consistent restart behavior."
+        },
+        {
+          "id": "e",
+          "text": "Use multibranch discovery and branch-aware gates so review and release paths differ intentionally."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "e"
+      ],
+      "explanation": "Versioned pipeline code, visible execution boundaries, and branch-aware behavior make delivery reviewable and operable. One giant stage hides failures, while global production credentials erase the trust boundary. See [Jenkins Pipeline as Code](https://www.jenkins.io/doc/book/pipeline/pipeline-as-code/)."
     }
   ]
 }

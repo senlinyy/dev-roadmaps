@@ -1,0 +1,18 @@
+{
+  "language": "yaml",
+  "filename": "notification-worker-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-worker\n  namespace: customer-notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: notification-worker\n  template:\n    metadata:\n      labels:\n        app: notification-worker\n    spec:\n      containers:\n        - name: worker\n          image: ghcr.io/customer-notifications/notification-worker:1.8.0\n          ports:\n            - name: metrics\n              containerPort: 9090\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "template", "spec", "volumes", 0, "name"], "equals": "worker-routing", "label": "routing volume name" },
+      { "path": ["spec", "template", "spec", "volumes", 0, "configMap", "name"], "equals": "notification-worker-files", "label": "routing ConfigMap source" },
+      { "path": ["spec", "template", "spec", "volumes", 0, "configMap", "items"], "containsObject": { "key": "routing.yaml", "path": "provider-routing.yaml" }, "label": "selected routing file" },
+      { "path": ["spec", "template", "spec", "volumes", 0, "configMap", "defaultMode"], "equals": 420, "label": "routing file mode" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "worker", "label": "worker container" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notifications/notification-worker:1.8.0", "label": "approved worker image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "worker-routing", "mountPath": "/etc/notification", "readOnly": true }, "label": "read-only routing mount" }
+    ]
+  }
+}

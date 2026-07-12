@@ -1,6 +1,6 @@
 ---
 title: "Decode Load Average"
-sectionSlug: load-average-decoded
+sectionSlug: load-average-and-runnable-work
 order: 1
 ---
 

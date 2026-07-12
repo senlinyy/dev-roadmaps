@@ -1,88 +1,84 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A team has a network parser that accepts untrusted binary messages and must run with predictable latency. Which reason best supports considering Rust?",
+      "scenario": "A security scanner reads untrusted binary manifests on short-lived Linux workers. The current Python version needs 900 ms to start, can exceed 700 MB on malformed input, and requires a runtime on every worker. The team can accept a longer compile step, but the deployed tool must start quickly and enforce strict memory handling. Which decision best matches the evidence?",
       "options": [
-        {
-          "id": "a",
-          "text": "Rust can make memory bounds and ownership mistakes harder to ship while still compiling to native code."
-        },
-        {
-          "id": "b",
-          "text": "Rust removes the need to design the protocol carefully."
-        },
-        {
-          "id": "c",
-          "text": "Rust programs never crash once they compile."
-        },
-        {
-          "id": "d",
-          "text": "Rust is mainly chosen because Cargo downloads frontend packages faster."
-        }
+        { "id": "a", "text": "Keep Python solely because a managed runtime removes the need to test malformed input and memory growth" },
+        { "id": "b", "text": "Prototype the parser in Rust because native startup, explicit data ownership, and strong type checks address the stated constraints" },
+        { "id": "c", "text": "Choose Rust because compilation guarantees the parser has no logic bugs or runtime failures" },
+        { "id": "d", "text": "Choose either language based only on benchmark throughput because deployment and failure behavior are equivalent" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The article frames Rust as useful near low-level control and untrusted input, where memory-safety bugs matter. Rust does not remove design bugs or every crash."
+      "correct": ["b"],
+      "explanation": "Rust is a credible fit because the workload values native execution, predictable resource use, and compiler-enforced data rules. That does not remove testing or guarantee correct parsing, so the proposal still needs benchmarks and malformed-input tests. Keeping Python may remain reasonable if its operational costs are acceptable, but it does not directly address the stated runtime and memory constraints. [The Rust Programming Language](https://doc.rust-lang.org/book/) introduces Rust's performance and reliability goals."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A small internal dashboard mostly renders database records for office users. It has no tight memory limit, no special latency target, and the team is already productive in TypeScript. What is the best Rust judgment?",
+      "scenario": "A security team refactors a configuration loader so validation happens before the same text is recorded in an audit message. The build now fails with:\n\n```text\nerror[E0382]: borrow of moved value: `config`\n  --> src/main.rs:9:28\n5 | validate(config);\n  |          ------ value moved here\n9 | println!(\"loaded {}\", config);\n  |                            ^^^^^^ value borrowed here after move\n```\n\nValidation only reads the text, and the audit requirement means the caller must retain it. Which change expresses that contract best?",
       "options": [
-        {
-          "id": "a",
-          "text": "Rust may not be the first tool to reach for because the main pressure is product iteration, not low-level control."
-        },
-        {
-          "id": "b",
-          "text": "Rust is always the best backend language because it has no garbage collector."
-        },
-        {
-          "id": "c",
-          "text": "Rust should be required because JavaScript cannot talk to databases."
-        },
-        {
-          "id": "d",
-          "text": "Rust is only useful for operating systems and never for services."
-        }
+        { "id": "a", "text": "Change `validate` to accept `&str` and pass a borrow of `config`" },
+        { "id": "b", "text": "Clone `config` at every call site so ownership questions remain hidden from the function signature" },
+        { "id": "c", "text": "Make `config` mutable because mutation restores a value after it has moved" },
+        { "id": "d", "text": "Suppress E0382 because the later print proves the original allocation still exists" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The article is tradeoff-shaped. Rust is strong, but not every application has the constraints that make Rust worth the extra early learning cost."
+      "correct": ["a"],
+      "explanation": "A shared borrow lets `validate` read the text without taking ownership, so the caller can use `config` afterward. Cloning could work but adds allocation and obscures the read-only contract. Mutability does not undo a move, and the diagnostic identifies a real ownership violation rather than a warning to suppress. [Rust references and borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html) explains this data flow."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which pressures from the article are realistic signs that Rust might fit a component?",
+      "type": "single",
+      "scenario": "A product group is choosing implementation languages. Project Atlas is a command-line parser for large untrusted files with tight startup and memory budgets. Project Beacon is a two-page internal form backed by an existing TypeScript platform, and its delivery deadline is two weeks. The team has Rust experience but no mandate to standardize on one language. Which recommendation is most defensible?",
       "options": [
-        {
-          "id": "a",
-          "text": "The component parses untrusted input and memory bugs could become security bugs."
-        },
-        {
-          "id": "b",
-          "text": "The component needs predictable performance without garbage-collector pauses."
-        },
-        {
-          "id": "c",
-          "text": "The team wants safer concurrency around shared state."
-        },
-        {
-          "id": "d",
-          "text": "The team wants to avoid writing tests because Rust replaces them."
-        }
+        { "id": "a", "text": "Reject Rust for Atlas because memory-safe code cannot parse untrusted binary formats efficiently" },
+        { "id": "b", "text": "Use Rust for both because native compilation is the dominant requirement for every production application" },
+        { "id": "c", "text": "Use Rust for Atlas, then evaluate Beacon against team speed and platform integration instead of assuming the same answer" },
+        { "id": "d", "text": "Use TypeScript for Atlas because an existing web platform proves it meets command-line startup and memory constraints" }
       ],
-      "correct": [
-        "a",
-        "b",
-        "c"
+      "correct": ["c"],
+      "explanation": "Atlas aligns with Rust's strengths: native deployment, performance, explicit memory behavior, and safe parsing. Beacon has different constraints, where the existing platform and short deadline may outweigh Rust's benefits. A sound language decision follows workload and team evidence, not a universal rule. [Rust's production users](https://www.rust-lang.org/production) provides examples of where those tradeoffs are valuable."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A configuration service has two operations. Reading `/etc/app.toml` can fail with an I/O or parsing error. Looking up an optional `owner` field can legitimately return no value. A reviewer proposes returning an empty string from both operations. Which API design preserves the operational difference?",
+      "options": [
+        { "id": "a", "text": "Use empty strings for both because callers can infer every failure cause from string length" },
+        { "id": "b", "text": "Return `Option<Config>` for loading and discard whether the file was missing, unreadable, or malformed" },
+        { "id": "c", "text": "Return `Result<&str, ConfigError>` for the owner and treat normal absence as a service failure" },
+        { "id": "d", "text": "Return `Result<Config, ConfigError>` for loading and `Option<&str>` for the optional owner" }
       ],
-      "explanation": "Rust helps with memory safety, predictability, and concurrency discipline. It does not replace tests."
+      "correct": ["d"],
+      "explanation": "`Result` preserves recoverable failure details from loading, while `Option` represents an expected present-or-absent field. Collapsing load failures into `None` loses useful diagnosis, and treating ordinary absence as an error overstates the condition. Empty-string sentinels make every caller rediscover an undocumented convention. [Result](https://doc.rust-lang.org/std/result/) and [Option](https://doc.rust-lang.org/std/option/) document these contracts."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During onboarding, a developer spends an hour changing code around a compiler error without reading it. The diagnostic names the moved binding, the move site, the later use, and suggests borrowing. The team wants a learning practice that also improves production review quality. What should the mentor recommend?",
+      "options": [
+        { "id": "a", "text": "Reduce the case to a small program, trace the diagnostic locations, apply one ownership change, then verify behavior with a test" },
+        { "id": "b", "text": "Add clones until compilation succeeds, then avoid revisiting the ownership contract during review" },
+        { "id": "c", "text": "Move directly to unsafe pointers so compiler diagnostics no longer constrain the design" },
+        { "id": "d", "text": "Memorize the error number because the same number has one universal fix in every program" }
+      ],
+      "correct": ["a"],
+      "explanation": "The diagnostic is structured evidence about data flow. A small reproduction makes that evidence easier to follow, and a test connects compilation with intended behavior. Cloning can be deliberate, but using it blindly hides design questions. Unsafe code and memorized error numbers do not replace understanding the binding, move, and later use. [Rust compiler error E0382](https://doc.rust-lang.org/error_codes/E0382.html) shows how move diagnostics guide corrections."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A team is approving a four-week Rust pilot for a native log scrubber. The exit criteria are a reproducible build, safe handling of borrowed input, explicit error paths, and evidence that the tool fits its workload. Which activities directly support those criteria? Select all that apply.",
+      "options": [
+        { "id": "a", "text": "Benchmark representative inputs and record startup, memory, and throughput against the current tool" },
+        { "id": "b", "text": "Treat successful compilation as proof that malformed production inputs cannot trigger incorrect behavior" },
+        { "id": "c", "text": "Practice compiler diagnostics on small ownership and borrowing examples before expanding the parser" },
+        { "id": "d", "text": "Adopt nightly-only features immediately so the pilot cannot be evaluated on the stable toolchain described in the article" },
+        { "id": "e", "text": "Model fallible parsing with `Result` and expected absence with `Option`, then test both branches" }
+      ],
+      "correct": ["a", "c", "e"],
+      "explanation": "Measurements test project fit, explicit return types expose failure contracts, and focused compiler exercises build the data-flow skills the implementation needs. Nightly may be justified by a specific feature, but making it a default adds avoidable compatibility risk. Compilation catches important classes of mistakes, but malformed-input tests are still required. [The Rust Programming Language](https://doc.rust-lang.org/book/) follows this progression from tooling and ownership to error handling and projects."
     }
   ]
 }

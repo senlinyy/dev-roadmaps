@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A VM works because someone SSHed in and installed packages by hand. The replacement VM fails. What is the core design problem?",
+      "scenario": "A payment service needs identical VM instances in three zones. One engineer suggests manually installing packages on the first VM, then copying the checklist into the runbook. What should the image review call out?",
       "options": [
-        { "id": "a", "text": "The server state was not captured in an image or repeatable startup automation." },
-        { "id": "b", "text": "Compute Engine cannot run Linux." },
-        { "id": "c", "text": "The project needs more DNS zones." },
-        { "id": "d", "text": "The machine type name is too short." }
+        {
+          "id": "b",
+          "text": "Clone the configured VM's boot disk independently in each zone and continue applying package changes by SSH."
+        },
+        {
+          "id": "c",
+          "text": "Let each zone team choose packages manually because zones are independent failure domains."
+        },
+        {
+          "id": "d",
+          "text": "Create the three VMs from the same public image, then let each startup owner install the remaining production packages manually."
+        },
+        {
+          "id": "a",
+          "text": "Use a curated or custom image plus startup configuration so every VM begins from the same repeatable base."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A healthy VM design can reproduce the server from an image plus automation."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer uses an image as the repeatable VM starting point. The manual checklist and zone-by-zone package choices create drift, and a larger machine type changes CPU and memory, not image consistency. See [Google Cloud images documentation](https://cloud.google.com/compute/docs/images)."
+    },
+    {
+      "id": "startup-q1",
+      "type": "single",
+      "scenario": "A startup script installs packages and starts a worker. The instance group recreates an unhealthy VM, and the new VM fails because the package repository was temporarily unavailable. What should the startup review emphasize?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Have the instance group retry replacement until the repository returns, without preserving startup logs or a clear failure signal."
+        },
+        {
+          "id": "a",
+          "text": "Make startup idempotent, log each step, and fail clearly so recreated VMs can be diagnosed."
+        },
+        {
+          "id": "b",
+          "text": "Disable instance recreation so startup scripts are not rerun during automated replacement."
+        },
+        {
+          "id": "c",
+          "text": "Move package installation into a custom image but keep mutable credentials and environment-specific endpoints in that image."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer focuses on repeatable and diagnosable startup. Disabling recreation reduces resilience, embedding credentials is unsafe, and laptop-run setup breaks automation. See [Google Cloud startup scripts documentation](https://cloud.google.com/compute/docs/instances/startup-scripts)."
+    },
+    {
+      "id": "logs-and-patching-q1",
+      "type": "single",
+      "scenario": "A VM serving checkout traffic is running an old OS image. The service owner says Compute Engine is managed, so Google patches the guest OS automatically. What should the review say?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Google manages the infrastructure, but the customer still plans guest OS patching and application updates unless they use a managed service that owns that layer."
+        },
+        {
+          "id": "b",
+          "text": "Assume OS Config patches the guest and application by default because Compute Engine is a managed Google Cloud service."
+        },
+        {
+          "id": "c",
+          "text": "Replace the VM monthly from the same old image and treat recreation alone as a complete guest patch strategy."
+        },
+        {
+          "id": "d",
+          "text": "Increase the machine type so the supported guest packages and application dependencies update during the restart."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer states the VM responsibility boundary. The other options confuse infrastructure management with guest OS upkeep or unrelated sizing. See [Google Cloud apply os patches documentation](https://cloud.google.com/compute/docs/instances/apply-os-patches)."
+    },
+    {
+      "id": "logs-and-patching-q2",
+      "type": "multiple",
+      "scenario": "A VM stopped serving traffic after an overnight patch window and rebooted twice before recovering. The incident lead must distinguish a guest package failure from an image, boot-disk, or startup problem. Which three evidence sets belong in the timeline?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Instance metadata, source image, boot disk, startup configuration, and the exact reboot times."
+        },
+        {
+          "id": "d",
+          "text": "The lifecycle policy of an unrelated export bucket because it shares the same project."
+        },
+        {
+          "id": "e",
+          "text": "A current CPU utilization chart that begins after both reboots and omits package, boot, and startup events."
+        },
+        {
+          "id": "a",
+          "text": "Guest OS patch history and package-manager logs from the maintenance window."
+        },
+        {
+          "id": "b",
+          "text": "Cloud Logging entries and serial console output around both reboot attempts."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Patch and package records, platform and serial evidence, and instance boot configuration can reconstruct this failure. An unrelated object lifecycle policy does not explain guest boot or patch behavior. See [Compute Engine serial console troubleshooting](https://cloud.google.com/compute/docs/troubleshooting/troubleshooting-using-serial-console)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The security team requires a hardened OS baseline for import workers. Which VM planning artifact should name that baseline?",
+      "scenario": "Northstar Finance discovers that custom image `reconcile-worker-v17` contains a production database password in `/opt/app/config.env`. The image has created twelve batch VMs, the credential must be rotated today, and replacement workers still need unattended database access. Which remediation best fits Compute Engine image practice?",
       "options": [
-        { "id": "a", "text": "The image used to create the VM." },
-        { "id": "b", "text": "The public DNS TTL." },
-        { "id": "c", "text": "The Cloud Run revision." },
-        { "id": "d", "text": "A function trigger." }
+        {
+          "id": "b",
+          "text": "Rename the affected image and restrict SSH access, leaving the embedded credential available to every VM created from it."
+        },
+        {
+          "id": "c",
+          "text": "Create a newer image that contains an encrypted copy of the same credential and distribute the decryption key through metadata."
+        },
+        {
+          "id": "d",
+          "text": "Keep the image but rotate only the database password, without removing the old value from reusable image versions and caches."
+        },
+        {
+          "id": "a",
+          "text": "Rebuild the image without the secret and fetch credentials at runtime through approved identity and secret paths."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The image is the operating system starting point for the VM."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rebuilding without the credential removes it from future reusable artifacts, while the VM service account can retrieve the rotated value through an approved secret path at runtime. Renaming or restricting SSH does not remove the embedded value. Encrypting it while distributing the decryption key through metadata recreates the same secret-distribution problem, and rotation alone leaves the old credential in image copies and caches. See [Google Cloud create custom image documentation](https://cloud.google.com/compute/docs/images/create-custom)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which statements about VM images are healthy?",
+      "id": "startup-q5",
+      "type": "single",
+      "scenario": "A startup script pulls a container image from Artifact Registry. The script fails with permission denied even though the VM image is correct. Which boundary should the review inspect?",
       "options": [
-        { "id": "a", "text": "They define what exists before startup automation runs." },
-        { "id": "b", "text": "Custom images need a refresh and patch strategy." },
-        { "id": "c", "text": "They help avoid manual snowflake servers." },
-        { "id": "d", "text": "They replace all IAM review." }
+        {
+          "id": "d",
+          "text": "The startup script filename extension."
+        },
+        {
+          "id": "a",
+          "text": "The VM service account permissions and scopes used for the API call."
+        },
+        {
+          "id": "b",
+          "text": "The Artifact Registry repository location, assuming cross-region access produces an IAM-style permission denial."
+        },
+        {
+          "id": "c",
+          "text": "The image's guest OS login configuration, because registry authorization is inherited from SSH access."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Images are runtime starting points, not permission systems."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer checks runtime identity for the API pull. Disk type, zone choice, and filename extension do not explain an authenticated registry denial. See [Google Cloud service accounts documentation](https://cloud.google.com/compute/docs/access/service-accounts)."
+    },
+    {
+      "id": "logs-and-patching-q3",
+      "type": "single",
+      "scenario": "Northstar Media runs twenty identical web VMs behind a load balancer. Security requires an OS patch this week, customer capacity must remain available, and the team needs health-based rollback if patched instances fail. Which Compute Engine rollout pattern best meets those requirements?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Stop all twenty VMs, patch the shared boot image reference, and restart them together to keep versions consistent."
+        },
+        {
+          "id": "d",
+          "text": "Disable health checks during patching so partially updated instances remain in service while the operator completes the fleet."
+        },
+        {
+          "id": "a",
+          "text": "Use managed instance groups with templates, health checks, and staged replacement or rolling updates."
+        },
+        {
+          "id": "b",
+          "text": "SSH to each VM in sequence and patch it in place, relying on the operator checklist rather than replacement health signals."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer uses instance group primitives to roll changes predictably. Manual SSH, disabling health checks, and naming a firewall rule do not provide controlled VM replacement. See [Google Cloud rolling out updates to managed instance groups documentation](https://cloud.google.com/compute/docs/instance-groups/rolling-out-updates-to-managed-instance-groups)."
     }
   ]
 }

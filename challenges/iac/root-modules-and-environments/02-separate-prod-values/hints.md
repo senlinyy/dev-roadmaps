@@ -1,1 +1,1 @@
-Only edit `envs/prod/terraform.tfvars`. The module call in `envs/prod/main.tf` is context, not the place for environment values.
+A tfvars file supplies values for variables. It should not contain module blocks or source paths.

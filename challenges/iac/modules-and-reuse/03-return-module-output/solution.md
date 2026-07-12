@@ -11,5 +11,3 @@ output "bucket_arn" {
   value       = aws_s3_bucket.this.arn
 }
 ```
-
-Returning the resource ARN gives root modules a stable handoff point for IAM policies without rebuilding provider strings.

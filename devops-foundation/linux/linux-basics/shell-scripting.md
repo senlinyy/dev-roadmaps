@@ -22,7 +22,7 @@ id: article-devops-foundation-linux-linux-basics-shell-scripting
 ## Why Scripts Matter
 <!-- section-summary: Shell scripts turn repeated server operations into reviewed, repeatable commands. -->
 
-After you can navigate the filesystem and edit a config file, the next problem is repetition. Linux servers have tasks that happen again and again: pull a release artifact, install dependencies, restart a service, validate Nginx, check a health endpoint, and inspect logs when something fails.
+After you can navigate the filesystem and edit a config file, the next problem is repetition. A deploy over SSH often turns into the same chain of commands: pull a release artifact, install dependencies, restart a service, validate Nginx, check a health endpoint, and inspect logs when something fails.
 
 Typing those steps manually works once. The risk grows when the team deploys every day or when someone repairs a server during an incident. A shell script captures the known sequence so the operator runs one reviewed command instead of remembering ten small details.
 
@@ -33,7 +33,7 @@ Bash is a good fit for this layer because it orchestrates other programs. It cal
 ## What a Shell Script Is
 <!-- section-summary: A shell script is a text file of commands that Bash executes in order. -->
 
-The smallest useful automation can be one command you no longer want to type by hand. A health check is a good example: the same URL, the same flags, the same success-or-failure decision after every deploy.
+One command you already trust can turn into the first script. A health check is a good example: the same URL, the same flags, the same success-or-failure decision after every deploy. Saving that command in a file gives you the smallest useful script.
 
 A **shell script** is a plain text file containing commands for a shell to run. Bash reads the file from top to bottom, expands variables, runs commands, checks exit codes, and moves to the next line.
 
@@ -47,12 +47,9 @@ Save that as `check-app.sh`. Run it through Bash:
 
 ```bash
 bash check-app.sh
-```
 
-Example output:
-
-```console
-ok
+# Example output:
+# ok
 ```
 
 This is already useful. The command returns success only when the service responds with a successful HTTP status. A deployment script can use that fact after restarting the service.
@@ -67,12 +64,9 @@ If the service is down, the same script may print an error:
 
 ```bash
 bash check-app.sh
-```
 
-Example output:
-
-```console
-curl: (7) Failed to connect to 127.0.0.1 port 8080 after 0 ms: Couldn't connect to server
+# Example output:
+# curl: (7) Failed to connect to 127.0.0.1 port 8080 after 0 ms: Couldn't connect to server
 ```
 
 That error is good for automation. The script should fail loudly so a deploy step can stop before it marks a broken release as successful.
@@ -82,7 +76,7 @@ As scripts grow, the goal is clarity. A good operations script makes the importa
 ## Shebang, Execute Bit, and `PATH`
 <!-- section-summary: The shebang tells Linux which interpreter runs the script, and the execute bit allows direct execution. -->
 
-When a script runs directly as `./deploy.sh`, Linux needs to know which interpreter should read it. The first line handles that:
+After `bash check-app.sh` works, the natural next step is running a script directly as `./deploy.sh`. At that point Linux needs to know which interpreter should run the text file. The first line handles that:
 
 ```bash
 #!/usr/bin/env bash
@@ -102,12 +96,9 @@ Check the permission:
 
 ```bash
 ls -l scripts/deploy.sh
-```
 
-Example output:
-
-```console
--rwxr-xr-x 1 deploy web 1842 Jun 24 09:30 scripts/deploy.sh
+# Example output:
+# -rwxr-xr-x 1 deploy web 1842 Jun 24 09:30 scripts/deploy.sh
 ```
 
 The `x` in the owner, group, and others positions means those classes can execute the script. Some teams choose a narrower mode such as `750` when only the deploy user and service group should run it.
@@ -116,12 +107,9 @@ Now run the script with an explicit relative path:
 
 ```bash
 ./scripts/deploy.sh
-```
 
-Example output:
-
-```console
-usage: deploy.sh /path/to/release.tar.gz
+# Example output:
+# usage: deploy.sh /path/to/release.tar.gz
 ```
 
 The `./` prefix matters. Your shell searches the directories listed in `PATH` when you type a bare command name. The current directory usually is not in `PATH` for security reasons, so `./scripts/deploy.sh` gives the shell an explicit path.
@@ -140,10 +128,14 @@ A team can place stable admin scripts in `/usr/local/sbin` or `/usr/local/bin`, 
 
 The production symptom is "the script works over SSH and fails in CI." CI may have a smaller `PATH`, a different shell, or no execute bit on the checked-out file. The next decision is to call the script through an explicit path, keep the shebang accurate, and print `command -v` for required tools during debugging.
 
+![Script execution path infographic showing shebang, execute bit, PATH lookup, and direct script execution](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/script-execution-path.png)
+
+_The image shows the chain that lets a text file run like a command._
+
 ## Variables and Quoting
 <!-- section-summary: Bash variables store strings, and quoting keeps those strings as one argument after expansion. -->
 
-A script can work perfectly until a path contains a space. A release directory named `/srv/web/releases/2026-06-24 09-30` looks harmless to a person, but unquoted Bash variables can split that path into two separate words.
+The first script may work perfectly until a path contains a space. A release directory named `/srv/web/releases/2026-06-24 09-30` may look harmless to a person. Unquoted Bash variables can split that path into two separate words.
 
 Bash variables are strings. They hold paths, service names, URLs, release versions, and command output. Assignment has no spaces around the equals sign:
 
@@ -177,12 +169,9 @@ If you want to see the difference, print the value:
 
 ```bash
 printf '<%s>\n' "$release_dir"
-```
 
-Example output:
-
-```console
-</srv/web/releases/2026-06-24 09-30>
+# Example output:
+# </srv/web/releases/2026-06-24 09-30>
 ```
 
 The whole path stayed one argument. That is what you want when a command creates or reads a directory.
@@ -198,22 +187,23 @@ Print those values when debugging:
 
 ```bash
 printf 'release=%s commit=%s\n' "$release_id" "$current_commit"
-```
 
-Example output:
-
-```console
-release=20260624-093015 commit=4f8a2c1
+# Example output:
+# release=20260624-093015 commit=4f8a2c1
 ```
 
 The same quoting rule applies after substitution. Store the value, quote it when used, and avoid relying on luck when a path or branch name contains a surprising character.
 
 The production symptom is a cleanup loop that works for normal names and breaks on a release directory with a space. The next decision is to quote every variable expansion unless you intentionally need word splitting, and to test scripts with paths that contain spaces before adding deletion commands.
 
+![Quoted variable splitting infographic showing an unquoted release path breaking into words and a quoted path staying whole](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/quoted-variable-splitting.png)
+
+_The image shows why quotes protect paths and arguments before a script reaches production data._
+
 ## Exit Codes and Branching
 <!-- section-summary: Scripts make decisions from exit codes, where `0` means success and nonzero values represent failure. -->
 
-A deploy script cannot rely on printed output alone. A health endpoint may print an error page, `curl` may print a connection error, or a command may produce no output at all. The script needs a small machine-readable signal that says whether the step worked.
+After variables hold the important paths and URLs, the script has to decide whether each step worked. Printed output alone is not enough. A health endpoint may print an error page, `curl` may print a connection error, or a command may produce no output at all. The script needs a small machine-readable signal that says whether the step worked.
 
 Every Linux command returns an **exit code**. `0` means success. Any nonzero value means the command failed in some way. Bash stores the last exit code in `$?`, and `if` statements use command success directly.
 
@@ -255,12 +245,9 @@ else
     echo "Missing or unreadable config: $config_file"
     exit 1
 fi
-```
 
-Example output:
-
-```console
-Nginx site config is readable
+# Example output:
+# Nginx site config is readable
 ```
 
 Common test operators include:
@@ -277,14 +264,14 @@ Common test operators include:
 | `a = b` | Strings match |
 | `n -gt m` | Integer `n` is greater than `m` |
 
-This is the core of shell scripting. Run a command, check whether it succeeded, then choose the next step.
+That command-and-result rhythm is the core of shell scripting. Run a command, check whether it succeeded, then choose the next step.
 
 The production symptom of ignored exit codes is a deploy that restarts a service even after extraction failed. The next decision is to make failure stop the script near the broken command and print enough context for the operator to know which check failed.
 
 ## A Safer Deploy Script
 <!-- section-summary: A production script should fail early, name important paths, validate services, and leave a clear rollback clue. -->
 
-Shell scripts are powerful because they can change files, restart services, and move releases forward with one command. That also means a small mistake can keep running after the real failure already happened. A missing variable can turn into an empty path. A failed command in the middle of a pipeline can be hidden by a later successful command.
+Now put the pieces together in a deploy script. Shell scripts are powerful because they can change files, restart services, and move releases forward with one command. That also means a small mistake can keep running after the real failure already happened. A missing variable can turn into an empty path. A failed command in the middle of a pipeline can be hidden by a later successful command.
 
 The first production-grade habit is adding strict mode near the top:
 
@@ -345,14 +332,11 @@ Run it with a release archive:
 
 ```bash
 ./scripts/deploy.sh /home/deploy/releases/web.tar.gz
-```
 
-Example output:
-
-```console
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-Deployed app.service release 20260624-093015
+# Example output:
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
+# Deployed app.service release 20260624-093015
 ```
 
 The symlink pattern gives the server a simple release structure. Each release gets its own directory under `/srv/web/releases`, and `/srv/web/current` points at the active one. Rollback can point the symlink back to the previous release, restart the service, and rerun the health check.
@@ -367,10 +351,14 @@ The middle of the script does the operational work:
 
 This script assumes the unit file uses `/srv/web/current` as its working directory. Scripts and service files need to agree on paths. The next system administration articles connect Bash with systemd and process inspection.
 
+![Bash safety flags infographic showing errexit, nounset, pipefail, explicit checks, and useful error output](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/bash-safety-flags.png)
+
+_The image turns the common safety options into a small script reliability checklist._
+
 ## Functions, `trap`, and Cleanup
 <!-- section-summary: Functions group repeated work, and traps run cleanup or diagnostics when a script exits. -->
 
-A deploy script often grows by copy and paste. The same health check appears after restart and after rollback. The same log message appears before several commands. At the same time, the script may create a temporary directory or update a symlink that needs cleanup if the run fails halfway through.
+After a deploy script works once, it often grows by copy and paste. The same health check appears after restart and after rollback. The same log message appears before several commands. At the same time, the script may create a temporary directory or update a symlink that needs cleanup if the run fails halfway through.
 
 Functions solve the repeated-code part by giving a name to a group of commands. A deploy script might have separate functions for validation, health checks, and rollback hints:
 
@@ -455,10 +443,14 @@ Jun 24 09:31:03 server01 app[1842]: shutting down
 
 The exit code tells automation that the script failed. The recent logs give the human the first place to inspect.
 
+![Trap cleanup lifecycle infographic showing temporary directory creation, work, error, cleanup trap, and final exit](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/trap-cleanup-lifecycle.png)
+
+_The image shows how `trap` keeps cleanup attached to every exit path, including failures._
+
 ## Loops and Safe File Handling
 <!-- section-summary: Loops repeat checks across files or hosts, and null-delimited file lists handle awkward filenames safely. -->
 
-Manual checks get old quickly when the same question applies to several targets. A release may need to check the local health URL, the public Nginx URL, and a small list of files before it continues.
+The last beginner scripting step is repetition inside the script itself. Manual checks get old quickly when the same question applies to several targets. A release may need to check the local health URL, the public Nginx URL, and a small list of files before it continues.
 
 Loops let a script repeat one operation across a known list. A health script may check the local service and the public Nginx endpoint:
 
@@ -471,6 +463,10 @@ for url in "http://127.0.0.1:8080/health" "https://example.com/health"; do
         exit 1
     fi
 done
+
+# Example output:
+# ok: http://127.0.0.1:8080/health
+# ok: https://example.com/health
 ```
 
 The loop reads like a small checklist:
@@ -482,13 +478,6 @@ The loop reads like a small checklist:
 - `exit 1` stops the script on the first failed endpoint so later deploy steps do not continue after a broken health check.
 - `done` closes the loop after every URL has been checked.
 
-Example output:
-
-```console
-ok: http://127.0.0.1:8080/health
-ok: https://example.com/health
-```
-
 When looping over files from `find`, filenames may contain spaces, quotes, or newlines. The safer pattern uses null-delimited output from `find -print0` and reads it with `read -d ''`:
 
 ```bash
@@ -496,13 +485,10 @@ find /srv/web/releases -maxdepth 1 -type d -mtime +14 -print0 |
 while IFS= read -r -d '' old_release; do
     echo "Old release candidate: $old_release"
 done
-```
 
-Example output:
-
-```console
-Old release candidate: /srv/web/releases/20260601-091500
-Old release candidate: /srv/web/releases/20260605-174200
+# Example output:
+# Old release candidate: /srv/web/releases/20260601-091500
+# Old release candidate: /srv/web/releases/20260605-174200
 ```
 
 The script above only prints candidates. A real cleanup script should also keep the active `current` target, keep at least one previous release, and log what it removes. Deleting files in automation deserves extra care because a small path bug can remove the wrong tree.
@@ -510,6 +496,10 @@ The script above only prints candidates. A real cleanup script should also keep 
 Null-delimited loops exist because newline-delimited file lists cannot safely represent every valid filename. The under-the-hood idea is simple: `find -print0` separates names with the zero byte, and normal path names cannot contain that byte. The next decision before deletion is to print candidates first, compare them with the active symlink, then add `rm -rf -- "$old_release"` only after review.
 
 Shell scripting grows from one repeated command. Add variables for important paths, quote expansions, check exit codes, group repeated behavior into functions, and print useful diagnostics when the script stops.
+
+![Shell scripting summary infographic showing shebang, quoting, exit codes, functions, traps, loops, and safe file handling](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/shell-scripting-summary.png)
+
+_The summary image gathers the scripting habits that keep small automation readable and safe._
 
 ## References
 

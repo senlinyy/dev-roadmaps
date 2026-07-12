@@ -4,29 +4,93 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A template task notifies `Reload nginx`. A later task immediately checks the new Nginx route. Without extra steps, when will the handler normally run?",
+      "scenario": "DevPolaris is updating two Nginx route files on `orders-web-01` during a production release. Both template tasks report `changed` and notify `Reload nginx`, but the team wants one reload after all related file work, not two interruptions. A monitoring-label task follows and the play has no explicit handler flush. When should the reload run on this host?",
       "options": [
-        {
-          "id": "a",
-          "text": "At the handler point near the end of the play, after normal tasks finish."
-        },
-        {
-          "id": "b",
-          "text": "Before the next task, because handlers always run immediately."
-        },
-        {
-          "id": "c",
-          "text": "Only on the next playbook run."
-        },
-        {
-          "id": "d",
-          "text": "Never, because template tasks cannot notify handlers."
-        }
+        { "id": "a", "text": "After the normal tasks reach the handler phase, with both notifications coalesced into one reload." },
+        { "id": "b", "text": "Immediately after the first template task, then again after the second template task." },
+        { "id": "c", "text": "Immediately before the monitoring task because a changed template creates an implicit flush point." },
+        { "id": "d", "text": "At the start of the next play, because handlers are deferred across play boundaries." }
       ],
-      "correct": [
-        "a"
+      "correct": ["a"],
+      "explanation": "Handlers normally run at the handler phase after normal tasks, and notifications to the same handler are deduplicated per host. Ansible does not insert a flush after each changed task, and pending handlers do not wait for a later play. This delayed, coalesced behavior prevents repeated service disruption. See [Ansible handlers](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The orders team is canarying a route change on one production host. Ansible renders `/etc/nginx/conf.d/orders-api.conf`, queues `Reload nginx`, and then calls `http://127.0.0.1/orders/ready`, but the check still reaches the old route because normal handler timing has not activated the file. Which change preserves one delayed reload while ensuring the readiness gate tests the new route?",
+      "options": [
+        { "id": "b", "text": "Replace the handler with an unconditional reload task after every template task." },
+        { "id": "a", "text": "Add `meta: flush_handlers` after the related file tasks and before the readiness check." },
+        { "id": "c", "text": "Move the readiness check into inventory so it runs while hosts are being resolved." },
+        { "id": "d", "text": "Enable `force_handlers` and keep the readiness check in its current position." }
       ],
-      "explanation": "Handlers normally run after the normal task list for the play. Use `meta: flush_handlers` only when later tasks truly need the change active earlier."
+      "correct": ["a"],
+      "explanation": "A targeted flush runs pending handlers at the dependency boundary, so the check observes the new process state. An unconditional reload loses change awareness and can reload repeatedly. Inventory does not execute checks, while `force_handlers` affects failure behavior rather than the position of this normal task."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "DevPolaris must change one Nginx route without dropping established customer connections. Nginx can validate and reload this fragment without replacing the worker process, but the proposed Ansible handler uses `state: restarted`. Which implementation best satisfies the low-disruption requirement?",
+      "options": [
+        { "id": "b", "text": "Keep the restart because every managed configuration change requires a new process." },
+        { "id": "c", "text": "Remove the service action and rely on the next host reboot to load the route." },
+        { "id": "a", "text": "Validate the candidate file and notify a reload handler because this service can reread the route safely." },
+        { "id": "d", "text": "Use a systemd daemon reload only, because that also makes Nginx reread its site configuration." }
+      ],
+      "correct": ["a"],
+      "explanation": "The service supports a lower-disruption reload for this configuration, and candidate validation protects the live destination before the action. A restart is broader than required, no action leaves old runtime state active, and a systemd daemon reload rereads unit metadata rather than Nginx route files."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A systemd drop-in and an application environment file both change on `orders-api-01`. The application reads environment variables only at process start. Which two handler decisions correctly encode the required runtime transition?",
+      "options": [
+        { "id": "a", "text": "Queue a systemd daemon reload for the changed drop-in before the application restart handler." },
+        { "id": "c", "text": "Use only an application reload because reload and restart have identical process semantics." },
+        { "id": "b", "text": "Queue an application restart because the running process will not reread startup environment automatically." },
+        { "id": "d", "text": "Order the notifications in the task, because notification order overrides handler definition order." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Systemd must reread the changed drop-in, then the application needs a new process to consume startup environment. A service reload is not equivalent when the application reads values only at startup. Handler execution order follows handler definition order, not the order in which tasks list notifications. See [Ansible handler insertion and execution order](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During an orders API release, Ansible installs a validated configuration and queues `Restart orders API`. A later database migration fails before the normal handler phase, leaving the host with new configuration on disk and the old process in memory. The team must avoid both silent split state and activation of unvalidated configuration. What is the most defensible play design?",
+      "options": [
+        { "id": "b", "text": "Enable forced handlers for every play because any changed file is safer when activated after any failure." },
+        { "id": "c", "text": "Disable all handlers so a failed play can never alter a running service." },
+        { "id": "d", "text": "Ignore the split state because the next successful deployment will eventually reconcile it." },
+        { "id": "a", "text": "Decide explicitly whether this play should force notified handlers after later failures, and pair that choice with validation and health checks." }
+      ],
+      "correct": ["a"],
+      "explanation": "`force_handlers` is an operational choice: it can restore consistency after a later failure, but it can also activate a bad change if validation is weak. The article therefore pairs deliberate failure behavior with pre-replacement validation and post-action health checks. Enabling it everywhere, removing handlers, or accepting split state avoids the real risk decision."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A three-host production play uses `serial: 1`. On the first host, related files change, the restart handler runs, and the readiness endpoint returns HTTP 503 after all retries. What should happen before the play reaches the second host?",
+      "options": [
+        { "id": "a", "text": "Stop the rollout, investigate or roll back the canary, and keep the remaining hosts on the known working version." },
+        { "id": "b", "text": "Continue to the second host because handler completion proves the service accepted the configuration." },
+        { "id": "c", "text": "Increase `serial` to all hosts so the same failure can be compared across the fleet." },
+        { "id": "d", "text": "Suppress the readiness failure and rely on the load balancer to discover recovery later." }
+      ],
+      "correct": ["a"],
+      "explanation": "A successful handler task proves only that the service action command completed. The failed readiness check is the runtime evidence that should stop the canary before the blast radius widens. Increasing the batch or hiding the failure discards the safety provided by `serial: 1`."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "After a successful Nginx configuration release, the DevPolaris operator immediately reruns the same reviewed commit to verify convergence. The recap is:\n\n```console\norders-web-01 : ok=12 changed=0 unreachable=0 failed=0\norders-web-02 : ok=12 changed=0 unreachable=0 failed=0\n```\n\nNo handler lines appear. What is the strongest conclusion this repeat-run evidence supports?",
+      "options": [
+        { "id": "a", "text": "The managed inputs were already converged on this run, so no change notification queued the service handlers." },
+        { "id": "b", "text": "The handlers are misconfigured because every successful play should reload each managed service once." },
+        { "id": "c", "text": "The services were unhealthy because the recap does not list process health details." },
+        { "id": "d", "text": "The inventory skipped both hosts because `changed=0` means no remote tasks executed." }
+      ],
+      "correct": ["a"],
+      "explanation": "The recap shows tasks ran successfully and found no managed-state changes, so change-triggered handlers were not queued. It does not independently prove application health, but it also does not show unhealthy services or skipped hosts. A handler that runs on every quiet repeat would undermine the change-aware design."
     }
   ]
 }

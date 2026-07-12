@@ -1,6 +1,6 @@
 ---
 title: "Inspect Secret Metadata"
-sectionSlug: evidence-without-exposure
+sectionSlug: grant-production-permissions
 order: 4
 ---
 

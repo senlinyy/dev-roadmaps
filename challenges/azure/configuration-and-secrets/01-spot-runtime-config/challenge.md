@@ -1,7 +1,6 @@
 ---
-title: "Spot Runtime Config"
-sectionSlug: runtime-configuration
+title: "Runtime Configuration and Safe Rollouts"
 order: 1
 ---
 
-Practice separating artifact problems from runtime configuration problems during an Azure release.
+Use the scenario evidence to choose the safest Azure rollout decision.

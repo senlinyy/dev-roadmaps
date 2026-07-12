@@ -4,82 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A rolling deployment starts new tasks for `orders-api:42`. Target health shows:\n\n```text\n10.0.52.14 unhealthy Target.ResponseCodeMismatch\n10.0.53.21 unhealthy Target.ResponseCodeMismatch\n```\n\nThe app log for the new task says `readiness failed reason=\"missing ORDERS_TOPIC\"`. What is the safest release action?",
+      "scenario": "The checkout API runs 10 Kubernetes replicas, and the release policy permits no loss of serving capacity during business hours. Its rolling strategy allows 2 surge replicas and 0 unavailable replicas, but the cluster has CPU for exactly 10 pods. After the image update, both new pods remain Pending while all old pods continue serving. Which change best preserves the stated availability policy and lets the rollout progress?",
       "options": [
-        { "id": "a", "text": "Continue the rollout because the task process started." },
-        { "id": "b", "text": "Stop the rollout and fix the missing configuration before this task definition serves users." },
-        { "id": "c", "text": "Increase desired count so more unhealthy tasks can start." },
-        { "id": "d", "text": "Ignore readiness because `/livez` would probably pass." }
+        {
+          "id": "a",
+          "text": "Set `maxSurge` to 0 and `maxUnavailable` to 2 so two old pods leave before replacements are scheduled."
+        },
+        {
+          "id": "b",
+          "text": "Provide capacity for the two surge pods, or reduce maxSurge to a value the cluster can actually schedule."
+        },
+        {
+          "id": "c",
+          "text": "Increase the rollout progress deadline so the scheduler has more time to find CPU for the surge pods."
+        },
+        {
+          "id": "d",
+          "text": "Raise `maxSurge` to 4 so the scheduler has more replacement pods to choose from."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Readiness means the task can receive traffic. A response code mismatch plus a missing required variable is a clear stop signal. Starting the process is not enough, and adding more bad tasks only increases noise."
+      "correct": [
+        "b"
+      ],
+      "explanation": "A rolling update needs temporary capacity when new pods must become ready before old pods are removed. Adding surge capacity, or choosing a smaller schedulable surge, preserves the healthy floor. Removing old pods first defeats the zero-unavailable policy, and probe changes cannot schedule a Pending pod. See [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "During a rolling update, `/version` sometimes returns `orders-api:41` and sometimes returns `orders-api:42`. Error rate and latency for both task definitions remain close to baseline. How should you interpret the mixed versions?",
+      "scenario": "A new pod reports the following during a rollout:\n\n~~~text\n/startup  200\n/live     200\n/ready    503 database pool warming\n~~~\n\nThe process is running and has not restarted. What should the platform do with this pod?",
       "options": [
-        { "id": "a", "text": "It is expected during a rolling deployment because old and new tasks can serve traffic during the replacement window." },
-        { "id": "b", "text": "It proves the load balancer is broken because production should never see two versions." },
-        { "id": "c", "text": "It means the release must be rolled back immediately." },
-        { "id": "d", "text": "It means staging and production are sharing secrets." }
+        {
+          "id": "a",
+          "text": "Restart the pod after shortening the liveness threshold so database warm-up failures recover faster."
+        },
+        {
+          "id": "b",
+          "text": "Register the pod for a 1 percent traffic sample while retaining the readiness failure as a warning."
+        },
+        {
+          "id": "c",
+          "text": "Increase the readiness timeout and mark the current pod ready while its connection pool continues warming."
+        },
+        {
+          "id": "d",
+          "text": "Keep it running but out of Service traffic until readiness succeeds."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A rolling deployment deliberately changes production in pieces. Mixed old and new versions are normal while the service replaces tasks, as long as health and behavior remain good."
+      "correct": [
+        "d"
+      ],
+      "explanation": "Startup and liveness show that the process started and remains alive. Readiness answers whether it can serve requests now, so the pod should stay out of Service endpoints while the database pool warms. Restarting a healthy process or routing traffic early confuses three different probe purposes. See [Kubernetes pod probes](https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "The new task definition becomes healthy, then p95 latency for `orders-api:42` climbs to 780 ms while `orders-api:41` remains near 180 ms. The 5xx rate is still low. What should the release lead do?",
+      "scenario": "Halfway through a rolling release, requests alternate between versions 1.8.3 and 1.8.4. Error rate and latency remain normal, but version 1.8.4 writes queue messages with a required field that 1.8.3 cannot parse. What is the strongest release concern?",
       "options": [
-        { "id": "a", "text": "Keep rolling because only 5xx errors matter." },
-        { "id": "b", "text": "Pause or roll back according to the runbook because the new task definition is materially slower after traffic moves." },
-        { "id": "c", "text": "Delete the old task definition so all traffic reaches the new version and the sample size improves." },
-        { "id": "d", "text": "Ignore latency during rolling deployments because it is always caused by warmup." }
+        {
+          "id": "a",
+          "text": "Mixed versions are expected, but the incompatible message contract makes this rollout unsafe."
+        },
+        {
+          "id": "b",
+          "text": "The overlap is safe because queue consumers can normally ignore fields introduced by a newer producer."
+        },
+        {
+          "id": "c",
+          "text": "The main risk is telemetry attribution, because errors cannot yet be separated by application version."
+        },
+        {
+          "id": "d",
+          "text": "The incompatibility matters only if revision 1.8.3 produces messages that revision 1.8.4 cannot parse."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The article treats latency as a release signal, not decoration. A new version can harm users without producing many 5xx responses. Warmup can explain a short spike, but sustained high p95 after traffic moves should pause the rollout."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Old and new instances normally overlap during a rolling deployment, so interfaces must tolerate both versions. The scenario explicitly states that old consumers reject the new required field, so the usual assumption that consumers ignore additive fields does not apply. Healthy HTTP signals and version labels cannot repair that queue contract. See [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A reviewer notices this workflow step in a rolling deploy:\n\n```yaml\n- run: ./scripts/update-ecs-service.sh orders-api-prod orders-api:43\n```\n\nThe release record says the tested task definition is `orders-api:42`. What is the best review comment?",
+      "scenario": "An ECS service starts revision 42. New tasks pass container health, but Application Load Balancer targets stay unhealthy for six minutes and the service cannot reach its minimum healthy percentage. The deployment circuit breaker is enabled. Which outcome should the release owner prefer?",
       "options": [
-        { "id": "a", "text": "Deploying `orders-api:43` is fine if it has a higher number." },
-        { "id": "b", "text": "The service update should point at the task definition revision recorded for this release, not an unreviewed newer revision." },
-        { "id": "c", "text": "Task definition revisions are ignored by ECS during rolling deployments." },
-        { "id": "d", "text": "The task definition number only affects rollback, not the rollout." }
+        {
+          "id": "a",
+          "text": "Extend the circuit-breaker window because container health proves revision 42 will eventually pass the load balancer check."
+        },
+        {
+          "id": "b",
+          "text": "Pause the deployment at its current task mix and route a small request sample directly to revision 42."
+        },
+        {
+          "id": "c",
+          "text": "Let the deployment fail and roll back to the last completed deployment, then diagnose revision 42."
+        },
+        {
+          "id": "d",
+          "text": "Start revision 43 with the same image but a longer load balancer health-check grace period before revision 42 fails."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "A task definition is the deploy snapshot. The workflow should update the service to the revision that belongs to the release record. A higher revision may contain different image, env, or role settings."
+      "correct": [
+        "c"
+      ],
+      "explanation": "The load balancer is the traffic gate, and the service cannot maintain its healthy floor. The circuit breaker should stop this deployment and restore the last completed revision. Extending the window without new evidence prolongs a failed rollout, direct traffic bypasses the gate, and starting another revision with the same artifact obscures rather than resolves revision 42's failure. See [Amazon ECS deployment failure detection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-failure-detection.html)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "Version `1.8.4` starts writing order rows with a field that version `1.8.3` cannot read. The rolling deployment is halfway through and errors appear only on the new path. What rollback risk must the team check before pointing the service back to `orders-api:41`?",
+      "scenario": "Revision 42 has served 35 percent of traffic and already dropped the discount_code column. Revision 41 still reads that column. A latency regression appears in revision 42. What must happen before the team rolls the application back?",
       "options": [
-        { "id": "a", "text": "Whether the previous task definition can read data already written by the new version." },
-        { "id": "b", "text": "Whether the old Docker tag is shorter than the new one." },
-        { "id": "c", "text": "Whether `orders-api:41` has fewer environment variables than `orders-api:42`." },
-        { "id": "d", "text": "Whether the new version has more requests in the last minute." }
+        {
+          "id": "a",
+          "text": "Confirm that revision 41 remains stored as the last completed deployment and can be scaled to the desired count."
+        },
+        {
+          "id": "b",
+          "text": "Assess database recovery or a roll-forward fix because revision 41 cannot run against the current schema."
+        },
+        {
+          "id": "c",
+          "text": "Restore the dropped column from the latest backup while revision 42 continues serving writes, then switch traffic immediately."
+        },
+        {
+          "id": "d",
+          "text": "Roll revision 41 out beside revision 42 and use its readiness result as the database compatibility test."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Rollback is not only a service update. If new code wrote data old code cannot read, moving traffic back can create a second failure. The data compatibility question must be answered before treating rollback as safe."
+      "correct": [
+        "b"
+      ],
+      "explanation": "An application rollback cannot restore a destructive database change. Because revision 41 expects the removed column, availability and task history alone do not make it safe. Restoring from backup while new writes continue risks losing or overwriting current data, and using production readiness as the compatibility test exposes users before the data path is proven. The team must plan database recovery or choose a narrow roll-forward first. See [Kubernetes Deployment rollback](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-back-a-deployment)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "A rolling deployment runbook says the release is successful as soon as `update-service` exits with status 0. Which review comments are correct?",
+      "scenario": "A checkout service has finished replacing all ten replicas during a rolling deployment. The deployment controller reports the desired count, but the release owner must decide whether the change is ready to close and whether the recorded evidence would support a later incident investigation. Which evidence should the release record require before calling the release complete?",
       "options": [
-        { "id": "a", "text": "The runbook should wait for load balancer target health." },
-        { "id": "b", "text": "The runbook should watch release signals such as 5xx rate and p95 latency." },
-        { "id": "c", "text": "The runbook should keep the previous task definition available until rollback is no longer needed." },
-        { "id": "d", "text": "The runbook should delete old tasks immediately after the update command returns." },
-        { "id": "e", "text": "The runbook should verify that the final steady state points at the intended task definition." }
+        {
+          "id": "a",
+          "text": "The deployment command returned exit code 0."
+        },
+        {
+          "id": "b",
+          "text": "Every desired instance is ready and the load balancer reports the expected healthy target count."
+        },
+        {
+          "id": "c",
+          "text": "The previous revision was deleted as soon as the first new instance passed readiness."
+        },
+        {
+          "id": "d",
+          "text": "The running instances use the intended immutable image or task definition revision."
+        },
+        {
+          "id": "e",
+          "text": "Error rate, latency, and the checkout smoke path stayed within the release thresholds during the watch window."
+        }
       ],
-      "correct": ["a", "b", "c", "e"],
-      "explanation": "The deploy command starts a change. Health, rollout signals, previous revision availability, and final state prove the change is safe. Deleting old tasks immediately weakens the rollback path."
+      "correct": [
+        "b",
+        "d",
+        "e"
+      ],
+      "explanation": "Command success only starts the change. Completion needs healthy capacity, the intended artifact, and user-facing release signals over a watch window. Deleting the previous revision early weakens recovery. See [Kubernetes rolling updates](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/) and [Amazon ECS rolling deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)."
     }
   ]
 }
-

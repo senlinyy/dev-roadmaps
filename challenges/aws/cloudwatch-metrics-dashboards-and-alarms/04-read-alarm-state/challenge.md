@@ -1,6 +1,6 @@
 ---
 title: "Read Alarm State"
-sectionSlug: alarms
+sectionSlug: alarms-as-state-machines
 order: 4
 ---
 

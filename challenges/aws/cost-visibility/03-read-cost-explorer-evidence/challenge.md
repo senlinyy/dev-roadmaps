@@ -1,6 +1,6 @@
 ---
 title: "Read Cost Explorer Evidence"
-sectionSlug: cost-explorer
+sectionSlug: cost-explorer-views
 order: 3
 ---
 

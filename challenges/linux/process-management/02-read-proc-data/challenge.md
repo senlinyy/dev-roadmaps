@@ -1,6 +1,6 @@
 ---
 title: "Read /proc for Live Process Data"
-sectionSlug: the-proc-filesystem-live-introspection
+sectionSlug: priority-nice-values-and-proc
 order: 2
 ---
 

@@ -8,6 +8,3 @@ rollback:
     - /version reports orders-api:41
     - /smoke/checkout passes
 ```
-
-Rollback is safer when the target is named before the incident. The verification checks prove production actually returned to the intended task definition and still handles checkout.
-

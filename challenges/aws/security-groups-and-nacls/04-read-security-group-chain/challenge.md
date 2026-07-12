@@ -1,6 +1,6 @@
 ---
 title: "Read Security Group Chain"
-sectionSlug: draw-the-packet-path-before-editing-rules
+sectionSlug: verification-with-flow-logs
 order: 4
 ---
 

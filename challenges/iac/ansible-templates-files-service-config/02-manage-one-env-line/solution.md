@@ -12,4 +12,4 @@
     mode: "0644"
 ```
 
-`lineinfile` now controls one setting as state, rather than appending a shell echo on every run.
+- `lineinfile` now controls one setting as state, rather than appending a shell echo on every run.

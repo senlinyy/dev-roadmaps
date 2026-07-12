@@ -1,14 +1,15 @@
 ---
 title: "Call a Private Bucket Module"
-sectionSlug: root-and-child-modules
+sectionSlug: calling-the-module-from-an-environment
 order: 1
 ---
 
-Add the private bucket module call in `main.tf` using the existing root context.
+Production needs the reviewed private bucket pattern, not another copied S3 resource. Add the module call from the environment root and pass the release values the child module expects.
 
-Requirements:
+Your job:
 
-1. **Module:** `invoice_bucket`.
-2. **Source:** `../../modules/private-bucket`.
-3. **Inputs:** `bucket_name = "dp-orders-invoices-prod"`, `service = "orders-api"`, `environment = "prod"`.
-4. **Ownership and recovery:** `owner = "platform"`, `versioning_enabled = true`.
+1. **Call the private bucket module** from the production root using the local module source already used in this repository.
+2. **Pass the invoice bucket name and service context** for the orders production bucket.
+3. **Preserve the ownership and recovery choices** from the release brief, including platform ownership and versioning.
+
+The grader checks the module call and inputs in HCL.

@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A quick Cloud Run test for `devpolaris-orders-api` now handles production-like traffic in a personal learning project. What is the safest first correction?",
+      "scenario": "The Orders team proposes one project named orders for dev, staging, and production because the services are identical. Security wants different IAM reviewers, quotas, and deletion controls for production. What placement is safest?",
       "options": [
-        { "id": "a", "text": "Create or select an owned production project with a clear folder, billing account, API set, and labels." },
-        { "id": "b", "text": "Keep production in the personal project because the service is already running." },
-        { "id": "c", "text": "Move only the display name, because display names move resources." },
-        { "id": "d", "text": "Disable all inherited policy so the deployment is easier." }
+        {
+          "id": "b",
+          "text": "Use one project and separate everything with labels because labels enforce IAM and quota boundaries."
+        },
+        {
+          "id": "c",
+          "text": "Use one project but prefix every resource with prod- so accidental changes are impossible."
+        },
+        {
+          "id": "d",
+          "text": "Use one project but apply folder-level production policies only after resource creation, accepting shared quotas and project-level bindings."
+        },
+        {
+          "id": "a",
+          "text": "Create separate projects for production and non-production, then place them under the right folder so inherited controls match the environment."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Production needs an intentional project boundary. The project should be reviewable before the quick test becomes accidental infrastructure."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Projects are the main workload boundary for IAM, APIs, quotas, and many operational controls; folders add inherited policy structure. Labels and prefixes help inventory but do not enforce the same boundary, and a personal sandbox is the wrong ownership and control model. See [Google Cloud cloud platform resource hierarchy documentation](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy)."
     },
     {
-      "id": "q2",
+      "id": "check-billing-and-apis-q1",
       "type": "single",
-      "scenario": "The team wants separate dev, staging, and production blast-radius, quotas, cost review, and access control. Which GCP boundary is usually the first conversation?",
+      "scenario": "A deployment to orders-prod fails with Cloud Run Admin API has not been used in project before or it is disabled. The project is already linked to a billing account. What should the release owner check?",
       "options": [
-        { "id": "a", "text": "Separate projects for the environments, with labels and folder placement reviewed." },
-        { "id": "b", "text": "One bucket prefix per environment, because prefixes replace project boundaries." },
-        { "id": "c", "text": "One service account for every human and runtime." },
-        { "id": "d", "text": "One region per developer laptop." }
+        {
+          "id": "d",
+          "text": "Whether the project label says cloudrun=true, because labels enable product APIs."
+        },
+        {
+          "id": "a",
+          "text": "Whether the specific APIs required by the workload are enabled in orders-prod, because billing does not enable every service API automatically."
+        },
+        {
+          "id": "b",
+          "text": "Whether the Cloud Run runtime service account has more project roles, before confirming that the deployment API is enabled."
+        },
+        {
+          "id": "c",
+          "text": "Whether the project has enough Cloud Run instance quota, even though the failure occurs before the service API accepts deployment requests."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Projects are the everyday boundary for resources, IAM, quotas, logs, APIs, and billing linkage. Separate projects are often the first environment-separation discussion."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error points to service API enablement in the project. Billing linkage is necessary for many paid services but does not turn on every API; display names, replica count, and labels do not enable Cloud Run Admin API. See [Google Cloud enable disable documentation](https://cloud.google.com/service-usage/docs/enable-disable)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which placement facts belong in the production project record?",
+      "id": "choose-location-scope-q1",
+      "type": "single",
+      "scenario": "The product team serves EU customers and stores profile exports in Cloud Storage and analytics in BigQuery. A proposal puts the bucket in us-central1 because that is the default in another project. What should the design review require?",
       "options": [
-        { "id": "a", "text": "Project ID and display name." },
-        { "id": "b", "text": "Folder or organization context where inherited policy may come from." },
-        { "id": "c", "text": "Primary region and main service families." },
-        { "id": "d", "text": "Only the name of the last engineer who deployed." }
+        {
+          "id": "a",
+          "text": "Choose locations deliberately for latency, data residency, and service compatibility instead of inheriting a default from an unrelated project."
+        },
+        {
+          "id": "b",
+          "text": "Keep us-central1 because a regional default from another project is sufficient evidence for EU residency and latency."
+        },
+        {
+          "id": "c",
+          "text": "Choose an EU zone for the bucket and dataset, assuming both services expose zonal placement and identical cross-service compatibility."
+        },
+        {
+          "id": "d",
+          "text": "Keep the US locations for launch and rely on resource renaming later, without planning the data migration needed to change location."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Project identity, hierarchy context, location, and service intent make the workload findable and reviewable. A last deployer is not the workload home."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Location choice affects latency, residency, availability design, and sometimes migration cost. Google Cloud resources are not all one storage location, zones are narrower than regions, and moving stateful resources later can require real migration work. See [Google Cloud locations documentation](https://cloud.google.com/about/locations)."
+    },
+    {
+      "id": "choose-location-scope-q4",
+      "type": "multiple",
+      "scenario": "Northstar Retail must place a new BigQuery dataset and Cloud Storage export bucket for EU customer data. The privacy policy requires EU residency, the existing transformation job runs in `europe-west4`, and the selected BigQuery and Storage locations must support transfers without an avoidable cross-location dependency. Which two details make the location decision independently reviewable?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The region used by the first developer's workstation, treated as the preferred location even if it conflicts with residency and downstream services."
+        },
+        {
+          "id": "d",
+          "text": "The lowest current storage list price, used alone without recording dataset compatibility, transfer behavior, or the residency requirement."
+        },
+        {
+          "id": "a",
+          "text": "The selected bucket or dataset location and why it matches users, data policy, and downstream services."
+        },
+        {
+          "id": "b",
+          "text": "Any service limitation or compatibility concern that made another location unsuitable."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Reviewable location records name the chosen location, rationale, and compatibility constraints. Initials do not prove data placement, and blanket cost claims are not evidence. See [Google Cloud locations documentation](https://cloud.google.com/about/locations)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Northstar Retail renamed its Orders division, but production still runs in project `orders-prod-2024`. IAM bindings, service identities, CI configuration, and external integrations reference that immutable project ID. The reorganization requires accurate ownership records but does not justify production migration risk. What should the platform owner do?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Delete and recreate the project with a new ID while exporting only application data, because service integrations follow display names."
+        },
+        {
+          "id": "c",
+          "text": "Attempt to rename the project ID in place and update references only if an API later reports a failure."
+        },
+        {
+          "id": "d",
+          "text": "Create a second project with the prettier ID and let both projects share the same production integrations indefinitely."
+        },
+        {
+          "id": "a",
+          "text": "Keep the immutable project ID stable and update documentation, labels, and ownership records instead of rebuilding the project just for a prettier name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Project IDs are durable identifiers used by APIs and integrations, so review should favor stable references plus corrected metadata. Renaming the ID in place is not the normal path, deletion is high risk, and display names alone are weak operational evidence. See [Google Cloud cloud platform resource hierarchy documentation](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy)."
+    },
+    {
+      "id": "check-billing-and-apis-q5",
+      "type": "single",
+      "scenario": "A CI job is pointed at orders-staging, but the production deploy ticket says orders-prod. The job fails to find the expected Cloud Run service. Which project-control habit would have prevented this?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Skip project checks when billing succeeds, because billing proves the target project is correct."
+        },
+        {
+          "id": "a",
+          "text": "Make the active project explicit in deployment configuration and verify it before service-specific commands run."
+        },
+        {
+          "id": "b",
+          "text": "Rely on the newest project created in the organization because CI should discover intent by default."
+        },
+        {
+          "id": "c",
+          "text": "Use the same display name for staging and production so scripts do not need project IDs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Many Google Cloud commands and client flows depend on the active or configured project, so deployment evidence should make it explicit. Discovery by creation time, duplicate display names, and billing success do not prove the CI job targeted production. See [Google Cloud cloud platform resource hierarchy documentation](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy)."
+    },
+    {
+      "id": "choose-location-scope-q3",
+      "type": "single",
+      "scenario": "orders-prod runs two VM instances in different zones inside us-east1, but the database is single-region in us-east1. Which risk should the resilience review call out?",
+      "options": [
+        {
+          "id": "c",
+          "text": "The database location no longer matters when compute uses more than one zone."
+        },
+        {
+          "id": "d",
+          "text": "Add a third compute zone in `us-east1` and treat the extra instance as protection from loss of the regional database."
+        },
+        {
+          "id": "a",
+          "text": "The design can survive some zonal compute failures, but it has not proven protection from a regional database outage."
+        },
+        {
+          "id": "b",
+          "text": "Two zones inside one region provide the same protection as a multi-region database."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Multi-zone compute improves zone-failure posture but does not automatically make the state layer multi-region. The other options overstate zone coverage, ignore database location, or prescribe an unrelated geography change. See [Google Cloud locations documentation](https://cloud.google.com/about/locations)."
     }
   ]
 }

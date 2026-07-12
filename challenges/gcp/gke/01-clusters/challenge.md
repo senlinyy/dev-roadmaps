@@ -1,7 +1,6 @@
 ---
-title: "Name The Cluster Boundary"
-sectionSlug: clusters
+title: "GKE"
 order: 1
 ---
 
-Practice reading a GKE cluster as the Kubernetes platform boundary. The questions focus on project, region, network, namespace, and upgrade evidence.
+Review production scenarios covering recognizing when Kubernetes is the requirement, then reviewing clusters, Autopilot versus Standard, workload objects, identity, and node responsibility.

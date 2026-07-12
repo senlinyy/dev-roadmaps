@@ -1,6 +1,6 @@
 ---
 title: "Variables in Action"
-sectionSlug: variables-assigning-reading-and-quoting
+sectionSlug: variables-and-quoting
 order: 2
 ---
 

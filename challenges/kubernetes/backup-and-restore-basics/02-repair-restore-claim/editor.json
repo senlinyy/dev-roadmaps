@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-restore-pvc.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: notification-postgres-data\n  namespace: default\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "PVC API version" },
+      { "path": ["kind"], "equals": "PersistentVolumeClaim", "label": "PVC kind" },
+      { "path": ["metadata", "name"], "equals": "notification-postgres-data-restore", "label": "restore claim name" },
+      { "path": ["metadata", "namespace"], "equals": "customer-notifications", "label": "restore namespace" },
+      { "path": ["spec", "dataSource", "name"], "equals": "notification-postgres-2026-06-28", "label": "snapshot name" },
+      { "path": ["spec", "dataSource", "kind"], "equals": "VolumeSnapshot", "label": "snapshot source kind" },
+      { "path": ["spec", "dataSource", "apiGroup"], "equals": "snapshot.storage.k8s.io", "label": "snapshot API group" },
+      { "path": ["spec", "accessModes"], "includes": "ReadWriteOnce", "label": "restore access mode" },
+      { "path": ["spec", "resources", "requests", "storage"], "equals": "20Gi", "label": "restore capacity" }
+    ]
+  }
+}

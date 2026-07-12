@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "target-safety-q1",
+      "type": "single",
+      "scenario": "An engineer has spent the morning debugging staging. Their current kubeconfig context is `notifications-staging`, whose default namespace is also `notifications-staging`. A production incident begins, and both environments contain a Deployment named `notification-api`. Which command shape gives the clearest production evidence without depending on the engineer's current local state?",
+      "options": [
+        { "id": "a", "text": "Read `deployment notification-api` with explicit context `notifications-prod` and namespace `notifications-prod`." },
+        { "id": "b", "text": "Read `deployment notification-api` with namespace `notifications-prod` but keep the current staging context." },
+        { "id": "c", "text": "Read all Deployments with context `notifications-prod` but omit the namespace because the name is unique." },
+        { "id": "d", "text": "Switch the current context once, then use a short command that records neither context nor namespace in the incident notes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The explicit production context chooses the cluster and identity, while the explicit production namespace chooses the scope containing the Deployment. A namespace flag on the staging context still queries the staging cluster. A resource name is unique only inside its scope, and relying on a prior context switch hides the target from command history and incident notes."
+    },
+    {
+      "id": "scope-q2",
+      "type": "single",
+      "scenario": "A production Pod `notification-api-746dd8dbf8-ds6tw` runs in `notifications-prod` on node `worker-c`. An operator will inspect both objects while keeping context `notifications-prod` explicit. Which targeting plan correctly follows Kubernetes resource scope?",
+      "options": [
+        { "id": "a", "text": "Use namespace `notifications-prod` for both the Pod and node because the Pod currently runs on that node." },
+        { "id": "b", "text": "Omit the namespace for the Pod and use `notifications-prod` for the node because nodes own their scheduled Pods." },
+        { "id": "c", "text": "Use namespace `notifications-prod` for the Pod and omit the namespace for node `worker-c`." },
+        { "id": "d", "text": "Omit the namespace for both objects because an explicit context supplies every resource scope." }
+      ],
+      "correct": ["c"],
+      "explanation": "Pods are namespaced, so the Pod read must name `notifications-prod`. Nodes are cluster-scoped and do not belong to one application namespace. Scheduling a Pod on a node does not move either object into the other's scope, and a context can have a namespace default but does not make all resource types namespaced."
+    },
+    {
+      "id": "investigation-order-q3",
+      "type": "single",
+      "scenario": "A release dashboard reports that `notification-api` should have six replicas, but customers see intermittent errors. The operator has not yet identified a failing Pod. Which first read best follows the article's investigation path?",
+      "options": [
+        { "id": "a", "text": "Read the ConfigMap first because environment values are the most detailed source of application state." },
+        { "id": "b", "text": "Read the Deployment first to compare desired, updated, and available replicas before narrowing to selected Pods." },
+        { "id": "c", "text": "Read one arbitrary Pod log first and treat its messages as representative of all six replicas." },
+        { "id": "d", "text": "Read the worker node first because every availability issue begins at the cluster-scoped layer." }
+      ],
+      "correct": ["b"],
+      "explanation": "The Deployment gives the high-level replica and rollout state, which tells the operator whether to narrow into Pods and where capacity is missing. ConfigMaps answer dependency configuration questions later. One arbitrary Pod can hide the affected replica, and node inspection is useful only after evidence points toward placement or node health."
+    },
+    {
+      "id": "logs-events-q4",
+      "type": "single",
+      "scenario": "A new `notification-api` Pod never reaches Running and the application process has not started. The team suspects either an image pull failure or a scheduling problem. Which evidence source should the operator inspect first?",
+      "options": [
+        { "id": "a", "text": "Container logs, because stdout and stderr exist before the image is pulled and the process starts." },
+        { "id": "b", "text": "The Service YAML, because its selector records image pull and scheduling failures for each backend." },
+        { "id": "c", "text": "Deployment JSONPath output for the image tag, because one extracted field explains every startup failure." },
+        { "id": "d", "text": "Kubernetes events for the Pod and namespace, because they record scheduling and image pull observations before application logs exist." }
+      ],
+      "correct": ["d"],
+      "explanation": "Events record what Kubernetes observed around scheduling, image pulls, probes, and restarts, so they are the first useful source when the process never started. Container logs explain what a running process wrote. Service selectors describe traffic selection, and the configured image field alone does not report whether scheduling or pulling succeeded."
+    },
+    {
+      "id": "output-review-q5",
+      "type": "multiple",
+      "scenario": "A release check must confirm that production Deployment `notification-api` exists and capture the exact container image for a rollback record. The check already uses explicit context `notifications-prod` and namespace `notifications-prod`. Which two output choices directly fit those two separate questions?",
+      "options": [
+        { "id": "a", "text": "Use `-o name` when the check only needs the Kubernetes resource address as existence evidence." },
+        { "id": "b", "text": "Use `-o wide` to guarantee that the Deployment table contains the exact container image field." },
+        { "id": "c", "text": "Use JSONPath that selects the named container's image when the rollback record needs one exact value." },
+        { "id": "d", "text": "Use recent container logs as the authoritative source for the image stored in the Deployment template." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "`-o name` is stable evidence that the addressed object exists, while JSONPath can extract the exact image from the Deployment Pod template. Wide output adds operational columns but does not guarantee the required image field. Logs are process output and are not the authoritative stored Deployment specification."
+    }
+  ]
+}

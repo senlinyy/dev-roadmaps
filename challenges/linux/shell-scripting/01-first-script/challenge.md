@@ -1,6 +1,6 @@
 ---
 title: "Your First Script"
-sectionSlug: what-is-a-shell-script
+sectionSlug: shebang-execute-bit-and-path
 order: 1
 ---
 

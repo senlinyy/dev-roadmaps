@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "dependency-outage-q1",
+      "type": "single",
+      "scenario": "PostgreSQL is unavailable for 40 seconds. The orders API process remains responsive, but requests that need the database cannot succeed. The team wants Pods removed from Service traffic without restarting every API container and adding more connection churn. Which probe behavior best matches that goal?",
+      "options": [
+        { "id": "a", "text": "Fail startup after every database timeout so readiness and liveness remain disabled for the lifetime of the container." },
+        { "id": "b", "text": "Fail liveness because any required dependency outage should restart all API containers until the database returns." },
+        { "id": "c", "text": "Keep every probe successful because a running process should remain in Service endpoints during dependency failure." },
+        { "id": "d", "text": "Fail readiness while keeping liveness focused on process progress, so traffic stops without forced restarts." }
+      ],
+      "correct": ["d"],
+      "explanation": "Readiness should fail when the Pod cannot serve normal traffic, removing it from endpoints while the process stays alive. Liveness restarts would add churn during a database outage, startup is for initialization rather than recurring dependency loss, and keeping readiness successful would route requests to an unusable Pod."
+    },
+    {
+      "id": "slow-start-q2",
+      "type": "single",
+      "scenario": "A new release spends about 90 seconds loading configuration and warming route tables. Its strict liveness check starts after 20 seconds and repeatedly restarts the container before initialization completes. The team still wants fast deadlock recovery after a successful boot. What is the best change?",
+      "options": [
+        { "id": "a", "text": "Increase the liveness failure budget for the entire container lifetime so startup and runtime use the same long patience window." },
+        { "id": "b", "text": "Add a startup probe with enough period and failure budget for normal initialization, then retain strict liveness after startup succeeds." },
+        { "id": "c", "text": "Remove liveness and use readiness failures to restart the container whenever it becomes stuck." },
+        { "id": "d", "text": "Point liveness at the database so successful startup depends on every external service remaining available." }
+      ],
+      "correct": ["b"],
+      "explanation": "A startup probe gives initialization its own protected window and delays readiness and liveness until startup succeeds. A permanently relaxed liveness probe slows runtime recovery, readiness does not trigger restarts, and external dependency availability is too broad for process liveness."
+    },
+    {
+      "id": "timing-action-q3",
+      "type": "single",
+      "scenario": "The readiness probe runs every `10` seconds, times out after `2` seconds, and has `failureThreshold: 3`. A brief network blip causes one timeout, followed by successful checks. What should the team expect from this configuration?",
+      "options": [
+        { "id": "a", "text": "One failed check is below the threshold, and a later success resets the consecutive failure count before traffic removal is triggered." },
+        { "id": "b", "text": "The first timeout restarts the container because timeout values override readiness failure thresholds." },
+        { "id": "c", "text": "The Pod is permanently removed from endpoints because readiness can recover only after a new Pod is created." },
+        { "id": "d", "text": "The kubelet waits exactly 30 seconds before recording the first check result because period and threshold form an initial delay." }
+      ],
+      "correct": ["a"],
+      "explanation": "The threshold requires three failed readiness checks before the traffic action, and a successful check resets the failure count. Readiness does not restart containers, it can recover without Pod replacement, and period multiplied by threshold is not an automatic initial delay."
+    },
+    {
+      "id": "debug-evidence-q4",
+      "type": "single",
+      "scenario": "A rollout Pod is `Running` but `0/1 Ready` with zero restarts. Events report `Readiness probe failed: HTTP probe failed with statuscode: 503`, and the new Pod IP is absent from the Service EndpointSlice. What is the best next action before changing probe thresholds?",
+      "options": [
+        { "id": "a", "text": "Replace readiness with liveness because an absent endpoint proves the process must be restarted." },
+        { "id": "b", "text": "Increase every timeout immediately because any 503 response proves kubelet waited too little for the endpoint." },
+        { "id": "c", "text": "Inspect application logs or the `/readyz` response to identify the failing required check while the Pod stays out of traffic." },
+        { "id": "d", "text": "Change the Service selector first because readiness events cannot affect EndpointSlice membership." }
+      ],
+      "correct": ["c"],
+      "explanation": "The evidence already shows readiness is gating traffic as designed, so logs or the endpoint response should identify why the application returned 503. An absent endpoint does not prove restart would help, a 503 is an application result rather than a timeout, and readiness directly affects endpoint membership."
+    },
+    {
+      "id": "endpoint-contract-q5",
+      "type": "multiple",
+      "scenario": "The application team proposes health endpoint behavior for the orders API. Which two review comments preserve the distinct platform actions described in the article?",
+      "options": [
+        { "id": "a", "text": "Let `/readyz` check required configuration and the database path needed for normal orders traffic, while avoiding a full checkout transaction." },
+        { "id": "b", "text": "Let `/livez` fail whenever optional analytics is unavailable so every API container restarts during an analytics incident." },
+        { "id": "c", "text": "Let `/livez` report whether the main process loop is responsive, without making database availability a restart condition." },
+        { "id": "d", "text": "Let `/startupz` perform long external dependency calls on every probe because startup checks do not add operational load." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Readiness should cheaply represent the required request path, while liveness should stay narrow and detect process states where restart helps. Optional analytics should not cause restart storms, and startup checks should avoid long dependency calls because probe endpoints need to remain cheap and clear."
+    }
+  ]
+}

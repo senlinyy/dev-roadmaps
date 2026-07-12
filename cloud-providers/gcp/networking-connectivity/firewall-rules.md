@@ -1,7 +1,7 @@
 ---
 title: "Firewall Rules and Packet Access"
-description: "Learn how Google Cloud firewall rules use direction, priority, allow and deny actions, targets, implied rules, and logging to decide packet access."
-overview: "After the VPC map exists, every packet still needs an access decision. This article explains GCP firewall rules through a practical web, API, and database scenario."
+description: "Learn how Google Cloud firewall rules use packet facts, direction, priority, allow and deny actions, implied rules, stateful return traffic, and targets to decide packet access."
+overview: "After the VPC map exists, every packet still needs an access decision. GCP firewall rules let you describe the web-to-API and API-to-database paths that should pass through the network."
 tags: ["gcp", "firewalls", "vpc", "network-security", "troubleshooting"]
 order: 2
 id: article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules
@@ -13,171 +13,183 @@ aliases:
 
 ## Table of Contents
 
-1. [Firewall Rules as Packet Decisions](#firewall-rules-as-packet-decisions)
-2. [Direction, Sources, and Destinations](#direction-sources-and-destinations)
-3. [Priority, Allow, and Deny](#priority-allow-and-deny)
-4. [Implied Rules and Default Network Rules](#implied-rules-and-default-network-rules)
-5. [Stateful Return Traffic](#stateful-return-traffic)
-6. [Targets: Tags and Service Accounts](#targets-tags-and-service-accounts)
-7. [Firewall Policies for Shared Guardrails](#firewall-policies-for-shared-guardrails)
-8. [gcloud and Terraform Firewall Baseline](#gcloud-and-terraform-firewall-baseline)
-9. [Verification Commands and Troubleshooting](#verification-commands-and-troubleshooting)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Routes and Firewall Decisions](#routes-and-firewall-decisions)
+2. [Packet Facts](#packet-facts)
+3. [Ingress and Egress](#ingress-and-egress)
+4. [Sources and Destinations](#sources-and-destinations)
+5. [Priority, Allow, and Deny](#priority-allow-and-deny)
+6. [Implied Rules](#implied-rules)
+7. [Stateful Return Traffic](#stateful-return-traffic)
+8. [Targets: Tags and Service Accounts](#targets-tags-and-service-accounts)
+9. [Commands and Terraform Shape](#commands-and-terraform-shape)
+10. [Verification and Troubleshooting](#verification-and-troubleshooting)
+11. [References](#references)
 
-## Firewall Rules as Packet Decisions
-<!-- section-summary: A firewall rule is an access decision for packets that enter or leave VM interfaces in a VPC network. -->
+## Routes and Firewall Decisions
+<!-- section-summary: A route says where traffic could go; firewall rules decide whether packets may pass. -->
 
-A **Google Cloud firewall rule** is a network access rule that decides whether traffic is allowed or denied for VM interfaces in a VPC network. It checks packet facts such as direction, source, destination, protocol, port, target, priority, and action. The action is either **allow** or **deny**.
+A route says where traffic could go; firewall rules decide whether packets may pass. The VPC article gave your resources private addresses and routes. The firewall layer takes the next step and asks whether a specific packet is allowed for a specific target.
 
-The food delivery app from the VPC article gives us the packet path for this article. The team has a web tier, an API tier, and a database client tier. The VPC route table can send packets from the web subnet to the API subnet. That only answers the path question. The firewall answers the access question: can a packet from the web tier reach TCP port `8080` on the API tier?
+Think of the route as the road map and the firewall as the security checkpoint. The road map can show a road from the web tier to the API tier. The checkpoint still decides whether this source is allowed to enter that destination on this port. Production networking needs both; a road without permission still fails, and permission without a road also fails.
+
+Use the same learning platform network. A web frontend receives user traffic through a public entry point. The web tier calls the API tier on TCP `8080`. The API tier connects to a private database endpoint on TCP `5432`. Background workers call selected API endpoints, while random internet traffic should never reach the API or database clients directly.
+
+A **Google Cloud firewall rule** is an access rule evaluated for VM interfaces in a VPC network. It checks facts about a packet, chooses the highest-priority matching rule, and applies an allow or deny action. Routes and firewalls work together: the route gives a path, and the firewall decides whether a packet may use that path.
+
+## Packet Facts
+<!-- section-summary: Firewall debugging starts by writing down the packet facts before changing a rule. -->
+
+A **packet fact** is a concrete detail about the traffic being checked. Useful facts include direction, source, destination, protocol, port, target, priority, and action. Writing these facts down turns "the network is broken" into a reviewable access question.
+
+This step matters because firewall rules do not understand vague application names. They evaluate packet facts. If a support ticket says "the frontend cannot call the API," the firewall does not see "frontend" or "API" as a feeling. It sees source identity or source range, target identity or tag, protocol, port, direction, and the VPC rule set.
+
+Write the sentence a human can understand, then translate it into packet facts. The human sentence is: "web should call API on TCP `8080`." The packet version is: ingress to API targets, source web service account, protocol TCP, port `8080`, action allow, priority chosen by the team's rule plan.
+
+For the web-to-API path, the access sentence is clear: "API VMs accept TCP `8080` from web VMs." That sentence gives you the target, source, protocol, and port before anyone opens the console.
 
 ![A generated infographic showing packet facts such as direction, source, target, protocol, port, and action.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/packet-facts.png)
-*A firewall decision is easier to debug when the packet facts are written down before anyone edits a rule.*
+*A firewall decision is easier to debug after the packet facts are written down.*
 
-Firewall rules are attached to a VPC network, and Google Cloud enforces them for VM network interfaces that match the rule target. That detail is important for beginners because rule enforcement follows the targeted interfaces in the VPC rather than a single appliance VM sitting in one subnet. If a managed instance group replaces an API VM with a new VM that uses the same target service account, the rule applies to the new VM interface too.
-
-Every firewall decision starts with direction, so that is the next piece.
-
-## Direction, Sources, and Destinations
-<!-- section-summary: Ingress rules control packets arriving at targets, and egress rules control packets leaving targets. -->
-
-**Direction** describes the packet's movement relative to the targeted VM interface. **Ingress** means the packet is arriving at the target. **Egress** means the packet is leaving the target. This sounds small, but many firewall mistakes start with the rule written in the wrong direction.
-
-An **ingress rule** controls incoming traffic to target VMs. For the food delivery app, the API tier might need an ingress allow rule for TCP `8080` from the web tier. The target is the API VM interface. The source is the web tier, expressed as a source range, source tag, or source service account depending on the rule design.
-
-An **egress rule** controls outgoing traffic from target VMs. The API tier might need egress to a private database address on TCP `5432`, or the worker tier might need egress to a package repository through Cloud NAT on TCP `443`. The target is the VM that sends the traffic. The destination is the IP range or address the packet tries to reach.
-
-Here is the same app written as packet questions:
+Here are the platform paths as packet facts:
 
 | Packet | Direction | Target | Source or destination | Port |
 |---|---|---|---|---:|
-| Public load balancer proxy to web VM | Ingress | Web VMs | Load balancer proxy ranges | `443` or app port |
-| Web VM to API VM | Ingress | API VMs | Web tier identity or subnet range | `8080` |
-| API VM to database | Egress | API VMs | Database private address range | `5432` |
-| Worker VM to API VM | Ingress | API VMs | Worker tier identity or subnet range | `8080` |
+| Load balancer proxy to web frontend | Ingress | Web VMs | Load balancer proxy ranges | App port |
+| Web frontend to API | Ingress | API VMs | Web tier identity | `8080` |
+| API to private database endpoint | Egress | API VMs | Database private address | `5432` |
+| Worker to API job endpoint | Ingress | API VMs | Worker tier identity | `8080` |
 
-The useful beginner habit is to name the target first. "API VMs accept TCP `8080` from web VMs" is an ingress rule targeting API VMs. "API VMs send TCP `5432` to the database range" is an egress rule targeting API VMs. Once the target is clear, source and destination fields stop blending together.
+The target is the resource receiving the firewall rule. A rule that allows web-to-API traffic usually targets the API VMs because the packet is arriving at them. A rule that restricts API-to-database traffic targets the API VMs because the packet is leaving them.
 
-Direction tells Google Cloud which side of the packet to evaluate. Priority decides which matching rule wins when multiple rules could apply.
+## Ingress and Egress
+<!-- section-summary: Ingress rules control packets arriving at targets, and egress rules control packets leaving targets. -->
+
+**Ingress** means the packet is arriving at the targeted VM interface. If the web tier calls the API tier, an ingress rule on the API target can allow TCP `8080` from the web source. The API VM is the target because it receives the connection.
+
+**Egress** means the packet is leaving the targeted VM interface. If the API tier connects to the private database endpoint, an egress rule on the API target can allow TCP `5432` to the database range. The API VM is still the target because it sends the packet.
+
+The easiest way to choose direction is to stand next to the target VM. If the packet is coming toward that VM, think ingress. If the packet is leaving that VM, think egress. This is why the same API VM can be the target of an ingress rule for web traffic and the target of an egress rule for database traffic.
+
+For beginners, direction is often confusing because application diagrams use arrows between services. Firewall rules use the target interface as the point of view. The rule sentence should include that point of view: "allow ingress to API from web on TCP 8080" or "allow egress from API to database on TCP 5432."
+
+Direction is one of the most common beginner mistakes. A rule that says "allow API from web" and uses egress on the API target describes the wrong side of the connection. A clearer rule sentence is "allow ingress to API from web on TCP `8080`."
+
+## Sources and Destinations
+<!-- section-summary: Ingress rules care about sources, while egress rules care about destinations. -->
+
+A **source** is where an ingress packet comes from. In GCP firewall rules, the source can be expressed as an IP range, source network tag, or source service account depending on the rule style. For production workloads, source service accounts often describe the workload more safely than changing IP addresses.
+
+A **destination** is where an egress packet goes. In egress rules, destination ranges describe the IP range that the target can reach. For the API-to-database path, the destination might be `10.70.4.12/32` for one private database endpoint or a documented private range for a managed service pattern.
+
+For the learning platform, the first clean access design could be:
+
+| Rule sentence | Direction | Source or destination | Target |
+|---|---|---|---|
+| API accepts TCP `8080` from web | Ingress | Web service account | API service account |
+| API sends TCP `5432` to database | Egress | Database private address | API service account |
+| Workers call selected API paths | Ingress | Worker service account | API service account |
+| Internet cannot SSH to VMs | Ingress | `0.0.0.0/0` | All VM targets or admin targets |
+
+This is where AWS readers need a careful bridge. AWS security groups attach to elastic network interfaces and use stateful allow rules. Network ACLs apply at the subnet level and can allow or deny statelessly. GCP VPC firewall rules live on the VPC policy surface and apply to matching VM interfaces, with targets commonly selected by network tag or service account.
 
 ## Priority, Allow, and Deny
-<!-- section-summary: Firewall priorities decide which matching rule applies, and lower priority numbers win over higher numbers. -->
+<!-- section-summary: Lower priority numbers win, and the winning matching rule applies either an allow or deny action. -->
 
-Every VPC firewall rule has a **priority** from `0` through `65535`. Lower numbers have higher priority. If a rule is created without an explicit priority, Google Cloud assigns priority `1000`.
+Every VPC firewall rule has a **priority** from `0` through `65535`. Lower numbers have higher priority. If you create a rule without an explicit priority, Google Cloud uses `1000`.
 
-The highest-priority applicable rule controls the decision for a packet. A broad rule with priority `500` can override a narrower rule with priority `1000` because priority wins before target specificity. When two applicable rules have the same priority and different actions, **deny wins over allow**. Because of that, production teams usually give important rules unique priorities so logging and review stay predictable.
+The highest-priority matching rule controls the packet. A broad deny at priority `100` can override a narrower allow at priority `800`. If two applicable rules have the same priority and different actions, deny wins. Production teams usually give important rules unique priorities so review and logs stay predictable.
 
-Here is a small priority plan for the food delivery app:
+An **allow** rule grants the matching packet access. A **deny** rule blocks the matching packet. A practical design uses allow rules for expected application paths and deny rules for shared guardrails, such as blocking direct SSH and RDP from the internet.
+
+![A generated infographic showing firewall priority order from broad denies to application allow rules and implied fallback behavior.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/priority-order.png)
+*Lower priority numbers win, so broad guardrails need deliberate priority choices.*
+
+A small priority plan can leave room for future rules:
 
 | Priority | Rule idea | Why it exists |
 |---:|---|---|
-| `100` | Deny SSH from the internet to all VMs | A shared safety rule blocks a risky management path |
-| `300` | Allow emergency SSH from the VPN admin subnet to break-glass VMs | A narrow exception sits above broad denies |
-| `800` | Allow web tier to reach API tier on TCP `8080` | The application path is explicit |
-| `900` | Allow API tier to reach database private range on TCP `5432` | The database path is explicit |
-| `65535` | Implied rules | Google Cloud fallback behavior applies when no rule matches |
+| `100` | Deny internet SSH and RDP | Shared safety guardrail |
+| `300` | Allow admin access from VPN to break-glass targets | Narrow emergency path |
+| `800` | Allow web to API on TCP `8080` | Main application path |
+| `900` | Allow API to database on TCP `5432` | Private data path |
+| `65535` | Implied rules | Google Cloud fallback behavior |
 
-![A generated infographic showing firewall priority order from broad denies to application allow rules and implied fallback behavior.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/priority-order.png)
-*Lower priority numbers win, so a broad guardrail at priority `100` can beat a narrower allow rule at priority `800`.*
+The exact bands are a team convention. The important behavior is fixed: lower numbers win, and the winning matching rule chooses allow or deny.
 
-The numbers leave gaps, which helps a team add a future rule without renumbering everything. The exact bands are a team convention rather than a Google Cloud requirement. The important behavior is official: lower numbers have higher priority, and the highest-priority applicable rule takes precedence.
+## Implied Rules
+<!-- section-summary: Every VPC has implied fallback behavior, and the default network may also have pre-populated ingress allows. -->
 
-An **allow rule** grants the matching packet access. A **deny rule** blocks the matching packet. A practical production design uses both. Allow rules express expected paths, such as web to API. Deny rules express guardrails, such as no direct SSH from `0.0.0.0/0`.
+Every VPC network has two implied IPv4 firewall rules at priority `65535`. The implied ingress rule denies incoming traffic. The implied egress rule allows outgoing traffic. These implied rules exist even if you create a custom-mode VPC with no visible firewall rules.
 
-Now we can talk about what happens when no custom rule matches.
+The default network is separate from those implied rules. New projects may receive a default auto-mode VPC unless organization policy disables it. That default network can include pre-populated ingress allow rules for internal traffic, SSH, RDP, and ICMP. Production teams often delete or avoid default network rules because they want every access path reviewed.
 
-## Implied Rules and Default Network Rules
-<!-- section-summary: Every VPC has implied fallback rules, while the default network also starts with removable pre-populated ingress allow rules. -->
+The difference is easy to miss during a lab because both network types still have implied fallback behavior:
 
-Google Cloud VPC networks have implied firewall behavior. There is an implied ingress deny rule and an implied egress allow rule at the lowest priority, `65535`. In plain language, unsolicited inbound traffic is blocked unless a higher-priority rule allows it, and outbound traffic is allowed unless a higher-priority rule denies it.
+| Network shape | Visible rules you may inherit | Fallback behavior still present |
+|---|---|---|
+| Custom-mode VPC | No application ingress allows unless the team creates them | Implied ingress deny and implied egress allow at priority `65535` |
+| Default network | Pre-populated ingress allows for internal traffic, SSH, RDP, and ICMP in many projects | The same implied ingress deny and implied egress allow still exist underneath |
 
-Those implied rules exist in every VPC network. They are different from the pre-populated rules in the default network. The **default network** is the auto mode VPC network that new projects may receive unless organization policy disables it. Google Cloud pre-populates the default network with ingress allow rules that permit internal traffic, SSH, RDP, and ICMP. These rules can be deleted or modified.
+For a reviewed production VPC, the custom-mode path is easier to audit. The firewall list starts close to empty, so an allow rule for `web` to `api` on TCP `8080` has a clear reason. In a default network, the team must first check whether an inherited SSH, RDP, ICMP, or broad internal allow already opens a path that the new application design did not ask for.
 
-That distinction matters during production reviews. A custom mode production VPC usually starts quieter because the team adds the opening rules deliberately. A default network may already allow SSH or RDP from broad source ranges, and those rules deserve review before real workloads land there.
+For the platform API, the implied ingress deny is useful. If no rule allows internet traffic to the API VMs, direct scans from the internet have no allowed ingress path. If the team wants restricted egress, it must add higher-priority egress deny rules and narrow allow rules because implied egress allows outbound traffic by default.
 
-For the food delivery app, a custom mode network makes the access story easier to audit:
+An egress-lockdown design usually keeps narrow allows above one broad deny:
 
-| Access path | Expected firewall posture |
-|---|---|
-| Internet to API VMs | No allow rule, so implied ingress deny blocks it |
-| Web tier to API tier on TCP `8080` | Explicit ingress allow targeting API VMs |
-| API tier to database on TCP `5432` | Explicit egress allow if the team restricts outbound paths |
-| API tier to arbitrary internet destination | Allowed by implied egress unless a higher-priority egress deny blocks it |
+| Priority | Direction | Action | Destination | Purpose |
+|---:|---|---|---|---|
+| `700` | Egress | Allow TCP `5432` | `10.70.4.7/32` | API to private database |
+| `710` | Egress | Allow TCP `443` | `10.40.30.25/32` | API to PSC endpoint for Google APIs |
+| `65000` | Egress | Deny all | `0.0.0.0/0` | Override implied egress allow |
 
-Some teams leave implied egress allow in place for early application work, then add egress deny rules and narrow allows once dependencies are known. Other teams start with restricted egress in production from the beginning. The right timing depends on the team's operational maturity, but the final goal is clear: application paths are visible in rules instead of hidden inside a broad fallback.
-
-The next beginner question is return traffic. If a web VM starts a connection to an API VM and the API VM replies, does the team need a second firewall rule for the response?
+The broad deny uses priority `65000`, which is still higher precedence than the implied allow at `65535`. The narrow allow rules use lower priority numbers, so approved dependency calls match before the broad deny. Firewall logs should show accepted database and PSC traffic, while unexpected internet destinations should show deny matches on the lockdown rule.
 
 ## Stateful Return Traffic
-<!-- section-summary: GCP firewall rules track allowed connections, so matching return traffic can flow without a mirrored rule. -->
+<!-- section-summary: GCP firewall rules track allowed connections, so matching return traffic can flow without mirrored response rules. -->
 
-Google Cloud VPC firewall rules are **stateful**. Stateful means Google Cloud tracks allowed connections and automatically permits matching return traffic for that connection. If an ingress rule allows a web VM to connect to TCP `8080` on an API VM, the API VM's response packets can return to the web VM as part of that connection.
+Google Cloud VPC firewall rules are **stateful**. Stateful means Google Cloud tracks allowed connections and permits matching return traffic for that connection. If an ingress rule allows a web VM to open TCP `8080` to an API VM, the API VM's response packets can return as part of that connection.
 
-This saves teams from writing mirrored rules for every response. The first packet that starts the connection still needs to match an allow rule. After Google Cloud accepts the connection, return packets that belong to that connection are allowed by connection tracking.
+For the learning platform, a request might look like this:
 
-Here is the food delivery API flow:
+| Flow | Packet facts | Rule needed |
+|---|---|---|
+| Request | Web `10.30.10.12:49152` to API `10.30.20.8:8080` | Ingress allow on the API target for TCP `8080` from the web source |
+| Response | API `10.30.20.8:8080` to web `10.30.10.12:49152` | No mirrored ingress rule on the web target for this response packet |
 
-1. A web VM sends a TCP packet to an API VM on port `8080`.
-2. Google Cloud evaluates ingress firewall rules for the API VM interface.
-3. An allow rule matches the web source and API target.
-4. Google Cloud tracks the connection.
-5. The API VM sends response packets back to the web VM.
-6. The return packets match connection state and flow back without a separate mirrored egress allow for that response.
+The web VM uses an ephemeral source port such as `49152`. The API response returns to that temporary port as part of the same tracked connection. Google Cloud recognizes the response as related traffic and permits it through connection tracking after the original request is allowed.
 
-Stateful firewalls still need good direction design. If the API VM initiates a new outbound connection to a database, that is a new connection and follows egress evaluation for the API VM. The earlier web-to-API state grants no unrelated access to other destinations.
+This saves teams from writing mirrored response rules for every request. The first packet that initiates the connection still needs to match an allow rule. After the connection is accepted, return packets for that same connection follow connection tracking.
 
-Now that direction, priority, implied rules, and state are clear, the next design question is scope. Which VMs receive a rule?
+The state is specific to the connection. A successful web-to-API connection does not grant the API tier a new unrelated connection to the database. After the API opens `10.30.20.8:51544` to database `10.70.4.7:5432`, that is a new connection with a new source, destination, protocol, and port. The database target needs an ingress allow from the API tier, and a locked-down API tier may also need an egress allow to the database address. If that rule is missing, the user request can reach the API and still fail as the API tries to load course records.
 
 ## Targets: Tags and Service Accounts
-<!-- section-summary: Targets define which VM interfaces receive a rule, and service account targeting gives stricter production control than simple network tags. -->
+<!-- section-summary: Targets define which VM interfaces receive a rule, and service account targeting ties rules to workload identity. -->
 
-A **target** defines which VM interfaces a firewall rule applies to. Without a specific target, a VPC firewall rule can apply broadly in the network. With a target, the team can attach the rule only to selected VMs.
+A **target** defines which VM interfaces a firewall rule applies to. Without a specific target, a VPC firewall rule can apply broadly across the network. With a target, the rule applies only to selected VM interfaces.
 
-Google Cloud commonly uses **network tags** and **service accounts** for firewall targeting. A network tag is a text label on a VM, such as `web` or `api`. A service account is the Google Cloud identity attached to a VM, such as `api-prod@food-prod.iam.gserviceaccount.com`.
+Google Cloud commonly targets firewall rules by **network tag** or **service account**. A network tag is a text label on a VM, such as `web` or `api`. A service account is the workload identity attached to the VM, such as `api-prod@learn-prod.iam.gserviceaccount.com`.
 
-Network tags are easy to start with. A rule can say "allow TCP `8080` to VMs with the `api` tag from VMs with the `web` tag." This is readable and fast for labs or small environments. The operational tradeoff is that tags can be added or removed while a VM is running by users with the right Compute Engine permissions. If tag editing is too broad, a VM can accidentally join a more privileged network group.
+Network tags are easy for small labs and simple environments. Service account targeting is often better for production application tiers because it follows workload identity and tends to have tighter IAM review. A managed instance group can replace an API VM, and the rule still matches as long as the new VM uses the API service account.
 
-Service account targeting ties firewall scope to workload identity. A rule can target VMs running as `api-prod@food-prod.iam.gserviceaccount.com` and allow sources running as `web-prod@food-prod.iam.gserviceaccount.com`. Changing the service account on an instance requires stopping and restarting the VM, and IAM permissions around service accounts are usually reviewed more tightly than simple tag changes.
+One GCP-specific detail matters: a single VPC firewall rule supports either target service accounts or target network tags. You do not mix both target styles in one rule. Choose the style for the rule family and keep the source fields compatible with that style.
 
-Google Cloud has an important constraint: a single firewall rule supports either target service accounts or target network tags, with no mixing between the two target styles. The source fields also have restrictions depending on the target style. A team can choose the targeting style intentionally for each rule family.
-
-For the food delivery app, service accounts give a clean production layout:
+For the learning platform, service account targets read clearly:
 
 | Tier | VM service account | Firewall role |
 |---|---|---|
-| Web | `web-prod@food-prod.iam.gserviceaccount.com` | Source for API ingress |
-| API | `api-prod@food-prod.iam.gserviceaccount.com` | Target for API ingress and source for database egress |
-| Worker | `worker-prod@food-prod.iam.gserviceaccount.com` | Source for selected API ingress |
+| Web frontend | `web-prod@learn-prod.iam.gserviceaccount.com` | Source for API ingress |
+| API | `api-prod@learn-prod.iam.gserviceaccount.com` | Target for API ingress and source for database egress |
+| Worker | `worker-prod@learn-prod.iam.gserviceaccount.com` | Source for selected API ingress |
 
-This design lets a rule describe the workload identity instead of chasing individual VM IPs. Managed instance groups can recreate VMs, and the firewall intent remains attached to the service account.
+## Commands and Terraform Shape
+<!-- section-summary: A practical firewall baseline turns expected application paths into reviewed rules with clear names, priorities, and logging. -->
 
-Workload-level rules handle application paths. Larger organizations also need shared guardrails above individual projects and VPCs.
-
-## Firewall Policies for Shared Guardrails
-<!-- section-summary: Hierarchical and network firewall policies let organizations manage shared rules above individual VPC firewall rules. -->
-
-Google Cloud has more than one firewall rule surface. Traditional **VPC firewall rules** live at the VPC network level. **Firewall policies** provide shared policy containers for broader governance. A beginner only needs the basic hierarchy on day one because it explains why a project rule might be one decision among several in the path.
-
-A **hierarchical firewall policy** can be associated with an organization or folder. Rules in that policy can block, allow, or delegate evaluation to lower levels. When a policy is attached at the organization or folder, VMs under that part of the resource hierarchy inherit it. This is useful for central security teams that want broad guardrails, such as blocking risky management ports from the internet across many projects.
-
-A **global network firewall policy** is a project-level policy that can apply to VPC networks in that project. It gives teams a reusable network policy layer instead of repeating the same VPC firewall rules by hand across networks. Traditional VPC firewall rules still matter for local application access, especially in smaller projects.
-
-For the food delivery company, a central platform team might create a folder-level policy that denies ingress SSH from `0.0.0.0/0`. The application team can still create VPC firewall rules that allow web-to-API traffic. The central guardrail handles a company-wide risk. The application rules handle service-specific paths.
-
-This layered design also affects troubleshooting. When a packet is denied, the denied decision might come from a hierarchical policy, a global network firewall policy, or a VPC firewall rule. Logs and testing tools help find the actual layer.
-
-## gcloud and Terraform Firewall Baseline
-<!-- section-summary: A practical firewall baseline turns the web, API, database, and admin paths into reviewed rules with clear priorities and logging. -->
-
-Now turn the food delivery packet story into actual configuration. The team has one custom-mode VPC called `food-prod-vpc`. The web tier runs as `web-prod@food-prod.iam.gserviceaccount.com`, the API tier runs as `api-prod@food-prod.iam.gserviceaccount.com`, and the database private address is `10.40.0.15`.
-
-The first rule blocks direct internet SSH and RDP. This is a guardrail rule, so it uses a low priority number and logging:
+The command examples assume one custom-mode VPC named `learn-prod-vpc`. The first rule blocks direct internet admin access. It is a mutating command, so real teams usually apply it through infrastructure review:
 
 ```bash
 gcloud compute firewall-rules create deny-ingress-admin-from-internet \
-  --project=food-prod \
-  --network=food-prod-vpc \
+  --project=learn-prod \
+  --network=learn-prod-vpc \
   --direction=INGRESS \
   --priority=100 \
   --deny=tcp:22,tcp:3389 \
@@ -185,72 +197,69 @@ gcloud compute firewall-rules create deny-ingress-admin-from-internet \
   --enable-logging
 ```
 
-The important fields are `--direction=INGRESS`, `--priority=100`, `--deny=tcp:22,tcp:3389`, and `--source-ranges=0.0.0.0/0`. This is a mutating command, so a real change should be reviewed before it runs. A healthy create returns an operation that finishes successfully:
+Important fields:
+
+- `--direction=INGRESS` checks packets arriving at targets.
+- `--priority=100` makes this guardrail win over normal application allow rules.
+- `--deny=tcp:22,tcp:3389` blocks SSH and RDP.
+- `--source-ranges=0.0.0.0/0` covers internet IPv4 sources.
+
+Expected output should show a completed firewall operation:
 
 ```yaml
 operationType: insert
 status: DONE
-targetLink: projects/food-prod/global/firewalls/deny-ingress-admin-from-internet
+targetLink: projects/learn-prod/global/firewalls/deny-ingress-admin-from-internet
 ```
 
-The next rule allows the expected application path. The source and target are service accounts, so the rule follows workload identity instead of VM names or IP addresses:
+The next rule allows the web tier to call the API tier:
 
 ```bash
 gcloud compute firewall-rules create allow-ingress-api-from-web-tcp-8080 \
-  --project=food-prod \
-  --network=food-prod-vpc \
+  --project=learn-prod \
+  --network=learn-prod-vpc \
   --direction=INGRESS \
   --priority=800 \
   --allow=tcp:8080 \
-  --source-service-accounts=web-prod@food-prod.iam.gserviceaccount.com \
-  --target-service-accounts=api-prod@food-prod.iam.gserviceaccount.com \
+  --source-service-accounts=web-prod@learn-prod.iam.gserviceaccount.com \
+  --target-service-accounts=api-prod@learn-prod.iam.gserviceaccount.com \
   --enable-logging
 ```
 
-The service account fields are the heart of this rule. `--source-service-accounts` names the workload identity that starts the connection, and `--target-service-accounts` names the API VM identity that receives it. If a VM runs with the wrong service account, the rule will not match even if the IP address sits in the expected subnet.
+Important fields:
 
-If the team restricts egress, the API tier also needs a database path:
+- `--source-service-accounts` names the workload identity that starts the connection.
+- `--target-service-accounts` names the API workload identity receiving the packet.
+- `--allow=tcp:8080` limits the rule to the API port instead of opening every protocol.
+- `--enable-logging` creates evidence for rule matches.
+
+If the team restricts outbound traffic, add a narrow API-to-database egress rule:
 
 ```bash
 gcloud compute firewall-rules create allow-egress-api-to-db-tcp-5432 \
-  --project=food-prod \
-  --network=food-prod-vpc \
+  --project=learn-prod \
+  --network=learn-prod-vpc \
   --direction=EGRESS \
   --priority=900 \
   --allow=tcp:5432 \
-  --destination-ranges=10.40.0.15/32 \
-  --target-service-accounts=api-prod@food-prod.iam.gserviceaccount.com \
+  --destination-ranges=10.70.4.12/32 \
+  --target-service-accounts=api-prod@learn-prod.iam.gserviceaccount.com \
   --enable-logging
 ```
 
-`--destination-ranges=10.40.0.15/32` narrows the rule to one database private address. That is useful for a small example, but a managed database failover design might require a documented range or service-specific endpoint pattern instead of one hardcoded address.
+Important fields:
 
-In a real production repo, the same rules usually live in Terraform. Terraform gives review, history, plan output, and rollback through the infrastructure workflow:
+- `--direction=EGRESS` checks packets leaving the API target.
+- `--destination-ranges=10.70.4.12/32` narrows the destination to one private endpoint in this example.
+- The target service account keeps the rule attached to the API workload instead of all VMs in the subnet.
+
+Terraform keeps the same intent in reviewable code:
 
 ```hcl
-resource "google_compute_firewall" "deny_ingress_admin_from_internet" {
-  project   = var.project_id
-  name      = "deny-ingress-admin-from-internet"
-  network   = google_compute_network.food_prod.self_link
-  direction = "INGRESS"
-  priority  = 100
-
-  source_ranges = ["0.0.0.0/0"]
-
-  deny {
-    protocol = "tcp"
-    ports    = ["22", "3389"]
-  }
-
-  log_config {
-    metadata = "INCLUDE_ALL_METADATA"
-  }
-}
-
 resource "google_compute_firewall" "allow_ingress_api_from_web" {
   project   = var.project_id
   name      = "allow-ingress-api-from-web-tcp-8080"
-  network   = google_compute_network.food_prod.self_link
+  network   = google_compute_network.learn_prod.self_link
   direction = "INGRESS"
   priority  = 800
 
@@ -271,68 +280,41 @@ resource "google_compute_firewall" "allow_ingress_api_from_web" {
     metadata = "INCLUDE_ALL_METADATA"
   }
 }
-
-resource "google_compute_firewall" "allow_egress_api_to_db" {
-  project   = var.project_id
-  name      = "allow-egress-api-to-db-tcp-5432"
-  network   = google_compute_network.food_prod.self_link
-  direction = "EGRESS"
-  priority  = 900
-
-  destination_ranges = ["10.40.0.15/32"]
-
-  target_service_accounts = [
-    "api-prod@${var.project_id}.iam.gserviceaccount.com"
-  ]
-
-  allow {
-    protocol = "tcp"
-    ports    = ["5432"]
-  }
-
-  log_config {
-    metadata = "INCLUDE_ALL_METADATA"
-  }
-}
 ```
 
-The important production habit is that each rule name reads like the sentence the team says during review: allow ingress to API from web on TCP `8080`, allow egress from API to database on TCP `5432`, and deny internet admin ports. The priority numbers, service accounts, ports, and logging settings should all match that sentence.
+The resource name, priority, source identity, target identity, protocol, port, and logging block should match the review sentence. That makes the rule understandable in code review and during incident response.
 
-## Verification Commands and Troubleshooting
-<!-- section-summary: Firewall logging, rule listing, Connectivity Tests, and flow evidence help teams prove which rule or network step controls a packet path. -->
+## Verification and Troubleshooting
+<!-- section-summary: Rule listings, Connectivity Tests, logging, and flow evidence help prove which rule controls a packet path. -->
 
-Firewall rules can have logging enabled. **Firewall Rules Logging** records information about connections that match a rule. This helps answer practical questions like "Did the API allow rule match?" and "Which deny rule blocked the packet?" Unique priorities and clear rule names make those logs far easier to read.
-
-Good rule names explain direction, target, source, and port. A name like `allow-ingress-api-from-web-tcp-8080` carries more operational value than `api-rule-1`. During an incident, the person reading logs gets the rule's purpose from the name before opening the full configuration.
-
-The first verification command lists the rule set in the order humans usually review it:
+The first verification command lists firewall rules in priority order:
 
 ```bash
 gcloud compute firewall-rules list \
-  --project=food-prod \
-  --filter='network~food-prod-vpc' \
+  --project=learn-prod \
+  --filter='network~learn-prod-vpc' \
   --sort-by=priority \
-  --format='table(name,direction,priority,disabled,allowed,denied,sourceRanges,destinationRanges,targetServiceAccounts)'
+  --format='table(name,direction,priority,disabled,allowed,denied,sourceRanges,destinationRanges,sourceServiceAccounts,targetServiceAccounts)'
 ```
 
-Example output should put the guardrail deny above the application allows. `DISABLED` should be `False`, and the `TARGET_SERVICE_ACCOUNTS` column should match the workload identity that receives the rule:
+Healthy output should show guardrails above application allows and `DISABLED` as `False`:
 
 ```console
-NAME                                  DIRECTION  PRIORITY  DISABLED  ALLOWED     DENIED             SOURCE_RANGES  DESTINATION_RANGES  TARGET_SERVICE_ACCOUNTS
+NAME                                  DIRECTION  PRIORITY  DISABLED  ALLOWED     DENIED             SOURCE_RANGES  DESTINATION_RANGES  SOURCE_SERVICE_ACCOUNTS                  TARGET_SERVICE_ACCOUNTS
 deny-ingress-admin-from-internet      INGRESS    100       False                 tcp:22,tcp:3389    0.0.0.0/0
-allow-ingress-api-from-web-tcp-8080   INGRESS    800       False     tcp:8080                                         api-prod@food-prod.iam.gserviceaccount.com
-allow-egress-api-to-db-tcp-5432       EGRESS     900       False     tcp:5432                     10.40.0.15/32    api-prod@food-prod.iam.gserviceaccount.com
+allow-ingress-api-from-web-tcp-8080   INGRESS    800       False     tcp:8080                                      web-prod@learn-prod.iam.gserviceaccount.com  api-prod@learn-prod.iam.gserviceaccount.com
+allow-egress-api-to-db-tcp-5432       EGRESS     900       False     tcp:5432                     10.70.4.12/32                                            api-prod@learn-prod.iam.gserviceaccount.com
 ```
 
-The second command describes one rule when the team needs exact fields:
+The describe command checks exact fields if the rule name is not enough:
 
 ```bash
 gcloud compute firewall-rules describe allow-ingress-api-from-web-tcp-8080 \
-  --project=food-prod \
+  --project=learn-prod \
   --format=yaml
 ```
 
-The describe output is where a reviewer checks exact service account fields, logging, and priority instead of trusting the name:
+Useful output should show direction, priority, logging, source service account, and target service account:
 
 ```yaml
 allowed:
@@ -343,101 +325,63 @@ direction: INGRESS
 disabled: false
 logConfig:
   enable: true
-name: allow-ingress-api-from-web-tcp-8080
 priority: 800
 sourceServiceAccounts:
-- web-prod@food-prod.iam.gserviceaccount.com
+- web-prod@learn-prod.iam.gserviceaccount.com
 targetServiceAccounts:
-- api-prod@food-prod.iam.gserviceaccount.com
+- api-prod@learn-prod.iam.gserviceaccount.com
 ```
 
-The third check creates a Connectivity Test for the expected web-to-API path. The instance URIs and IP addresses should come from the actual incident or deployment evidence:
+Connectivity Tests can simulate the expected path for supported endpoints:
 
 ```bash
 gcloud network-management connectivity-tests create web-to-api-8080 \
-  --project=food-prod \
-  --source-instance=projects/food-prod/zones/us-central1-a/instances/web-1 \
-  --source-ip-address=10.20.10.15 \
-  --destination-instance=projects/food-prod/zones/us-central1-a/instances/api-1 \
-  --destination-ip-address=10.20.20.9 \
+  --project=learn-prod \
+  --source-instance=projects/learn-prod/zones/us-central1-a/instances/web-1 \
+  --source-ip-address=10.30.10.15 \
+  --destination-instance=projects/learn-prod/zones/us-central1-a/instances/api-1 \
+  --destination-ip-address=10.30.20.8 \
   --destination-port=8080 \
   --protocol=TCP
 
 gcloud network-management connectivity-tests describe web-to-api-8080 \
-  --project=food-prod \
+  --project=learn-prod \
   --format=yaml
 ```
 
-The create command mutates Google Cloud state by storing a test definition. The describe command is the important read-only evidence. A healthy result should show reachability instead of a firewall deny:
+The create command stores a test definition. The describe command is the evidence. A healthy result should show reachability:
 
 ```yaml
-name: projects/food-prod/locations/global/connectivityTests/web-to-api-8080
-source:
-  instance: projects/food-prod/zones/us-central1-a/instances/web-1
-  ipAddress: 10.20.10.15
-destination:
-  instance: projects/food-prod/zones/us-central1-a/instances/api-1
-  ipAddress: 10.20.20.9
-  port: 8080
-protocol: TCP
+name: projects/learn-prod/locations/global/connectivityTests/web-to-api-8080
 reachabilityDetails:
   result: REACHABLE
   traces:
   - endpointInfo:
-      sourceIp: 10.20.10.15
-      destinationIp: 10.20.20.9
+      sourceIp: 10.30.10.15
+      destinationIp: 10.30.20.8
       destinationPort: 8080
       protocol: TCP
 ```
 
-If the result is `UNREACHABLE` and the trace names a firewall step, check the matching target, source, priority, and action before changing routes. If the trace names route selection, return to the VPC route table instead of editing firewall rules.
-
-Google Cloud also provides **Connectivity Tests** in Network Intelligence Center. Connectivity Tests can analyze the expected forwarding path for traffic between endpoints, such as a VM, GKE cluster, load balancer forwarding rule, or internet IP address. For some paths, it can also run live data plane analysis. This is useful when the route exists, but the packet still fails because a firewall rule, policy, or next hop blocks the path.
-
 ![A generated infographic showing a firewall troubleshooting sequence with rule listing, Connectivity Tests, firewall logs, and flow evidence.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/firewall-troubleshooting.png)
-*Firewall debugging should move from configured rules to simulated path evidence and then to runtime logs or flow records.*
+*Firewall troubleshooting moves from configured rules to simulated path evidence and then to runtime logs or flow records.*
 
-A practical troubleshooting flow for the food delivery app might look like this:
+For a failed packet, keep the checks in order:
 
 | Symptom | First useful check | What the team learns |
 |---|---|---|
-| Web tier fails to reach API on `8080` | Connectivity Test from web VM to API VM | Route, firewall, and policy path |
-| API logs show no request | Firewall rule logging on API ingress rule | Whether packets reached firewall evaluation |
-| SSH works from the internet unexpectedly | List default-network rules or broad ingress rules | Whether a pre-populated or custom rule allows it |
-| API can reach any external endpoint | Egress rules and implied egress posture | Whether outbound access is intentionally broad |
+| Web tier cannot reach API on `8080` | Connectivity Test from web VM to API VM | Route, firewall, and policy path |
+| API logs show no request | Firewall rule logging and VPC Flow Logs where enabled | Whether packets reached firewall evaluation |
+| SSH works from the internet | Rule list plus default-network review | Whether a broad ingress allow exists |
+| API can reach every public endpoint | Egress rules and implied egress posture | Whether outbound access is intentionally broad |
 
-Troubleshooting is easiest when the rule set tells a story. Direction, target, source, protocol, port, priority, and action all match the sentence the team would say out loud.
+The final beginner checkpoint is this: **routes decide where a packet could go, firewall rules decide whether it may pass, priorities decide which matching rule wins, implied rules provide fallback behavior, stateful tracking permits response traffic, and targets decide which VM interfaces receive the rule**.
 
-## Putting It All Together
-<!-- section-summary: A production firewall design writes explicit packet paths for web, API, and database traffic while shared guardrails block risky defaults. -->
+## References
 
-Let's assemble the food delivery app with a clean firewall design.
-
-The web tier receives traffic from the public load balancer path on the application port. The exact source ranges depend on the load balancer design, so the team uses the documented proxy or health check ranges for that product rather than opening every VM port to the internet. The target is the web tier service account.
-
-The API tier accepts ingress on TCP `8080` from the web tier service account. It also accepts selected worker traffic if the worker tier needs to call internal API endpoints. There is no rule that allows `0.0.0.0/0` directly to the API tier, so internet scans fall to the implied ingress deny.
-
-The API tier sends egress to the database private address on TCP `5432`. If the team has chosen restricted egress, the API service account receives only the destination ranges and ports it needs. If the team still uses implied egress allow during early development, the future hardening task is documented so broad outbound access gets tracked instead of quietly remaining forever.
-
-A folder-level hierarchical firewall policy blocks SSH and RDP from the internet across production projects. A break-glass admin path allows management access only from a VPN subnet to a small set of emergency targets. Firewall logging is enabled on important allow and deny rules, and Connectivity Tests is available when a packet path fails.
-
-The final beginner checkpoint is this: **routes decide where a packet can go, firewall rules decide whether that packet is allowed, priorities decide which matching rule wins, targets decide which VM interfaces receive the rule, and stateful tracking lets return traffic follow an allowed connection**.
-
-## What's Next
-<!-- section-summary: The next networking topic follows public entry points after the private VPC and firewall rules are in place. -->
-
-The VPC now has a map, and the firewall rules now describe packet access. The next networking question is how public users reach the application safely.
-
-From here, the roadmap can move into DNS, certificates, load balancers, public entry points, and private backends. Those pieces sit in front of the app, while the VPC and firewall rules keep the internal path controlled.
-
----
-
-**References**
-
-- [Google Cloud: VPC firewall rules](https://docs.cloud.google.com/firewall/docs/firewalls) - Documents firewall rule direction, priority, actions, implied rules, default network rules, targets, stateful behavior, and logging.
-- [Google Cloud: Use VPC firewall rules](https://docs.cloud.google.com/firewall/docs/using-firewalls) - Shows how to create, update, list, and manage VPC firewall rules with the Google Cloud CLI.
-- [Google Cloud SDK: gcloud compute firewall-rules create](https://docs.cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/create) - Documents current flags for allow and deny rules, source ranges, source service accounts, target service accounts, priorities, and logging.
-- [Google Cloud: Hierarchical firewall policies](https://docs.cloud.google.com/firewall/docs/firewall-policies) - Explains organization and folder-level firewall policies, inheritance, delegation, and shared guardrail use cases.
-- [Google Cloud: Connectivity Tests overview](https://docs.cloud.google.com/network-intelligence-center/docs/connectivity-tests/concepts/overview) - Describes configuration analysis and packet path simulation for troubleshooting connectivity.
-- [Google Cloud SDK: gcloud network-management connectivity-tests create](https://docs.cloud.google.com/sdk/gcloud/reference/network-management/connectivity-tests/create) - Documents current CLI fields for source, destination, port, protocol, and cross-project Connectivity Tests.
-- [Terraform Registry: google_compute_firewall](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/compute_firewall) - Defines the Terraform resource shape for VPC firewall rules, service account targets, allow and deny blocks, and logging configuration.
+- [VPC firewall rules](https://docs.cloud.google.com/firewall/docs/firewalls) - Documents direction, priority, actions, implied rules, default network rules, targets, and stateful behavior.
+- [Use VPC firewall rules](https://docs.cloud.google.com/firewall/docs/using-firewalls) - Shows the official workflow for creating, updating, listing, and managing firewall rules.
+- [Firewall Rules Logging](https://docs.cloud.google.com/firewall/docs/firewall-rules-logging) - Explains logging for firewall rule matches and operational evidence.
+- [Hierarchical firewall policies](https://docs.cloud.google.com/firewall/docs/firewall-policies) - Explains organization and folder-level firewall guardrails.
+- [Connectivity Tests overview](https://docs.cloud.google.com/network-intelligence-center/docs/connectivity-tests/concepts/overview) - Describes configuration analysis and packet path simulation.
+- [gcloud compute firewall-rules create](https://docs.cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/create) - Documents current CLI flags for allow rules, deny rules, source service accounts, target service accounts, priorities, and logging.

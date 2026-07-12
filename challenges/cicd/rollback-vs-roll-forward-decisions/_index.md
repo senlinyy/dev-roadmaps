@@ -1,5 +1,5 @@
 ---
-title: "Rollback vs. Roll Forward Decisions"
+title: "Rollback vs. Roll-Forward"
 description: "Choose the smallest safe recovery move, disable isolated behavior with flags, and record the release decision while facts are fresh."
 articleId: article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions
 articleSlug: rollback-vs-roll-forward-decisions

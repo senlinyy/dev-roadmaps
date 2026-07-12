@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "private-backend-q1",
+      "type": "single",
+      "scenario": "The `checkout-web` Pods call `orders-api` only from inside the cluster. A review proposes changing the orders Service to `LoadBalancer` so the internal caller has a stable address. The platform already provides cluster DNS, and no external client should reach this backend directly. Which design best matches the intended audience?",
+      "options": [
+        { "id": "a", "text": "Use NodePort so checkout can call a worker IP and a fixed high port from inside the cluster." },
+        { "id": "b", "text": "Use LoadBalancer because every stable Service address must be created by external infrastructure." },
+        { "id": "c", "text": "Keep orders-api as ClusterIP and have checkout call its Service name and port inside the cluster." },
+        { "id": "d", "text": "Remove the Service and store the current ready Pod IPs in checkout configuration." }
+      ],
+      "correct": ["c"],
+      "explanation": "ClusterIP serves the actual in-cluster audience without adding node-level or external exposure. NodePort widens access to node networks, LoadBalancer requests external infrastructure, and Pod IPs are temporary during rollouts and failures."
+    },
+    {
+      "id": "lab-nodeport-q2",
+      "type": "single",
+      "scenario": "A bare-metal training cluster has no load balancer controller. A lab appliance can route to every worker node and is configured to send test traffic to port `31080`. Students must still be able to call the Service internally on port `80`. Which Service shape fits this deliberate lab path?",
+      "options": [
+        { "id": "a", "text": "Use NodePort with Service port 80 and nodePort 31080, while retaining the normal internal Service behavior." },
+        { "id": "b", "text": "Use ClusterIP with clusterIP 31080 so the appliance can treat the virtual IP as a node port." },
+        { "id": "c", "text": "Use LoadBalancer and expect Kubernetes to publish an external address without an infrastructure controller." },
+        { "id": "d", "text": "Use a headless Service so every worker automatically listens on port 31080." }
+      ],
+      "correct": ["a"],
+      "explanation": "NodePort adds a static high port on each node and keeps the Service port available to cluster callers. ClusterIP does not publish a node port, LoadBalancer needs an implementation to fulfill the external request, and a headless Service changes DNS behavior rather than opening node ports."
+    },
+    {
+      "id": "pending-loadbalancer-q3",
+      "type": "single",
+      "scenario": "A new `LoadBalancer` Service has shown `EXTERNAL-IP <pending>` for 25 minutes. Its EndpointSlice lists two ready gateway Pods, and the internal Service path returns HTTP 200. The team is considering changing selectors and readiness probes. What is the best next investigation?",
+      "options": [
+        { "id": "a", "text": "Change the selector because a pending external address proves the Service has no backend Pods." },
+        { "id": "b", "text": "Change targetPort because a pending address is produced by an incorrect application listener." },
+        { "id": "c", "text": "Convert the Service to ClusterIP and wait for CoreDNS to allocate the external address." },
+        { "id": "d", "text": "Inspect Service events and the load balancer controller or provider for provisioning, quota, annotation, or subnet failures." }
+      ],
+      "correct": ["d"],
+      "explanation": "Healthy endpoints and a working internal path show that selection and backend routing are already functioning. A pending external address points toward the infrastructure controller or provider path, including events, quotas, annotations, and network allocation. CoreDNS does not provision load balancers."
+    },
+    {
+      "id": "named-target-port-q4",
+      "type": "single",
+      "scenario": "The orders Service exposes port `80` with `targetPort: http`. During a rollout, old Pods name container port `8080` as `http`, while new Pods name container port `8081` as `http`. Internal callers must keep using the same Service port. Why can this rollout preserve the client contract?",
+      "options": [
+        { "id": "a", "text": "The Service changes its own port to match whichever Pod replica received the request." },
+        { "id": "b", "text": "The named target port resolves against each selected Pod, while callers continue using Service port 80." },
+        { "id": "c", "text": "NodePort assigns a different high port to every Pod and translates it back to port 80." },
+        { "id": "d", "text": "LoadBalancer status stores both container port numbers and returns one through DNS." }
+      ],
+      "correct": ["b"],
+      "explanation": "The Service port remains the stable caller contract, and the named target port maps to the matching named container port on each backend. Service ports do not change per request, NodePort does not assign a port per Pod, and load balancer status does not publish container port mappings through DNS."
+    },
+    {
+      "id": "safe-public-edge-q5",
+      "type": "multiple",
+      "scenario": "A team is preparing public browser access for several applications. Internal calls already use private ClusterIP Services. The platform wants one controlled HTTP edge with TLS and routing, and reviewers want a rollback that does not disturb internal names. Which two choices align with the article's production pattern?",
+      "options": [
+        { "id": "a", "text": "Expose the Gateway or Ingress controller with a LoadBalancer Service and route from that edge to private backends." },
+        { "id": "b", "text": "Change every backend Service to NodePort so browsers can choose any worker and application port." },
+        { "id": "c", "text": "Keep backend Services as ClusterIP so internal callers and names remain stable during edge changes." },
+        { "id": "d", "text": "Publish each backend with its own public LoadBalancer because TLS and routing cannot live at a shared edge." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A LoadBalancer at the shared Gateway or Ingress edge provides infrastructure entry, while ClusterIP backends preserve private application contracts and a clean rollback boundary. NodePort on every backend widens the node-network audience, and separate public load balancers bypass the shared edge controls described in the article."
+    }
+  ]
+}

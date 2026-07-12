@@ -1,6 +1,5 @@
 ---
-title: "Map Package Crate Module"
-sectionSlug: "the-map-package-crate-module-path"
+title: "Project Structure"
 order: 1
 ---
-Knowledge check for the organization vocabulary used by Cargo and Rust source files.
+Use compiler failures, testing boundaries, and deployment targets to review packages, crates, modules, visibility, and shared project structure.

@@ -1,7 +1,6 @@
 ---
-title: "Start From The Event"
-sectionSlug: events
+title: "Cloud Run Functions"
 order: 1
 ---
 
-Practice recognizing event-shaped work around a backend API. The questions focus on what happened and why the function should run.
+Review production scenarios covering event-shaped compute with events, triggers, handlers, invocations, retries, timeouts, identity, logs, and service boundaries.

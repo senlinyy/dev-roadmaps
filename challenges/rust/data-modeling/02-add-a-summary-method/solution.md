@@ -5,5 +5,3 @@ impl Note {
     }
 }
 ~~~
-
-The method borrows self, reads the note fields, and returns an owned formatted String.

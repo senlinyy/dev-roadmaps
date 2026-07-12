@@ -1,44 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The Orders API should be reachable only through the approved external load balancer path. Which Cloud Run setting family belongs in the first review?",
+      "scenario": "The Orders API is approved for public access only through an external Application Load Balancer with a WAF policy. A penetration test sends an authenticated request to the default Cloud Run URL and receives HTTP 200. Which service setting should the reviewer inspect first?",
       "options": [
-        { "id": "a", "text": "Ingress." },
-        { "id": "b", "text": "Only egress." },
-        { "id": "c", "text": "Only billing export." },
-        { "id": "d", "text": "Only Cloud SQL storage size." }
+        {
+          "id": "d",
+          "text": "Set one minimum instance, because a warm revision accepts traffic only from the configured frontend."
+        },
+        {
+          "id": "a",
+          "text": "Restrict Cloud Run ingress to the approved load balancer path, then repeat the direct-URL bypass test."
+        },
+        {
+          "id": "b",
+          "text": "Keep ingress open and rely on invoker IAM, because authenticated callers cannot bypass load balancer controls."
+        },
+        {
+          "id": "c",
+          "text": "Route all outbound traffic through the VPC, because egress configuration also restricts inbound callers."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Ingress controls which network paths can reach the Cloud Run service."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Ingress controls which network paths may reach the service, so the direct HTTP 200 shows that the approved frontend is not the only path. Invoker IAM authenticates a caller but does not force that caller through the WAF, egress governs outbound traffic, and minimum instances affect capacity rather than reachability. See [Cloud Run ingress documentation](https://cloud.google.com/run/docs/securing/ingress)."
     },
     {
-      "id": "q2",
+      "id": "egress-q4",
       "type": "single",
-      "scenario": "A service requires authenticated invokers but still allows broad public ingress. What is true?",
+      "scenario": "A Cloud Run revision resolves api.partner.example, but every connection times out. The service sends all egress through a VPC connector, the destination is a public API, and the selected subnet has no Cloud NAT or other Internet gateway path. What should the reviewer check?",
       "options": [
-        { "id": "a", "text": "IAM can reject callers, but the network reachability setting is still broad." },
-        { "id": "b", "text": "IAM automatically changes ingress to internal only." },
-        { "id": "c", "text": "The service can no longer receive HTTPS." },
-        { "id": "d", "text": "Egress settings decide who may call the service." }
+        {
+          "id": "b",
+          "text": "Increase minimum instances so the connector remains warm between partner API calls."
+        },
+        {
+          "id": "c",
+          "text": "Change ingress to internal and cloud load balancing so outbound packets use the load balancer."
+        },
+        {
+          "id": "d",
+          "text": "Grant the runtime service account Cloud Run Invoker so it can open Internet connections."
+        },
+        {
+          "id": "a",
+          "text": "Provide an approved NAT or outbound Internet path for traffic routed through the VPC, then retest the partner endpoint."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "IAM invocation and ingress reachability are separate controls."
+      "correct": [
+        "a"
+      ],
+      "explanation": "When all egress enters the VPC, public destinations need an approved outbound path such as Cloud NAT. Minimum instances do not create routing, ingress does not control outbound packets, and Cloud Run Invoker authorizes calls to a service rather than Internet egress. See [Cloud NAT overview](https://cloud.google.com/nat/docs/overview)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which questions belong in Cloud Run ingress review?",
+      "id": "startup-checks-q3",
+      "type": "single",
+      "scenario": "A new revision fails its startup dependency check. DNS resolves the restricted Google API endpoint, but the log shows PERMISSION_DENIED for secretmanager.versions.access. The same image works locally under a developer identity. Which boundary should the review inspect?",
       "options": [
-        { "id": "a", "text": "Should callers use the generated URL directly?" },
-        { "id": "b", "text": "Should traffic arrive only through a load balancer path?" },
-        { "id": "c", "text": "Are internal callers allowed?" },
-        { "id": "d", "text": "Which private database range does outbound traffic use?" }
+        {
+          "id": "c",
+          "text": "Change service ingress to internal, because inbound reachability grants access to restricted Google APIs."
+        },
+        {
+          "id": "d",
+          "text": "Grant Secret Accessor to the deployer identity, because local success proves the runtime uses deployer credentials."
+        },
+        {
+          "id": "a",
+          "text": "Verify the runtime service account, its secret permission, and the revision egress and DNS path used for Google APIs."
+        },
+        {
+          "id": "b",
+          "text": "Increase the startup timeout, because permission errors normally clear after the revision has stayed warm."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Ingress is about inbound reachability. Private database egress is a different direction."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The log identifies an authorization failure, while the local success used a different principal. The runtime identity needs the secret permission and a valid API path; more startup time, an ingress change, or a grant to the deployer does not authorize the running revision. See [Private Google Access documentation](https://cloud.google.com/vpc/docs/private-google-access)."
+    },
+    {
+      "id": "startup-checks-q2",
+      "type": "multiple",
+      "scenario": "A release changes Cloud Run ingress, routes all egress through a VPC path, and attaches a new runtime service account. Before shifting customer traffic, which three checks specifically validate the network and caller boundaries?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Exercise the egress path to each private dependency and any required public endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Verify invoker IAM and the runtime service account permissions used along those paths."
+        },
+        {
+          "id": "d",
+          "text": "Confirm the container image passed its vulnerability scan, without exercising ingress or egress."
+        },
+        {
+          "id": "e",
+          "text": "Confirm the revision label matches the release ticket, without calling the approved frontend or any dependency."
+        },
+        {
+          "id": "a",
+          "text": "Confirm the ingress setting and prove the default service URL cannot bypass the approved load balancer path."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Ingress, egress, invoker IAM, and runtime identity form the network and caller contract for this rollout. An image scan is valuable release evidence, but it does not prove that the deployed revision can be reached only through the approved path or can reach its dependencies. See [Cloud Run networking documentation](https://cloud.google.com/run/docs/configuring/networking)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The load balancer hostname applies Cloud Armor and returns HTTP 200. The default Cloud Run URL also returns HTTP 200 for the same authenticated test token. The team argues that authentication makes both paths equivalent. What is the strongest finding?",
+      "options": [
+        {
+          "id": "d",
+          "text": "The team should lengthen token lifetime so the load balancer and default URL return identical responses."
+        },
+        {
+          "id": "a",
+          "text": "The default URL is still a bypass path, so ingress should enforce the approved load balancer entry while IAM continues to authorize callers."
+        },
+        {
+          "id": "b",
+          "text": "Both paths are equivalent because a valid identity token by default applies the load balancer WAF policy."
+        },
+        {
+          "id": "c",
+          "text": "The team should remove the custom domain and use the default URL so there is only one DNS record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Authentication and network-path enforcement solve different problems. A valid token does not route a direct request through Cloud Armor, so the service still needs ingress protection; changing DNS or token lifetime does not apply the missing frontend controls. See [Cloud Run ingress documentation](https://cloud.google.com/run/docs/securing/ingress)."
+    },
+    {
+      "id": "egress-q5",
+      "type": "single",
+      "scenario": "During a traffic spike, Cloud Run instances remain healthy but requests to a private dependency time out. Connector metrics are at the throughput ceiling and new connector instances cannot scale quickly enough. What should the performance review examine?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Higher Cloud Run concurrency without checking whether it sends even more traffic through the saturated connector."
+        },
+        {
+          "id": "c",
+          "text": "An internal ingress setting, because restricting inbound callers increases connector throughput."
+        },
+        {
+          "id": "d",
+          "text": "A shorter private DNS TTL, because DNS refreshes add network capacity to the connector."
+        },
+        {
+          "id": "a",
+          "text": "Connector sizing and scaling limits, expected throughput, and whether Direct VPC egress better fits the service."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to connector capacity, so sizing, scaling behavior, traffic volume, and Direct VPC egress are the relevant design checks. More concurrency can worsen pressure, while ingress and DNS TTL do not add connector throughput. See [Serverless VPC Access connector documentation](https://cloud.google.com/run/docs/configuring/vpc-connectors)."
+    },
+    {
+      "id": "startup-checks-q5",
+      "type": "single",
+      "scenario": "A rollback sends traffic to the previous container revision, but the service still uses the new all-traffic egress setting. Calls to a public payment API continue to time out through a VPC path without NAT. What should the rollback plan have included?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The service-level networking configuration as well as the target container revision."
+        },
+        {
+          "id": "b",
+          "text": "A new tag on the old image, while leaving the changed service egress configuration in place."
+        },
+        {
+          "id": "c",
+          "text": "A DNS rollback for the public hostname, even though the failure is on the service outbound path."
+        },
+        {
+          "id": "d",
+          "text": "More minimum instances for the old revision, without restoring its dependency route."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A container revision rollback does not automatically undo every service-level network change. The recovery plan must restore the egress configuration or its required NAT path; image tags, DNS changes, and extra instances do not repair the broken route. See [Cloud Run networking documentation](https://cloud.google.com/run/docs/configuring/networking)."
     }
   ]
 }

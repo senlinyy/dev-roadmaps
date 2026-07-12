@@ -1,13 +1,15 @@
 ---
 title: "Hide Secret Task Output"
-sectionSlug: "no-log-and-log-leakage"
+sectionSlug: "using-vault-during-a-run"
 order: 2
 ---
 
-Protect task output for the environment file that contains the API token.
+The environment file task renders a secret-bearing template. Tighten the remote file permissions and make the task keep decrypted values out of normal task output.
 
-Requirements:
+Your job:
 
-1. **Template:** render `orders-api.env.j2` to `/etc/default/devpolaris-orders-api`.
-2. **Mode:** `"0640"`.
-3. **Log safety:** `no_log: true` on the task.
+1. **Render the existing environment template** to `/etc/default/devpolaris-orders-api`.
+2. **Restrict the rendered file mode** to `0640`.
+3. **Hide the task's arguments and result output** because the template contains secrets.
+
+The grader checks the task fields, not command output.

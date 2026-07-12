@@ -29,4 +29,4 @@ resource "aws_s3_bucket" "orders_invoices" {
 }
 ```
 
-This small root module keeps provider setup in `main.tf` and the managed bucket in `s3.tf`.
+- This small root module keeps provider setup in `main.tf` and the managed bucket in `s3.tf`.

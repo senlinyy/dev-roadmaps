@@ -1,15 +1,15 @@
 ---
-title: "Configure OIDC for AWS Deployment"
-sectionSlug: setting-up-oidc-with-aws
+title: "Configure OIDC for AWS"
+sectionSlug: openid-connect
 order: 2
 ---
 
-Your team is replacing static AWS credentials with OIDC (OpenID Connect) so that no long-lived secrets are stored in GitHub. The workflow needs to request an identity token from GitHub and use it to assume an IAM role in AWS.
+Your team is replacing static AWS keys with OpenID Connect so deployment jobs receive short-lived cloud credentials. Update the deployment job so GitHub can request an identity token and exchange it for the approved AWS role.
 
-Your task:
+Your job:
 
-1. **Grant the job permission** to request an OIDC identity token from GitHub.
-2. **Add the AWS credentials configuration action** that handles the token exchange with AWS STS.
-3. **Specify the IAM role** the job should assume and the AWS region.
+1. **Grant only the workflow permissions needed for checkout and identity-token exchange**.
+2. **Configure the AWS credential action** to assume the production deployment role.
+3. **Keep the deploy command in the protected production job**.
 
-The grader checks for the correct permission scope and the presence of the OIDC credential action with a role-to-assume parameter.
+The grader checks the workflow structure, not a prose explanation.

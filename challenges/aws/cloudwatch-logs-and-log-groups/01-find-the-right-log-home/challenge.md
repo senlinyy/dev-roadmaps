@@ -1,7 +1,6 @@
 ---
-title: "Find The Right Log Home"
-sectionSlug: log-groups
+title: "CloudWatch Logs and Logs Insights"
 order: 1
 ---
 
-Use each scenario to decide where CloudWatch log evidence should live and how to narrow the search. Focus on log groups, streams, events, workload type, Region, and time window.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

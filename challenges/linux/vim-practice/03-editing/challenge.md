@@ -1,6 +1,6 @@
 ---
 title: "Editing Practice"
-sectionSlug: editing-delete-copy-paste-undo
+sectionSlug: change-text-without-losing-control
 order: 3
 ---
 

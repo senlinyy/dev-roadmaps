@@ -4,82 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A pre-switch validation report says:\n\n```text\nURL tested: https://orders-api.devpolaris.example/version\ntask definition: orders-api:41\nexpected green task definition: orders-api:42\n```\n\nThe report marks the test as passed because the endpoint returned 200. What is the correct review response?",
+      "scenario": "A retailer is preparing to switch its checkout service from blue to green. Blue serves image digest sha256:1111, and the approved release record requires sha256:2222 on green. The preview URL and synthetic checkout both succeed, but the green version endpoint reports sha256:3333. What should the release owner do before any production traffic moves?",
       "options": [
-        { "id": "a", "text": "Reject the result because the test hit the public blue URL, not the green test listener." },
-        { "id": "b", "text": "Accept the result because any 200 response proves green is healthy." },
-        { "id": "c", "text": "Switch traffic because blue and green always share the same task definition before the switch." },
-        { "id": "d", "text": "Delete blue so the public URL must hit green next time." }
+        {
+          "id": "a",
+          "text": "Accept sha256:3333 if its source commit matches the approved commit, because the synthetic checkout passed."
+        },
+        {
+          "id": "b",
+          "text": "Record sha256:3333 as an approved release exception, then switch traffic while blue remains available."
+        },
+        {
+          "id": "c",
+          "text": "Compare the package manifests for sha256:2222 and sha256:3333, then promote if their application files match."
+        },
+        {
+          "id": "d",
+          "text": "Stop promotion, deploy sha256:2222 to green, and repeat the complete pre-traffic validation."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Before the switch, the public URL points to blue. The task definition `orders-api:41` confirms the test did not exercise green. The validation must use the test listener and prove `orders-api:42` answered."
+      "correct": [
+        "d"
+      ],
+      "explanation": "A successful request against the wrong artifact is not release evidence. Green must run the immutable digest that was built and approved, then repeat validation against that digest. A matching commit or similar file set cannot prove the images have identical dependencies and provenance. Reclassifying the observed digest after testing bypasses the promotion contract. See [AWS CodeDeploy deployments on Amazon ECS](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-steps-ecs.html)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "After a blue-green traffic switch, CodeDeploy reports routing completed. The public `/version` endpoint still reports `orders-api:41`. What is the most likely release concern?",
+      "scenario": "A team proposes switching blue and green by changing the public DNS record from blue.example.com to green.example.com. Mobile clients and corporate resolvers cache DNS for different periods. Which promotion design is more predictable?",
       "options": [
-        { "id": "a", "text": "The production listener may still point at blue or the wrong target group." },
-        { "id": "b", "text": "This is expected because blue-green always leaves public traffic on blue for one hour." },
-        { "id": "c", "text": "The version endpoint is never useful after a traffic switch." },
-        { "id": "d", "text": "The checkout smoke test should be skipped because CodeDeploy already succeeded." }
+        {
+          "id": "a",
+          "text": "Lower the DNS TTL before the release and wait for the previous TTL to expire before changing the record."
+        },
+        {
+          "id": "b",
+          "text": "Use weighted DNS records to move traffic gradually while monitoring resolver-level request counts."
+        },
+        {
+          "id": "c",
+          "text": "Move production traffic at the load balancer, gateway, or Service routing layer."
+        },
+        {
+          "id": "d",
+          "text": "Change the application CNAME and keep blue available until access logs show that cached traffic has drained."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The platform status is one signal, but the public version endpoint proves what users are actually hitting. If it still reports blue, inspect the deployment and target groups before continuing."
+      "correct": [
+        "c"
+      ],
+      "explanation": "A load balancer, gateway, or Service gives the deployment system one authoritative switch and immediate rollback point. Lower TTLs and weighted records can support DNS migrations, but resolver and client caching make them less deterministic for this blue-green promotion. Waiting for logs to drain also extends the period in which both versions serve users. See [Argo Rollouts blue-green strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "Green receives 100 percent production traffic and checkout starts returning 500s. Blue is still healthy and compatible with current data. What is the first recovery move?",
+      "scenario": "Green passes /ready, but its synthetic checkout cannot authorize a test payment and its traces lack the release version attribute. Blue remains healthy. What is the best next action?",
       "options": [
-        { "id": "a", "text": "Send traffic back to blue, then debug green after users are protected." },
-        { "id": "b", "text": "Keep traffic on green and inspect logs until root cause is fully known." },
-        { "id": "c", "text": "Rebuild the image from main and deploy it to green immediately." },
-        { "id": "d", "text": "Delete green and blue so CodeDeploy recreates both target groups." }
+        {
+          "id": "a",
+          "text": "Hold promotion and fix green until the business path and observability checks pass."
+        },
+        {
+          "id": "b",
+          "text": "Promote a small traffic slice because readiness passed, then use production requests to validate payment authorization."
+        },
+        {
+          "id": "c",
+          "text": "Promote after adding the release version label, because payment authorization can be investigated during the watch window."
+        },
+        {
+          "id": "d",
+          "text": "Repeat the synthetic checkout against blue and green, then promote if both fail in the same way."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The article frames blue-green rollback as a traffic decision. If blue is still healthy and data-compatible, moving users back to blue protects them first. Deep debugging can happen after the traffic state is safe."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Readiness proves that the process can receive requests, not that the release's critical payment path or telemetry works. Adding labels fixes only one failed gate, and production traffic is unnecessary while the isolated environment can still be corrected. A matching failure on blue would change the diagnosis, but it would not make green ready for promotion. See [AWS CodeDeploy ECS lifecycle flow](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-steps-ecs.html)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "Green writes a new field named `discountRulesV2`. Blue can only read `discountRules`. Green served traffic for ten minutes before errors started. Why might a traffic rollback to blue be unsafe?",
+      "scenario": "Green requires a new cart_discounts table. The team also wants a 30-minute fast-revert window after promotion while blue continues to use orders.discount_code. Which database plan best supports both environments?",
       "options": [
-        { "id": "a", "text": "Blue may fail when it reads records that green already wrote in the new shape." },
-        { "id": "b", "text": "Traffic rollback always deletes data written by green." },
-        { "id": "c", "text": "CodeDeploy prevents rollback after ten minutes." },
-        { "id": "d", "text": "Blue-green deployments cannot be used with databases at all." }
+        {
+          "id": "a",
+          "text": "Rename `discount_code` in place, then deploy a compatibility view that exposes the old name to blue."
+        },
+        {
+          "id": "b",
+          "text": "Replicate production into a green-only database and merge green writes back after the watch window."
+        },
+        {
+          "id": "c",
+          "text": "Add the new table, migrate or dual-write data, switch reads later, and remove the old field in a later release."
+        },
+        {
+          "id": "d",
+          "text": "Write only to the new table after promotion and reconstruct the old column if a revert becomes necessary."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Blue-green can make traffic movement easy, but it does not undo data writes. If green wrote data blue cannot read, rollback can create a second failure. The article points to expand-and-contract compatibility as the safer pattern."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Expand and contract keeps the shared database readable and writable by both versions during validation, promotion, and the rollback window. A compatibility view may preserve reads but does not by itself handle both write paths. A separate database creates reconciliation risk, while reconstructing the old field during an incident makes recovery slower and less certain. See [Prisma expand and contract migration guidance](https://www.prisma.io/docs/guides/data-migration)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A team wants to fully warm a replacement Spring service, verify readiness through a private URL, and then make a single production switch. Which deployment style fits best?",
+      "scenario": "Ten minutes after promotion, green's checkout error rate reaches 4 percent. Blue is still running, its target group is healthy, and the shared schema remains backward compatible. Which recovery action minimizes user impact?",
       "options": [
-        { "id": "a", "text": "Blue-green, because it prepares a complete replacement before users reach it." },
-        { "id": "b", "text": "Rolling, because it always gives a private URL for the new version." },
-        { "id": "c", "text": "Canary, because it never sends real traffic to the new version." },
-        { "id": "d", "text": "Manual deploy, because automated release patterns cannot handle warmup." }
+        {
+          "id": "a",
+          "text": "Keep green live while the team debugs until root cause is proven."
+        },
+        {
+          "id": "b",
+          "text": "Route production traffic back to blue, then investigate green."
+        },
+        {
+          "id": "c",
+          "text": "Rebuild green from the default branch and replace it in place."
+        },
+        {
+          "id": "d",
+          "text": "Shift half the traffic back to blue and hold that split while comparing version-specific errors."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Blue-green is useful when the team wants to prepare and test a full replacement before moving public traffic. Rolling changes production gradually and usually does not provide a separate pre-switch public path for the full replacement."
+      "correct": [
+        "b"
+      ],
+      "explanation": "Blue is a ready, compatible recovery target, so traffic can return there quickly. A partial shift reduces but does not end customer exposure when a complete safe revert is available. Debugging on the active failing environment extends harm, and rebuilding from a moving branch introduces an unvalidated artifact. See [CodeDeploy rollback behavior for ECS](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-steps-ecs.html#deployment-steps-ecs-rollback)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "Which checks belong before or immediately after a blue-green traffic switch for `devpolaris-orders-api`?",
+      "scenario": "Green now serves all production traffic, and the release owner is preparing to close the deployment record. Which controls make the blue-green release operationally complete?",
       "options": [
-        { "id": "a", "text": "Before switch: test listener `/readyz` returns ready for green." },
-        { "id": "b", "text": "Before switch: test listener `/version` reports `orders-api:42`." },
-        { "id": "c", "text": "After switch: public `/version` reports `orders-api:42`." },
-        { "id": "d", "text": "After switch: public smoke checkout succeeds." },
-        { "id": "e", "text": "Before switch: public `/version` reports `orders-api:41` and that is accepted as green validation." }
+        {
+          "id": "a",
+          "text": "Keep blue at full capacity until the next scheduled release, regardless of the agreed recovery window."
+        },
+        {
+          "id": "b",
+          "text": "Keep blue available for the agreed fast-revert window."
+        },
+        {
+          "id": "c",
+          "text": "Label logs and metrics with version, environment color, and deployment identity."
+        },
+        {
+          "id": "d",
+          "text": "Retain blue but stop collecting blue-specific telemetry once its production traffic reaches zero."
+        },
+        {
+          "id": "e",
+          "text": "Scale down or recycle the old environment after the watch window and cleanup checks pass."
+        }
       ],
-      "correct": ["a", "b", "c", "d"],
-      "explanation": "Green must be tested through the test listener before users reach it. After the switch, the public URL should prove users are on green and checkout still works. A public blue response before the switch is not green validation."
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "A defined revert window preserves the recovery path, release labels separate blue and green evidence, and delayed cleanup controls cost after confidence grows. Keeping blue indefinitely spends capacity without a decision rule. Stopping its telemetry weakens confidence that the recovery target remains usable during the window. See [Argo Rollouts blue-green strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/)."
     }
   ]
 }
-

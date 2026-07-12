@@ -1,6 +1,6 @@
 ---
 title: "Disable the Isolated Flag"
-sectionSlug: disable-a-flag-when-the-bad-behavior-is-isolated
+sectionSlug: roll-forward
 order: 2
 ---
 

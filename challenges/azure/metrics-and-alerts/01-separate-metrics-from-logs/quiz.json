@@ -1,59 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The team wants a dashboard tile showing whether checkout is getting worse during a release. They need request count, failed request count, and average duration for `ca-devpolaris-orders-prod`. Which data type fits that tile?",
+      "scenario": "At 14:05, the checkout dashboard shows requests per minute holding steady, CPU on `devpolaris-orders-api` staying below 45 percent, and p95 request duration climbing from 220 ms to 1.6 s over the last ten minutes. Support is already reporting abandoned checkouts. The on call engineer wants one signal that can drive a fast threshold based alert for this change. Which signal is the best fit?",
       "options": [
         {
           "id": "a",
-          "text": "Metrics, because they summarize counts and timing over time."
+          "text": "A metric time series such as request duration percentile or server error rate."
         },
         {
           "id": "b",
-          "text": "Logs, because a dashboard should show every individual checkout message."
+          "text": "A log query over request events that would need search execution and aggregation logic before it behaves like a threshold signal."
         },
         {
           "id": "c",
-          "text": "Traces, because one trace is enough to show release-wide health."
+          "text": "An activity log entry showing when the last deployment changed the app configuration."
         },
         {
           "id": "d",
-          "text": "Tags, because tags summarize runtime performance."
+          "text": "A synthetic availability test result from one probe location without the latency time series the team wants to threshold."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Metrics are built for counts, rates, latency, and trends. Logs and traces explain individual events after the metric tells the team where to look."
+      "explanation": "Metrics are built for fast numeric evaluation over time, so they are the right source for threshold based alerts and dashboards. The closest distractor is the log query because logs can describe the incident, but without a deliberate metric shape and aggregation plan they are not the fastest alerting surface for this latency change. See [Azure Monitor metrics data platform](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The failed request count is high for five minutes, then returns to normal. The alert fires once and sends orders on-call an email. What makes this alert useful instead of noisy?",
+      "scenario": "The alert that fired was based on CPU over 80 percent, but the incident review now sees that CPU never crossed 45 percent during the customer impact window. The team needs to investigate which checkout route failed, which dependency call slowed down, and which release revision handled each bad request. What should logs or traces add that the metric alert did not provide?",
       "options": [
         {
-          "id": "a",
-          "text": "It has a clear threshold, evaluation window, severity, and receiver group tied to an action the team can take."
-        },
-        {
           "id": "b",
-          "text": "It fires for every single failed request, even when retries succeed."
+          "text": "A longer retention period for the same CPU aggregate so the team can scroll farther back through the incident timeline."
         },
         {
           "id": "c",
-          "text": "It uses the longest possible retention period so notifications are easier to audit."
+          "text": "A resource level metric split by instance so the team can see which host ran hottest."
+        },
+        {
+          "id": "a",
+          "text": "Per request context such as route, operation ID, dependency call, exception details, and release revision."
         },
         {
           "id": "d",
-          "text": "It sends to every engineering team because more people means faster diagnosis."
+          "text": "A synthetic availability result showing whether the public endpoint answered from one test location."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A useful alert tells the right humans about a meaningful signal. Too many low-value notifications train people to ignore alerts."
+      "explanation": "Logs and traces explain individual failing requests, dependencies, and correlation data that a metric threshold alone cannot show. The closest distractor is the instance split metric because it adds diagnostic detail, but it still does not identify the exact route, dependency call, exception, or release revision for each failing request. See [Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "After a release, checkout failures rise from 0.2 percent to 4.8 percent while host CPU remains normal. The incident lead wants one signal to page quickly when the failure rate changes and another source to inspect the exact failing requests after the page arrives. Which two telemetry choices fit those two jobs most directly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Metrics are numeric time series suited to alert thresholds, charting, and fast evaluation windows."
+        },
+        {
+          "id": "c",
+          "text": "Log queries can page quickly enough by themselves, so a separate metric alert is usually redundant for rate based failures."
+        },
+        {
+          "id": "b",
+          "text": "Logs or traces preserve event level context for request by request investigation."
+        },
+        {
+          "id": "d",
+          "text": "One synthetic availability test can replace both telemetry jobs if it checks the same public path often enough."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Metrics and logs have different jobs in the same incident: metrics detect the change fast, while logs and traces explain the individual failures behind it. The closest distractor is the claim that logs can replace the alert entirely, but the article makes metrics the primary threshold and dashboard surface while logs carry the detailed evidence. See [Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The checkout workbook shows average request duration over five minute windows, and the chart looks almost flat around 280 ms during a release. At the same time, support tickets show some customers waiting more than 1.5 seconds at payment confirmation. The team realizes the dashboard never included a p95 or other tail view. What alerting risk does that create?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Average latency is safer than any percentile because it smooths spikes and prevents unnecessary alerts."
+        },
+        {
+          "id": "a",
+          "text": "Tail latency can hurt a meaningful slice of users while the average still looks acceptable."
+        },
+        {
+          "id": "c",
+          "text": "Percentiles are useful only for one off analysis, so thresholding them would create noisier alerts than staying on the average."
+        },
+        {
+          "id": "d",
+          "text": "Averages are the primary latency view for customer experience, because percentile spikes usually reflect too few requests to matter operationally."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Averages can hide a bad tail, so the team can miss customer pain even while the mean stays stable. The closest distractor is the claim that smoothing spikes is safer, but that trades away the exact evidence operators need when a slower minority of requests is already hurting users. See [Metrics aggregation explained](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/metrics-aggregation-explained)."
+    },
+    {
+      "id": "03-route-attention-carefully-q1",
+      "type": "single",
+      "scenario": "A CPU alert for the orders platform pages the checkout on call every night when a known receipt export batch runs from 01:00 to 01:20. The batch team expects that short CPU rise and confirms no customer impact during that window. The review goal is to keep useful detection while reducing false pages. What should the alert review change first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Disable the alert and rely on engineers to inspect the nightly dashboard manually until the batch project finishes."
+        },
+        {
+          "id": "c",
+          "text": "Keep the same threshold but route the nightly page to more teams so the batch owners can acknowledge it faster."
+        },
+        {
+          "id": "d",
+          "text": "Raise the threshold above the batch peak without revisiting the alert window, severity, dimensions, or schedule."
+        },
+        {
+          "id": "a",
+          "text": "Tune the threshold, evaluation window, dimensions, severity, or routing so the alert matches the real production question."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Alert quality comes from matching threshold, window, dimensions, severity, and routing to the condition that actually matters. The closest distractor is simply raising the threshold, but that treats only one symptom and can erase useful daytime detection if the team does not review the full rule design. See [Alerts overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview)."
+    },
+    {
+      "id": "03-route-attention-carefully-q3",
+      "type": "single",
+      "scenario": "The payment failure alert still fires during a live incident, but the configured action group sends email to a retired distribution list and a webhook endpoint that was decommissioned last quarter. The metric condition itself remains valid. What operational risk should the review capture?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Detection still exists, but the response path is broken because the action group no longer reaches the right responders."
+        },
+        {
+          "id": "b",
+          "text": "The rule still evaluates, but only the stale email target is a problem because webhook delivery does not affect responder reachability."
+        },
+        {
+          "id": "c",
+          "text": "The alert should keep the same action group because a valid metric condition matters more than whether the notification targets are current."
+        },
+        {
+          "id": "d",
+          "text": "The safest response is to lower the metric threshold so more alerts fire, which increases the chance that someone notices the broken routing path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An alert can detect the problem correctly while the routing layer still fails to notify anyone useful. The closest distractor is the idea that a valid metric condition matters more than stale targets, but an incident response chain is only useful if the action group still reaches current responders. See [Action groups in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups)."
+    },
+    {
+      "id": "03-route-attention-carefully-q4",
+      "type": "single",
+      "scenario": "One alert rule watches checkout latency across `westeurope` and `eastus` together. During an incident, `westeurope` is degraded, but the combined aggregate stays below the page threshold because `eastus` remains healthy and handles more traffic. The team wants the next incident to expose a single region problem instead of averaging it away. What should be improved?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Increase the aggregation window so short regional spikes are less likely to create one off noise across the shared rule."
+        },
+        {
+          "id": "c",
+          "text": "Keep one global rule but add a second workbook chart, because visualization is enough if the page still evaluates the blended regional metric."
+        },
+        {
+          "id": "a",
+          "text": "Use metric dimensions or separate rules so each region can be evaluated and routed independently."
+        },
+        {
+          "id": "d",
+          "text": "Lower the single global threshold, because a more sensitive combined rule will usually expose one degraded region without needing regional dimensions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Regional dimensions let the team see and route one failing slice instead of hiding it inside a global average. The closest distractor is a lower global threshold because that can make the combined alert more sensitive, but it still does not preserve the independent per region evaluation the incident requires. See [Azure Monitor metrics data platform](https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics)."
     }
   ]
 }

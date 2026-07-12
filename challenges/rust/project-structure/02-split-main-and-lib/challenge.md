@@ -1,6 +1,6 @@
 ---
 title: "Split Main And Lib"
-sectionSlug: "mainrs-and-librs"
+sectionSlug: mainrs-and-librs
 order: 2
 ---
 Keep startup code in main.rs and reusable behavior in lib.rs.

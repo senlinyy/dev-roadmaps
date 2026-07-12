@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "scheduling-q1",
+      "type": "single",
+      "scenario": "A node has `2000m` allocatable CPU. Existing Pods request `1800m`, although current CPU usage is only `400m`. A rollout surge Pod requests `300m` and stays Pending with `Insufficient cpu`. Which explanation best fits the evidence?",
+      "options": [
+        { "id": "a", "text": "The scheduler should use current 400m usage, so the Pending state proves the container image cannot start." },
+        { "id": "b", "text": "The scheduler compares requests with remaining allocatable capacity, so the promised 1800m leaves only 200m for placement." },
+        { "id": "c", "text": "The CPU limit must be lower than 300m, because limits are the scheduler's placement values." },
+        { "id": "d", "text": "The node must report zero live usage before Kubernetes can place any rollout surge Pod." }
+      ],
+      "correct": ["b"],
+      "explanation": "Scheduling uses requested capacity against node allocatable capacity, not a quiet moment of live usage. Limits govern runtime behavior after start, the image has not started on a Pending Pod, and zero usage is not required for placement."
+    },
+    {
+      "id": "runtime-q2",
+      "type": "single",
+      "scenario": "After a release, `notification-api` remains running but latency rises during CPU bursts. Metrics show sustained CPU throttling and memory stays below its limit. What is the most accurate interpretation?",
+      "options": [
+        { "id": "a", "text": "The memory request is preventing the scheduler from assigning additional CPU after the Pod starts." },
+        { "id": "b", "text": "The Pod is OOMKilled on every burst, but Kubernetes keeps the same process running through the kill." },
+        { "id": "c", "text": "The CPU limit is constraining runtime CPU time, which can slow the process without terminating it." },
+        { "id": "d", "text": "The CPU request is a hard runtime ceiling, so changing the limit cannot affect throttling." }
+      ],
+      "correct": ["c"],
+      "explanation": "CPU is compressible and a CPU limit usually appears as throttling and higher latency. Memory requests do not allocate runtime CPU, OOMKilled terminates a container, and requests are planning values rather than hard CPU ceilings."
+    },
+    {
+      "id": "oom-q3",
+      "type": "single",
+      "scenario": "A notification Pod is Running again with restart count 4. `describe pod` shows the previous container state as `OOMKilled` with exit code 137, and previous logs show a bulk preview reaching 742Mi against a 768Mi limit. What should the team do next?",
+      "options": [
+        { "id": "a", "text": "Lower the CPU request because scheduler placement is the direct cause of a container crossing its memory limit." },
+        { "id": "b", "text": "Remove the readiness probe because readiness failures are recorded as OOMKilled with exit code 137." },
+        { "id": "c", "text": "Increase replicas without reviewing per-container memory because each replica shares one common memory limit." },
+        { "id": "d", "text": "Profile the memory path and review streaming or pagination, then change the request or limit only when the measured workload justifies it." }
+      ],
+      "correct": ["d"],
+      "explanation": "OOMKilled is runtime memory evidence, so the team should understand the allocation pattern and tune code and resource values from measurement. CPU requests affect placement, readiness does not create an OOM kill, and each replica has its own container boundary."
+    },
+    {
+      "id": "qos-q4",
+      "type": "single",
+      "scenario": "A Pod has one container with CPU request `300m`, memory request `384Mi`, CPU limit `1`, and memory limit `768Mi`. During a review, an engineer calls it Guaranteed because all four fields exist. Which classification is correct?",
+      "options": [
+        { "id": "a", "text": "Burstable, because requests exist but at least one request differs from its matching limit." },
+        { "id": "b", "text": "Guaranteed, because specifying both CPU and memory fields is sufficient even when values differ." },
+        { "id": "c", "text": "BestEffort, because only namespace policies can assign a QoS class to a Pod." },
+        { "id": "d", "text": "Pending, because a Pod cannot request less CPU or memory than its limit." }
+      ],
+      "correct": ["a"],
+      "explanation": "Guaranteed requires CPU and memory requests to equal limits for every container. This Pod is Burstable because it has requests with higher limits. BestEffort has no CPU or memory requests or limits, and requesting less than a limit is a valid production shape."
+    },
+    {
+      "id": "release-review-q5",
+      "type": "multiple",
+      "scenario": "A three-replica Deployment uses `maxSurge: 1`. Before release, the namespace quota has room for exactly three replicas' requested CPU, and CPU-based HPA is enabled but the containers have no CPU requests. Which two review findings directly threaten predictable rollout or autoscaling behavior?",
+      "options": [
+        { "id": "a", "text": "Using three replicas prevents Kubernetes from assigning resource requests to individual containers." },
+        { "id": "b", "text": "The quota has no request budget for the temporary surge Pod, so the rollout can stall even when nodes have capacity." },
+        { "id": "c", "text": "A memory limit must equal the namespace's total memory quota before HPA can calculate CPU utilization." },
+        { "id": "d", "text": "Missing CPU requests can make CPU utilization unavailable or distort the HPA's usage-relative-to-request calculation." }
+      ],
+      "correct": ["b", "d"],
+      "explanation": "ResourceQuota must leave request budget for desired replicas plus surge, and CPU-based HPA relies on CPU requests for utilization math. Replica count does not prevent per-container requests, and a container memory limit does not need to equal namespace quota for CPU autoscaling."
+    }
+  ]
+}

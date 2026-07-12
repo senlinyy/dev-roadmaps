@@ -1,142 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "A contractor signs in with `alex@partner.example`. They need temporary read access to DevPolaris staging logs, but they should not see production billing or user data. Which boundary should the team reason about first?",
-      "options": [
-        {
-          "id": "a",
-          "text": "The tenant and external identity relationship first, then the exact subscription, resource group, and role scope for the temporary access."
-        },
-        {
-          "id": "b",
-          "text": "The region first, because region choice decides who can sign in to Azure."
-        },
-        {
-          "id": "c",
-          "text": "The resource name first, because the name can confirm the staging app before access is granted."
-        },
-        {
-          "id": "d",
-          "text": "The deployment environment first, because staging access can often be copied from the staging app setup."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Sign-in starts with identity and tenant context. After that, access should be scoped to the smallest useful subscription, resource group, or resource. Names, regions, and slots do not grant identity by themselves."
-    },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The finance team asks why `devpolaris-orders-api` production spend is mixed with experimentation costs. The resources are in one subscription with tags, but no budget or policy boundary separates prod from experiments. What is the most useful boundary to discuss?",
+      "scenario": "Finance cannot separate the production Orders API spend from experimentation because both live in one Azure subscription and rely only on tags for reporting. The platform team also wants independent budgets and policy control for production. What boundary should the review recommend first?",
       "options": [
         {
           "id": "a",
-          "text": "A subscription boundary, because subscriptions are commonly used for billing, policy, quota, and environment separation."
+          "text": "A separate subscription boundary, because subscriptions are the normal place to separate billing ownership, quotas, and policy scope."
         },
         {
           "id": "b",
-          "text": "A stricter resource group layout inside the same subscription, because tags and groups may be enough if finance agrees."
+          "text": "A stricter resource group layout inside the same subscription, because resource groups already provide the strongest billing boundary Azure uses."
         },
         {
           "id": "c",
-          "text": "A regional split, because region-level cost reports may already separate most production and experiment spend."
+          "text": "A regional split, because putting experiments in another region naturally separates the cost and policy model."
         },
         {
           "id": "d",
-          "text": "A DNS zone boundary, because public names decide who pays for resources."
+          "text": "A separate management group with the same shared subscription underneath, because hierarchy labels alone will separate production billing and policy ownership."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Resource groups help with lifecycle and organization, and tags help reporting. Subscriptions are the stronger boundary for billing ownership, policy, quota, and environment separation."
+      "explanation": "Subscriptions are a standard Azure boundary for billing ownership, quota management, and broad policy separation. The closest distractor is the resource-group answer, because resource groups do help organization and lifecycle, but they do not replace the subscription as the stronger billing and governance boundary. See [Microsoft Learn: Design areas for Azure landing zones: Resource organization](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/design-area/resource-org-subscriptions)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Before deploying a production database, Maya runs a preflight check because her CLI was used earlier for a sandbox task. The deployment record names a production subscription and resource group. Which facts should she confirm from Azure context or the deployment record?",
+      "id": "04-follow-scope-and-inheritance-q5",
+      "type": "single",
+      "scenario": "A developer asks for `Key Vault Secrets Officer` at the whole production subscription so one managed identity can read one secret for `orders-api`. The application already has its own identity, and the secret lives in a known production vault. What is the better first design?",
       "options": [
         {
-          "id": "a",
-          "text": "The active tenant and subscription."
-        },
-        {
           "id": "b",
-          "text": "The target resource group and whether it is meant for production."
+          "text": "Assign the role at subscription scope because runtime secret names can change and the application may need future vaults automatically."
         },
         {
           "id": "c",
-          "text": "The policy and RBAC scope that will apply to the deployment."
+          "text": "Grant the same role to the on-call group and the application identity together so support has matching permissions during incidents."
+        },
+        {
+          "id": "a",
+          "text": "Grant the application's identity the smallest useful access at the narrowest relevant Key Vault scope instead of granting a subscription-wide role."
         },
         {
           "id": "d",
-          "text": "The portal breadcrumb and selected directory label, if they match the environment named in the ticket."
+          "text": "Grant the role at the production resource group so every app resource there can inherit access if secret usage expands later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's scope lesson is to review the role name together with the assignment location and keep access as narrow as the workload needs. The closest distractor is the subscription-wide convenience answer, because it sounds future-proof, but it grants far more reach than the scenario justifies. See [Microsoft Learn: Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)."
+    },
+    {
+      "id": "07-place-the-service-q1",
+      "type": "single",
+      "scenario": "DevPolaris is placing the first production region for `devpolaris-orders-api`. Most customers are in Western Europe, order data must stay within an approved EU geography, and the support rotation works UK and EU business hours. West Europe and North Europe both support the required compute and database services. Which decision is the most defensible first placement?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Choose the cheapest region visible in the subscription even if it sits outside the approved geography, then document the exception after launch."
+        },
+        {
+          "id": "a",
+          "text": "Choose one of the suitable nearby EU regions and record why it matches user geography, data requirements, service support, and the operations team."
+        },
+        {
+          "id": "c",
+          "text": "Run the database in the EU but place compute in whichever region has the platform team's default template, because split placement reduces migration work."
+        },
+        {
+          "id": "d",
+          "text": "Choose the region the previous project used unless deployment fails, because standardization matters more than current workload constraints."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A production region choice should start from users, data residency, service availability, and the operating model, then be written down as a placement decision. The closest distractor is the standardization answer, because a shared default can reduce friction, but it should not override the explicit geography and support constraints in the scenario. See [Microsoft Learn: Azure regions list](https://learn.microsoft.com/en-us/azure/reliability/regions-list)."
+    },
+    {
+      "id": "07-place-the-service-q2",
+      "type": "multiple",
+      "scenario": "The team approves West Europe for a regulated production API. The application entry path is zone-redundant, but one downstream dependency remains regional. The placement record needs to help future responders understand both where the workload was placed and what local failure boundary was accepted. Which two details are the most important to capture explicitly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The chosen region and the business or technical reason it was selected."
+        },
+        {
+          "id": "c",
+          "text": "The rough latency estimate from the first design meeting, even if it was not the deciding factor."
+        },
+        {
+          "id": "b",
+          "text": "Whether each critical dependency is zonal, zone-redundant, or only regional in that design."
+        },
+        {
+          "id": "d",
+          "text": "The release date and launch owner without any placement assumptions or service-boundary notes."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "Tenant, subscription, resource group, policy, and RBAC scope are real deployment boundaries. Portal appearance is not reliable evidence of scope."
+      "explanation": "Responders need to know where the workload lives and which failure boundaries were accepted there, so region choice plus zonal or regional dependency shape are the strongest record. The closest distractor is the latency-estimate note, because performance assumptions can matter, but the scenario asks for the record that explains placement and failure boundaries directly. See [Microsoft Learn: Azure regions and availability zones](https://learn.microsoft.com/en-us/azure/reliability/regions-list)."
     },
     {
-      "id": "q4",
+      "id": "10-understand-zone-failure-q1",
       "type": "single",
-      "scenario": "The team has `rg-devpolaris-orders-prod` and `rg-devpolaris-orders-dev` in the same subscription. A new compliance rule says production must have stricter policy, separate budget alerts, and limited contributor access. Which change is most likely worth considering?",
+      "scenario": "The Orders API runs three active instances in one Azure region, but the placement review later discovers that every instance landed in availability zone 1. A zone 1 outage then occurs. Azure SQL remains reachable from the other zones, yet the API tier cannot serve traffic. What weakness did the design review miss?",
       "options": [
         {
-          "id": "a",
-          "text": "Move production into its own subscription or place subscriptions under a management group with stricter policy, then keep resource groups for lifecycle organization."
-        },
-        {
           "id": "b",
-          "text": "Rename the production resource group, because stricter policy is inherited from names that contain `prod`."
+          "text": "The service needed more replicas in the same zone, because higher instance count is the normal fix for a zonal outage."
         },
         {
           "id": "c",
-          "text": "Put production in a different availability zone, because zones are permission boundaries."
+          "text": "The database should be treated as the primary root cause, because a reachable data tier means the app tier placement cannot be the issue."
         },
         {
           "id": "d",
-          "text": "Move secrets into a separate resource group first, because secret access is usually the strongest compliance concern."
+          "text": "The main problem is DNS failover, because cross-zone placement matters less than whether the hostname can be repointed quickly."
+        },
+        {
+          "id": "a",
+          "text": "Replica count alone was mistaken for resilience even though the app copies were still concentrated in one local failure boundary."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "When policy, budget, and access boundaries need to differ strongly, a subscription or management group boundary may be appropriate. Resource group names help humans, but names do not enforce policy."
+      "explanation": "Availability zones are failure boundaries, so resilience requires useful spread across them rather than simple replica count. The closest distractor is the add-more-replicas answer, because scaling out is often good capacity advice, but it does not help if every copy still depends on the same failed zone. See [Microsoft Learn: Azure availability zones overview](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview)."
     },
     {
-      "id": "q5",
+      "id": "11-read-zone-concentration-evidence-q1",
       "type": "single",
-      "scenario": "A deployment fails because the pipeline service principal exists in the DevPolaris tenant, but the target subscription belongs to a different tenant selected in the CLI. What is the safest first action?",
+      "scenario": "A placement evidence record shows three running API replicas, all currently in zone 2. Azure SQL is zone-redundant, Key Vault is a regional service, and the public endpoint is still healthy. What is the most accurate operational conclusion?",
       "options": [
         {
           "id": "a",
-          "text": "Stop and correct the tenant and subscription context before changing roles or creating resources."
+          "text": "The app tier still has a single-zone concentration risk, so a zone 2 event can remove every running API copy even though some dependencies are more resilient."
         },
         {
           "id": "b",
-          "text": "Grant a broad temporary role so the pipeline can finish, then narrow the role after confirming which tenant was intended."
+          "text": "The service is effectively zone tolerant because the database is zone-redundant and the API already has three replicas."
         },
         {
           "id": "c",
-          "text": "Change the resource group name to include the tenant name, because Azure will route the request by name."
+          "text": "The healthy public endpoint proves users can complete checkout even if the app tier remains concentrated."
         },
         {
           "id": "d",
-          "text": "Switch regions, because tenant mismatch is usually caused by regional service availability."
+          "text": "The regional nature of Key Vault means app-zone placement is no longer a meaningful recovery concern."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "A tenant or subscription mismatch is a context problem. Broad Owner access would increase risk, and names or regions do not route identity into the correct tenant."
+      "explanation": "The evidence shows dependency resilience and app-tier concentration at the same time, and the concentration is still a real weakness. The closest distractor is the database-plus-three-replicas answer, because it sounds balanced, but cross-zone resilience depends on where the replicas actually run, not just how many exist. See [Microsoft Learn: Azure availability zones overview](https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview)."
+    },
+    {
+      "id": "12-choose-the-right-placement-shape-q5",
+      "type": "single",
+      "scenario": "A team is not ready to fund multi-region yet, but it wants a better first operating habit for a single-region production system. The goal is to help future on-call engineers and architecture reviews without claiming the service is already region-fault tolerant. Which action is the best next step?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Create empty placeholder resources in a second region and describe the workload as highly available."
+        },
+        {
+          "id": "c",
+          "text": "Delay monitoring and recovery exercises until the service is mature enough for a full multi-region build."
+        },
+        {
+          "id": "a",
+          "text": "Document the chosen region and zone shape, run restore tests against that design, and state the conditions that would trigger a multi-region review later."
+        },
+        {
+          "id": "d",
+          "text": "Prefer globally named services where possible and defer all region-specific dependency notes to future incidents."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A clear placement record plus restore evidence improves operability right now without overstating the resilience that exists. The closest distractor is the placeholder-second-region answer, because it looks like progress, but empty resources do not prove recovery behavior or create a tested failover design. See [Microsoft Learn: Paired and nonpaired regions](https://learn.microsoft.com/en-us/azure/reliability/regions-paired)."
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
@@ -11,29 +11,31 @@
           "text": "Sensitive hides normal CLI display, but the real value may still be present in state and must be protected."
         },
         {
-          "id": "b",
-          "text": "Sensitive encrypts the value inside state, so backend access does not matter."
+          "id": "d",
+          "text": "Sensitive only works for outputs, not variables."
         },
         {
           "id": "c",
           "text": "Sensitive prevents providers from receiving the value, so the database password will not be configured."
         },
         {
-          "id": "d",
-          "text": "Sensitive only works for outputs, not variables."
+          "id": "b",
+          "text": "Sensitive encrypts the value inside state, so backend access does not matter."
         }
       ],
-      "correct": ["a"],
-      "explanation": "Terraform sensitivity is mainly a display boundary. It helps keep terminal output and routine logs cleaner, but state and saved plans can still contain the values Terraform needs to operate."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Terraform sensitivity is mainly a display boundary. It helps keep terminal output and routine logs cleaner, but state and saved plans can still contain the values Terraform needs to operate. See [Terraform sensitive data guidance](https://developer.hashicorp.com/terraform/language/manage-sensitive-data)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A teammate adds an output for `database_password` with `sensitive = true` because a one-off migration script might need it later. What is the best review comment?",
+      "scenario": "The orders module receives a database password from the deployment secret store. A proposed output republishes it with `sensitive = true` for a possible future migration script, but no current consumer requires the value and the team wants to minimize secret paths. What is the best review decision?",
       "options": [
         {
-          "id": "a",
-          "text": "Avoid exposing the password unless a real consumer needs it; sensitive redaction does not make the output harmless."
+          "id": "d",
+          "text": "Rename it to `secret_password` and keep the output."
         },
         {
           "id": "b",
@@ -44,62 +46,150 @@
           "text": "Remove `sensitive = true` so reviewers can inspect the exact password."
         },
         {
-          "id": "d",
-          "text": "Rename it to `secret_password` and keep the output."
+          "id": "a",
+          "text": "Avoid exposing the password unless a real consumer needs it; sensitive redaction does not make the output harmless."
         }
       ],
-      "correct": ["a"],
+      "correct": [
+        "a"
+      ],
       "explanation": "Outputs are a module contract. A sensitive output still increases the number of places that value travels, and it can still be present in state. Expose it only when there is a deliberate consumer."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A pull request marks `environment` as sensitive so production plans show less information. The value is one of `dev`, `staging`, or `prod`. What should the reviewer prefer?",
+      "scenario": "The orders team relies on plan review to confirm whether a change targets `dev`, `staging`, or `prod`. A pull request marks the `environment` input sensitive to make plan output quieter, even though the value is not confidential. Which design preserves useful targeting evidence while enforcing valid choices?",
       "options": [
-        {
-          "id": "a",
-          "text": "Keep environment visible and validate allowed values, because hiding it removes useful operational context."
-        },
-        {
-          "id": "b",
-          "text": "Mark every variable sensitive so all plans are quieter."
-        },
         {
           "id": "c",
           "text": "Move the environment into a password manager because it appears in tags."
         },
         {
+          "id": "a",
+          "text": "Keep environment visible and validate allowed values, because hiding it removes useful operational context."
+        },
+        {
           "id": "d",
           "text": "Hardcode production in the module so no variable appears in the plan."
+        },
+        {
+          "id": "b",
+          "text": "Mark every variable sensitive so all plans are quieter."
         }
       ],
-      "correct": ["a"],
+      "correct": [
+        "a"
+      ],
       "explanation": "Sensitivity is for values that should not be exposed. Environment names are usually review context, not secrets. Validation is a better control for allowed environment choices."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A team is reviewing how to handle Terraform values for `devpolaris-orders`. Which statements are correct?",
+      "scenario": "The orders root receives a database password from CI, stores state remotely, and exposes selected module outputs to deployment jobs. Which two controls directly reduce unnecessary secret exposure?",
       "options": [
         {
-          "id": "a",
-          "text": "Do not commit secret values in `.tfvars` files just because a matching variable is marked sensitive."
+          "id": "d",
+          "text": "Mark ordinary environment and owner tags sensitive so production targeting is hidden from routine plan review."
         },
         {
           "id": "b",
-          "text": "Protect the state backend because state may include sensitive provider attributes."
+          "text": "Restrict backend access because state can retain sensitive input and provider-returned values."
         },
         {
           "id": "c",
-          "text": "Output only values that humans, scripts, or other modules have a real reason to consume."
+          "text": "Publish the password as a sensitive output so deployment jobs can choose later whether they need it."
+        },
+        {
+          "id": "a",
+          "text": "Supply the password through an approved secret channel rather than committing it in a `.tfvars` file."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "An approved secret channel keeps cleartext out of Git, and restricted backend access protects values Terraform may retain. A speculative sensitive output expands the value's interface and should exist only for a real consumer. Hiding ordinary targeting tags removes useful review evidence without protecting a secret."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A migration job needs temporary database access, and a runbook proposes `terraform output -raw database_password` in CI because the output is marked sensitive. CI logs are retained for 30 days and readable by the engineering group. What should the security reviewer require?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Approve only if the value also appears in a tfvars file."
+        },
+        {
+          "id": "a",
+          "text": "Do not print it in CI; raw output can reveal a sensitive output value to logs or callers."
         },
         {
           "id": "d",
-          "text": "Use sensitive on ordinary tags so reviewers cannot see what environment a plan targets."
+          "text": "Use a local value instead, because locals are always encrypted in state."
+        },
+        {
+          "id": "b",
+          "text": "Approve because the raw flag preserves redaction for sensitive outputs."
         }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Sensitive flags reduce display exposure, but they do not replace secret handling, backend access control, or selective module interfaces. Ordinary review context should usually stay visible."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Sensitive output redaction helps normal display, but raw or JSON output can expose the value to the caller. CI logs and artifacts need the same secret-handling discipline as the backend."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A CI runner has `TF_VAR_environment=staging` in its environment, but the plan command is `terraform plan -var-file=prod.tfvars` and that file sets `environment = \"prod\"`. Which value should the resource plan use?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`staging`, because environment variables always override every command-line value source."
+        },
+        {
+          "id": "c",
+          "text": "No value, because Terraform rejects any duplicate input source."
+        },
+        {
+          "id": "b",
+          "text": "Both values, because Terraform converts conflicting strings into a list."
+        },
+        {
+          "id": "d",
+          "text": "`prod`, because the explicitly named variable file has higher precedence than `TF_VAR_environment`."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Terraform resolves variable sources by precedence, and a named `-var-file` value overrides a `TF_VAR_` environment value for the same input. Terraform does not combine conflicting strings or reject duplicate sources when precedence resolves them, and `TF_VAR_` does not outrank an explicitly named variable file. The plan should still make the final production name and tags visible before apply. See [Terraform variable assignment precedence](https://developer.hashicorp.com/terraform/language/parameterize#assign-values-to-input-variables)."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "The production plan uses `retention_days = 0` and proposes immediate expiration for export objects. The variable has a number type but no validation. What is the most useful contract improvement?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Add a string output that prints the zero value after apply."
+        },
+        {
+          "id": "b",
+          "text": "Add a validation rule that rejects values outside the approved retention range before provider calls."
+        },
+        {
+          "id": "c",
+          "text": "Move the value into a local so callers can no longer see which retention period was selected."
+        },
+        {
+          "id": "a",
+          "text": "Mark the retention value sensitive so the risky value disappears from routine plan output."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A numeric type checks shape, while validation can enforce the business-safe range before Terraform asks the provider to change lifecycle behavior. Sensitivity would only hide useful review context, a local would relocate the value without validating it, and an output would report the unsafe value after the decision. See [Terraform variable validation](https://developer.hashicorp.com/terraform/language/values/variables#custom-validation-rules)."
     }
   ]
 }

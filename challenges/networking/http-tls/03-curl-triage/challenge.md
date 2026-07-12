@@ -1,6 +1,6 @@
 ---
 title: "Triage Three curl Runs"
-sectionSlug: inspecting-http-with-curl
+sectionSlug: inspecting-the-whole-request-with-curl
 order: 3
 ---
 

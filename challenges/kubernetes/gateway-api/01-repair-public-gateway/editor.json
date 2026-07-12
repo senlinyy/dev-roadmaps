@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "filename": "gateway.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: public-api\n  namespace: platform-networking\n  labels:\n    app.kubernetes.io/part-of: shared-edge\nspec:\n  gatewayClassName: shared-public\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "gateway.networking.k8s.io/v1", "label": "Gateway API version" },
+      { "path": ["kind"], "equals": "Gateway", "label": "Gateway kind" },
+      { "path": ["metadata", "name"], "equals": "public-api", "label": "Gateway name" },
+      { "path": ["metadata", "namespace"], "equals": "platform-networking", "label": "platform namespace" },
+      { "path": ["spec", "gatewayClassName"], "equals": "shared-public", "label": "public GatewayClass" },
+      { "path": ["spec", "listeners", 0, "name"], "equals": "https", "label": "HTTPS listener name" },
+      { "path": ["spec", "listeners", 0, "protocol"], "equals": "HTTPS", "label": "HTTPS protocol" },
+      { "path": ["spec", "listeners", 0, "port"], "equals": 443, "label": "HTTPS port" },
+      { "path": ["spec", "listeners", 0, "hostname"], "equals": "api.devpolaris.local", "label": "listener hostname" },
+      { "path": ["spec", "listeners", 0, "tls", "mode"], "equals": "Terminate", "label": "TLS termination mode" },
+      { "path": ["spec", "listeners", 0, "tls", "certificateRefs", 0, "name"], "equals": "devpolaris-api-tls", "label": "TLS Secret reference" },
+      { "path": ["spec", "listeners", 0, "allowedRoutes", "namespaces", "from"], "equals": "Selector", "label": "selected namespace policy" },
+      { "path": ["spec", "listeners", 0, "allowedRoutes", "namespaces", "selector", "matchLabels", "shared-gateway"], "equals": "public-api", "label": "approved namespace label" }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: "Read EC2 Runtime Evidence"
-sectionSlug: sample-server-shape
+sectionSlug: network-access-and-instance-roles
 order: 5
 ---
 

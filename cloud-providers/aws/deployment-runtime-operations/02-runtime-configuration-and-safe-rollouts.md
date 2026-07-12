@@ -39,7 +39,7 @@ For this article, follow `checkout-api`, an ECS service that handles normal chec
 | Question | Release answer |
 |---|---|
 | Where does the value live? | ECS task definition, Lambda environment, Parameter Store, Secrets Manager, AppConfig, or a deployment-managed file |
-| Who can read it? | ECS task role, Lambda execution role, deployment role, or a narrow operator role |
+| Who can read it? | ECS task execution role for task-definition injection, ECS task role for application API calls, Lambda execution role, deployment role, or a narrow operator role |
 | How does the app load it? | At startup, per request, through a cache, or through a flag/config client |
 | How does the team verify it? | CLI read, startup log, smoke test, IAM simulation, and runtime behavior |
 | How does rollback work? | Previous task definition, previous parameter version, previous secret stage, previous flag rule, or previous alias target |
@@ -150,7 +150,7 @@ In ECS, a task definition can reference a Secrets Manager secret and inject it i
 }
 ```
 
-`name` is the environment variable visible to the container process. `valueFrom` points to the secret location without printing the secret value. The secret is resolved when the task starts, so existing tasks may keep the old value after rotation. The next action after changing or rotating this secret is to replace tasks, refresh the application cache, or confirm that the runtime fetches the value on demand.
+`name` is the environment variable visible to the container process. `valueFrom` points to the secret location without printing the secret value. The ECS agent resolves the secret when the task starts, so existing tasks keep the old injected value after rotation. The next action for this injection path is to launch replacement tasks. An application that retrieves the secret through the AWS SDK at runtime needs its own refresh or cache policy instead.
 
 Use `describe-secret` for metadata during a release because it avoids printing the secret value:
 
@@ -180,11 +180,13 @@ Example output:
 }
 ```
 
-`RotationEnabled` shows whether the secret follows the team's rotation policy. `LastChangedDate` and `LastRotatedDate` place the secret in the release timeline. `AWSCURRENT` marks the version new clients should read, and `AWSPREVIOUS` marks the prior version where Secrets Manager keeps one. The next action is to confirm the runtime role can read the secret and that the app refresh path matches the rotation plan.
+`RotationEnabled` shows whether the secret follows the team's rotation policy. `LastChangedDate` and `LastRotatedDate` place the secret in the release timeline. `AWSCURRENT` marks the version new clients should read, and `AWSPREVIOUS` marks the prior version where Secrets Manager keeps one. The next action is to confirm which IAM role needs access and that the app refresh path matches the rotation plan.
+
+ECS uses two roles for different jobs. The **task execution role** gives the ECS agent permission to fetch a secret referenced by the task definition before the container starts. The **task role** gives the application code inside the running container permission to call AWS APIs. Secret injection through the `secrets` field therefore needs `secretsmanager:GetSecretValue` on the task execution role. Application code that calls Secrets Manager at runtime needs that permission on the task role instead. AWS documents these responsibilities separately in the [task execution role guide](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) and the [task IAM role guide](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
 
 ```bash
 aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::123456789012:role/prod-checkout-task-role \
+  --policy-source-arn arn:aws:iam::123456789012:role/prod-checkout-task-execution-role \
   --action-names secretsmanager:GetSecretValue \
   --resource-arns arn:aws:secretsmanager:eu-west-2:123456789012:secret:prod/orders/payment-AbCdEf \
   --region eu-west-2 \
@@ -203,7 +205,7 @@ Example output:
 ]
 ```
 
-`allowed` means the role policy path grants the read action for the tested secret ARN. The next action is a real smoke test because KMS key policies, secret resource policies, organization guardrails, and application code still participate in the final request. If the decision is `implicitDeny`, add the narrow permission before the candidate tasks start.
+`allowed` means the execution role policy path grants the ECS agent permission to read the tested secret ARN. The next action is a real task launch and smoke test because secret resource policies, organization guardrails, and the new task definition still participate in the startup path. A secret encrypted with a customer-managed KMS key also requires `kms:Decrypt` on the execution role and permission through the key policy. If the decision is `implicitDeny`, add the narrow permission before the candidate tasks start. If the application fetches the secret after startup instead of using task-definition injection, run the same policy check against `prod-checkout-task-role` because that request comes from the application.
 
 ![The rotation path shows how current and previous secret versions, validation, and a rollback window reduce config-change risk](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-config-secrets-and-environment-variables/secret-rotation-path.png)
 
@@ -491,6 +493,9 @@ This review teaches the general loop. Name the runtime value, find where the app
 
 - [Amazon ECS task definition parameters](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html)
 - [Pass sensitive data to an Amazon ECS container](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/specifying-sensitive-data.html)
+- [Pass Secrets Manager secrets through Amazon ECS environment variables](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)
+- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html)
+- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
 - [Working with Lambda environment variables](https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html)
 - [Manage Lambda function versions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-versions.html)
 - [Create a Lambda alias](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)

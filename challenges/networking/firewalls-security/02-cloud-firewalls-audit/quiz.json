@@ -4,198 +4,222 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A public client cannot complete requests to an EC2 app on TCP 8080. The exported rules show:\n\n```text\nSecurity Group sg-app\nInbound:  allow tcp 8080 from 0.0.0.0/0\nOutbound: allow all traffic to 0.0.0.0/0\n\nNetwork ACL acl-public\nIngress rule 100: allow tcp 8080 from 0.0.0.0/0\nEgress rule 100: allow tcp 80 to 0.0.0.0/0\nEgress rule 110: allow tcp 443 to 0.0.0.0/0\n```\n\nWhich layer is still the best suspect?",
+      "scenario": "A company is retiring TCP port `8443` across two legacy hosts. After the change, an external probe to host A times out, while the same probe to host B returns `Connection refused` immediately. The team must confirm whether the controls are silently dropping traffic or actively rejecting it before standardizing the rollout. Which interpretation best fits the evidence?",
       "options": [
         {
           "id": "a",
-          "text": "The Network ACL, because it is stateless and lacks an egress rule for the client return path"
+          "text": "Both hosts actively rejected the connection, but host A delayed its reset until the client retry budget expired"
         },
         {
           "id": "b",
-          "text": "The Security Group, because stateful firewalls require a separate inbound rule for response traffic"
+          "text": "Host A proves the host firewall dropped the packet, while host B proves the application process generated the refusal"
         },
         {
           "id": "c",
-          "text": "The application listener, because cloud firewall evidence cannot affect a public client"
+          "text": "The timeout is consistent with silent drop, while the refusal means a host or reject rule replied explicitly, often because no listener accepted the port"
         },
         {
           "id": "d",
-          "text": "The SSH hardening policy, because port 8080 is not the default SSH port"
+          "text": "Host A proves its NACL dropped the packet, while host B proves its Security Group issued the refusal"
         }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The Security Group permits inbound 8080 and, because it is stateful, permits replies for that allowed connection. The NACL is stateless, so it must allow both directions, including egress back to the client's ephemeral port."
+      "correct": ["c"],
+      "explanation": "A DROP action gives the sender no response and commonly produces a timeout. REJECT or a closed listener returns an explicit failure, often a TCP reset. Neither symptom alone proves an HTTP or TLS failure because the connection may not reach those layers. The [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html) documents rule targets and packet filtering behavior."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A client opens a TCP connection from source port `53144` to the instance's destination port `8080`. The request reaches the subnet, but the response never reaches the client. Which NACL egress rule best matches the missing return path?",
+      "scenario": "An AWS instance serves TCP `8080`. Its Security Group allows inbound `8080` from the load balancer Security Group and all required outbound traffic. The subnet NACL allows inbound `8080`, but its egress rules allow only destination ports `80` and `443`. Health checks time out even though SYN packets reach the instance. What is the best diagnosis?",
       "options": [
         {
           "id": "a",
-          "text": "Allow outbound TCP `1024-65535` to the client range that needs to receive responses"
+          "text": "The stateless NACL lacks an egress rule for replies to the load balancer's ephemeral source port"
         },
         {
           "id": "b",
-          "text": "Allow outbound TCP `8080` only, because the application listens on 8080"
+          "text": "The stateful Security Group requires a second inbound rule for every load balancer ephemeral port"
         },
         {
           "id": "c",
-          "text": "Allow outbound UDP `53` only, because DNS always carries web responses"
+          "text": "The load balancer must use source port `8080` so the request and response destination ports are identical"
         },
         {
           "id": "d",
-          "text": "Allow inbound TCP `1024-65535` only, because egress rules do not affect stateless ACLs"
+          "text": "The NACL cannot affect this flow because subnet controls run only after the application returns HTTP"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The server response is destined for the client's temporary source port, not back to destination port 8080. The article calls out the common ephemeral range `1024-65535` for stateless NACL return traffic."
+      "explanation": "Security Groups are stateful, so return traffic for an allowed connection is tracked automatically. NACLs are stateless and must permit the response toward the client's ephemeral port. Allowing only destinations `80` and `443` does not cover that return path. [AWS Security Groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) and [AWS Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) document the scope and state difference."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An NACL export for a subnet includes these ingress entries:\n\n```text\nRule  90 DENY  tcp 0-65535 0.0.0.0/0\nRule 100 ALLOW tcp 443     0.0.0.0/0\nRule 110 ALLOW tcp 8080    0.0.0.0/0\n```\n\nHTTPS traffic is not reaching the instances. What is the most accurate review comment?",
+      "scenario": "Public HTTPS requests time out. On the instance, `curl https://127.0.0.1/health` succeeds, and a packet capture taken during an external test shows no SYN packets on any expected interface. Which check should come before changing the host iptables policy?",
       "options": [
         {
           "id": "a",
-          "text": "Rule 90 wins first and denies the packet before the later allow rules are evaluated"
+          "text": "Change the application bind address first, because a localhost success is sufficient evidence that the external SYN reached Linux"
         },
         {
           "id": "b",
-          "text": "All NACL allow rules are merged together, so rule order cannot explain the failure"
+          "text": "Add temporary iptables logging before the cloud review, even though the packet capture saw no inbound SYN on the host"
         },
         {
           "id": "c",
-          "text": "The Security Group must be wrong because NACLs only evaluate outbound traffic"
+          "text": "Inspect only the TLS certificate because the successful localhost request proves the public connection completed"
         },
         {
           "id": "d",
-          "text": "The rules are fine because explicit denies are ignored when a later allow is more specific"
+          "text": "Inspect the load balancer listener, route, Security Group, and NACL because an upstream cloud control may be dropping the packet before Linux sees it"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "The article states that NACLs evaluate rules in order by rule number, first match wins. A broad deny at a lower number shadows later allows for the same traffic."
+      "explanation": "The local request proves the service can answer on the host, while the empty capture says the external packet did not reach the inspected interfaces. Cloud routing and firewall layers therefore come before host policy. Broadly opening the host adds risk without addressing the missing packet. [AWS Security Groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) documents filtering before traffic reaches the resource."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A design review proposes one Security Group per subnet and one NACL per instance. The author says this matches AWS firewall scope. How should you correct the design?",
+      "scenario": "Abuse traffic from `203.0.113.0/24` still reaches HTTP after a block was added:\n\n```text\nChain INPUT (policy DROP)\nnum  target  prot  source           destination  options\n1    ACCEPT  tcp   0.0.0.0/0        0.0.0.0/0    tcp dpt:80\n2    ACCEPT  tcp   0.0.0.0/0        0.0.0.0/0    tcp dpt:443\n3    DROP    tcp   203.0.113.0/24   0.0.0.0/0    tcp dpt:80\n```\n\nWhich change addresses the actual error?",
       "options": [
         {
           "id": "a",
-          "text": "Security Groups wrap individual resources, while NACLs wrap entire subnets"
+          "text": "Change the chain policy to ACCEPT so the explicit DROP starts being evaluated"
         },
         {
           "id": "b",
-          "text": "Security Groups and NACLs both wrap only the whole VPC"
+          "text": "Move or insert the source-specific DROP above the broad port 80 ACCEPT because the chain stops at the first matching rule"
         },
         {
           "id": "c",
-          "text": "NACLs wrap individual processes, while Security Groups wrap Linux users"
+          "text": "Copy the rule to OUTPUT because INPUT cannot match source CIDRs"
         },
         {
           "id": "d",
-          "text": "Both controls are HTTP-layer filters and do not apply to EC2 networking"
+          "text": "Remove the port match because rule order matters only when every rule matches all protocols"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "Security Groups are resource-level, stateful controls. NACLs are subnet-level, stateless controls. Reversing their scope leads to incorrect rules and debugging assumptions."
+      "explanation": "The traffic matches rule 1 and is accepted before rule 3 can run. The narrow block must appear before the broad allow it is meant to override. Chain policy applies only when no rule matches, and INPUT is the correct chain for traffic destined to this host. The [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html) documents ordered chain evaluation."
     },
     {
       "id": "q5",
-      "type": "multiple",
-      "scenario": "You are reviewing an incident summary for a public service that times out only from the internet. The evidence says:\n\n```text\nEC2 curl localhost:8080: HTTP/1.1 200 OK\nSecurity Group inbound: tcp 8080 from 0.0.0.0/0\nSecurity Group outbound: all traffic allowed\nNACL ingress: tcp 8080 allowed\nNACL egress: tcp 80 and tcp 443 allowed, no other egress allows\n```\n\nWhich conclusions are defensible from this evidence?",
+      "type": "single",
+      "scenario": "A single host runs Nginx on public ports `80` and `443`, a Node.js app on `3000`, and SSH on a private interface. Which listener and firewall design best preserves the intended trust boundaries?",
       "options": [
         {
           "id": "a",
-          "text": "The application can respond locally, so host-level app startup is not the first suspect"
+          "text": "Bind every service to `0.0.0.0` and rely on application passwords to distinguish public and admin traffic"
         },
         {
           "id": "b",
-          "text": "The Security Group is unlikely to be the remaining blocker for the inbound request shown"
+          "text": "Expose port `3000` publicly so clients can bypass Nginx when the proxy is unhealthy"
         },
         {
           "id": "c",
-          "text": "The NACL still needs outbound ephemeral-port coverage for replies"
+          "text": "Allow public web ports to Nginx, bind the app to `127.0.0.1:3000`, and restrict SSH by private interface and trusted source"
         },
         {
           "id": "d",
-          "text": "The NACL can be ignored because Security Groups are always evaluated after application code"
-        },
-        {
-          "id": "e",
-          "text": "Adding only an outbound TCP 8080 NACL rule would not cover a client source port like 53144"
+          "text": "Block loopback traffic so Nginx cannot reach an application that is not publicly exposed"
         }
       ],
       "correct": [
-        "a",
-        "b",
-        "c",
-        "e"
+        "c"
       ],
-      "explanation": "The local curl proves the process can answer on the instance. The Security Group permits inbound 8080 and is stateful, but the stateless NACL still lacks the response path to ephemeral client ports. Outbound 8080 alone targets the wrong destination port for replies."
+      "explanation": "The public entry point belongs on Nginx, while the application port stays reachable only from the local proxy. SSH is a separate admin path and should be limited to trusted sources. Publicly exposing every listener or blocking loopback defeats those boundaries. The [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html) covers interface, source, protocol, and port matching."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "An engineer says, \"iptables on the box allows 8080, so AWS firewall rules cannot be the reason public traffic times out.\" The instance never logs the failed public requests. Which answer best explains the flaw?",
+      "scenario": "A remote administrator plans to set `PasswordAuthentication no`, `PermitRootLogin no`, and a default-deny INPUT policy on a bastion. Only one SSH session is open, and no second login has been tested. Which rollout is safest?",
       "options": [
         {
           "id": "a",
-          "text": "Cloud firewalls can drop packets before they reach the instance, so host iptables may never see the traffic"
+          "text": "Confirm authorized-key access and the narrow SSH allow rule first, keep the current session open, test a second login, and retain an out-of-band or timed rollback path"
         },
         {
           "id": "b",
-          "text": "iptables always overrides Security Groups because it runs inside the guest operating system"
+          "text": "Apply the DROP policy before adding SSH allows so the test proves default deny is active immediately"
         },
         {
           "id": "c",
-          "text": "Security Groups filter only outbound traffic, so inbound reachability must be an app log issue"
+          "text": "Disable public-key authentication with passwords so only console users can authenticate during the change"
         },
         {
           "id": "d",
-          "text": "NACLs apply only to DNS traffic and cannot affect a web app port"
+          "text": "Close the current session before testing because established connections hide all SSH configuration errors"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The article emphasizes that cloud firewalls sit in front of the instance. If a Security Group or NACL blocks the packet, the operating system and its iptables rules never get a chance to log or accept it."
+      "explanation": "Safe SSH hardening preserves a known-good session while proving the replacement path. Key login, user access, source rules, and rollback must be verified before removing passwords or applying default deny. Dropping traffic first or disabling both authentication methods risks lockout. The [OpenSSH `sshd_config` manual](https://man.openbsd.org/sshd_config) defines the authentication and root-login controls."
     },
     {
       "id": "q7",
       "type": "single",
-      "scenario": "A WebSocket client connects successfully through an AWS Network Load Balancer, stays idle for several minutes, then receives a TCP reset on the next message. Firewall allows are correct and short-lived requests work. Which mitigation best matches the cloud-firewall trap from the article?",
+      "scenario": "An SSH jail is configured as:\n\n```ini\n[sshd]\nenabled = true\nmaxretry = 3\nfindtime = 600\nbantime = 3600\n```\n\nOne source produces three matching failures within eight minutes. What response should the operator expect from this layer?",
       "options": [
         {
           "id": "a",
-          "text": "Enable TCP keepalives below the load balancer idle timeout or shorten the client pool idle lifetime"
+          "text": "The source is permanently added to the cloud NACL because `bantime` is measured in days"
         },
         {
           "id": "b",
-          "text": "Replace every Security Group inbound rule with NACL inbound rules because load balancers ignore state"
+          "text": "Every SSH user is blocked for 600 seconds because `findtime` is a global service timeout"
         },
         {
           "id": "c",
-          "text": "Lower the DNS TTL because TCP resets are caused by stale resolver cache entries"
+          "text": "The SSH daemon disables public-key authentication because fail2ban replaces the server authentication policy"
         },
         {
           "id": "d",
-          "text": "Disable SSH password authentication because idle WebSocket flows use the SSH daemon"
+          "text": "The source is temporarily banned for 3,600 seconds because it reached three failures inside the 600-second observation window"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "The article notes that managed load balancers and NAT devices can drop idle connection-tracking entries, causing later packets to receive resets. Keepalives or shorter idle reuse times keep the flow from going stale."
+      "explanation": "`maxretry` sets the matching failure threshold, `findtime` defines the window, and `bantime` defines the temporary block duration. fail2ban reacts to logs; it does not replace key authentication, source restrictions, or cloud firewall policy. The [fail2ban documentation](https://fail2ban.readthedocs.io/en/latest/) explains jail timing and actions."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "A team is preparing a default-deny firewall for an internet-facing checkout host. Nginx must accept public HTTPS, the private application must call an external payment API, administrators connect by SSH only from the VPN CIDR, and a reboot must not restore the distribution's previous permissive rules. Which controls are required before rollout? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow public inbound port `3000` as a fallback while keeping Nginx as the documented primary entry point"
+        },
+        {
+          "id": "b",
+          "text": "Allow inbound `ESTABLISHED,RELATED` traffic so replies to accepted or host-initiated connections can return"
+        },
+        {
+          "id": "c",
+          "text": "Allow public HTTPS and restrict SSH to the VPN source rather than opening every service port"
+        },
+        {
+          "id": "d",
+          "text": "Add a broad ACCEPT near the top during rollout, then rely on later source and port rules to narrow matching traffic"
+        },
+        {
+          "id": "e",
+          "text": "Save the tested rules through the distribution's persistence mechanism and verify restore behavior"
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "State tracking is needed for response traffic, public exposure should stop at the web entry point, SSH needs a narrow source, and live kernel rules need persistence to survive reboot. Exposing the app port bypasses the proxy boundary, while broad early ACCEPT rules can shadow later restrictions. The [iptables manual](https://man7.org/linux/man-pages/man8/iptables.8.html) documents connection-state matches, chain order, and save-compatible rule behavior."
     }
   ]
 }

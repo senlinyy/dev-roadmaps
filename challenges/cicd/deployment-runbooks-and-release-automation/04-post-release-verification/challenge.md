@@ -1,6 +1,6 @@
 ---
 title: "Record Post-Release Verification"
-sectionSlug: post-release-verification
+sectionSlug: post-flight-verification
 order: 4
 ---
 

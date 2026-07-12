@@ -1,5 +1,5 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
@@ -7,99 +7,189 @@
       "scenario": "Mira and Jamal both work on the same `devpolaris-orders` AWS bucket from separate laptops. Each laptop has its own `terraform.tfstate`. Mira applies versioning while Jamal applies an IAM policy. What is the main risk?",
       "options": [
         {
-          "id": "a",
-          "text": "The two state files can diverge, so future plans may not have a reliable memory of all managed objects."
-        },
-        {
           "id": "b",
           "text": "Terraform refuses to run when more than one local state file exists anywhere."
+        },
+        {
+          "id": "d",
+          "text": "The `.terraform.lock.hcl` file will prevent both applies from changing infrastructure."
         },
         {
           "id": "c",
           "text": "AWS automatically merges the two local state files after both applies finish."
         },
         {
-          "id": "d",
-          "text": "The `.terraform.lock.hcl` file will prevent both applies from changing infrastructure."
+          "id": "a",
+          "text": "The two state files can diverge, so future plans may not have a reliable memory of all managed objects."
         }
       ],
-      "correct": ["a"],
-      "explanation": "Local state is convenient for one learner, but it becomes unsafe for shared infrastructure. Each state file can remember only part of the managed system, making later plans harder to trust."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Local state is convenient for one learner, but it becomes unsafe for shared infrastructure. Each state file can remember only part of the managed system, making later plans harder to trust. See [Terraform S3 backend](https://developer.hashicorp.com/terraform/language/backend/s3)."
     },
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "A new Terraform learning directory contains:\n\n```text\n.terraform/\n.terraform.lock.hcl\nmain.tf\nterraform.tfstate\n```\n\nWhich repository choices are correct?",
+      "scenario": "A new Terraform repository contains provider selections in `.terraform.lock.hcl`, downloaded working data under `.terraform/`, and a local `terraform.tfstate` that includes a database endpoint. Which two repository decisions are correct?",
       "options": [
+        {
+          "id": "c",
+          "text": "Keep `terraform.tfstate` out of Git and move shared infrastructure to an access-controlled remote backend."
+        },
+        {
+          "id": "d",
+          "text": "Commit state only after removing visibly sensitive fields because Git then provides adequate locking."
+        },
         {
           "id": "a",
           "text": "Commit `.terraform.lock.hcl` so provider selections and checksums are reviewable."
         },
         {
           "id": "b",
-          "text": "Do not commit `.terraform/` because it is local working data."
-        },
-        {
-          "id": "c",
-          "text": "Do not commit `terraform.tfstate` because state is operational data and may contain sensitive values."
-        },
-        {
-          "id": "d",
-          "text": "Commit `terraform.tfstate` so everyone can share the latest state through Git history."
+          "text": "Commit `.terraform/` so CI uses the same downloaded plugins rather than verifying them from the lock file."
         }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "The dependency lock file belongs in source control. The plugin/cache directory and state file do not. Git history is a poor state backend and a poor secret boundary."
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "The dependency lock file belongs in source control so provider selections and checksums are reviewable. State is operational data and belongs in a protected backend for shared infrastructure. Removing obvious fields does not make Git a locking or secret boundary, while `.terraform/` is reproducible local working data rather than a reviewed dependency contract. See [Terraform backend configuration](https://developer.hashicorp.com/terraform/language/backend)."
     },
     {
-      "id": "q3",
+      "id": "q5",
       "type": "single",
-      "scenario": "A teammate says local state is fine because the project is currently a one-person sandbox. Which review comment is most accurate?",
+      "scenario": "A proposed S3 backend config includes access keys directly in `backend/prod.s3.hcl` so CI can initialize without extra setup. What is the best review comment?",
       "options": [
         {
-          "id": "a",
-          "text": "Local state is acceptable for disposable learning, but move to a backend before the infrastructure becomes team-owned or important."
-        },
-        {
-          "id": "b",
-          "text": "Local state is never allowed, even for a first Terraform exercise."
-        },
-        {
           "id": "c",
-          "text": "Local state is safer than remote state because it cannot contain secrets."
+          "text": "Approve only if the same access keys are also stored in `terraform.tfvars`."
         },
         {
           "id": "d",
-          "text": "Local state should be emailed after each apply so the team has backups."
+          "text": "Move the access keys into an output so CI can read them after apply."
+        },
+        {
+          "id": "a",
+          "text": "Keep backend config focused on the state location and let the runner identity or environment supply credentials."
+        },
+        {
+          "id": "b",
+          "text": "Approve because backend config files are never copied into local Terraform metadata."
         }
       ],
-      "correct": ["a"],
-      "explanation": "Local state has a place while learning alone on throwaway infrastructure. Once other people, production targets, backups, or access control matter, a backend becomes part of the safety model."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Backend settings can be copied into local metadata or logs, so credentials do not belong there. The backend file should identify the state target, while the runner identity provides access."
     },
     {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "The platform team proposes a remote backend for `devpolaris-orders`. Which benefits should reviewers expect from that move?",
+      "id": "lock-conflict-q1",
+      "type": "single",
+      "scenario": "A production apply fails with:\n\n```text\nError: Error acquiring the state lock\n\nLock Info:\n  Operation: OperationTypeApply\n  Who: mira@example.com\n  Path: dp-terraform-state-prod/devpolaris-orders/prod/terraform.tfstate\n```\n\nWhat should Jamal do first?",
       "options": [
         {
-          "id": "a",
-          "text": "A shared place for the state record instead of one laptop being the source of truth."
-        },
-        {
           "id": "b",
-          "text": "Access controls, encryption, audit logs, or backups can protect operational state."
-        },
-        {
-          "id": "c",
-          "text": "Locking may prevent two writers from updating the same state at once."
+          "text": "Immediately force-unlock because all locks are stale after an error."
         },
         {
           "id": "d",
-          "text": "Terraform no longer needs providers or state once a backend exists."
+          "text": "Delete the backend block so Terraform falls back to local state."
+        },
+        {
+          "id": "a",
+          "text": "Check whether Mira's apply is still active before attempting any unlock or second apply."
+        },
+        {
+          "id": "c",
+          "text": "Copy the state file locally and apply without the backend."
         }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A backend gives the team shared, protectable state storage and often locking. It does not remove Terraform's need to use providers or maintain a state record."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A lock during an apply is normal protection. The first step is to verify whether the listed run is still active. Force-unlocking an active apply brings back the race locking was meant to prevent."
+    },
+    {
+      "id": "lock-conflict-q3",
+      "type": "single",
+      "scenario": "A lock has been held for four hours. The listed owner confirms their laptop crashed during `terraform apply`, and no CI run is active. What is the safest next step?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Delete the state object because a crashed apply means state is no longer useful."
+        },
+        {
+          "id": "d",
+          "text": "Commit a local copy of state so everyone can continue from Git."
+        },
+        {
+          "id": "a",
+          "text": "Use the recorded lock ID to force-unlock, then run a plan to verify state and reality still match before applying changes."
+        },
+        {
+          "id": "b",
+          "text": "Force-unlock every state file in the bucket so future applies are not blocked."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Force-unlock is for a confirmed stale lock. After unlocking, a plan is the low-risk check that Terraform still understands the managed objects before any new write."
+    },
+    {
+      "id": "sensitive-state-q1",
+      "type": "single",
+      "scenario": "A plan shows:\n\n```text\n+ password = (sensitive value)\n```\n\nA teammate says the state backend can be broadly readable because the password is redacted. What is the best correction?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Only output values can appear in state, not resource arguments."
+        },
+        {
+          "id": "b",
+          "text": "Redacted plan values are deleted before Terraform writes state."
+        },
+        {
+          "id": "d",
+          "text": "Sensitive values become safe to paste into tickets after plan output hides them."
+        },
+        {
+          "id": "a",
+          "text": "Plan redaction protects normal display, but state may still contain sensitive provider data and needs restricted access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Terraform can hide a value from CLI output while still storing data it needs for future comparisons or provider operations. Backend read access should be treated carefully."
+    },
+    {
+      "id": "sensitive-state-q3",
+      "type": "single",
+      "scenario": "A failed CI job leaves a saved Terraform plan file as a downloadable artifact. The plan includes database changes that use sensitive variables. What should the team assume?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Saved plan files may contain sensitive values and should be short-lived, access-controlled, and kept out of source control."
+        },
+        {
+          "id": "d",
+          "text": "The plan should be pasted into chat so reviewers can inspect it faster."
+        },
+        {
+          "id": "b",
+          "text": "Saved plan files are always safe because terminal output redacts sensitive values."
+        },
+        {
+          "id": "c",
+          "text": "Only state files can contain sensitive data; plans cannot."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A saved plan can include values Terraform needs for apply. Treat it with similar care to state: limited access, short retention, and no Git or casual chat sharing. See [Terraform state purpose](https://developer.hashicorp.com/terraform/language/state)."
     }
   ]
 }

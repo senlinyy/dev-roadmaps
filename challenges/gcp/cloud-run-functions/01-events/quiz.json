@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Checkout completes and the system needs to send a receipt later. What is the event-shaped view?",
+      "scenario": "A checkout API currently waits for the email provider before returning a 200 response. Customers see slow checkouts when the provider is throttled. Which event-driven split is the best fit?",
       "options": [
-        { "id": "a", "text": "An order-created event can trigger bounded side work." },
-        { "id": "b", "text": "The customer must wait for every email provider call." },
-        { "id": "c", "text": "A VM must be patched for every receipt." },
-        { "id": "d", "text": "A Kubernetes cluster is required because events exist." }
+        {
+          "id": "a",
+          "text": "Commit the purchase, publish a receipt event with stable IDs, and let a Cloud Run function send the email after the request completes."
+        },
+        {
+          "id": "b",
+          "text": "Keep the email call inside the checkout request so one trace contains every step."
+        },
+        {
+          "id": "c",
+          "text": "Move the entire checkout database transaction into the function and return to the user before the purchase exists."
+        },
+        {
+          "id": "d",
+          "text": "Return success after publishing an event before the purchase transaction commits, then let the function create the order and send the receipt."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The side work starts because checkout happened, which fits event-driven handling."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Publishing a receipt event after the purchase is committed keeps the user path short while giving the function one follow-up job. Keeping the provider call in the request preserves the delay, moving the whole purchase transaction out risks acknowledging before the business action exists, and bucket polling is not a receipt workflow. See [Google Cloud events triggers documentation](https://cloud.google.com/functions/docs/concepts/events-triggers)."
+    },
+    {
+      "id": "triggers-q1",
+      "type": "single",
+      "scenario": "Northstar Social must generate a thumbnail within seconds whenever an object is finalized in `profile-uploads-prod`. The upload is the source of truth, no other consumer needs the event, and the team wants to avoid a second application call or periodic bucket scan. Which trigger design best meets those constraints?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Publish all storage notifications to a shared Pub/Sub topic, then filter bucket and event type only inside the function."
+        },
+        {
+          "id": "d",
+          "text": "Use a scheduled inventory scan because it provides simpler retries, accepting up to one minute of delay and repeated full-bucket listing."
+        },
+        {
+          "id": "a",
+          "text": "Use a Cloud Storage event trigger for object-finalized events on the upload bucket if the upload itself is the source of truth."
+        },
+        {
+          "id": "b",
+          "text": "Use HTTP because storage events cannot identify the bucket or object name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A Cloud Storage object-finalized trigger matches the source event and can scope the function to the upload bucket. HTTP adds an extra manual call, a global topic is too broad, and scheduled scans are a heavier fallback rather than the natural trigger. See [Google Cloud events triggers documentation](https://cloud.google.com/functions/docs/concepts/events-triggers)."
+    },
+    {
+      "id": "retries-q1",
+      "type": "single",
+      "scenario": "A receipt function sends an email and then writes sent=true to the orders table. The database write times out after the email provider accepted the message. The event is retried. What should the handler design prevent?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Disable platform retries and rely on the email provider's success response, even though the delivery record can still fail afterward."
+        },
+        {
+          "id": "a",
+          "text": "A duplicate receipt by using the stable order or event ID with an idempotency record and, where supported, the provider's idempotency control around the send."
+        },
+        {
+          "id": "b",
+          "text": "Write `sent=true` before calling the provider and treat that flag as proof of delivery even if the provider request fails."
+        },
+        {
+          "id": "c",
+          "text": "Use the function execution ID as the delivery key, creating a different record whenever the same event is redelivered."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The timeout leaves delivery outcome uncertain, so retries must reuse a stable business key and coordinate recorded state with any idempotency support offered by the email provider. Marking delivery complete before the send can lose receipts, marking it only afterward cannot distinguish a provider success followed by a database timeout, and execution-specific IDs defeat deduplication. Disabling retries trades duplicates for lost work. See [Cloud Run functions retry guidance](https://cloud.google.com/functions/docs/bestpractices/retries)."
+    },
+    {
+      "id": "retries-q4",
+      "type": "multiple",
+      "scenario": "A Pub/Sub-triggered receipt handler may receive the same event more than once. It calls an email provider and records delivery state after the call. Which two requirements belong in the retry-safety runbook?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Log the event ID, attempt result, and skip reason without exposing the secret payload."
+        },
+        {
+          "id": "c",
+          "text": "Generate a new order ID on every attempt so retries cannot collide with the previous delivery record."
+        },
+        {
+          "id": "d",
+          "text": "Skip event validation after the first failure because repeated delivery proves the payload is trustworthy."
+        },
+        {
+          "id": "a",
+          "text": "Claim a stable event or business key before the irreversible send so a retry can detect completed work."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "A stable idempotency key prevents repeated side effects, and structured non-secret logs make retries diagnosable. New IDs defeat deduplication, while retries can repeat malformed events and do not remove validation needs. See [Cloud Run functions retry guidance](https://cloud.google.com/functions/docs/bestpractices/retries)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A function receives a receipt event. Which fields are useful without copying the whole database record into the event?",
+      "scenario": "Northstar Social generates thumbnails from versioned uploads in `profile-uploads-prod`. Users can overwrite an object name while an earlier event is still queued, derived thumbnails are written back to the same bucket, and each thumbnail must correspond to the generation that emitted the event. How should the handler process the event?",
       "options": [
-        { "id": "a", "text": "Order ID, customer ID, and correlation ID." },
-        { "id": "b", "text": "Every table row in the system." },
-        { "id": "c", "text": "The billing account display name only." },
-        { "id": "d", "text": "A VM image family." }
+        {
+          "id": "a",
+          "text": "Validate the bucket and object facts, skip derived thumbnail files, and use the object generation when reading the source image."
+        },
+        {
+          "id": "b",
+          "text": "Validate only the object suffix and assume the trigger configuration permanently guarantees the expected bucket and event type."
+        },
+        {
+          "id": "c",
+          "text": "Trust the event content type and process every finalized object, including derived thumbnail objects that can trigger the function again."
+        },
+        {
+          "id": "d",
+          "text": "Read the object by name without its generation and accept whichever generation is current when the handler starts."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Events should carry enough context to do the job without becoming fragile full data copies."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The handler should treat the event as evidence and validate bucket, object, and generation before doing work. Processing every bucket is too broad, ignoring generation can mix object versions, and events should carry identifiers rather than large image payloads. See [Google Cloud events triggers documentation](https://cloud.google.com/functions/docs/concepts/events-triggers)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which examples are event-shaped?",
+      "id": "triggers-q5",
+      "type": "single",
+      "scenario": "The function code is correct, but no logs appear after a test object upload. The bucket name in the trigger is profile-upload-prod, while the real bucket is profile-uploads-prod. What is the most likely cause?",
       "options": [
-        { "id": "a", "text": "A Pub/Sub message arrives." },
-        { "id": "b", "text": "A file is created in Cloud Storage." },
-        { "id": "c", "text": "A schedule fires." },
-        { "id": "d", "text": "A service owns many long-running HTTP routes." }
+        {
+          "id": "c",
+          "text": "The event filter is correct, but Eventarc suppresses object-finalized events until the bucket contains more than one object."
+        },
+        {
+          "id": "d",
+          "text": "The trigger service account lacks an unrelated project-wide role, so Eventarc silently rewrites the configured bucket name."
+        },
+        {
+          "id": "a",
+          "text": "The trigger is scoped to the wrong event source, so the platform does not invoke the handler for the real upload."
+        },
+        {
+          "id": "b",
+          "text": "The handler returned too quickly, so Cloud Run functions refuses to write logs."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Functions fit bounded work that starts because something happened."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A bucket-name mismatch means the trigger watches the wrong source. Returning quickly can still produce logs, small objects still create finalized events, and project Owner is not the trigger requirement. See [Google Cloud events triggers documentation](https://cloud.google.com/functions/docs/concepts/events-triggers)."
+    },
+    {
+      "id": "retries-q2",
+      "type": "single",
+      "scenario": "A thumbnail function sometimes receives the same object-finalized event twice. The handler writes thumbnail files named from the source object and generation. What behavior is safest?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Append an execution-specific suffix on every retry so repeated deliveries create separate thumbnail objects for later cleanup."
+        },
+        {
+          "id": "c",
+          "text": "Fail every repeated event so Cloud Run functions stops delivering duplicates globally."
+        },
+        {
+          "id": "d",
+          "text": "Delete the source upload after the first attempt whether thumbnail creation succeeded or failed."
+        },
+        {
+          "id": "a",
+          "text": "Treat the source object and generation as an idempotency key and make repeated runs produce the same final thumbnail state."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Using object and generation as an idempotency key makes repeated delivery safe. Random suffixes create clutter, failing repeats can trigger more retries, and deleting the source upload risks data loss before successful processing. See [Google Cloud retries documentation](https://cloud.google.com/functions/docs/bestpractices/retries)."
     }
   ]
 }

@@ -54,5 +54,3 @@ output "deployment_context" {
   value = "${local.service_name}:${local.account_id}:${local.region}"
 }
 ```
-
-The data sources read existing AWS context without making the account or region managed resources.

@@ -9,5 +9,3 @@ pub fn first_match(notes: &[Note], query: &str) -> Option<&Note> {
     None
 }
 ~~~
-
-The return type makes the two normal outcomes explicit: a borrowed matching note, or no match.

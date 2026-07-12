@@ -24,5 +24,3 @@ import {
   id = "dp-orders-invoices-prod"
 }
 ```
-
-The import block records the adoption mapping in code review while the resource block describes the object Terraform will own.

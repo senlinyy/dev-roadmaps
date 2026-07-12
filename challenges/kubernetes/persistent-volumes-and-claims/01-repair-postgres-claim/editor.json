@@ -1,0 +1,18 @@
+{
+  "language": "yaml",
+  "filename": "notification-postgres-pvc.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: notification-postgres-data\n  namespace: test\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "PVC API version" },
+      { "path": ["kind"], "equals": "PersistentVolumeClaim", "label": "PVC kind" },
+      { "path": ["metadata", "name"], "equals": "notification-postgres-data", "label": "claim name" },
+      { "path": ["metadata", "namespace"], "equals": "customer-notifications", "label": "application namespace" },
+      { "path": ["spec", "storageClassName"], "equals": "fast-ssd", "label": "storage class" },
+      { "path": ["spec", "accessModes"], "includes": "ReadWriteOnce", "label": "single-node read-write access" },
+      { "path": ["spec", "resources", "requests", "storage"], "equals": "20Gi", "label": "requested capacity" }
+    ]
+  }
+}

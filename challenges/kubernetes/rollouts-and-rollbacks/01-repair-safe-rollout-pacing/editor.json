@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: notification-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: notification-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/customer-notification/notification-api:2026.06.14-1\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["spec", "replicas"], "equals": 3, "label": "desired replicas" },
+      { "path": ["spec", "strategy", "type"], "equals": "RollingUpdate", "label": "rolling update strategy" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxSurge"], "equals": 1, "label": "one surge Pod" },
+      { "path": ["spec", "strategy", "rollingUpdate", "maxUnavailable"], "equals": 0, "label": "zero unavailable Pods" },
+      { "path": ["spec", "minReadySeconds"], "equals": 10, "label": "stable readiness window" },
+      { "path": ["spec", "progressDeadlineSeconds"], "equals": 300, "label": "progress deadline" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/notification-api:2026.06.14-2", "label": "release image" }
+    ]
+  }
+}

@@ -1,16 +1,16 @@
 ---
-title: "Navigate the Log Directory"
-sectionSlug: where-logs-actually-live
+title: "Map the Log Homes"
+sectionSlug: where-the-important-logs-live
 order: 1
 ---
 
-Every Linux service writes its logs somewhere under `/var/log/`. Understanding which file belongs to which service is the first step in any troubleshooting workflow. Some services get their own subdirectory; others share `syslog`.
+The checkout VM has separate evidence streams for system lifecycle messages, Nginx request handling, Nginx upstream errors, and application JSON logs. You start in `/home/dev`.
 
-You start in `/home/dev`. Your job:
+Your job:
 
-1. **List all files and directories under `/var/log/`** to see what is available.
-2. **Find which log file contains SSH authentication activity** by searching for "sshd" across the log files.
-3. **View the most recent syslog entries** using `tail` on the syslog file.
-4. **Identify which services wrote to syslog** by reading the file and looking for service names like cron, sshd, and nginx.
+1. **Inspect the log directories** under `/var/log` so you know which files exist before you search.
+2. **Surface one lifecycle message** for `orders-api.service`.
+3. **Surface the Nginx request and upstream-error evidence** for the checkout failure.
+4. **Surface the application JSON error** that carries the matching request id.
 
-The grader requires you to use `cat` and `grep` at least once each, and checks that your combined output mentions `auth.log`, `syslog`, `sshd`, `cron`, and `nginx`.
+The grader checks that your terminal output includes evidence from multiple log homes, not a written report.

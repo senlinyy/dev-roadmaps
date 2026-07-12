@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "production-symptom-q1",
+      "type": "single",
+      "scenario": "At `10:08 UTC`, the alert channel reports only `orders API 5xx high`. The dashboard shows checkout writes in namespace `orders` returning `503`, while reads remain mostly healthy. A release began at `10:03`. Before changing the Deployment, what should the incident lead record?",
+      "options": [
+        { "id": "a", "text": "A decision to restart every Pod because a broad restart tests whether the alert is transient." },
+        { "id": "b", "text": "A conclusion that the `10:03` release caused the incident because it is the nearest recorded change." },
+        { "id": "c", "text": "A concrete symptom stating the affected operation, namespace, status code, first known bad time, and unaffected read path." },
+        { "id": "d", "text": "A rollback command for the previous revision so mitigation begins before the scope is documented." }
+      ],
+      "correct": ["c"],
+      "explanation": "A concrete symptom captures user impact, scope, time, and a verification boundary before action. The nearby release is useful timeline evidence but not yet proven causal, while immediate restarts or rollback can alter state before the failure family is understood."
+    },
+    {
+      "id": "production-path-q2",
+      "type": "single",
+      "scenario": "External checkout requests fail, but DNS and TLS checks succeed and the gateway routes to the expected Service. The EndpointSlice contains two ready Pod IPs, while the new Pod is unready and absent. What does this evidence support as the next focus?",
+      "options": [
+        { "id": "a", "text": "Inspect the unready Pod's readiness evidence and application logs because Service routing still has two healthy backends." },
+        { "id": "b", "text": "Replace the DNS record because successful resolution does not prove that it points to any gateway." },
+        { "id": "c", "text": "Recreate the Service because an EndpointSlice with two addresses means its selector matched no Pods." },
+        { "id": "d", "text": "Debug image registry authentication first because every running but unready Pod is an image pull failure." }
+      ],
+      "correct": ["a"],
+      "explanation": "The outside-in path reaches a Service with two ready endpoints, and the missing new endpoint matches its unready state. Readiness evidence and application logs are therefore the focused next checks. DNS, Service selection, and image pulling are not the leading failure family shown here."
+    },
+    {
+      "id": "production-dependency-q3",
+      "type": "single",
+      "scenario": "Pod events show readiness failures with HTTP `503`. Application logs say `database migration lock timeout`. A controlled PostgreSQL client in the same namespace successfully runs `select 1` using the test credentials. What is the strongest conclusion?",
+      "options": [
+        { "id": "a", "text": "PostgreSQL is fully healthy for every query and migration because one basic query succeeded." },
+        { "id": "b", "text": "The readiness probe itself created the migration lock because failed probes acquire database locks." },
+        { "id": "c", "text": "The image registry is unavailable because dependency checks cannot run while a new Pod is unready." },
+        { "id": "d", "text": "Basic in-cluster connectivity and test credentials work, so the investigation should narrow to workload-specific migration state rather than a total database outage." }
+      ],
+      "correct": ["d"],
+      "explanation": "The successful in-cluster query proves a narrow path: reachability, the tested credentials, and a basic query. It does not prove all database behavior, but it makes a total outage less likely and supports investigating migration-specific state. Readiness probes and image pulls do not explain the successful dependency check."
+    },
+    {
+      "id": "production-mitigation-q4",
+      "type": "single",
+      "scenario": "A new ReplicaSet has one unready Pod after a release. Two old Pods remain healthy and serve traffic. Events and logs tie the new revision to a migration lock timeout, and error rates rose only after the rollout began. Which mitigation is best supported while the team preserves evidence?",
+      "options": [
+        { "id": "a", "text": "Delete all old Pods so the new revision receives enough traffic to reproduce the issue at full load." },
+        { "id": "b", "text": "Pause or roll back the rollout, then verify controller status and the user-facing error rate." },
+        { "id": "c", "text": "Raise the HPA maximum because every unready rollout is caused by insufficient application capacity." },
+        { "id": "d", "text": "Cordon every worker node because migration lock timeouts identify a node-wide scheduling failure." }
+      ],
+      "correct": ["b"],
+      "explanation": "The failure is isolated to the new revision while old Pods remain healthy, so pausing or rolling back is the smallest evidence-backed mitigation. Deleting healthy capacity increases risk, and neither HPA capacity nor node scheduling is supported by the migration lock evidence. Recovery still needs controller and user-path verification."
+    },
+    {
+      "id": "production-rollback-q5",
+      "type": "multiple",
+      "scenario": "Rollout history identifies revision `42` as the current bad image and revision `41` as the previous candidate. The team rolls back to revision `41`, and Kubernetes reports that the Deployment successfully rolled out. Which two additional actions are required for a defensible incident recovery?",
+      "options": [
+        { "id": "a", "text": "Assume the database schema also returned to its earlier state because Deployment rollback restores external dependencies." },
+        { "id": "b", "text": "Check application metrics, error rate, and one affected user path to prove the symptom recovered." },
+        { "id": "c", "text": "Preserve relevant Deployment YAML, events, and previous container logs before retention or later changes remove evidence." },
+        { "id": "d", "text": "Delete the incident timeline after rollout success because controller completion replaces earlier observations." }
+      ],
+      "correct": ["b", "c"],
+      "explanation": "Controller completion proves the rollback rollout finished, but application metrics and the affected user path prove service recovery. Preserving YAML, events, and previous logs protects the evidence needed for review. Deployment rollback does not reverse external database state, and success does not make the timeline disposable."
+    }
+  ]
+}

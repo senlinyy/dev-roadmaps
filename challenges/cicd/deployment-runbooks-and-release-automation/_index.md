@@ -1,5 +1,5 @@
 ---
-title: "Deployment Runbooks and Release Automation"
+title: "Deployment Runbooks"
 description: "Write a practical release runbook, automate repeatable deployment steps, define stop rules, and record post-release verification."
 articleId: article-cicd-deployment-strategies-deployment-runbooks-and-release-automation
 articleSlug: deployment-runbooks-and-release-automation

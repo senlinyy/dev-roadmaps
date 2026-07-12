@@ -1,70 +1,194 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "The `devpolaris-orders-report-worker` runs on one EC2 instance and needs this path for local state and temporary report rendering:\n\n```text\npath=/var/lib/devpolaris-orders-api\nsharedAcrossWorkers=false\nmustSurviveInstanceReboot=true\nfinalExportUploadedToS3=true\n```\n\nWhich storage shape is the best first fit for the path?",
-      "options": [
-        { "id": "a", "text": "EBS, because one EC2 instance needs disk-like storage mounted at a normal Linux path." },
-        { "id": "b", "text": "EFS, because all AWS file paths should be shared across compute by default." },
-        { "id": "c", "text": "S3 mounted as a POSIX filesystem, because the worker should append to export objects." },
-        { "id": "d", "text": "RDS, because temporary report chunks should be stored as relational rows." }
-      ],
-      "correct": ["a"],
-      "explanation": "EBS fits when one EC2 instance needs a persistent mounted disk. The final export can still move to S3 when it is ready. EFS would make sense if several workers needed the same live file tree."
-    },
     {
       "id": "q2",
       "type": "single",
       "scenario": "A batch renderer runs three tasks at the same time. Task A writes `part-07.ndjson`, task B writes `part-08.ndjson`, and an assembler task reads all parts from the same path:\n\n```text\nworkspace=/mnt/devpolaris-orders-shared/monthly/2026-05\nneedsOpenReadRename=true\nmultipleTasksNeedSameTree=true\n```\n\nWhich storage shape best matches this need?",
       "options": [
-        { "id": "a", "text": "EFS, because multiple compute units need a shared Linux filesystem path." },
-        { "id": "b", "text": "EBS attached to one renderer, because an attached volume is automatically shared with all tasks." },
-        { "id": "c", "text": "RDS, because file rename operations need SQL transactions." },
-        { "id": "d", "text": "S3 only, because the tasks need POSIX file operations on one mounted tree." }
+        {
+          "id": "b",
+          "text": "Give each renderer its own EBS volume and synchronize completed files through the application after every write."
+        },
+        {
+          "id": "c",
+          "text": "Mount one EFS file system on all renderer tasks because they require concurrent POSIX access to the same paths."
+        },
+        {
+          "id": "a",
+          "text": "EFS, because multiple compute units need a shared Linux filesystem path."
+        },
+        {
+          "id": "d",
+          "text": "Store source objects in S3 and give each task local scratch space, but keep the shared rename and directory workflow unchanged."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "EFS is the AWS shape for a shared mounted filesystem across compute units. EBS is normally tied to one EC2 instance and is not a shared workspace for many tasks. S3 may be the final object store, but it is not the same as a POSIX file tree."
+      "correct": [
+        "a"
+      ],
+      "explanation": "EFS is the AWS shape for a shared mounted filesystem across compute units. EBS is normally tied to one EC2 instance and is not a shared workspace for many tasks. S3 may be the final object store, but it is not the same as a POSIX file tree.\n\nLearn more in [Amazon EFS concepts](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html)."
+    },
+    {
+      "id": "q-read-mounted-volume-evidence-5",
+      "type": "single",
+      "scenario": "AWS says the volume is attached:\n\n```json\n{\"VolumeId\":\"vol-0a12b34c56d78e901\",\"State\":\"in-use\",\"Instance\":\"i-0123456789abcdef0\",\"Device\":\"/dev/sdf\"}\n```\n\nBut `findmnt /var/lib/devpolaris-orders-api` returns no output. What should the team investigate next?",
+      "options": [
+        {
+          "id": "b",
+          "text": "S3 bucket policy for `exports/daily/*` because S3 controls Linux mounts."
+        },
+        {
+          "id": "c",
+          "text": "RDS restore targets because attached volumes are restored as DB instances."
+        },
+        {
+          "id": "d",
+          "text": "DynamoDB partition keys because the mount point uses a path string."
+        },
+        {
+          "id": "a",
+          "text": "Linux mount configuration and whether the filesystem was mounted after attachment or reboot."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Attachment and mounting are separate facts. AWS can attach a block device, but Linux still needs the filesystem mounted at the path the app uses. The next investigation belongs in OS mount configuration and startup behavior.\n\nLearn more in [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html)."
+    },
+    {
+      "id": "q-diagnose-attached-storage-1",
+      "type": "single",
+      "scenario": "The report worker fails during render:\n\n```text\nstage=render path=/var/lib/devpolaris-orders-api/reports/ordexp_9012.tmp\ncode=ENOSPC message=no space left on device\n```\n\n`du` shows 83 GB under the reports scratch directory. What is the best fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Safely remove confirmed temporary files, fix cleanup after upload, add monitoring, and resize the volume if needed."
+        },
+        {
+          "id": "b",
+          "text": "Move all scratch files to `/tmp` even if the job needs state after reboot."
+        },
+        {
+          "id": "c",
+          "text": "Give the worker `s3:DeleteObject` on the whole bucket because local disk is full."
+        },
+        {
+          "id": "d",
+          "text": "Add a DynamoDB GSI so report chunks are easier to search."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to disk space on the mounted worker path. Cleanup and sizing should be handled carefully so only disposable files are removed. Moving important state to `/tmp` may make the next restart lose data.\n\nLearn more in [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "DevPolaris is replacing a report pipeline that currently writes everything to one EC2 instance. Order records require transactions and support queries, completed PDFs and CSV exports must survive worker replacement, and each renderer needs fast scratch space that no other worker reads. Which storage design best matches those access patterns?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep order records in RDS, completed artifacts in S3, and each renderer's private scratch data on EBS."
+        },
+        {
+          "id": "d",
+          "text": "Keep order records and completed artifacts in RDS, then use S3 as a mounted POSIX scratch filesystem for each renderer."
+        },
+        {
+          "id": "a",
+          "text": "Keep all three data types on one EBS volume attached to the first renderer so the pipeline has one storage location."
+        },
+        {
+          "id": "c",
+          "text": "Keep order records on EFS, completed artifacts on EBS, and renderer scratch data in RDS so every layer is network accessible."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "RDS fits transactional records and queryable relationships, S3 fits durable completed objects, and EBS fits block storage attached to one EC2 renderer. The tempting shared-filesystem designs ignore that no renderer needs another renderer's scratch data. Replacing relational records with files would also discard the stated transaction and query requirements.\n\nLearn more in [AWS storage services overview](https://docs.aws.amazon.com/whitepapers/latest/aws-overview/storage-services.html)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "After report rendering finishes, the worker logs:\n\n```text\nstage=upload bucket=devpolaris-order-exports key=exports/2026/05/ordexp_8841.csv\nstage=cleanup removed=/var/lib/devpolaris-orders-api/reports/ordexp_8841.tmp\n```\n\nWhere should the finished export live for user or finance download?",
+      "scenario": "A DevPolaris media team is migrating a Linux render farm that uses Lustre-compatible high-throughput scratch storage and reads large source objects from S3. Jobs run across many compute nodes and need parallel filesystem throughput, while the finished artifacts return to S3. Which AWS storage choice best preserves the specialist filesystem behavior?",
       "options": [
-        { "id": "a", "text": "S3, because the finished CSV is a durable object read later by key." },
-        { "id": "b", "text": "The EBS temporary path, because the worker already generated the file there." },
-        { "id": "c", "text": "EFS, because all downloads should come from a mounted shared directory." },
-        { "id": "d", "text": "DynamoDB, because CSV files are key-based state." }
+        {
+          "id": "b",
+          "text": "One general-purpose EBS volume attached to the scheduler and exported manually to every render node."
+        },
+        {
+          "id": "c",
+          "text": "Amazon EFS because any shared Linux path provides the same parallel scratch behavior and S3 integration."
+        },
+        {
+          "id": "d",
+          "text": "S3 mounted as a POSIX filesystem because object keys provide Lustre locking and metadata semantics."
+        },
+        {
+          "id": "a",
+          "text": "Amazon FSx for Lustre linked to S3, with performance and lifecycle settings designed for the render workload."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The temporary report file can be built on disk, but the finished export is object-shaped data. S3 gives the export a durable bucket and key for later download. Leaving it only on a worker disk ties a user-visible result to one machine."
+      "correct": [
+        "a"
+      ],
+      "explanation": "FSx for Lustre is the specialist managed filesystem aligned with parallel, high-throughput render and analytics workloads and can integrate with S3 data. EFS provides general shared NFS semantics but is not interchangeable with Lustre behavior. A single EBS volume does not provide the required multi-node filesystem, and S3 object naming is not POSIX locking or metadata.\n\nLearn more in [Amazon FSx for Lustre](https://docs.aws.amazon.com/fsx/latest/LustreGuide/what-is.html)."
     },
     {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "A design review lists four data needs around the report pipeline. Which classifications are correct?",
-      "options": [
-        { "id": "a", "text": "Order records with transactions and support queries belong in RDS." },
-        { "id": "b", "text": "Finished receipt PDFs and export CSVs belong in S3." },
-        { "id": "c", "text": "A single EC2 worker's mounted scratch and state path can fit EBS." },
-        { "id": "d", "text": "Several workers sharing a live directory should use one worker's local EBS path." }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "RDS, S3, and EBS each match a different data shape in the first three options. The fourth option is wrong because one worker's local disk is not a shared filesystem. When several compute units need the same path, EFS or a different workflow should be reviewed."
-    },
-    {
-      "id": "q5",
+      "id": "q-read-mounted-volume-evidence-2",
       "type": "single",
-      "scenario": "A developer suggests storing checkout orders as JSON files on the report worker volume because the code already writes files there. Support needs joins by customer, payment state, refund records, and date range. What should the review say?",
+      "scenario": "The worker logs `ENOSPC` while writing a report. `df -h /var/lib/devpolaris-orders-api` shows:\n\n```text\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme1n1     98G   98G     0 100% /var/lib/devpolaris-orders-api\n```\n\nWhat is the best first conclusion?",
       "options": [
-        { "id": "a", "text": "Use RDS for the order records because they are business truth with relationships and queries." },
-        { "id": "b", "text": "Use EBS because any data that can be encoded as JSON is disk-shaped." },
-        { "id": "c", "text": "Use EFS because shared files are the same as database constraints." },
-        { "id": "d", "text": "Use S3 metadata because it can replace support's relational filters." }
+        {
+          "id": "b",
+          "text": "Resize the instance root volume, even though the full filesystem is the separately mounted `/dev/nvme1n1` device."
+        },
+        {
+          "id": "c",
+          "text": "Delete the report directory immediately without checking retention, open files, or whether the job can regenerate its output."
+        },
+        {
+          "id": "d",
+          "text": "Increase EBS throughput because an `ENOSPC` error indicates insufficient I/O operations rather than exhausted capacity."
+        },
+        {
+          "id": "a",
+          "text": "The mounted filesystem is full, so cleanup, volume sizing, and monitoring need review."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The order records are not just files. They have business relationships, changing state, and support queries that need database behavior. EBS can hold bytes, but it does not provide SQL constraints or transaction semantics."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`ENOSPC` and zero available space on `/dev/nvme1n1` establish a capacity problem on that mounted filesystem. The team should identify retained data, cleanup safety, required growth, and alarms before resizing or deleting files. Root-volume sizing and EBS throughput do not change free space on this separate full mount.\n\nLearn more in [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html)."
+    },
+    {
+      "id": "q-diagnose-attached-storage-2",
+      "type": "single",
+      "scenario": "A batch renderer task cannot mount the shared workspace:\n\n```text\nworkspace=/mnt/devpolaris-orders-shared\nmount.nfs4: Connection timed out\nfilesystem=fs-0abc1234\nclientSecurityGroup=sg-renderer\nmountTargetSecurityGroup=sg-efs-target\n```\n\nWhat should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The EFS mount target network path, especially security group rules for NFS from the renderer tasks."
+        },
+        {
+          "id": "b",
+          "text": "The POSIX owner and mode on the workspace directory, even though the client times out before mounting it."
+        },
+        {
+          "id": "c",
+          "text": "The EFS throughput mode, because low throughput prevents the client from establishing the NFS connection."
+        },
+        {
+          "id": "d",
+          "text": "The application subdirectory name, because a missing directory produces a network connection timeout."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A mount connection timeout occurs before POSIX permissions or application subdirectories are evaluated. The client needs DNS and network reachability to an EFS mount target, including NFS TCP 2049 through the mount-target security group. Throughput settings affect I/O after connection, not establishment of the mount.\n\nLearn more in [EFS network access](https://docs.aws.amazon.com/efs/latest/ug/manage-fs-access.html)."
     }
   ]
 }

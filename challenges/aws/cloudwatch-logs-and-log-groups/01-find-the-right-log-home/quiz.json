@@ -1,70 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A deploy of `devpolaris-orders-api` fails health checks. The runbook says:\n\n```text\nservice: devpolaris-orders-api\nworkload: ECS Fargate\nmain log group: /ecs/devpolaris-orders-api\nside job log group: /aws/lambda/devpolaris-receipt-email\nincident time: 2026-05-02T09:40Z to 09:48Z\n```\n\nWhere should the engineer look first for the API startup error?",
+      "scenario": "DevPolaris has deployed a new revision of `devpolaris-orders-api` on ECS Fargate, but the replacement tasks fail health checks between 09:40 and 09:48 UTC. The runbook identifies `/ecs/devpolaris-orders-api` as the API log group and `/aws/lambda/devpolaris-receipt-email` as the unrelated receipt-job group. The engineer needs the first application startup error from the replacement tasks. Where should the engineer search first?",
       "options": [
-        { "id": "a", "text": "In `/ecs/devpolaris-orders-api`, filtered to the incident time window and new task streams." },
-        { "id": "b", "text": "In `/aws/lambda/devpolaris-receipt-email`, because all AWS application logs share one Lambda group." },
-        { "id": "c", "text": "Only in RDS metrics, because ECS task startup logs cannot reach CloudWatch." },
-        { "id": "d", "text": "In an old staging log group, because production errors are usually copied there first." }
+        {
+          "id": "b",
+          "text": "Start in the receipt Lambda group because its latest stream is newer than the failed ECS deployment."
+        },
+        {
+          "id": "c",
+          "text": "Start with RDS engine logs because a database dependency can prevent an API from becoming ready."
+        },
+        {
+          "id": "a",
+          "text": "In `/ecs/devpolaris-orders-api`, filtered to the incident time window and new task streams."
+        },
+        {
+          "id": "d",
+          "text": "Start in the staging API group and compare the successful startup sequence before opening production streams."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The workload type and service name point to the ECS log group. The time window and new task streams keep the search small. Lambda logs may matter for side jobs, but they are not the API container's startup evidence."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The workload type and service name point to the ECS log group. The time window and new task streams keep the search small. Lambda logs may matter for side jobs, but they are not the API container's startup evidence.\n\nLearn more in [CloudWatch log groups and streams](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html)."
     },
     {
-      "id": "q2",
+      "id": "q-read-structured-app-logs-1",
       "type": "single",
-      "scenario": "CloudWatch Logs shows this structure:\n\n```text\nlog group: /ecs/devpolaris-orders-api\nstreams:\n  orders-api/orders-api/3b7c8f2a\n  orders-api/orders-api/91d4a011\nevent:\n  09:42:18 ERROR request_id=req_7 step=rds.insert_order\n```\n\nWhat is the best reading?",
+      "scenario": "A checkout failure log is structured like this:\n\n```text\nlevel=error time=2026-05-02T09:42:18Z service=devpolaris-orders-api env=prod request_id=req_51 route=POST /v1/orders step=rds.insert_order error_name=ConnectionTimeout message=database connection timed out\n```\n\nWhy is this better than `checkout failed`?",
       "options": [
-        { "id": "a", "text": "The group is the home for related service logs, each stream is one runtime source, and the event is one timestamped message." },
-        { "id": "b", "text": "The group is one request, the stream is one CloudWatch dashboard, and the event is one monthly bill row." },
-        { "id": "c", "text": "The group is an RDS table, each stream is one SQL transaction, and the event is a backup snapshot." },
-        { "id": "d", "text": "The group is always one AWS account, so stream names do not help during a deploy." }
+        {
+          "id": "b",
+          "text": "It identifies a database timeout, so the engineer can treat the database as the root cause without checking scope or frequency."
+        },
+        {
+          "id": "c",
+          "text": "It provides a request ID and route, but the free-form message remains the only field suitable for filtering."
+        },
+        {
+          "id": "d",
+          "text": "It provides enough request detail to replace metrics when estimating how many customers were affected."
+        },
+        {
+          "id": "a",
+          "text": "It gives searchable fields that connect the request, route, failing step, and error category."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "CloudWatch Logs uses a simple hierarchy: group, stream, event. For ECS, streams often line up with task or container runtime sources. That model helps you narrow a deploy investigation to the task streams that were created around the failure."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Structured fields make a future search precise. The log names the service, request, route, step, and error, so the next engineer knows where to inspect. It still needs metrics and traces to understand wider impact and timing.\n\nLearn more in [CloudWatch Logs filter pattern syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html)."
     },
     {
-      "id": "q3",
+      "id": "q-find-the-first-useful-error-1",
       "type": "single",
-      "scenario": "The team knows customer failures started at 10:14 UTC. A teammate proposes searching every event in `/ecs/devpolaris-orders-api` from the last 30 days for `ERROR`.",
+      "scenario": "A new `devpolaris-orders-api` revision repeatedly exits before it can pass its health check. The release engineer searches the task's CloudWatch log stream and finds this sequence:\n\n```log\n09:40:03 INFO release=2026-05-02.4 starting service\n09:40:05 ERROR Cannot find module ./dist/server.js\n09:40:07 INFO container exiting code=1\n09:40:31 ERROR target unhealthy\n09:41:02 ERROR service unavailable\n09:41:31 ERROR service unavailable\n```\n\nWhich event is the first useful error for diagnosing the failed revision?",
       "options": [
-        { "id": "a", "text": "Search the service log group for the narrow incident window first, then widen only if the evidence requires it." },
-        { "id": "b", "text": "Search all 30 days first because a bigger search is always more reliable." },
-        { "id": "c", "text": "Start in the Lambda side-job group because ECS logs are not useful for API requests." },
-        { "id": "d", "text": "Skip logs and change the ECS task size before reading evidence." }
+        {
+          "id": "a",
+          "text": "`Cannot find module ./dist/server.js`, because it names the startup failure before repeated symptoms."
+        },
+        {
+          "id": "b",
+          "text": "Start with `target unhealthy` because target health is the first production gate that failed externally."
+        },
+        {
+          "id": "c",
+          "text": "Start with the repeated `service unavailable` entries because frequency is the strongest indicator of root cause."
+        },
+        {
+          "id": "d",
+          "text": "Start with `container exiting code=1` because exit status is more actionable than the preceding module path."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A focused time window reduces noise and cost while preserving the most relevant events. You can widen the search later if the first useful error points outside the window. Starting too broad makes repeated symptoms harder to separate from cause."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The useful clue is the first specific failure that changes the next check. Missing `./dist/server.js` points toward image build, artifact path, or startup command. The later messages are symptoms after the app failed to start.\n\nLearn more in [CloudWatch Logs Insights query syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html)."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "An on-call note needs enough context to help the next engineer find CloudWatch logs quickly. Which details belong in it?",
+      "scenario": "DevPolaris stores high-volume JSON checkout logs in CloudWatch Logs. Engineers repeatedly query `request_id` and `order_id`, support needs 30 days of interactive investigation, older logs are retained only for audit, and the on-call team wants a metric when new events contain `error_name=PaymentDeclined`. Which three changes match those requirements without scanning or retaining more data than necessary?",
       "options": [
-        { "id": "a", "text": "The workload type, such as ECS task or Lambda function." },
-        { "id": "b", "text": "The expected log group name and AWS Region." },
-        { "id": "c", "text": "The incident time window and useful search fields such as request ID or order ID." },
-        { "id": "d", "text": "A decision to read every unrelated service before checking the failing workload." }
+        {
+          "id": "b",
+          "text": "Use narrow time ranges and the owned production log group for Logs Insights queries."
+        },
+        {
+          "id": "d",
+          "text": "Keep all logs in the Standard class forever because archival requirements make retention policies unsafe."
+        },
+        {
+          "id": "a",
+          "text": "Evaluate field indexes for frequently searched equality fields such as request ID or order ID."
+        },
+        {
+          "id": "c",
+          "text": "Create a metric filter for the stable payment-declined pattern on incoming events."
+        },
+        {
+          "id": "e",
+          "text": "Add customer email as a metric dimension so each declined payment has its own time series."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Good log navigation starts with workload, log home, Region, time window, and search terms. Those facts get an engineer to the right evidence fast. Reading unrelated services first burns time and makes the incident feel larger than it is."
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "Focused groups and time ranges reduce scanned data, field indexes can improve common equality searches, and a metric filter can turn a stable incoming log pattern into an alarmable metric. Retention and log-class choices should separate interactive investigation from older audit needs instead of keeping everything in the most expensive shape. Customer identity is also unsuitable as a high-cardinality metric dimension.\n\nLearn more in [CloudWatch Logs Insights query cost](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AnalyzingLogData.html) and [metric filters](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html)."
     },
     {
-      "id": "q5",
+      "id": "q2",
       "type": "single",
-      "scenario": "The ALB says the new target is unhealthy, but the expected startup log never appears:\n\n```text\nexpected: service ready release=2026-05-02.4 port=3000 health_path=/health\nlog group: /ecs/devpolaris-orders-api\nstreams created after deploy: none\nECS event: task stopped before container became healthy\n```\n\nWhat should this absence make you check?",
+      "scenario": "DevPolaris routes ECS container logs for `devpolaris-orders-api` into `/ecs/devpolaris-orders-api`. During a failed release, the engineer sees streams `orders-api/orders-api/3b7c8f2a` and `orders-api/orders-api/91d4a011`, with a timestamped event reporting `request_id=req_7 step=rds.insert_order`. How should the engineer interpret the log group, streams, and event?",
       "options": [
-        { "id": "a", "text": "Whether the app started, the task logging route is correct, and the execution role can write logs." },
-        { "id": "b", "text": "Whether the receipt Lambda template is missing, because startup logs always appear there." },
-        { "id": "c", "text": "Whether S3 lifecycle deleted the log group, because lifecycle rules manage CloudWatch streams." },
-        { "id": "d", "text": "Only whether the console time range is wrong, without checking app startup or log permissions." }
+        {
+          "id": "b",
+          "text": "Treat each stream as one application request because the stream suffix changes between runtime sources."
+        },
+        {
+          "id": "a",
+          "text": "The group is the home for related service logs, each stream is one runtime source, and the event is one timestamped message."
+        },
+        {
+          "id": "c",
+          "text": "Treat the group as one ECS task and the streams as individual containers across every service deployment."
+        },
+        {
+          "id": "d",
+          "text": "Search the whole group without stream or time filters first so older deployments remain part of the comparison."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Missing logs are evidence. If a release should write a startup line and no stream appears, check the app start path, task definition log configuration, Region, and permissions. The absence narrows the problem before you chase request-level errors."
+      "correct": [
+        "a"
+      ],
+      "explanation": "CloudWatch Logs uses a simple hierarchy: group, stream, event. For ECS, streams often line up with task or container runtime sources. That model helps you narrow a deploy investigation to the task streams that were created around the failure.\n\nLearn more in [CloudWatch log groups and streams](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html)."
+    },
+    {
+      "id": "q-read-structured-app-logs-3",
+      "type": "single",
+      "scenario": "A receipt write failed after the order was accepted:\n\n```text\nlevel=error service=devpolaris-orders-api request_id=req_8X order_id=ord_8x7k2n route=POST /v1/orders step=s3.write_receipt bucket=devpolaris-orders-prod-objects key=receipts/2026/05/02/order_ord_8x7k2n/receipt.pdf error_name=AccessDenied\n```\n\nWhat is the best next move?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Inspect only the bucket policy because `AccessDenied` rules out identity policy and KMS causes."
+        },
+        {
+          "id": "c",
+          "text": "Search by order ID but ignore the exact key until S3 confirms the bucket exists."
+        },
+        {
+          "id": "d",
+          "text": "Check whether the ECS task restarted near the error before using the operation and resource fields."
+        },
+        {
+          "id": "a",
+          "text": "Search by request ID and order ID, then inspect the S3 bucket, key, IAM role, and encryption path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The log gives concrete evidence for the next investigation. It names the failing operation, request, order, bucket, key, and error type. That points to S3 access and configuration, not a blind ECS or RDS change.\n\nLearn more in [CloudWatch Logs filter pattern syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html)."
+    },
+    {
+      "id": "q-find-the-first-useful-error-2",
+      "type": "single",
+      "scenario": "Support reports that order `ord_9` was rejected as a duplicate. An engineer searches the production log group by request ID rather than reading every nearby error:\n\n```log\n09:42:16 INFO request_id=req_A order_id=ord_9 step=checkout.start\n09:42:17 WARN request_id=req_A step=dynamodb.put_idempotency_key error_name=ConditionalCheckFailedException\n09:42:17 ERROR request_id=req_A step=checkout.abort reason=duplicate_request\n09:42:18 ERROR request_id=req_B step=rds.insert_order error_name=ConnectionTimeout\n```\n\nFor `req_A`, what should the engineer investigate first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The idempotency or duplicate-request path, because the first specific failure for `req_A` is DynamoDB conditional check failure."
+        },
+        {
+          "id": "b",
+          "text": "Investigate the RDS timeout for `req_B` first because it occurred one second later in the same log group."
+        },
+        {
+          "id": "c",
+          "text": "Treat the conditional check as DynamoDB capacity pressure before confirming whether the idempotency key already exists."
+        },
+        {
+          "id": "d",
+          "text": "Retry `req_A` with a new idempotency key before checking whether the original request already completed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Request IDs keep the search scoped. For `req_A`, the first useful error is the DynamoDB conditional check, which may be expected duplicate protection or a client retry issue. A different request's RDS timeout should not steer this investigation.\n\nLearn more in [DynamoDB condition expressions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html)."
     }
   ]
 }

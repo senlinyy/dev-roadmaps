@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "filename": "hpa.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: devpolaris-orders-api\n  namespace: orders\n  labels:\n    app.kubernetes.io/name: devpolaris-orders-api\n    app.kubernetes.io/part-of: orders-platform\nspec:\n  behavior:\n    scaleDown:\n      stabilizationWindowSeconds: 300\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "autoscaling/v2", "label": "HPA API version" },
+      { "path": ["kind"], "equals": "HorizontalPodAutoscaler", "label": "HPA kind" },
+      { "path": ["metadata", "name"], "equals": "devpolaris-orders-api", "label": "HPA name" },
+      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["spec", "scaleTargetRef", "apiVersion"], "equals": "apps/v1", "label": "target API version" },
+      { "path": ["spec", "scaleTargetRef", "kind"], "equals": "Deployment", "label": "target kind" },
+      { "path": ["spec", "scaleTargetRef", "name"], "equals": "devpolaris-orders-api", "label": "target Deployment" },
+      { "path": ["spec", "minReplicas"], "equals": 3, "label": "minimum replicas" },
+      { "path": ["spec", "maxReplicas"], "equals": 10, "label": "maximum replicas" },
+      { "path": ["spec", "metrics", 0, "type"], "equals": "Resource", "label": "resource metric type" },
+      { "path": ["spec", "metrics", 0, "resource", "name"], "equals": "cpu", "label": "CPU metric" },
+      { "path": ["spec", "metrics", 0, "resource", "target", "type"], "equals": "Utilization", "label": "utilization target type" },
+      { "path": ["spec", "metrics", 0, "resource", "target", "averageUtilization"], "equals": 70, "label": "average CPU utilization target" }
+    ]
+  }
+}

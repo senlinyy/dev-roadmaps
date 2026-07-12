@@ -1,6 +1,6 @@
 ---
 title: "Job Control and Background Tasks"
-sectionSlug: job-control-and-background-tasks
+sectionSlug: foreground-background-and-ssh-sessions
 order: 6
 ---
 

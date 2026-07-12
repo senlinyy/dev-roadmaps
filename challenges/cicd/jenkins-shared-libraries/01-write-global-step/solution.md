@@ -20,4 +20,4 @@ def call(Map config = [:]) {
 }
 ```
 
-`call` is the entry point Jenkins looks for. The Map default `[:]` lets callers pass nothing and still get a working build. The `?:` operator gives every key a defensible default. The single `Build` stage renders Maven goals from the caller's list (or the default pair). `post.failure` produces an `error` with the service name so Slack/email hooks downstream see exactly which service broke.
+- `call` is the entry point Jenkins looks for. The Map default `[:]` lets callers pass nothing and still get a working build. The `?:` operator gives every key a defensible default. The single `Build` stage renders Maven goals from the caller's list (or the default pair). `post.failure` produces an `error` with the service name so Slack/email hooks downstream see exactly which service broke.

@@ -1,7 +1,6 @@
 ---
-title: "Choose Handler Timing"
-sectionSlug: "when-handlers-run-and-when-to-flush-them"
+title: "Handlers and Restarts"
 order: 3
 ---
 
-Choose when a handler should run during a service rollout.
+Use change, handler, process, and health evidence to choose the least disruptive service action.

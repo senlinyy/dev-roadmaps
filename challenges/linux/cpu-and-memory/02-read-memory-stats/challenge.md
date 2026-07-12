@@ -1,6 +1,6 @@
 ---
 title: "Read Memory Stats"
-sectionSlug: why-free-lies-and-available-tells-the-truth
+sectionSlug: memory-used-free-and-available
 order: 2
 ---
 

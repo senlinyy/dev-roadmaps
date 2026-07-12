@@ -1,142 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A deployment review lists these values:\n\n- `PAYMENT_API_KEY`\n- `ORDERS_DB_PASSWORD`\n- `FEATURE_CHECKOUT_V2=true`\n- `PUBLIC_API_BASE_URL=https://orders.devpolaris.example`\n\nWhich value most clearly belongs in Key Vault?",
+      "scenario": "The checkout API currently stores SQL_PASSWORD as a plain App Service app setting. The value appears in a deployment export that support engineers attach to tickets. What should the launch review require?",
       "options": [
         {
           "id": "a",
-          "text": "`PAYMENT_API_KEY`, because it is a secret credential whose exposure could let another system be called as DevPolaris."
+          "text": "Move the password value into Key Vault, keep only a reference or lookup path in the app configuration, and review access without printing the secret value."
         },
         {
           "id": "b",
-          "text": "`FEATURE_CHECKOUT_V2`, because every app setting is equally sensitive."
+          "text": "Keep the password in the app setting, but restrict who can export configuration and tighten ticket-handling procedures around that setting."
         },
         {
           "id": "c",
-          "text": "`PUBLIC_API_BASE_URL`, because public URLs should be encrypted from users."
+          "text": "Store the password in the deployment pipeline's secret variable store and continue writing the live value into the app setting during each release."
         },
         {
           "id": "d",
-          "text": "The application name, because names become dangerous once deployed."
+          "text": "Place the password in a protected file in storage and have the app download it at startup instead of reading it from Key Vault."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Credentials and passwords belong in secret storage. Feature flags and public URLs are configuration, though they still need change control. Not every setting is a secret."
+      "explanation": "The dangerous value should move into Key Vault so app configuration can hold a reference path instead of the secret itself. The closest distractor is the rename because teams sometimes confuse obscurity with control, but changing the key name does not change where the value is exposed. Release notes and resource tags spread the secret even further. Official docs: [About Azure Key Vault secrets](https://learn.microsoft.com/en-us/azure/key-vault/secrets/about-secrets)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A teammate wants to store generated invoice PDFs in Key Vault because they contain customer information. What is the better first design? The PDF files must be downloadable by customers later, retained for support, and governed by normal document retention rules.",
+      "scenario": "A developer wants to add a connection string to source control for the weekend demo and rotate it next week. The string contains a live production username and password. Which review comment is strongest?",
       "options": [
         {
-          "id": "a",
-          "text": "Store file-like documents in Blob Storage with appropriate access controls, and store only required secrets or keys in Key Vault."
-        },
-        {
           "id": "b",
-          "text": "Store every private file as a Key Vault secret so the security team can approve one service."
+          "text": "Approve the commit for the demo, but create a follow-up rotation task and purge the value from repository history after the event."
         },
         {
           "id": "c",
-          "text": "Store invoices in App Configuration because documents are configuration for the customer portal."
+          "text": "Check in an encrypted or encoded copy of the connection string so the demo can proceed without exposing the plain text directly in source files."
+        },
+        {
+          "id": "a",
+          "text": "Block the commit and put the credential in Key Vault before the demo, then reference it from the app using its managed identity."
         },
         {
           "id": "d",
-          "text": "Store invoices in Azure Monitor logs so support can search them quickly."
+          "text": "Limit the repository to the demo team and keep the credential in code until the managed-identity integration is ready next week."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Key Vault is for secrets, keys, and certificates, not general document storage. Private documents need storage controls, retention, and access design, usually outside Key Vault."
+      "explanation": "The review should block the commit because the live credential never belongs in source control, even briefly. The closest distractor is the private-repo argument because repository visibility does reduce audience size, but it does not turn source control into a credential store or erase cloning, backup, and audit exposure. Planned rotation and base64 encoding also fail to fix the core leak. Official docs: [Azure Key Vault basic concepts](https://learn.microsoft.com/en-us/azure/key-vault/general/basic-concepts)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which values are good Key Vault candidates in a backend API? The team is sorting values from a deployment review into secret storage, normal app configuration, and public metadata before the release.",
+      "type": "single",
+      "scenario": "An incident commander asks an engineer to paste the current payment-provider API key into chat to compare it with a vendor dashboard. What should the Key Vault owner provide instead?",
       "options": [
         {
-          "id": "a",
-          "text": "A third-party payment provider token."
+          "id": "b",
+          "text": "A partially masked copy of the secret value in chat so responders can compare the visible prefix and suffix with the vendor dashboard."
         },
         {
-          "id": "b",
-          "text": "A database password when password-based access is still used."
+          "id": "a",
+          "text": "Secret metadata such as name, version, enabled state, update time, and the identity allowed to read it, without exposing the value."
         },
         {
           "id": "c",
-          "text": "A certificate private key used for TLS or signing."
+          "text": "A one-time portal screen share of the secret value and version so responders can visually compare it without pasting it into chat."
         },
         {
           "id": "d",
-          "text": "A public feature flag that only turns a UI banner on or off."
+          "text": "A temporary export of the secret value to a restricted file share so the incident team can inspect it outside the chat history."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The safe evidence is metadata that proves which secret and version are in use without revealing the payload. The closest distractor is the partially masked value because teams often reach for redaction, but once the real value is pasted or screen-shared the exposure already happened. Screenshots and text files create more unmanaged copies of the secret. Official docs: [About Azure Key Vault secrets](https://learn.microsoft.com/en-us/azure/key-vault/secrets/about-secrets)."
+    },
+    {
+      "id": "02-check-the-two-doors-q1",
+      "type": "single",
+      "scenario": "App Service managed identity is enabled for checkout-api, but calls to kv-orders-prod still return 403. The service principal exists in Entra ID. What second door should the reviewer check?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the App Service is using the expected managed identity object in the correct tenant for the target vault."
+        },
+        {
+          "id": "c",
+          "text": "Whether the vault firewall, private endpoint, or network path allows this App Service outbound request to reach the vault."
+        },
+        {
+          "id": "d",
+          "text": "Whether the application is calling the intended vault and secret URI, including the expected secret name or version."
+        },
+        {
+          "id": "a",
+          "text": "Whether that managed identity has a Key Vault data-plane role, such as permission to get the required secret, at the correct scope."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The managed identity's existence only proves there is a caller. The next check is whether that caller has the correct Key Vault data-plane role at the right scope. The closest distractor is the idea that a service property such as SKU might matter, but Key Vault secret access is governed by authorization, not compute size. Display names and secret characters have nothing to do with permission grants. Official docs: [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)."
+    },
+    {
+      "id": "02-check-the-two-doors-q4",
+      "type": "multiple",
+      "scenario": "The production API reads payment credentials from Key Vault through a managed identity, with separate network and authorization controls. A 403 investigation needs enough detail to decide whether authentication or authorization failed. Which two facts belong in the incident note?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The object ID or principal ID of the caller that requested the secret."
+        },
+        {
+          "id": "c",
+          "text": "The number of app instances running when the request failed."
+        },
+        {
+          "id": "b",
+          "text": "The vault name, secret name, requested operation, and role assignment or missing role assignment."
+        },
+        {
+          "id": "d",
+          "text": "The secret value copied from the portal for comparison."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "Tokens, passwords, and private keys are dangerous values. A public feature flag may be important configuration, but it is not automatically a secret."
+      "explanation": "Those two facts give the incident note the minimum identity and authorization evidence needed to explain a 403. The closest distractor is instance count because operators often gather broad runtime context, but replica count does not tell the reviewer who called the vault or which role grant was missing. Copying the secret value is both unnecessary and unsafe. Official docs: [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)."
     },
     {
-      "id": "q4",
+      "id": "02-check-the-two-doors-q5",
       "type": "single",
-      "scenario": "A developer adds a secret value to an app setting directly because `Key Vault is one extra hop`. What risk should the reviewer name? The setting appears in the deployment diff, the rollback record, and a copied troubleshooting bundle from staging.",
+      "scenario": "The vault is configured for Azure RBAC authorization, but an old runbook tells engineers to add a Key Vault access policy when a service gets 403. What should be fixed?",
       "options": [
         {
           "id": "a",
-          "text": "The secret may spread through app configuration views, deployment logs, exports, and backups with weaker secret-specific controls."
+          "text": "Update the runbook to use role assignments for the Azure RBAC permission model configured on the vault."
         },
         {
           "id": "b",
-          "text": "The app will run slower because app settings are stored farther from the compute service than Key Vault."
+          "text": "Add the same permission through both Azure RBAC and a legacy access policy so either authorization model can grant it."
         },
         {
           "id": "c",
-          "text": "Azure will refuse to start any app that has secret-looking app settings."
+          "text": "Leave the runbook generic and tell engineers to try access policies first, then RBAC if the first fix does not help."
         },
         {
           "id": "d",
-          "text": "The secret will be public on the custom domain because app settings are served as HTTP headers."
+          "text": "Grant a broad subscription role to the application identity so vault-specific authorization steps are no longer needed during incidents."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Secret stores add access control, audit, rotation, and handling boundaries. Plain app settings can leak through operational workflows even when the app still starts."
+      "explanation": "The runbook has to match the vault's configured authorization model. The closest distractor is adding both RBAC and access-policy entries because it sounds safer, but the article distinguishes the models instead of recommending duplicate grants. Making secrets public or replacing workload identity with a human password is operationally worse, not better. Official docs: [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)."
     },
     {
-      "id": "q5",
+      "id": "03-plan-rotation-and-encryption-q3",
       "type": "single",
-      "scenario": "A review finds a Key Vault named `kv-orders-prod` in a shared resource group with weak tags and no clear owner. Why is that still a problem if the vault stores secrets correctly?",
+      "scenario": "The production API reads payment credentials from Key Vault through a managed identity, with separate network and authorization controls. A team plans to purge a deleted production vault immediately after migration because the new vault appears healthy. What safety feature should the review confirm before approving destructive cleanup?",
       "options": [
         {
-          "id": "a",
-          "text": "Secret storage is only part of safety. Ownership, access review, tags, and lifecycle still need to be clear."
-        },
-        {
           "id": "b",
-          "text": "Tags are the encryption key for every Key Vault secret, so missing tags make values unreadable."
+          "text": "Whether all applications and jobs were repointed to the new vault and observed successfully reading it across a full business cycle."
         },
         {
           "id": "c",
-          "text": "A shared resource group means all apps can read all secrets inside the vault."
+          "text": "Whether secret recovery and deleted-item review were tested before deciding that the old vault can be purged safely."
+        },
+        {
+          "id": "a",
+          "text": "Soft-delete and purge-protection expectations, including the recovery window and who is allowed to purge."
         },
         {
           "id": "d",
-          "text": "The vault name should contain every secret name so operators know what is inside."
+          "text": "Whether the team exported enough vault metadata to rebuild references manually if the purge happens earlier than expected."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Using Key Vault is not the whole operating model. The team still needs ownership, access review, tagging, rotation, and lifecycle practices."
+      "explanation": "Soft delete and purge protection are the controls that determine whether deletion is still recoverable and who can make it final. The closest distractor is the spreadsheet copy because migration teams often keep side records, but copying secret values makes cleanup riskier without protecting the deleted vault. Instance count and tags do not provide any recovery path. Official docs: [Azure Key Vault soft-delete overview](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview)."
     }
   ]
 }

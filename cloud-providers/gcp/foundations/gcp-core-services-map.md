@@ -1,7 +1,7 @@
 ---
 title: "GCP Core Services Map"
 description: "Map one application request to the core Google Cloud services behind traffic, compute, data, identity, releases, and operations."
-overview: "A first GCP service map connects one real application request to the service families that run, protect, store, deploy, and observe it. This article follows a ticket-booking API across Cloud Run, load balancing, Cloud SQL, Cloud Storage, service accounts, Secret Manager, Artifact Registry, Cloud Build, and Cloud Operations."
+overview: "A first GCP service map helps you connect one application request to the service families that run, protect, store, deploy, and observe it. The example follows a simple ticket-booking backend and introduces each Google Cloud service only after its job is clear."
 tags: ["gcp", "cloud-run", "cloud-sql", "cloud-storage"]
 order: 1
 id: article-cloud-providers-gcp-foundations-gcp-core-services-map
@@ -13,408 +13,301 @@ aliases:
 
 ## Table of Contents
 
-1. [The Map We Are Building](#the-map-we-are-building)
-2. [Traffic: Getting the Request to the Backend](#traffic-getting-the-request-to-the-backend)
-3. [Runtime: Choosing Where the Code Runs](#runtime-choosing-where-the-code-runs)
-4. [State: Choosing Where the Data Lives](#state-choosing-where-the-data-lives)
-5. [Identity and Secrets: Letting the Code Call GCP Safely](#identity-and-secrets-letting-the-code-call-gcp-safely)
-6. [Delivery: Turning Source Code Into a Safe Release](#delivery-turning-source-code-into-a-safe-release)
-7. [Operations: Logs, Metrics, Traces, and First Production Review](#operations-logs-metrics-traces-and-first-production-review)
-8. [What's Next](#whats-next)
+1. [What a GCP Service Map Is](#what-a-gcp-service-map-is)
+2. [The Example App](#the-example-app)
+3. [Traffic: How Users Reach the App](#traffic-how-users-reach-the-app)
+4. [Compute: Where the Code Runs](#compute-where-the-code-runs)
+5. [Data: Where the App Keeps State](#data-where-the-app-keeps-state)
+6. [Identity and Secrets: How the App Gets Permission](#identity-and-secrets-how-the-app-gets-permission)
+7. [Delivery: How Code Turns Into a Release](#delivery-how-code-turns-into-a-release)
+8. [Operations: How You Know What Happened](#operations-how-you-know-what-happened)
+9. [Putting the Map Together](#putting-the-map-together)
+10. [References](#references)
 
-## The Map We Are Building
-<!-- section-summary: A GCP service map connects each job in one real application request to the service family that usually owns that job. -->
+## What a GCP Service Map Is
+<!-- section-summary: A GCP service map connects each job in one application request to the Google Cloud service family that usually owns that job. -->
 
-Imagine you have already built a small API on your laptop. It listens on `localhost:8080`, accepts a checkout request, writes an order row, saves a receipt file, and prints logs to the terminal. That local app already has the same jobs a cloud app has. It needs an entry point, a runtime, durable data, a safe way to read secrets, a release path, and evidence when something breaks.
+You can understand Google Cloud by looking at an app you already know. Picture a small backend on your laptop. It listens on `localhost:8080`, receives a browser request, writes data, saves a file, reads an API key, prints logs, and returns a response. Nothing about that flow is cloud-specific yet.
 
-A **GCP service map** ties those jobs to Google Cloud services. The map keeps the first conversation practical. Instead of opening the whole Google Cloud product catalog, we follow one request and ask which service family owns each job. In this article the request belongs to `ticket-api`, a backend for a small event-ticketing company. A customer chooses two seats, presses Buy, and waits for a ticket with a QR code.
+That local app already has the same jobs as a cloud app. Someone needs to reach it. The code needs CPU and memory. Data needs to survive after the process stops. Sensitive values need a safer home than one local `.env` file. New code needs a release path. After an outage, you need evidence instead of guesses.
 
-That single request needs several pieces. The browser needs an HTTPS entry point. The API code needs a runtime. The seat reservation needs a relational transaction. The ticket PDF needs object storage. The payment provider token needs a secret store. The release needs a build artifact and a deployed version. The team needs logs, metrics, traces, and rollback evidence when launch traffic arrives.
+A **GCP service map** connects those application jobs to Google Cloud services. The map answers a practical beginner question: "I know what my app needs to do, so which Google Cloud service usually handles each job?"
 
-A **managed service** means Google operates part of the platform for you, such as servers, request routing, scaling systems, database maintenance workflows, or logging pipelines. The team still owns application design, security choices, data shape, cost review, release decisions, and production behavior. Managed services reduce machine care, and they do not remove engineering responsibility.
+For AWS readers, use the same habit you use in AWS: follow one request and separate entry, compute, data, identity, delivery, and operations. The concrete AWS service anchors appear section by section after the matching GCP idea is introduced.
 
-![One request, six GCP jobs](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/request-service-map.png)
-*A checkout request is easier to place when each service name is tied to a job: entry, runtime, state, secrets, evidence, and review.*
+Before naming products, look at the jobs:
 
-Here is the first service map for the ticketing API. The table gives each product family a job, then the rest of the article walks through the request in the same order.
-
-| Application job | Common GCP services | What the team checks first |
+| Application job | Plain English question | Ticketing example |
 |---|---|---|
-| Accept web or mobile traffic | **Cloud Run ingress**, **Cloud Load Balancing**, **Cloud Armor** | domain, TLS, route, allowed callers, protection policy |
-| Run backend code | **Cloud Run**, **Compute Engine**, **Google Kubernetes Engine** | container contract, scaling behavior, operating-system ownership |
-| Store relational business data | **Cloud SQL**, **AlloyDB**, **Spanner** | transactions, backups, high availability, connection path |
-| Store files, exports, and backups | **Cloud Storage** | bucket location, access control, lifecycle rule, retention rule |
-| Store document-style app state | **Firestore** | document shape, indexes, query pattern, consistency needs |
-| Analyze historical data | **BigQuery** | dataset location, partitioning, query cost, dashboard access |
-| Give workloads an identity | **Service accounts**, **IAM**, **Application Default Credentials** | least privilege, attached service account, key-file avoidance |
-| Store secrets and config safely | **Secret Manager**, **Cloud KMS** | secret versions, runtime access, rotation path, encryption needs |
-| Build and release software | **Cloud Build**, **Artifact Registry**, **Cloud Deploy**, **Cloud Run revisions** | image tag, provenance, approval, rollout, rollback |
-| See what happened in production | **Cloud Logging**, **Cloud Monitoring**, **Cloud Trace**, **Error Reporting** | logs, metrics, alerts, latency traces, error groups |
+| Public entry | How does a user reach the app safely? | A customer opens `tickets.example.com`. |
+| Code execution | Where does the backend code run? | The purchase API receives the request and runs business logic. |
+| Durable state | Where does the app keep important data? | Seats, payments, ticket PDFs, and events need storage. |
+| Permission | Which identity may the app use? | The backend needs permission to write files and read secrets. |
+| Sensitive values | Where do private values live? | The payment provider key needs controlled access. |
+| Release path | How does source code turn into a running version? | A new purchase API version reaches production. |
+| Evidence | How do you know what happened? | Logs, metrics, traces, and audit records explain failures. |
 
-The first path stays small. The browser calls a public HTTPS endpoint. The request reaches Cloud Run. Cloud Run writes order data to Cloud SQL, saves the ticket PDF in Cloud Storage, reads a payment token from Secret Manager, and sends production evidence to Cloud Logging, Cloud Monitoring, and Cloud Trace.
+The word **service** here means a managed building block provided by Google Cloud. A managed service takes over part of the platform work for you. One service may route traffic. Another may run code. Another may store files. Another may collect logs. You still decide how the application behaves, how data is shaped, which permissions are safe, how releases work, and how the team responds during incidents.
 
-That path gives the rest of the article a natural order. Traffic reaches the platform first, so we start at the entry point. After that, the request needs running code, and the runtime choice decides how much infrastructure work the team accepts.
+The rest of the article reveals the service names in the same order as the request. First you learn the job. Then you learn the Google Cloud service that usually owns that job.
 
-## Traffic: Getting the Request to the Backend
-<!-- section-summary: Traffic services receive callers, apply the first routing and protection decisions, and send the request to the backend runtime. -->
+## The Example App
+<!-- section-summary: One small ticket-booking flow gives every later service a concrete job instead of a random product name. -->
 
-**Traffic** means the path a request takes before it reaches your application code. For `ticket-api`, traffic starts in a browser or mobile app and arrives as an HTTPS request. The first GCP decision is the entry point: a direct Cloud Run HTTPS URL for a small service, or a load balancer in front of one or more backends for shared domains, route rules, custom TLS control, private patterns, and edge protection.
+The example is a small event-ticketing backend called `ticket-api`. A customer chooses two concert seats, enters payment details, and receives a QR-code ticket. You can follow this flow before knowing the Google Cloud product names, because the work is normal application work first. The cloud service names only matter after the application jobs are clear.
 
-**TLS certificates** are the files browsers use to verify and encrypt HTTPS connections. In a small service, Cloud Run can provide a direct HTTPS endpoint. In a larger production setup, the load balancer often owns the public domain and certificate, then forwards accepted traffic to the backend service.
+The example is intentionally ordinary. A ticket app has work a beginner can picture: show a page, run backend code, protect seat reservations, keep ticket files, store private provider keys, and leave evidence after a failed purchase. Those jobs map cleanly to Google Cloud services without turning the article into a product-name list.
 
-**Cloud Run** is Google Cloud's managed way to run a containerized web service. A **container** is a packaged application process with its runtime files and dependencies. **Ingress** means the entry path into a service, so Cloud Run ingress controls which callers can reach the service.
+The customer request moves through ordinary application work. The browser sends a purchase request. The backend checks whether the seats are still available. The backend records the order and payment attempt. It generates a ticket PDF or QR image. It saves that file. It may publish a message so another piece of code can send an email. It records logs and metrics so the team can investigate errors later.
 
-**Cloud Load Balancing** sits in front of one or more backends and decides where each request should go. In a production ticketing system, the same domain might route `/api/*` to the API, `/assets/*` to static files, and `/admin/*` to a separate service. **Cloud Armor** can add edge security rules such as allowlists, denylists, rate-based controls, and preconfigured web attack protections.
+The request gives the article its order. A user reaches the app. Code runs. Data is saved. Permissions are checked. Secrets are accessed. A release path changes the running version. Operations evidence tells the team what happened.
 
-A first Cloud Run service can start with one direct deploy. The command below creates or updates the service named `ticket-api` with one container image. It includes four important choices: `--image` points to the exact container image, `--region` places the service, `--allow-unauthenticated` lets public callers invoke it, and `--service-account` attaches the workload identity the code will use when calling other Google Cloud APIs.
+## Traffic: How Users Reach the App
+<!-- section-summary: Traffic services receive callers, protect the public entry path, and route requests toward the backend code. -->
 
-```bash
-gcloud run deploy ticket-api \
-  --image=us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api:2026-06-14-8f31c2a \
-  --region=us-central1 \
-  --allow-unauthenticated \
-  --service-account=ticket-api@ticket-prod.iam.gserviceaccount.com
-```
+**Traffic** means the path between a user and your application. On your laptop, the path is tiny: the browser calls `localhost:8080`, and the process on your machine receives the request. In production, the user is outside your laptop and outside your private network. The app needs a public name, HTTPS, routing rules, and protection from abusive traffic.
 
-A beginner should expect output that names the service URL and the deployed revision. The URL confirms where public traffic enters, and the revision gives operations a version name to use later during rollback.
+For the ticketing app, the public URL might be `https://tickets.example.com/api/purchase`. A beginner-friendly way to read that URL is: the customer is reaching the ticketing system over HTTPS, using the hostname `tickets.example.com`, and asking for the `/api/purchase` path.
 
-```console
-Deploying container to Cloud Run service [ticket-api] in project [ticket-prod] region [us-central1]
-OK Deploying new service... Done.
-  OK Creating Revision...
-  OK Routing traffic...
-Done.
-Service [ticket-api] revision [ticket-api-00001-xad] has been deployed and is serving 100 percent of traffic.
-Service URL: https://ticket-api-uc.a.run.app
-```
+Google Cloud has several services for this public entry path:
 
-That first service now has a managed HTTPS entry point. A mature setup may put an external Application Load Balancer in front of Cloud Run through a serverless network endpoint group, which is the load balancer's way to point traffic at a serverless backend. The direct service URL is enough for orientation, while a later networking article can go deep on load balancer resources, certificates, DNS, and private routing.
+| Service | Beginner definition | Ticketing example |
+|---|---|---|
+| **Cloud DNS** | Publishes DNS records for names you own. | `tickets.example.com` points to the public entry point. |
+| **TLS certificate** | Proves the HTTPS endpoint is allowed to serve a hostname and helps encrypt the connection. | The browser trusts `https://tickets.example.com`. |
+| **Cloud Load Balancing** | Receives requests and chooses which backend should handle each one. | `/api/*` goes to the purchase backend, while `/assets/*` can go to static files. |
+| **Cloud Armor** | Applies security rules at the edge before traffic reaches the backend. | A rule slows repeated purchase attempts from abusive clients. |
 
-Traffic gets the customer request to the backend boundary. The next question is where the backend process runs. GCP gives several compute shapes, and each one changes the amount of platform work the team owns.
+For AWS readers, Cloud DNS is closest to Route 53, Cloud Load Balancing is closest to Elastic Load Balancing or an Application Load Balancer for this path, and Cloud Armor fills a similar space to AWS WAF-style edge protection.
 
-## Runtime: Choosing Where the Code Runs
-<!-- section-summary: Runtime services run the application code, and the main choice is how much infrastructure control the team needs. -->
+This section is only about the path into the system. DNS owns the name. HTTPS owns trust and encryption. The load balancer owns routing. Cloud Armor owns edge protection. After those decisions, the request reaches the place where the application code runs.
 
-**Runtime** means the place where your application process runs. For `ticket-api`, that process might be a Node.js, Go, Java, Python, or Rust HTTP server. GCP can run that code as a managed container service, as a virtual machine process, or as a Kubernetes workload.
+That leads naturally to compute.
 
-Cloud Run is the natural first runtime for many backend APIs because it runs containers on managed infrastructure. The team provides a container image, sets CPU and memory, configures environment variables and secrets, and Cloud Run handles request routing to running instances. The container needs to follow the Cloud Run container contract, including listening on the port from the `PORT` environment variable and writing logs to standard output and standard error.
+## Compute: Where the Code Runs
+<!-- section-summary: Compute services run application code, and the main choice is how much infrastructure control the team needs. -->
+
+**Compute** is the part of Google Cloud that gives your code a place to run. On your laptop, you might start the backend with `npm start`, `go run`, `python app.py`, or a Docker command. In Google Cloud, a compute service gives that code CPU, memory, network access, startup rules, logs, and scaling behavior on Google-managed infrastructure.
+
+A **container** is a packaged application process with the files, libraries, runtime, and startup command it needs. If your backend already runs in a container on your laptop, Google Cloud can run that container for real users.
+
+**Cloud Run** is Google Cloud's managed service for running containers and request-driven backend services. You provide a container image. Cloud Run starts instances of that image, sends requests to them, scales the number of instances up or down, records revision history, captures logs, and attaches a service account for permissions.
+
+For `ticket-api`, Cloud Run is a good first compute choice because the app has a clear request shape. A customer sends a purchase request, the backend handles the request, and the response returns to the browser. The team can focus on application behavior before taking on virtual machine patching or Kubernetes cluster operations.
+
+After Cloud Run exists, it can also expose a generated HTTPS URL for early testing. That URL belongs in the compute discussion because it comes from the service that runs the code. A customer-facing production app usually adds the traffic services from the previous section so the public path uses a stable domain, managed certificate, shared routing, and edge policy.
 
 ![Runtime choices by ownership](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/runtime-ownership-map.png)
-*Runtime choice is an ownership choice. The more control the team asks for, the more operating work the team must plan for.*
+*Runtime choice is an ownership choice. More control usually adds more operating work.*
 
-The Cloud Run deploy grows as the service map fills in. The next version connects the runtime to Cloud SQL, environment variables, and Secret Manager. The command still deploys one service, but it now shows how compute, data, identity, and configuration meet at runtime.
+Cloud Run is one compute choice, and there are others:
+
+| Compute service | Beginner definition | Good fit |
+|---|---|---|
+| **Cloud Run** | Runs containers on managed infrastructure with request-based scaling. | Web APIs, small backends, event handlers, simple workers. |
+| **Compute Engine** | Gives you virtual machines with operating-system control. | Legacy software, custom agents, special OS packages, server-style workloads. |
+| **Google Kubernetes Engine** | Runs Kubernetes clusters on Google Cloud. | Many services that need Kubernetes APIs, cluster policy, sidecars, or platform controls. |
+
+For AWS readers, Compute Engine maps closely to EC2, and GKE maps closely to EKS. Cloud Run is closest to App Runner for request-driven containers, with some Lambda-like serverless scaling behavior.
+
+For the ticketing product, a practical first shape could use Cloud Run for the public purchase API. A legacy nightly settlement script might stay on Compute Engine because it expects a Linux VM and local packages. A larger platform with many services and shared Kubernetes policy might use GKE later.
+
+The request can now reach the system and run code. The next question is where the app keeps the data created by that code.
+
+## Data: Where the App Keeps State
+<!-- section-summary: Data services split by data shape, so each part of the app state goes to the service that matches how the app reads and writes it. -->
+
+**State** is data the app must remember after one request ends. A ticket purchase creates several kinds of state. The seat reservation and order need strong database rules. The ticket PDF behaves like a file. A checkout draft may behave like a document. Sales reports need historical event data.
+
+A beginner mistake is putting every kind of data into one place. A cloud app is easier to reason about after you separate data by shape:
+
+| Data shape | What it means | GCP service that often fits |
+|---|---|---|
+| **Relational rows** | Tables, relationships, constraints, and transactions. | Cloud SQL, AlloyDB, Spanner |
+| **Object files** | Whole files or byte payloads with names and metadata. | Cloud Storage |
+| **Documents** | App-shaped records read by path or indexed query. | Firestore |
+| **Analytics events** | Many historical records queried for reports. | BigQuery |
+| **Messages** | Work that another service should process later. | Pub/Sub |
+
+For AWS readers, Cloud SQL is closest to RDS, Cloud Storage is closest to S3, Firestore is closest to DynamoDB for document-style app state, BigQuery sits closer to Redshift or Athena-style analytics, and Pub/Sub overlaps with SNS, SQS, and EventBridge messaging ideas.
+
+**Cloud SQL** is Google Cloud's managed relational database service for PostgreSQL, MySQL, and SQL Server. It fits ticket purchases because seat reservations need transactions. A transaction lets the app reserve seats, create the order, and record the payment attempt as one coordinated database change. If payment recording fails, the database can roll the reservation back instead of leaving the seat in a broken state.
+
+**Cloud Storage** stores objects in buckets. An object is file-like data plus metadata. For the ticketing app, a generated PDF ticket can live at an object name such as `tickets/2026/06/order-88421.pdf`. The database stores the object name, and Cloud Storage stores the PDF bytes.
+
+**Firestore** is a document database. It can fit a checkout draft because the app may want one document that contains selected seats, email address, timer state, and partial payment state. The app can update that document as the customer moves through checkout.
+
+**BigQuery** is an analytics warehouse. It fits questions that scan lots of historical events, such as sales by venue, failed payments by provider, or campaign conversion by hour. Those questions belong outside the live purchase request because one customer needs the purchase API to answer quickly.
+
+**Pub/Sub** is a messaging service. After a purchase succeeds, `ticket-api` can publish a `ticket.purchased` message. A separate worker can send email, notify a mobile app, or update a CRM system after the customer already has a response.
+
+The app now has a place to run and places to keep state. The next problem is permission. The backend needs its own workload identity instead of borrowing a human user's access.
+
+## Identity and Secrets: How the App Gets Permission
+<!-- section-summary: Identity and secret services give the runtime scoped access to GCP APIs without storing long-lived keys inside the application. -->
+
+**Identity** answers the question, "Who is calling Google Cloud?" For a person, the answer might be a user signed in through a company identity provider. For running code, the answer should usually be a **service account**. This separation matters because production software keeps running after one developer closes a laptop, changes teams, or leaves the company. The app needs an identity that belongs to the workload itself.
+
+A **service account** is a Google Cloud identity for software, automation, and workloads. The `ticket-api` service account can receive only the permissions the app needs: connect to the database, write ticket files, access a payment secret, and send logs or metrics. A dedicated workload identity keeps production access separate from a developer's personal account.
+
+**IAM**, Identity and Access Management, is the access-control system that grants permissions. IAM uses three important ideas:
+
+| IAM idea | Simple definition | Ticketing example |
+|---|---|---|
+| **Principal** | The caller receiving access. | `ticket-api@ticket-prod.iam.gserviceaccount.com` |
+| **Role** | A bundle of permissions. | A role that allows reading secret versions. |
+| **Resource** | The thing being accessed. | A secret, bucket, project, database, or service. |
+
+For AWS readers, a GCP service account often fills the workload-identity job that an IAM role fills for an AWS service. One key difference is that a GCP service account is also an IAM principal that you grant roles to directly.
+
+The permission story should stay narrow. The backend needs access to the payment secret for this service. It needs write access to the ticket-file bucket. It needs database connection permission. Broad project administration would give the runtime far more access than this request needs.
+
+Secrets need their own home. A **secret** is a sensitive value such as an API key, webhook signing key, OAuth client secret, database password, or private certificate. **Secret Manager** stores those values as named secrets with versions and IAM checks. The ticketing app can ask for `payment-api-key:latest` at runtime instead of baking the payment key into the container image.
+
+Google client libraries usually find credentials through **Application Default Credentials**, or **ADC**. On your laptop, ADC can use local developer credentials. On Cloud Run, ADC can use the attached service account. That gives the same code a safe credential path in production without downloading a service-account key file into the app.
+
+Now the app has runtime permissions and secrets. The next question is how a source-code change turns into a controlled production version.
+
+## Delivery: How Code Turns Into a Release
+<!-- section-summary: Delivery services create a chain from source code to image, deployed revision, traffic movement, and rollback evidence. -->
+
+**Delivery** is the path from source code to a running production version. For `ticket-api`, a useful delivery path should answer four questions: which source change was built, which artifact was produced, which version is serving traffic, and how can the team move traffic back if the release breaks?
+
+**Artifact Registry** stores build artifacts such as container images. A container image is the packaged version of the app that Cloud Run can start. A clear image tag or digest helps the team connect a running service back to a build.
+
+**Cloud Build** runs build steps in Google Cloud. It can build the container image, run tests, push the image to Artifact Registry, and record build evidence. A small team may use a simple build trigger. A larger team may require approvals, vulnerability checks, and deployment promotion rules.
+
+**Cloud Run revisions** are named versions of a Cloud Run service. Every deploy creates a revision. That matters because a revision gives the team a concrete rollback target. If revision `ticket-api-00043` produces errors, the team can move traffic back to `ticket-api-00042` after checking that it was the last healthy version.
+
+**Cloud Deploy** can manage delivery pipelines across environments such as development, staging, and production. It is useful after the team needs repeatable promotion, approvals, and release records across multiple targets.
+
+For AWS readers, Artifact Registry is closest to ECR for container images, Cloud Build is closest to CodeBuild, and Cloud Deploy covers part of the promotion and rollout space you may know from CodePipeline and CodeDeploy.
+
+Here is the compact release path for the ticket app. A developer merges a source change that fixes seat-hold expiration in commit `9f4c2d1`. Cloud Build runs tests, builds the container, and pushes an image digest such as `us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api@sha256:61ab...`. The digest matters because a tag can move later, while the digest points to the exact image bytes that Cloud Run starts.
+
+The team can deploy that image as a new revision without sending normal customer traffic to it:
 
 ```bash
 gcloud run deploy ticket-api \
-  --image=us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api:2026-06-14-8f31c2a \
+  --image=us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api@sha256:61ab... \
   --region=us-central1 \
-  --service-account=ticket-api@ticket-prod.iam.gserviceaccount.com \
-  --add-cloudsql-instances=ticket-prod:us-central1:ticket-db \
-  --set-env-vars=ENV=prod,RECEIPT_BUCKET=ticket-receipts-prod \
-  --set-secrets=PAYMENT_API_KEY=payment-api-key:latest
+  --no-traffic \
+  --tag=release-43
 ```
 
-The flags carry production meaning. `--add-cloudsql-instances` connects the service to the Cloud SQL instance through the managed connection path. `--set-env-vars` passes non-secret runtime settings into the container. `--set-secrets` maps a Secret Manager secret version into the runtime, so the payment key can rotate without baking a secret into the image.
+Important parts:
 
-After deployment, a read-only describe command helps a beginner verify the runtime facts without changing anything.
+- `--image` connects the running service back to the build artifact.
+- `--no-traffic` creates the revision while the public purchase path still uses the old revision.
+- `--tag=release-43` gives the team a direct URL for smoke tests before customer traffic moves.
 
-```bash
-gcloud run services describe ticket-api \
-  --region=us-central1 \
-  --project=ticket-prod \
-  --format="yaml(status.url,spec.template.spec.serviceAccountName,spec.template.metadata.annotations,spec.template.spec.containers[0].env)"
-```
-
-Useful output should show the service URL, the attached service account, the Cloud SQL connection annotation, and the environment variables or secret references. Healthy output names the expected service account and the expected database instance.
-
-```yaml
-status:
-  url: https://ticket-api-uc.a.run.app
-spec:
-  template:
-    metadata:
-      annotations:
-        run.googleapis.com/cloudsql-instances: ticket-prod:us-central1:ticket-db
-    spec:
-      serviceAccountName: ticket-api@ticket-prod.iam.gserviceaccount.com
-      containers:
-      - env:
-        - name: ENV
-          value: prod
-        - name: RECEIPT_BUCKET
-          value: ticket-receipts-prod
-        - name: PAYMENT_API_KEY
-          valueFrom:
-            secretKeyRef:
-              key: latest
-              name: payment-api-key
-```
-
-**Compute Engine** runs virtual machines. A **virtual machine** is a software server with its own operating system, CPU, memory, disk, and network settings. Teams usually pick it for workloads that need operating-system control, special agents, custom startup scripts, unusual networking, licensed software, persistent local processes, or migration compatibility with existing servers.
-
-**Google Kubernetes Engine**, usually shortened to **GKE**, runs Kubernetes clusters on Google Cloud. **Kubernetes** is a platform for running many containers across a group of machines with deployment, networking, and scheduling rules. Teams usually pick GKE when they already need Kubernetes APIs, many services sharing one cluster platform, admission policies, sidecars, custom controllers, service meshes, or fine-grained pod scheduling.
-
-The ticketing company can start with Cloud Run because `ticket-api` has a clean container boundary and request-based traffic. Later, the team might keep the API on Cloud Run, move long-running stream processors to GKE, and keep a legacy batch service on Compute Engine. The service map stays useful because each runtime has a job.
-
-At this point, the API can receive a request and run code. The request still needs durable state, because checkout data must survive container restarts and scale-downs.
-
-## State: Choosing Where the Data Lives
-<!-- section-summary: Data services split by data shape, so each part of the application state goes to the service that matches how the app reads and writes it. -->
-
-**State** means data the system must remember after one request finishes. In `ticket-api`, the order row, seat reservation, payment status, ticket PDF, customer support notes, and sales dashboard history all count as state. GCP has several data services because each kind of state has a different shape and access pattern.
-
-**Relational data** means data organized in tables with relationships between records, such as `orders`, `customers`, `seats`, and `payments`. A **transaction** is a group of database changes that succeeds or rolls back as one unit, which matters when two customers try to buy the same seat. **Cloud SQL** is Google Cloud's managed relational database service for PostgreSQL, MySQL, and SQL Server, so it fits ordinary application records that need SQL, transactions, indexes, constraints, and familiar database tooling.
-
-The first command creates the managed PostgreSQL instance, and the second creates the application database inside it. `--availability-type=REGIONAL` asks Cloud SQL to use a high availability configuration in the selected region, and `--tier` chooses CPU and memory shape for the instance.
-
-```bash
-gcloud sql instances create ticket-db \
-  --database-version=POSTGRES_16 \
-  --region=us-central1 \
-  --availability-type=REGIONAL \
-  --tier=db-custom-2-7680
-
-gcloud sql databases create tickets \
-  --instance=ticket-db
-```
-
-A beginner should look for the instance name, database version, region, and state after creation. The exact operation ID can vary, but `RUNNABLE` or a successful create message tells the team the database is ready for follow-up configuration.
+Useful output should name the revision and show that it has no normal traffic yet:
 
 ```console
-Creating Cloud SQL instance for POSTGRES_16...done.
-Created [https://sqladmin.googleapis.com/sql/v1beta4/projects/ticket-prod/instances/ticket-db].
-
-Created database [tickets].
+Service [ticket-api] revision [ticket-api-00043-hld] has been deployed and is serving 0 percent of traffic.
+Tag URL: https://release-43---ticket-api-7a2b3c-uc.a.run.app
 ```
 
-A real production review would also check automated backups, point-in-time recovery, maintenance windows, database flags, user management, connection limits, and whether the application reaches the database through an approved private or managed connection path. Cloud SQL removes much of the database operations burden, but the team still owns schema design, indexes, query behavior, migrations, and capacity choices.
-
-**Cloud Storage** stores objects in buckets. An object is file-like data plus metadata, such as `tickets/2026/06/order-88421.pdf` or `exports/daily-sales-2026-06-14.csv`. The ticketing API can store generated ticket PDFs in Cloud Storage because a PDF works as durable object data with metadata, lifecycle rules, and bucket access policies.
-
-```bash
-gcloud storage buckets create gs://ticket-receipts-prod \
-  --location=us-central1 \
-  --uniform-bucket-level-access
-```
-
-The `--location` flag places the bucket data, and `--uniform-bucket-level-access` makes access depend on bucket-level IAM instead of a mixture of IAM and object ACLs. Useful output should confirm the bucket URI.
-
-```console
-Creating gs://ticket-receipts-prod/...
-```
-
-The bucket should have a clear location, lifecycle policy, access policy, and retention decision. For example, ticket PDFs may need to stay available for customer support for one year, while temporary export files may expire after seven days. The same storage service can hold both, but lifecycle rules and naming conventions help the team treat them differently.
-
-**Firestore** is a document database. It fits data that naturally lives as documents and collections, such as user preferences, shopping-cart drafts, notification state, or mobile app sync data. For `ticket-api`, Firestore could hold a short-lived checkout session document while the customer moves through the payment flow.
-
-**BigQuery** is an analytics data warehouse. It fits historical questions such as "Which shows sold out fastest?", "Which campaign produced refunds?", or "What was checkout latency during the launch hour?" The application can keep the source-of-truth order in Cloud SQL and send clean event data into BigQuery for reporting and later analysis.
-
-**Pub/Sub** and **Memorystore** often appear near the data layer, even though they serve different jobs. Pub/Sub moves messages between systems, such as sending `ticket.purchased` events to an email worker after checkout. Memorystore provides managed Redis or Valkey-style caching, which can help with hot read paths such as event metadata that many buyers request at the same time.
-
-The API can now run and save data, but one question remains before it can safely call these services. The code needs permission. In GCP, that leads directly to service accounts, IAM roles, Application Default Credentials, and Secret Manager.
-
-## Identity and Secrets: Letting the Code Call GCP Safely
-<!-- section-summary: Identity and secret services give the runtime scoped access to GCP APIs without storing long-lived keys inside the application. -->
-
-**Identity** answers which caller is making a request to Google Cloud. For a running application, the caller should usually be a **service account**, which is a special Google Cloud account meant for workloads instead of humans. The `ticket-api` service account can receive only the permissions needed to read its secret, connect to Cloud SQL, write ticket PDFs, and emit telemetry.
-
-**IAM**, or Identity and Access Management, grants permissions through roles on resources. A **principal** is the identity that receives access, and a **role** is a bundle of permissions such as reading secrets or connecting to Cloud SQL. A binding connects a principal to a role on a project, folder, organization, or individual resource.
-
-These two commands grant database connection permission at the project level and object-write style permission on one bucket. The important detail is scope: the Cloud SQL role applies to the project because the connection permission is project-scoped, while the Storage role is attached directly to the receipts bucket.
-
-```bash
-gcloud projects add-iam-policy-binding ticket-prod \
-  --member=serviceAccount:ticket-api@ticket-prod.iam.gserviceaccount.com \
-  --role=roles/cloudsql.client
-
-gcloud storage buckets add-iam-policy-binding gs://ticket-receipts-prod \
-  --member=serviceAccount:ticket-api@ticket-prod.iam.gserviceaccount.com \
-  --role=roles/storage.objectUser
-```
-
-The output usually includes the updated policy. A beginner should find the role and service account in the bindings rather than trusting that the command succeeded.
-
-```yaml
-bindings:
-- members:
-  - serviceAccount:ticket-api@ticket-prod.iam.gserviceaccount.com
-  role: roles/cloudsql.client
-etag: BwYJ6u2x3mQ=
-version: 1
-```
-
-**Application Default Credentials**, often called **ADC**, is the strategy Google client libraries use to find credentials automatically. In local development, ADC can use credentials created by `gcloud auth application-default login`. In production on Cloud Run, ADC can use the attached service account through the metadata server, which is a local runtime endpoint that gives the workload short-lived identity information without putting downloaded key files in the application.
-
-The application code can stay simple because the library handles credential lookup. The example below writes a ticket PDF to the bucket named in runtime configuration. The same code can run locally with developer ADC and in production with the attached service account.
-
-```js
-import {Storage} from "@google-cloud/storage";
-
-const storage = new Storage();
-
-export async function saveTicketPdf(orderId, pdfBuffer) {
-  await storage
-    .bucket(process.env.RECEIPT_BUCKET)
-    .file(`tickets/${orderId}.pdf`)
-    .save(pdfBuffer, {
-      contentType: "application/pdf",
-      resumable: false
-    });
-}
-```
-
-The important fields are `RECEIPT_BUCKET`, which selects the bucket, and `contentType`, which tells consumers the object is a PDF. The code has no JSON key file path because the client library asks ADC for credentials. That keeps long-lived private keys out of the container image, out of environment variables, and out of source control.
-
-**Secret Manager** stores sensitive values such as API tokens, webhook signing secrets, database passwords for legacy clients, and private certificates. A secret has versions, so rotation can add a new version while the application keeps the same secret name.
-
-```bash
-printf "%s" "$PAYMENT_API_KEY" | gcloud secrets create payment-api-key \
-  --data-file=- \
-  --replication-policy=automatic
-
-gcloud secrets add-iam-policy-binding payment-api-key \
-  --member=serviceAccount:ticket-api@ticket-prod.iam.gserviceaccount.com \
-  --role=roles/secretmanager.secretAccessor
-```
-
-`--data-file=-` reads the secret payload from standard input, and `--replication-policy=automatic` lets Google manage secret replication. The IAM binding output should show the runtime service account under `roles/secretmanager.secretAccessor`.
-
-Identity and secrets give the running service scoped access to the rest of GCP. After that, the team needs a repeatable way to build the container, store the artifact, release it, and move traffic.
-
-## Delivery: Turning Source Code Into a Safe Release
-<!-- section-summary: Delivery services create a chain from source code to image, deployed revision, traffic movement, and rollback evidence. -->
-
-**Delivery** means the path from source code to a running production version. For `ticket-api`, a healthy delivery path builds a container image, stores it in a registry, deploys it to Cloud Run, records the new revision, moves traffic in a controlled way, and leaves enough evidence for a reviewer during an incident. A **registry** is a storage place for build artifacts, and a **revision** is a named Cloud Run version created from one deploy.
-
-**Artifact Registry** stores build artifacts such as container images and language packages. A production Cloud Run deployment should point at a clear image tag, digest, commit SHA, or build number. Tags like `latest` make operations work harder because the running service no longer points clearly to one build.
-
-The first command creates a Docker repository in Artifact Registry. The second command builds the current source tree and pushes one tagged image. `--repository-format=docker` selects container image storage, `--location` places the repository, and `--tag` names the image that Cloud Run will deploy.
-
-```bash
-gcloud artifacts repositories create apps \
-  --repository-format=docker \
-  --location=us-central1
-
-gcloud builds submit \
-  --tag=us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api:2026-06-14-8f31c2a
-```
-
-Useful output links the build to a build ID and the pushed image. In a real pipeline, that build ID should connect back to source commit, test result, and approval evidence.
-
-```console
-Created repository [apps].
-
-Creating temporary archive of 48 file(s) totalling 1.8 MiB before compression.
-Uploading tarball of [.] to [gs://ticket-prod_cloudbuild/source/1718370000.123456.tgz]
-Created [https://cloudbuild.googleapis.com/v1/projects/ticket-prod/locations/global/builds/7a52c9d1-91a6-4a0d-8c2a-7c6e9d7f21b4].
-PUSH: us-central1-docker.pkg.dev/ticket-prod/apps/ticket-api:2026-06-14-8f31c2a
-DONE
-```
-
-**Cloud Run revisions** are the deploy history for a Cloud Run service. Every configuration change creates a new revision, including a new image, environment variable, secret mount, CPU setting, memory setting, or service account. This gives the team a built-in release record and a direct traffic target.
-
-During rollback, this command sends all traffic back to a known good revision. The team gets the revision name from service history before running the command.
+After a smoke test creates a test purchase, the release can receive a small traffic share:
 
 ```bash
 gcloud run services update-traffic ticket-api \
   --region=us-central1 \
-  --to-revisions=ticket-api-00042-good=100
+  --to-revisions=ticket-api-00042-green=95,ticket-api-00043-hld=5
 ```
 
-Expected output should confirm the traffic split. If the output still shows traffic on a bad revision, the rollback is incomplete.
-
-```console
-Updating traffic...done.
-Traffic:
-  100% ticket-api-00042-good
-```
-
-**Cloud Deploy** is Google Cloud's managed continuous delivery service. It can define targets, delivery pipelines, approvals, and promotion flow across environments. For a beginner service, direct Cloud Build to Cloud Run may be enough. A team with dev, staging, and production usually benefits from a delivery tool that records promotion decisions and standardizes the release path.
-
-The release path connects back to everything we have covered. A new image changes what code runs. A new revision may use a different service account, secret version, or database connection. A safe delivery process gives the team one place to answer what changed, who approved it, and how to roll back.
-
-After the release reaches production, the service still needs evidence. The team needs to see errors, latency, traffic, saturation, and request traces without logging into containers or guessing from customer reports.
-
-## Operations: Logs, Metrics, Traces, and First Production Review
-<!-- section-summary: Operations services turn production behavior into evidence, and a first production review checks access, data safety, release safety, reliability, and cost. -->
-
-**Operations** means the everyday work of understanding and improving a running system. For `ticket-api`, operations includes reading logs after a failed checkout, watching error rate during a launch, tracing a slow request through Cloud Run and Cloud SQL, and receiving alerts before customers flood support. Google Cloud groups much of this under Cloud Operations, especially Cloud Logging, Cloud Monitoring, Cloud Trace, and Error Reporting.
-
-The first operations words are simple. A **log** is a record of something that happened, such as a checkout error or payment-provider response. A **metric** is a number over time, such as request count, error rate, latency, CPU, or memory. A **trace** follows one request across several steps, which helps the team see where time went during a slow checkout.
-
-**Cloud Logging** collects logs from Google Cloud services and from application output. Cloud Run automatically captures standard output and standard error from the container, so a structured log line from the application can show up with resource labels such as service name, revision, project, and region. The team should include useful fields such as `order_id`, `request_id`, `payment_provider`, and `release_sha`, while keeping payment tokens, passwords, and unnecessary personal data out of logs.
-
-This command reads recent error logs for one Cloud Run service. The query filters on the Cloud Run resource type, the service name, and severity, while `--limit` keeps the first investigation small.
+If checkout errors rise, rollback uses the same traffic control:
 
 ```bash
-gcloud logging read \
-  'resource.type="cloud_run_revision" AND resource.labels.service_name="ticket-api" AND severity>=ERROR' \
-  --limit=20 \
-  --project=ticket-prod
+gcloud run services update-traffic ticket-api \
+  --region=us-central1 \
+  --to-revisions=ticket-api-00042-green=100
 ```
 
-Helpful output should show a timestamp, severity, revision, and the application message. The revision label is especially useful when a new release caused the problem.
+A beginner should save release evidence that answers the incident question "what changed?" For this ticket app, the useful bundle is the pull request or commit, Cloud Build ID, image digest, Cloud Run revision name, traffic split command or approval, smoke-test order ID, log query filtered by revision, error-rate snapshot, and the previous healthy revision used for rollback. That bundle connects the delivery layer back to the same request flow: source change, image, runtime revision, customer traffic, and operations evidence.
 
-```yaml
----
-insertId: 6f6x2k9f8c3
-severity: ERROR
-timestamp: "2026-06-14T19:05:12.481Z"
-resource:
-  labels:
-    service_name: ticket-api
-    revision_name: ticket-api-00043-bad
-textPayload: "payment authorization failed: provider timeout after 3000ms"
-```
+The delivery layer connects back to the map. A new release may change the container image, environment variables, secret version, service account, database connection, scaling settings, or public behavior. The team needs a release record because many incidents first raise the question: what changed?
 
-**Cloud Monitoring** collects metrics and powers dashboards and alerting policies. For a Cloud Run API, first metrics usually include request count, request latency, error count, container instance count, CPU usage, memory usage, and database connection pressure. A ticket launch needs alerts on user-facing symptoms such as high 5xx rate or checkout latency, because those symptoms show customer impact better than a single CPU graph.
+After code reaches production, the team needs evidence from the running system. That takes us to operations.
 
-**Cloud Trace** helps follow request latency across services. If checkout takes four seconds, Trace can show time spent in the handler, payment call, database query, and object upload when the application emits trace context correctly. Trace matters more as the system adds workers, events, and multiple services, because one customer request can spread across several places.
+## Operations: How You Know What Happened
+<!-- section-summary: Operations services turn production behavior into evidence through logs, metrics, traces, errors, and first-review checks. -->
 
-**Error Reporting** groups application errors so the team can see repeated failures without reading every log line manually. A single bad null reference might produce hundreds of logs during a launch. Error grouping helps the team find the main failure pattern, assign ownership, and connect it to a release or dependency issue.
+**Operations** is the everyday work of understanding a running system. After `ticket-api` launches, you need answers without attaching a debugger to a production container. Are users seeing errors? Did latency rise after a deploy? Did database connections spike? Did the payment provider fail, or did the app fail before calling it?
+
+The first operations terms are straightforward:
+
+| Signal | Beginner definition | Ticketing example |
+|---|---|---|
+| **Log** | A record of something that happened. | Payment authorization failed for one request. |
+| **Metric** | A number tracked over time. | 5xx rate, latency, request count, instance count. |
+| **Trace** | The path and timing of one request across steps. | Purchase request spent most time waiting on payment provider. |
+| **Error group** | Similar application errors grouped together. | The same timeout error appears 800 times after release. |
+| **Audit log** | A record of who changed a cloud resource. | A deploy moved traffic to a new revision. |
+
+For AWS readers, Cloud Logging and Cloud Monitoring cover much of the CloudWatch Logs and metrics space, Cloud Trace is closest to X-Ray, and audit logs play a role similar to CloudTrail.
+
+**Cloud Logging** stores and searches logs. Cloud Run can send container standard output and standard error into Cloud Logging. A useful application log should include fields that help you connect one customer symptom to one release, such as request ID, route, revision, payment provider, sanitized error code, and order ID. It should avoid payment tokens, passwords, and unnecessary personal data.
+
+**Cloud Monitoring** stores metrics and powers dashboards and alerting policies. For this service, useful first metrics include request count, 5xx count, latency, container instance count, CPU, memory, and database connection pressure.
+
+**Cloud Trace** follows request latency across steps. If checkout takes four seconds, a trace can show time in the HTTP handler, payment call, database query, object upload, and Pub/Sub publish. Trace data needs application instrumentation to be truly useful, especially after a system has more than one service.
+
+**Error Reporting** groups repeated application errors. During a popular sale, one bug can create thousands of similar log lines. Error grouping helps the team find the main failure pattern and connect it to an owner.
 
 ![First production review map](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/production-review-map.png)
-*The first production review walks across the same service map: traffic, runtime, state, identity, delivery, and operations.*
+*A first production review walks across the same map: traffic, runtime, data, identity, delivery, and operations.*
 
-A first production review should walk through the service map and ask concrete questions. The traffic layer needs a domain, TLS, allowed caller rules, and Cloud Armor decisions. The runtime needs CPU, memory, concurrency, min or max instances, region choice, and a known service account. The data layer needs backups, restore tests, lifecycle rules, retention choices, indexes, and connection limits.
+A first production review should walk through the same map:
 
-The identity review should confirm that humans and workloads have separate identities. The Cloud Run service should use a dedicated service account, and that service account should have only the roles needed for Cloud SQL, Cloud Storage, Secret Manager, and telemetry. Service account keys should be absent unless a documented legacy integration truly requires them.
+| Review area | What you should be able to point to |
+|---|---|
+| Traffic | Domain, HTTPS certificate, routing rule, allowed caller path, and edge protection decision. |
+| Compute | Runtime choice, region, scaling settings, service account, and current deployed version. |
+| Data | Database backup settings, restore practice, bucket retention, lifecycle rules, and connection limits. |
+| Identity | Separate human and workload identities, least-privilege roles, and no unnecessary service account keys. |
+| Secrets | Secret versions, runtime access, rotation path, and audit evidence. |
+| Delivery | Traceable image, active revision, approval record, rollback path, and traffic split. |
+| Operations | Logs, metrics, traces, alerts, error groups, and cost signals. |
 
-The delivery review should confirm that every production revision points to a traceable image. The team should know how to find the active revision, compare it with the previous one, move traffic back, and explain who approved the release. A rollback path needs practice before the team depends on it during an incident.
+That review is the reason a service map matters. It gives you a path through the running system instead of a pile of disconnected product names.
 
-The operations review should confirm that the team can answer customer-impact questions quickly. What is the current error rate? Which revision produced the errors? Did latency rise after the deploy? Did Cloud SQL reach connection limits? Did the payment provider fail, or did the application fail before calling it?
+## Putting the Map Together
+<!-- section-summary: The full map follows one request from public entry through runtime, data, identity, delivery, and production evidence. -->
 
-The service map now has a full request path. A customer request enters through traffic services, runs on a compute service, reads and writes data services, uses a workload identity, depends on secrets, ships through a delivery path, and leaves operational evidence. That is the first practical map of Google Cloud for application builders.
+You now have the first practical GCP map for an application request. A customer sends an HTTPS request. Traffic services receive and route it. A compute service runs the backend code. Data services store records, files, documents, events, and messages. IAM and service accounts give the runtime permission. Secret Manager keeps sensitive values out of source code and container images. Delivery services create a traceable release. Operations services show what happened after the release reaches users.
 
-## What's Next
+For the ticketing example, the first production shape could be:
 
-This article stayed at the application-service level. We named the core services and connected them to one request, because that gives every later GCP topic a practical anchor. The next foundation step is the account structure underneath those services: projects, billing accounts, regions, zones, APIs, and the resource hierarchy.
+| Layer | First service choice | Why it belongs in the map |
+|---|---|---|
+| Traffic | Cloud DNS, HTTPS certificate, load balancer, Cloud Armor | Gives users a stable and protected public entry path. |
+| Compute | Cloud Run | Runs the purchase API as a managed container service. |
+| Relational data | Cloud SQL for PostgreSQL | Protects seat reservations with transactions. |
+| Files | Cloud Storage | Stores generated ticket PDFs and exports. |
+| Messages | Pub/Sub | Sends receipt and notification work to background handlers. |
+| Identity | Service account plus IAM | Lets the app call GCP APIs with scoped permissions. |
+| Secrets | Secret Manager | Stores payment provider keys as versioned secrets. |
+| Build and release | Cloud Build, Artifact Registry, Cloud Run revisions | Connects source code to an image, revision, and rollback target. |
+| Operations | Cloud Logging, Cloud Monitoring, Cloud Trace | Gives the team evidence during normal operation and incidents. |
 
-Those pieces decide where the services live, who pays for them, which APIs can run, and how teams separate development, staging, and production. After that, service maps are easier to apply because every resource has a project boundary, a location decision, and a billing trail.
+![One request, six GCP jobs](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/request-service-map.png)
+*After the concepts are in place, the request map shows the full path: browser, public entry, code runtime, data, files, secrets, operations evidence, and review.*
 
----
+The next GCP foundation topic sits underneath this service map: projects, billing, regions, zones, enabled APIs, and quotas. Those pieces decide where the services live, who pays for them, which APIs can run, and which limits the team should check before launch.
 
-**References**
+## References
 
-- [What is Cloud Run](https://cloud.google.com/run/docs/overview/what-is-cloud-run) - Explains Cloud Run services, jobs, worker pools, containerized workloads, scaling, revisions, and managed runtime behavior.
-- [Cloud Run container runtime contract](https://cloud.google.com/run/docs/container-contract) - Documents how Cloud Run containers receive ports, requests, signals, filesystems, and logs.
-- [Cloud Run service identity](https://cloud.google.com/run/docs/securing/service-identity) - Explains how Cloud Run uses service accounts as runtime identities.
-- [Cloud Run rollbacks and traffic migration](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration) - Documents gradual rollouts, traffic splits, revision tags, and rollback patterns.
-- [Cloud Load Balancing overview](https://cloud.google.com/load-balancing/docs/load-balancing-overview) - Describes Google Cloud load balancing families and traffic distribution patterns.
-- [Cloud Armor overview](https://cloud.google.com/armor/docs/cloud-armor-overview) - Explains edge security policies, WAF rules, and DDoS-related protection features.
-- [Cloud SQL overview](https://cloud.google.com/sql/docs/introduction) - Defines Cloud SQL as a managed relational database service for MySQL, PostgreSQL, and SQL Server.
-- [Connect from Cloud Run to Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/connect-run) - Documents Cloud Run connection options and IAM requirements for Cloud SQL.
-- [Cloud Storage overview](https://cloud.google.com/storage/docs/introduction) - Explains buckets, objects, locations, storage classes, lifecycle management, and access control.
-- [Firestore overview](https://cloud.google.com/firestore/docs/overview) - Describes Firestore as a document database for mobile, web, and server development.
-- [BigQuery overview](https://cloud.google.com/bigquery/docs/introduction) - Explains BigQuery as a serverless analytics data warehouse.
-- [Pub/Sub overview](https://cloud.google.com/pubsub/docs/overview) - Describes topics, subscriptions, and asynchronous message delivery.
-- [Service accounts overview](https://cloud.google.com/iam/docs/service-account-overview) - Defines service accounts and common workload identity use cases.
-- [How Application Default Credentials works](https://cloud.google.com/docs/authentication/application-default-credentials) - Documents how Google authentication libraries find credentials in development and production.
-- [Secret Manager overview](https://cloud.google.com/security/products/secret-manager) - Describes managed storage and access control for secrets.
-- [Artifact Registry overview](https://cloud.google.com/artifact-registry/docs/overview) - Explains managed repositories for container images and build artifacts.
-- [Cloud Build overview](https://cloud.google.com/build/docs/overview) - Describes managed build steps, triggers, and CI/CD workflows.
-- [Cloud Deploy overview](https://cloud.google.com/deploy/docs/overview) - Describes delivery pipelines, targets, promotion, and deployment automation.
-- [Cloud Logging overview](https://cloud.google.com/logging/docs/overview) - Explains log collection, querying, routing, and analysis.
-- [Cloud Monitoring overview](https://cloud.google.com/monitoring/docs/monitoring-overview) - Documents metrics, dashboards, alerting, and observability workflows.
-- [Cloud Trace overview](https://cloud.google.com/trace/docs/overview) - Explains distributed tracing for latency analysis.
-- [Cloud Billing budgets and alerts](https://cloud.google.com/billing/docs/how-to/budgets) - Documents budgets and alerts for cost monitoring.
+- [Google Cloud products and services](https://cloud.google.com/products) - Official product catalog for the core Google Cloud services mentioned in this map.
+- [What is Cloud Run](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) - Defines Cloud Run as a fully managed platform for running code, functions, and containers.
+- [Cloud Load Balancing overview](https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview) - Explains Google Cloud load balancer families and traffic patterns.
+- [Cloud SQL documentation](https://docs.cloud.google.com/sql/docs) - Defines Cloud SQL as a managed relational database service for MySQL, PostgreSQL, and SQL Server.
+- [Cloud Storage documentation](https://docs.cloud.google.com/storage/docs) - Documents object storage, buckets, objects, locations, and access patterns.
+- [IAM overview](https://docs.cloud.google.com/iam/docs/overview) - Explains principals, roles, resources, allow policies, and resource hierarchy inheritance.
+- [Service accounts overview](https://docs.cloud.google.com/iam/docs/service-account-overview) - Explains service accounts as identities for workloads and automation.
+- [Secret Manager overview](https://docs.cloud.google.com/secret-manager/docs/overview) - Documents secrets, secret versions, metadata, labels, annotations, and permissions.
+- [Artifact Registry overview](https://docs.cloud.google.com/artifact-registry/docs/overview) - Explains repositories for container images and build artifacts.
+- [Deploying to Cloud Run using Cloud Build](https://docs.cloud.google.com/build/docs/deploying-builds/deploy-cloud-run) - Documents Cloud Build deployment flow for Cloud Run services.
+- [Cloud Logging documentation](https://docs.cloud.google.com/logging/docs) - Documents log storage, search, analysis, monitoring, and alerting.
+- [Cloud Monitoring documentation](https://docs.cloud.google.com/monitoring/docs) - Documents metrics, dashboards, alerting, and service health workflows.
+- [Cloud Trace overview](https://docs.cloud.google.com/trace/docs/overview) - Explains distributed tracing for latency analysis.

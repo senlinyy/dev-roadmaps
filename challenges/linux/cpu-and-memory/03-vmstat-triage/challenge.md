@@ -1,6 +1,6 @@
 ---
 title: "Use vmstat for Triage"
-sectionSlug: vmstat-the-five-second-triage-tool
+sectionSlug: vmstat-as-the-first-triage-tool
 order: 3
 ---
 
@@ -12,6 +12,5 @@ You start in `/home/dev`. Your job:
 2. **Find how many processes are waiting for CPU** (the `r` column).
 3. **Identify the I/O wait percentage** (the `wa` column under cpu).
 4. **Check for swap activity** by looking at `si` and `so` (swap in and swap out per second).
-5. **Read the reference file** at `/home/dev/vmstat-reference.txt` to confirm which column is which.
 
-The grader requires you to use `vmstat` and `cat`, and your combined output must contain the key values from the vmstat data row and the reference file content.
+The grader requires you to use `vmstat`, and your output must contain the key values from the vmstat data row.

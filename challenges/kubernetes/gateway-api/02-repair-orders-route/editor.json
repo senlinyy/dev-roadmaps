@@ -1,0 +1,23 @@
+{
+  "language": "yaml",
+  "filename": "httproute.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: orders-api\n  namespace: orders\n  labels:\n    app.kubernetes.io/part-of: orders\nspec:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "gateway.networking.k8s.io/v1", "label": "HTTPRoute API version" },
+      { "path": ["kind"], "equals": "HTTPRoute", "label": "HTTPRoute kind" },
+      { "path": ["metadata", "name"], "equals": "orders-api", "label": "HTTPRoute name" },
+      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["spec", "parentRefs", 0, "name"], "equals": "public-api", "label": "parent Gateway" },
+      { "path": ["spec", "parentRefs", 0, "namespace"], "equals": "platform-networking", "label": "parent Gateway namespace" },
+      { "path": ["spec", "parentRefs", 0, "sectionName"], "equals": "https", "label": "HTTPS listener attachment" },
+      { "path": ["spec", "hostnames"], "includes": "api.devpolaris.local", "label": "route hostname" },
+      { "path": ["spec", "rules", 0, "matches", 0, "path", "type"], "equals": "PathPrefix", "label": "path family match type" },
+      { "path": ["spec", "rules", 0, "matches", 0, "path", "value"], "equals": "/orders", "label": "orders path" },
+      { "path": ["spec", "rules", 0, "backendRefs", 0, "name"], "equals": "orders-api", "label": "orders Service backend" },
+      { "path": ["spec", "rules", 0, "backendRefs", 0, "port"], "equals": 80, "label": "orders Service port" }
+    ]
+  }
+}

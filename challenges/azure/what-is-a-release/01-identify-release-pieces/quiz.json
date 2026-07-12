@@ -1,80 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "`devpolaris-orders-api` deployed successfully, but checkout fails only in production. The image digest matches the tested build. Which release piece should the team inspect next?",
+      "scenario": "At 09:10, the release engineer records image digest `sha256:8a7b...1111` in Azure Container Registry for `devpolaris-orders-api:2026.07.09.3`. At 09:18, the candidate revision starts successfully in the staging environment and the smoke test passes. At 09:25, production telemetry still shows 100 percent of requests on `devpolaris-orders-api--v30`, and no slot swap or revision weight change has been recorded. Which release step is still missing?",
       "options": [
         {
           "id": "a",
-          "text": "Runtime configuration and secret access for the production target."
+          "text": "Move production traffic to the approved candidate and verify health while it serves user requests."
         },
         {
           "id": "b",
-          "text": "The pull request title, because the artifact already proves runtime behavior."
+          "text": "Record the staging verification and release approval in the ticket before any production cutover."
         },
         {
           "id": "c",
-          "text": "The resource group description before checking app behavior."
+          "text": "Publish the release note and source-control tag for the approved version before the cutover."
         },
         {
           "id": "d",
-          "text": "A second deployment of the same artifact to clear the issue."
+          "text": "Run one more staging smoke test against the candidate before moving any production traffic."
         }
       ],
-      "correct": ["a"],
-      "explanation": "A matching artifact proves which version was built, not that production settings, identity, and dependencies are correct."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Moving traffic is the missing release step because the approved artifact is still not serving production users. The extra staging smoke test is the closest distractor, but the scenario already says the candidate started successfully in staging and passed verification there. What is still missing is production exposure and health after exposure, not more pre-cutover paperwork or staging checks. See [Microsoft Learn: Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) and [Microsoft Learn: Set ingress traffic in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)."
     },
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "A release record is being prepared before traffic moves to a new Container Apps revision. Which items belong in the record?",
+      "scenario": "An internal audit asks the release owner to show two things for `rel-2026-07-09`: first, exactly which package was approved; second, which runtime actually served production and how the team knew it was healthy after traffic moved. The owner already has the pull request number, branch name, and change ticket. Which two evidence sets satisfy the audit request?",
       "options": [
         {
           "id": "a",
-          "text": "The candidate revision and previous rollback revision."
-        },
-        {
-          "id": "b",
-          "text": "The traffic percentage planned for the candidate."
+          "text": "The immutable package identity, such as an image digest or package checksum."
         },
         {
           "id": "c",
-          "text": "The expected health and checkout signals for the watch window."
+          "text": "The branch name, pull request number, and sprint ticket that authorized the work."
+        },
+        {
+          "id": "b",
+          "text": "The runtime target, traffic movement, and post-cutover health evidence for the deployed candidate."
         },
         {
           "id": "d",
-          "text": "Only the engineer's local branch name."
+          "text": "The deployment job log and operator timestamp that show when the rollout command was run."
         }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A release record should preserve runtime, traffic, health, and rollback evidence. A local branch name is not enough operating context."
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The release record needs both the immutable artifact identity and the runtime evidence that proves what actually served production. The closest distractor is the deployment-job log because it shows that a rollout command ran, but it still does not prove which artifact served production after traffic moved or whether that target stayed healthy. The branch-and-ticket option explains approval context, not deployed bytes or runtime outcome. See [Microsoft Learn: Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) and [Microsoft Learn: Set ingress traffic in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A teammate says the release is complete because the Azure deployment command exited successfully. What is the best response?",
+      "scenario": "The team deploys version `2026.07.05` to the `staging` slot of an App Service app and verifies `/healthz` there. Thirty minutes later, the production hostname still responds from version `2026.06.28`, and the release note contains no swap event or production traffic-routing change. Which release action has not happened yet?",
       "options": [
         {
-          "id": "a",
-          "text": "The deployment succeeded, but the release is complete only after runtime, config, traffic, health, and rollback evidence are checked."
-        },
-        {
           "id": "b",
-          "text": "The command output is the only reliable source because production traffic is noisy."
+          "text": "Staging deployment and warm-up, because the candidate must be exercised there before a production cutover."
         },
         {
           "id": "c",
-          "text": "The team should ignore rollback unless an outage is already confirmed."
+          "text": "Release-note publication and approval sign-off, because production hostnames keep serving the old slot until that paperwork is complete."
+        },
+        {
+          "id": "a",
+          "text": "The production traffic move, such as a slot swap or other cutover step."
         },
         {
           "id": "d",
-          "text": "A successful deployment means configuration and identity were also validated."
+          "text": "Dependent database migration completion, because the team may intentionally hold the swap until that step is verified."
         }
       ],
-      "correct": ["a"],
-      "explanation": "The article separates deployment success from release safety. A release includes the operating evidence around the deploy."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The missing action is the production traffic move. Database migration completion is the closest distractor because teams sometimes do hold a swap until a downstream step is verified, but the scenario gives direct evidence that the candidate is already healthy in staging and that no swap or other production routing change occurred. The broader release paperwork and staging warm-up are not the missing runtime action. See [Microsoft Learn: Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)."
+    },
+    {
+      "id": "02-read-runtime-evidence-q1",
+      "type": "single",
+      "scenario": "The release ticket says production must run image digest `sha256:bbb`. During the verification window, `az containerapp revision show` reports that the active production revision is running `sha256:aaa` instead. Health probes are green and no customer errors appear yet. What is the first sound conclusion?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The release is complete because healthy probes matter more than matching the approved digest."
+        },
+        {
+          "id": "a",
+          "text": "The runtime does not match the approved artifact, so the release record is incomplete until the mismatch is explained or corrected."
+        },
+        {
+          "id": "c",
+          "text": "The ticket or approval record may be stale, but the production runtime still cannot be treated as the approved release until that mismatch is reconciled."
+        },
+        {
+          "id": "d",
+          "text": "The team can rely on the successful staging validation for now and reconcile the digest mismatch after the verification window ends."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The revision is healthy, but it is still the wrong artifact until the runtime digest matches the approved record or the ticket is corrected with evidence. The closest distractor is the idea that the ticket may be stale, because that can happen in practice, but the first sound conclusion is still that the release record and runtime do not currently match. Green probes and prior staging validation do not replace artifact identity. See [Microsoft Learn: Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)."
+    },
+    {
+      "id": "02-read-runtime-evidence-q4",
+      "type": "single",
+      "scenario": "A release changes both the checkout API and the refund worker. Production telemetry shows checkout on version `2026.07.05`, while the refund worker still emits version `2026.06.28`. The release manager wants a single line in the release note that says `prod on 2026.07.05`. What should the release record show instead?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Only the customer-facing API version, because background workers do not belong in release evidence."
+        },
+        {
+          "id": "c",
+          "text": "One global production version label, because the ticket covers a single release date."
+        },
+        {
+          "id": "d",
+          "text": "The release date, ticket ID, and approver, because one operational record is enough for every runtime touched by the release."
+        },
+        {
+          "id": "a",
+          "text": "Each runtime target and its deployed version, so the record shows which parts of the release actually changed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A multi-service release record has to show each runtime target and the version it actually runs. The closest distractor is the single global label because it feels tidy, but it hides drift between the API and worker. Ticket metadata and approver names matter for governance, yet they still do not replace per-runtime version evidence. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "02-read-runtime-evidence-q5",
+      "type": "single",
+      "scenario": "The deployment command succeeds and the new revision becomes active, but the application immediately fails startup because its managed identity cannot read a Key Vault secret referenced in configuration. Which release evidence should have been collected before production traffic moved?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Runtime identity and dependency access evidence for the target environment."
+        },
+        {
+          "id": "b",
+          "text": "Only the container build log that proved the image was published successfully."
+        },
+        {
+          "id": "c",
+          "text": "Only the revision or slot creation event, because a started runtime usually means its dependency access will work once traffic arrives."
+        },
+        {
+          "id": "d",
+          "text": "Only the staging smoke test, because managed identity and Key Vault access should behave the same way after promotion."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The missing proof is that the runtime identity could reach its required dependency before users were sent to it. The closest distractor is the staging smoke test because it is real release evidence, but identity, network, and secret access can still differ between staging and production. Build publication and revision creation also fall short because they do not prove production dependency access. See [Microsoft Learn: Use Key Vault references for App Service and Azure Functions](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references)."
+    },
+    {
+      "id": "03-choose-the-recovery-path-q4",
+      "type": "single",
+      "scenario": "A rollback returns traffic to the previous healthy revision within four minutes, and customer impact ends. During the post-incident review, the release record shows the timestamp of the rollback but no approver, no incident lead, and no note about who chose rollback instead of fix-forward. What remains unresolved?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the rollback criteria had been documented before the incident, even if the person who made the call is not recorded."
+        },
+        {
+          "id": "c",
+          "text": "Whether post-rollback health evidence was captured for the restored revision."
+        },
+        {
+          "id": "a",
+          "text": "Decision accountability for the production rollback."
+        },
+        {
+          "id": "d",
+          "text": "Whether the incident timeline notes when customer impact ended, even if the rollback owner is still unnamed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The technical rollback succeeded, but the operational decision still lacks accountable ownership in the record. The closest distractor is post-rollback health evidence because that is also important release data, yet the scenario specifically calls out the missing decision-maker, approver, and incident lead. What remains unresolved is governance accountability for who chose rollback instead of fix-forward. See [Microsoft Learn: Set ingress traffic in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting) and [Microsoft Learn: Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)."
     }
   ]
 }

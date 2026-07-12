@@ -1,37 +1,10 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A legacy invoice worker expects a mounted folder path and several workers may need to read the same small files during a migration. The team does not need SQL queries over those files. Which Azure service should be considered first?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Azure Files, because it provides a managed file share that can look like a mounted folder."
-        },
-        {
-          "id": "b",
-          "text": "Azure SQL Database, because a folder path can be represented as a table column."
-        },
-        {
-          "id": "c",
-          "text": "Cosmos DB, because files can be converted to JSON documents."
-        },
-        {
-          "id": "d",
-          "text": "A managed disk attached to every worker at the same time, because disks are always shareable."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Azure Files fits the shared-folder shape. Managed disks are attached to VMs, while SQL and Cosmos DB are data services for different access patterns."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A VM-based worker needs a durable boot and data volume. The data does not need to be shared by several machines at the same time. Which Azure storage shape is the closer fit?",
+      "scenario": "A legacy accounting service runs on one Azure VM and expects a local block device mounted at `/data` for its database files. The team wants Azure to manage disk durability, but the application still assumes block storage attached to that VM. Which storage shape is the closest fit?",
       "options": [
         {
           "id": "a",
@@ -39,21 +12,184 @@
         },
         {
           "id": "b",
-          "text": "A Blob Storage container mounted as the operating system disk."
+          "text": "An Azure Files share, because any mounted filesystem is equivalent to a block device from the application's perspective."
         },
         {
           "id": "c",
-          "text": "A Cosmos DB container with partition key /disk."
+          "text": "Blob Storage, because object storage can replace a VM disk when the path stays the same."
         },
         {
           "id": "d",
-          "text": "An Azure SQL database with one row per disk block."
+          "text": "Ephemeral OS disk storage, because the database can be rebuilt from backups if the VM is redeployed."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Managed disks are block-level volumes for VM-shaped workloads. They are the right mental model when the operating system expects a disk."
+      "explanation": "A managed disk is the Azure storage shape that matches a VM-attached block device. The closest distractor is Azure Files because it does expose a filesystem, but the article separates shared file protocols from a disk the guest OS treats as local block storage. Blob Storage is object storage, and ephemeral disks are the wrong place for durable database files. Official docs: [Azure managed disks overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Three Windows VMs in the same workload need to read and write the same report directory over SMB. The files must remain available after any one VM is replaced, and the application already expects a shared network file path rather than a block volume. Which Azure service should be evaluated first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "One managed disk attached to whichever VM currently owns the reports, with manual remounts during failover."
+        },
+        {
+          "id": "c",
+          "text": "Blob Storage mounted as a replacement SMB share so the application can keep using ordinary file operations."
+        },
+        {
+          "id": "a",
+          "text": "Azure Files."
+        },
+        {
+          "id": "d",
+          "text": "Azure NetApp Files only because it is a file product, even before basic Azure Files requirements are checked."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Files is the Azure service in the article that maps directly to managed SMB or NFS shares. The closest distractor is Azure NetApp Files because it is also a file service, but the question asks what to evaluate first for a standard shared-file need already described by the article's Azure Files guidance. Managed disks are block storage, and Blob Storage is object storage rather than a drop-in SMB share. Official docs: [Introduction to Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A claims-processing VM writes uploaded contracts to the VM's temporary local disk because it was the fastest path during testing. After host maintenance, several customer files are gone even though the VM itself came back. What design mistake caused the loss?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The team relied on host-local temporary storage for the primary copy of customer files and expected platform recovery to preserve it."
+        },
+        {
+          "id": "a",
+          "text": "Durable application data was placed on temporary instance storage instead of a persistent Azure storage service."
+        },
+        {
+          "id": "c",
+          "text": "The team skipped a durable backup or replica target for the uploaded contracts, so host maintenance exposed that the only copy lived on temporary storage."
+        },
+        {
+          "id": "d",
+          "text": "The workload treated the VM's fastest scratch path like a data volume, so maintenance removed files the application considered permanent."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The root mistake is storing durable business data on storage the platform treats as temporary. The closest distractor is the snapshot idea because backups are relevant to durability, but temporary local storage is still the wrong home for the primary copy of customer contracts. Zone redundancy and cache size do not change the temporary-storage contract. Official docs: [Azure managed disks overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A design team migrates shared project folders from an on-premises NAS to Azure Files. Azure-hosted VMs open the files quickly, but office users on the corporate network see long delays on first open. Before buying a higher storage tier, what should the team inspect first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Only the Azure Files tier and provisioned performance, because a successful SMB mount already proves the office network path is not contributing to the delay."
+        },
+        {
+          "id": "c",
+          "text": "Only the SMB protocol settings and authentication path, because client location should not matter once the same share opens quickly from Azure VMs."
+        },
+        {
+          "id": "d",
+          "text": "Only office desktop caching and shell extensions, before comparing latency across the corporate network path and Azure-hosted clients."
+        },
+        {
+          "id": "a",
+          "text": "The share tier, access protocol, client location, and the office-to-Azure network path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom difference between office users and Azure VMs means the storage service is only part of the path; the network route and client location also matter. The closest distractor is the higher tier because storage performance can matter, but the article's durable lesson is to separate file-service behavior from the network path before changing products or tiers. Protocol-only changes and caching can hide symptoms without proving the cause. Official docs: [Introduction to Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)."
+    },
+    {
+      "id": "03-avoid-local-runtime-storage-q1",
+      "type": "single",
+      "scenario": "An App Service API writes customer uploads to its local filesystem. After the plan scales from one worker to three, requests routed to other workers cannot find recently uploaded files, and a deployment removes some files entirely. Which change addresses both symptoms?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move durable uploads to shared file or object storage instead of the app's local runtime filesystem."
+        },
+        {
+          "id": "b",
+          "text": "Enable sticky sessions so each user usually returns to the instance that originally received the upload."
+        },
+        {
+          "id": "c",
+          "text": "Use a larger local disk on each instance and copy files between workers during deployments."
+        },
+        {
+          "id": "d",
+          "text": "Increase instance count again so every upload is likely to land on more than one worker over time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's durable rule is to keep business data out of replaceable runtime-local storage. The closest distractor is sticky sessions because they can mask the issue for some requests, but they do not make redeployments or cross-instance access safe. Larger local disks and more instances only create more copies of the same anti-pattern. Official docs: [Introduction to Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)."
+    },
+    {
+      "id": "03-avoid-local-runtime-storage-q3",
+      "type": "multiple",
+      "scenario": "Two replaceable VMs process exports in parallel. Product requires customer uploads to survive VM replacement, and compliance requires audit evidence to remain available after an instance is deleted. A thumbnail cache can be rebuilt from source data, and temporary export scratch files can be recreated if a job retries. Which two data sets clearly require durable external storage?",
+      "options": [
+        {
+          "id": "a",
+          "text": "User uploads that must survive instance replacement."
+        },
+        {
+          "id": "c",
+          "text": "A thumbnail cache that can be rebuilt from source data."
+        },
+        {
+          "id": "b",
+          "text": "Audit logs required for later investigation and compliance review."
+        },
+        {
+          "id": "d",
+          "text": "Scratch export files that can be regenerated if the job reruns."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "The durable data sets are the ones with explicit survival and retention requirements: customer uploads and audit evidence. The closest distractor is the rebuildable cache because it still feels important to the application, but the scenario says it can be recreated, which makes temporary placement acceptable. Scratch files are even more obviously disposable once the team can rerun the job. Official docs: [Azure managed disks overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) and [Introduction to Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)."
+    },
+    {
+      "id": "03-avoid-local-runtime-storage-q4",
+      "type": "single",
+      "scenario": "A Container App writes generated invoices under `/tmp` and emails customers links to fetch those files later. The service can scale out or restart at any time. Why is that design unsafe?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep using `/tmp`, but shorten link lifetimes so most customers retrieve the file before the next restart or scale event."
+        },
+        {
+          "id": "c",
+          "text": "Keep the files in `/tmp`, but increase replica CPU and memory so restarts are less likely while customers are still downloading invoices."
+        },
+        {
+          "id": "a",
+          "text": "The container filesystem is not a durable shared file service for later customer retrieval."
+        },
+        {
+          "id": "d",
+          "text": "Mount a replica-local scratch volume under `/tmp` and rely on routing to return each customer to the same replica later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The file must survive restarts and replica changes, so local container storage is the wrong durability boundary. The closest distractor is the performance argument because faster and slower paths do matter in some storage reviews, but performance is secondary when the design fails the durability requirement outright. Replica sync and emailed links do not change the storage contract. Official docs: [Introduction to Azure Files](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)."
     }
   ]
 }

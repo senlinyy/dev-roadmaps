@@ -1,6 +1,6 @@
 ---
 title: "Inspect SQL Runtime Evidence"
-sectionSlug: connections
+sectionSlug: connections-identity-and-network-access
 order: 2
 ---
 

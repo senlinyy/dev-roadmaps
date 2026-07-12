@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "filename": "pod.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: orders-api\nspec:\n  containers:\n    - name: api\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "Pod API version" },
+      { "path": ["kind"], "equals": "Pod", "label": "Pod kind" },
+      { "path": ["metadata", "name"], "equals": "orders-api", "label": "Pod name" },
+      { "path": ["metadata", "namespace"], "equals": "production", "label": "production namespace" },
+      { "path": ["metadata", "labels", "app"], "equals": "orders-api", "label": "application label" },
+      { "path": ["spec", "restartPolicy"], "equals": "Always", "label": "restart policy" },
+      { "path": ["spec", "containers", 0, "name"], "equals": "api", "label": "container name" },
+      { "path": ["spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/orders-api:2026.07.11", "label": "release image" },
+      { "path": ["spec", "containers", 0, "ports"], "containsObject": { "containerPort": 8080 }, "label": "application container port" },
+      { "path": ["spec", "containers", 0, "env"], "containsObject": { "name": "LOG_LEVEL", "value": "info" }, "label": "log level environment variable" }
+    ]
+  }
+}

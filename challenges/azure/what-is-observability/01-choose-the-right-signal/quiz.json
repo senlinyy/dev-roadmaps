@@ -1,61 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Checkout is failing for some users in `devpolaris-orders-api`. The team knows the failure rate rose from normal levels, but they do not yet know which request path or dependency is involved. Which observability signal should they use first to confirm the size and timing of the problem?",
+      "scenario": "Five minutes after release `rel-2026-07-09`, customers report that checkout is much slower, but the error-rate dashboard stays normal and CPU remains steady. The service emits metrics, logs, traces, and change records. Which signal should the incident lead check first?",
       "options": [
         {
           "id": "a",
-          "text": "Metrics, because they show how often and how much before the team reads individual events."
+          "text": "Latency metrics and request traces for the checkout path."
         },
         {
           "id": "b",
-          "text": "Logs, because every metric problem should start by reading all text lines from the app."
+          "text": "Deployment records first, because a recent release by itself reveals where time is being spent inside the request."
         },
         {
           "id": "c",
-          "text": "Traces, because they always replace the need for high-level rate and latency signals."
+          "text": "Exception count first, because slow requests with normal errors usually appear as handled application exceptions."
         },
         {
           "id": "d",
-          "text": "Alerts, because an alert notification contains every detail needed for root cause."
+          "text": "CPU saturation first, because steady CPU proves a dependency call cannot be responsible for the slowdown."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Metrics give the first shape of the incident: rate, latency, errors, and timing. Logs and traces add detail after the team understands the scope."
+      "explanation": "Latency metrics confirm the user-facing symptom, and traces show which span or dependency is consuming the time. Deployment records are the closest distractor because the slowdown started after a release, but change correlation does not identify the slow stage by itself. Exception counts and steady CPU do not answer where the latency sits. See [Microsoft Learn: Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview) and [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
     },
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "A request with operation ID `checkout-5001` failed after a SQL timeout. The team wants a complete evidence path, not only a final error line. Which pieces belong together in the review?",
+      "scenario": "After release `rel-2026-07-09`, checkout failures rise while CPU remains normal. The incident lead wants one view that proves the service-level impact across all users and another view that follows one failed checkout across downstream calls. Which two signal types provide those views most directly?",
       "options": [
         {
           "id": "a",
-          "text": "The request result and duration from Application Insights requests."
+          "text": "Metrics such as error rate, latency, and saturation."
         },
         {
           "id": "b",
-          "text": "The SQL dependency result for the same operation ID."
+          "text": "Logs with operation IDs and exception details."
         },
         {
           "id": "c",
-          "text": "The exception message tied to the same operation ID."
+          "text": "Distributed traces or dependency telemetry across services."
         },
         {
           "id": "d",
-          "text": "Only the action group name, because alert routing proves what failed."
+          "text": "Monthly cost totals grouped by service."
         }
       ],
       "correct": [
         "a",
-        "b",
         "c"
       ],
-      "explanation": "A single failed request is easiest to understand when request, dependency, and exception evidence share the same operation ID. Alert routing tells humans to look, but it is not the request story."
+      "explanation": "Metrics establish the size and timing of the production change, and traces show the request path through downstream calls. Logs are the closest distractor because they are often crucial for detail, but they are not the most direct pair for the two specific views named in the scenario. Cost totals are unrelated to request diagnosis. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The operations dashboard is green at the global level, but one enterprise tenant reports repeated checkout failures in `westeurope`. The service already emits metrics, logs, traces, and alerts. What observability gap is most likely?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The application emits too many logs, so Azure Monitor hides the tenant failure to protect workspace performance."
+        },
+        {
+          "id": "c",
+          "text": "The resource group has too many tags, so the green dashboard cannot display per-tenant telemetry correctly."
+        },
+        {
+          "id": "a",
+          "text": "The telemetry is not segmented by dimensions such as tenant, route, region, or dependency."
+        },
+        {
+          "id": "d",
+          "text": "The DNS record TTL is too low, so regional metrics look healthy even when one tenant is failing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The most likely gap is missing dimensions that let the team slice healthy overall traffic away from one failing tenant or region. Excess logs are the closest distractor because noisy telemetry can be a real problem, but noise is different from missing segmentation. Tags and DNS TTL do not explain why the dashboard hides one tenant's failures. See [Microsoft Learn: Metrics in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/essentials/data-platform-metrics)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A responder can query API logs and see that checkout requests end in HTTP 500. The workspace has no dependency telemetry for Azure SQL or Blob Storage calls from the same request. Which question remains difficult to answer?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the API resource group exists, because dependency telemetry is required before Azure can list resource metadata."
+        },
+        {
+          "id": "a",
+          "text": "Whether the failure started inside the API code or inside a downstream dependency call."
+        },
+        {
+          "id": "c",
+          "text": "Whether the DNS zone has a TXT record, because dependency telemetry is where Azure stores DNS configuration."
+        },
+        {
+          "id": "d",
+          "text": "Whether last month's bill increased, because dependency spans are the source of historical cost analysis."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Without dependency telemetry, the team loses the boundary between application work and downstream service calls. The closest distractor is the resource-group option because engineers do often pivot to Azure resource metadata, but that does not reveal where the request actually failed. DNS and billing questions are unrelated to the missing request path. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "03-pick-first-checks-during-failure-q1",
+      "type": "single",
+      "scenario": "Immediately after a release, customers report checkout `500` responses. The system uses a public entry layer in front of the application. Which first check best separates an entry-point problem from an application problem?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Look only at gateway 5xx metrics before checking whether requests reached the application."
+        },
+        {
+          "id": "c",
+          "text": "Look only at application exceptions before checking whether the entry layer had healthy backends."
+        },
+        {
+          "id": "d",
+          "text": "Compare deployment records with cost and storage metrics before looking at the request path."
+        },
+        {
+          "id": "a",
+          "text": "Compare public-entry or gateway health with request telemetry and application logs in the same time window."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The fastest separation is to compare whether requests reached the app and whether the entry layer still saw healthy backends at the same time. The closest distractor is the gateway-only option because 5xx counts are useful, but they do not tell you whether the failure originated before or after the app boundary. Application-only, cost, and storage checks leave the path half-unobserved. See [Microsoft Learn: Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview)."
+    },
+    {
+      "id": "03-pick-first-checks-during-failure-q3",
+      "type": "single",
+      "scenario": "Application logs begin showing `Forbidden` from Key Vault immediately after a managed identity change. The public endpoint is still healthy, but the app cannot start its normal request path. What should the responder check next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The runtime identity assignment and the Key Vault authorization path for that identity."
+        },
+        {
+          "id": "b",
+          "text": "Only the web-application firewall rules, because a `Forbidden` response always begins at the public edge."
+        },
+        {
+          "id": "c",
+          "text": "Blob lifecycle policy, because Key Vault failures usually come from expired storage retention settings."
+        },
+        {
+          "id": "d",
+          "text": "Budget forecast, because Azure denies Key Vault reads when the observability budget is exhausted."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The log points directly at the workload identity and its authorization to the dependency. The closest distractor is the WAF option because `Forbidden` is a familiar edge status, but the scenario says the application logs the failure after an identity change, which is a different layer. Blob lifecycle and budgets do not explain this dependency denial. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview) and [Microsoft Learn: Use Key Vault references for App Service and Azure Functions](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references)."
+    },
+    {
+      "id": "03-pick-first-checks-during-failure-q5",
+      "type": "single",
+      "scenario": "Only one region shows increased `502` responses through the public entry layer, while global dashboards still look close to normal. The on-call engineer needs the first regional split that will reveal whether the problem sits in that region's backend path or application path. What evidence should be segmented first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Global all-up averages only, because a regional issue should still be visible in the total trend if it matters."
+        },
+        {
+          "id": "c",
+          "text": "The oldest deployment record, because `502` responses usually prove a stale deployment rather than a regional path issue."
+        },
+        {
+          "id": "a",
+          "text": "Backend health, request logs, and application telemetry broken out by region."
+        },
+        {
+          "id": "d",
+          "text": "Only the alert action-group name, because the destination of the page reveals which backend failed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A regional breakdown across the entry layer and the application path is the fastest way to keep the failure scoped to the affected region. The closest distractor is the global-average option because it is often the default dashboard view, but that view can hide one-region failure behind healthy traffic elsewhere. Deployment history and alert destinations do not locate the failing path. See [Microsoft Learn: Azure Monitor overview](https://learn.microsoft.com/en-us/azure/azure-monitor/overview)."
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 title: "Verify Alert Routing"
-sectionSlug: alert-rules
+sectionSlug: alert-rule-anatomy
 order: 4
 ---
 

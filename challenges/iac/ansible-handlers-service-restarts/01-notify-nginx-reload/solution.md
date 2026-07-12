@@ -17,5 +17,3 @@
     name: nginx
     state: reloaded
 ```
-
-The config task now triggers a reload only when Ansible reports that the rendered config changed.

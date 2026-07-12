@@ -1,7 +1,6 @@
 ---
-title: "Review the First Plan"
-sectionSlug: plan
+title: "What Is Terraform?"
 order: 2
 ---
 
-Knowledge check on reading a first Terraform plan and deciding whether it matches the change request.
+Use configuration, plan, apply, and verification evidence to decide whether a Terraform change matches the reviewed intent.

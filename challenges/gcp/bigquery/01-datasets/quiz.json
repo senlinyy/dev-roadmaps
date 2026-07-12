@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Northstar Retail wants to correct a typo in the BigQuery dataset ID `finace_mart`. The dataset contains scheduled-query outputs, authorized views, and tables used by month-end finance reports, and the business requires uninterrupted reporting plus a tested rollback. How should the data platform team handle the change?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Delete immediately because dataset IDs are cosmetic once tables exist."
+        },
+        {
+          "id": "c",
+          "text": "Create the corrected dataset, redirect scheduled queries and authorized views, then delete the original before validating finance outputs."
+        },
+        {
+          "id": "d",
+          "text": "Rename only the scheduled queries and leave their destination references unchanged because table IDs, not dataset IDs, control every dependency."
+        },
+        {
+          "id": "a",
+          "text": "Treat dataset replacement as a data migration with dependency checks, access review, and rollback planning."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A dataset with active outputs and dependencies needs migration planning. Dataset IDs are not cosmetic to jobs and access, Cloud SQL is not a rename mechanism for warehouse datasets, and query cache is not a recovery strategy. See [Google Cloud BigQuery datasets documentation](https://cloud.google.com/bigquery/docs/datasets)."
+    },
+    {
+      "id": "queries-q3",
+      "type": "single",
+      "scenario": "A dashboard query joins raw clickstream events to orders without checking schema changes. Last night's load added nullable field campaign_id and renamed a staging column. What habit reduces broken analysis?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Point the dashboard at the production transaction database, avoiding warehouse schema review at the cost of live-system query load."
+        },
+        {
+          "id": "a",
+          "text": "Treat table schemas and load contracts as part of the analytics interface, then validate changes before dashboard queries depend on them."
+        },
+        {
+          "id": "b",
+          "text": "Keep SELECT * and update dashboard code after each break, because flexible schemas are safer when consumers adapt at runtime."
+        },
+        {
+          "id": "c",
+          "text": "Create a compatibility view for the renamed field but leave downstream `SELECT *` queries and undocumented nullable-field assumptions unchanged."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Warehouse tables have schemas and contracts that dashboards depend on. SELECT * can increase breakage and cost, logs are not curated analytics tables, and shifting dashboards to the live database can harm production without solving schema governance. See [Google Cloud BigQuery tables documentation](https://cloud.google.com/bigquery/docs/tables-intro)."
+    },
+    {
+      "id": "cost-habits-q1",
+      "type": "single",
+      "scenario": "A query scans events_2026 with 40 TB of data to count yesterday's checkout errors. The table is partitioned by event_date, but the query filters only on event_name. What should the review ask for?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Add a partition filter on event_date so BigQuery can prune partitions before scanning."
+        },
+        {
+          "id": "b",
+          "text": "Use SELECT * so BigQuery can decide which columns matter."
+        },
+        {
+          "id": "c",
+          "text": "Materialize a second unpartitioned copy for the dashboard so the query avoids filtering the existing partitioned table."
+        },
+        {
+          "id": "d",
+          "text": "Cluster by `event_name` but continue scanning every date partition, assuming clustering replaces the date filter."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A partition filter lets BigQuery skip unrelated date partitions and reduce bytes read. SELECT * usually reads more data, copying to Cloud SQL is not a cost habit for warehouse scans, and refreshing more often can increase total cost. See [Google Cloud querying partitioned tables documentation](https://cloud.google.com/bigquery/docs/querying-partitioned-tables)."
+    },
+    {
+      "id": "cost-habits-q4",
+      "type": "multiple",
+      "scenario": "Northstar Retail is designing `refund_events`, which will receive 800 GB each day and retain two years of data. Most investigations filter a seven-day window by `event_date`, then narrow results by `merchant_id`; dashboards need only six typed columns from each event. Which two table-design choices are most likely to reduce bytes scanned for that workload?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Keep the table unpartitioned, but materialize a daily summary for the current dashboard while investigations continue to query the full raw table."
+        },
+        {
+          "id": "d",
+          "text": "Shard the table into manually named daily tables and let each dashboard construct wildcard queries across the requested dates."
+        },
+        {
+          "id": "a",
+          "text": "Partition the table by the date field commonly used in time-window filters."
+        },
+        {
+          "id": "b",
+          "text": "Cluster on fields often used for selective filters or grouping, when the table size and query pattern justify it."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Partitioning on `event_date` lets BigQuery prune dates outside the requested window, and clustering on `merchant_id` can reduce the blocks scanned after the date filter. A current-day summary helps one dashboard but does not control historical investigation scans. Date-sharded tables can work, but they add table-management and wildcard overhead and are weaker than native time partitioning for this stated workload. See [Google Cloud partitioned tables documentation](https://cloud.google.com/bigquery/docs/partitioned-tables)."
+    },
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The analytics team creates `orders_analytics_prod` for checkout events and modeled reporting tables. What BigQuery concept is this?",
+      "scenario": "The analytics team wants one dataset named orders_shared for raw checkout events, finance marts, and support exports across dev and prod. What should the dataset review challenge?",
       "options": [
-        { "id": "a", "text": "A dataset." },
-        { "id": "b", "text": "A Cloud SQL transaction." },
-        { "id": "c", "text": "A Filestore mount." },
-        { "id": "d", "text": "A signed URL." }
+        {
+          "id": "b",
+          "text": "Keep one dataset because table names alone enforce environment access."
+        },
+        {
+          "id": "c",
+          "text": "Put prod and dev tables together because BigQuery ignores dataset location."
+        },
+        {
+          "id": "d",
+          "text": "Keep the shared dataset but use authorized views alone, even though raw, mart, environment, and ownership boundaries still differ."
+        },
+        {
+          "id": "a",
+          "text": "Use datasets as location, access, and ownership boundaries, and separate data that needs different controls."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "A dataset groups BigQuery tables and related controls."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Datasets are important boundaries for location, access, and organization, so mixed environments or owners deserve review. Table names do not enforce access by themselves, dataset location matters, and Secret Manager is not an analytics warehouse. See [Google Cloud BigQuery datasets documentation](https://cloud.google.com/bigquery/docs/datasets)."
     },
     {
-      "id": "q2",
+      "id": "queries-q1",
       "type": "single",
-      "scenario": "A team mixes unrelated finance, support, and experimental tables in one dataset with broad access. What is the concern?",
+      "scenario": "The checkout API wants to call BigQuery on every user request to decide whether a coupon is valid. The table has 2 billion historical rows. What design comment is strongest?",
       "options": [
-        { "id": "a", "text": "Ownership, access, and retention become harder to explain." },
-        { "id": "b", "text": "Datasets cannot contain tables." },
-        { "id": "c", "text": "BigQuery becomes object storage." },
-        { "id": "d", "text": "All queries become free." }
+        {
+          "id": "d",
+          "text": "Make customers wait for the warehouse query so the answer is generally fresh."
+        },
+        {
+          "id": "a",
+          "text": "Keep request-time coupon decisions in an operational store and use BigQuery for analytical questions over historical data."
+        },
+        {
+          "id": "b",
+          "text": "Use BigQuery for every request because SQL means the system is transactional."
+        },
+        {
+          "id": "c",
+          "text": "Materialize the coupon result in a daily BigQuery table and keep the checkout request waiting on a point lookup against that table."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Dataset boundaries should make ownership and access review clearer."
+      "correct": [
+        "a"
+      ],
+      "explanation": "BigQuery is built for analytics, not the hot path of every checkout decision. SQL does not automatically mean transactional request storage, container CSVs are stale and fragile, and user waits are a poor substitute for an operational coupon model. See [Google Cloud BigQuery tables documentation](https://cloud.google.com/bigquery/docs/tables-intro)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which facts belong in dataset review?",
+      "id": "cost-habits-q2",
+      "type": "single",
+      "scenario": "An analyst query selects every column from a wide sessions table but displays only user_id, country, and purchase_count. What cost habit should be changed?",
       "options": [
-        { "id": "a", "text": "Location." },
-        { "id": "b", "text": "Owner." },
-        { "id": "c", "text": "Access boundary." },
-        { "id": "d", "text": "VM startup script output." }
+        {
+          "id": "c",
+          "text": "Remove the WHERE clause because filters make billing unpredictable."
+        },
+        {
+          "id": "d",
+          "text": "Create a view that still selects every source column, then have the dashboard read only three fields from the view."
+        },
+        {
+          "id": "a",
+          "text": "Select only the columns needed for the answer."
+        },
+        {
+          "id": "b",
+          "text": "Add more unused columns so BigQuery compression improves."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "A dataset is an analytics organization and governance boundary."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Column selection matters because BigQuery charges and performs based on data read. More unused columns do not reduce scan bytes for the query, filters are usually helpful, and exporting full tables moves cost and risk elsewhere. See [Google Cloud best practices costs documentation](https://cloud.google.com/bigquery/docs/best-practices-costs)."
     }
   ]
 }

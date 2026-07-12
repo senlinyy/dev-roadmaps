@@ -1,7 +1,6 @@
 ---
-title: "Start With Access Patterns"
-sectionSlug: access-patterns
+title: "Cosmos DB"
 order: 1
 ---
 
-This step checks the judgment from this section. Read each scenario as a release or operations review for `devpolaris-orders-api`.
+Use the scenario evidence to choose the best Cosmos DB design decision.

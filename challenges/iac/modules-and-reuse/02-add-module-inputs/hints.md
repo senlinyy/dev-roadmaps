@@ -1,1 +1,1 @@
-Keep all module input variables in `variables.tf`. Required choices need a type, and safe defaults can live on the variable block.
+Inputs are the public module contract. Use types, defaults, descriptions, and validation to make caller mistakes visible before provider calls.

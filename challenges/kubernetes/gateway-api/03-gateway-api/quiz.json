@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "ownership-q1",
+      "type": "single",
+      "scenario": "Four application teams share `api.devpolaris.local`. The platform team must own HTTPS port 443, the certificate, and namespace admission, while the orders team must ship `/orders` changes without editing the shared listener. Which ownership split best fits Gateway API?",
+      "options": [
+        { "id": "a", "text": "The platform team owns the Gateway listener, and the orders team owns an HTTPRoute that attaches to it and targets its Service." },
+        { "id": "b", "text": "The orders team owns the cluster-scoped GatewayClass and edits its controller name for every path release." },
+        { "id": "c", "text": "The platform team owns every application Service because Gateway API removes route objects from application namespaces." },
+        { "id": "d", "text": "Each application team stores the shared TLS private key in its HTTPRoute because Routes terminate listener TLS." }
+      ],
+      "correct": ["a"],
+      "explanation": "The Gateway is the platform-owned listener and trust boundary, while the HTTPRoute is the application-owned match and backend policy. GatewayClass is a cluster platform concern, Services remain application backends, and listener TLS stays with the Gateway rather than each Route."
+    },
+    {
+      "id": "attachment-policy-q2",
+      "type": "single",
+      "scenario": "The `orders` HTTPRoute points to `platform-networking/public-api` listener `https`. Route status reports `Accepted=False` with reason `NotAllowedByListeners`. The listener accepts only namespaces labeled `shared-gateway=public-api`, but the `orders` namespace has no such label. What is the most direct repair?",
+      "options": [
+        { "id": "a", "text": "Change the backend Service to NodePort so listener policy no longer applies to the Route." },
+        { "id": "b", "text": "Move the orders Pods into `platform-networking` because cross-namespace Routes cannot attach to Gateways." },
+        { "id": "c", "text": "Approve the `orders` namespace with the required label, after confirming the platform team intends to admit that Route." },
+        { "id": "d", "text": "Create a ReferenceGrant in `orders` because every Route-to-Gateway attachment requires one." }
+      ],
+      "correct": ["c"],
+      "explanation": "The listener's namespace selector controls cross-namespace Route attachment, so the missing approved label explains `NotAllowedByListeners`. Service type does not bypass listener policy, Pods need not move, and Route-to-Gateway attachment uses `allowedRoutes` rather than ReferenceGrant."
+    },
+    {
+      "id": "reference-grant-q3",
+      "type": "single",
+      "scenario": "An HTTPRoute in namespace `orders` must forward one rule to Service `search-api` in namespace `shared-search`. The shared-search team wants to preserve ownership of who may reference its Service. Where should the permission be created?",
+      "options": [
+        { "id": "a", "text": "Add an unrestricted `allowedRoutes` block to the orders HTTPRoute because Routes grant themselves backend access." },
+        { "id": "b", "text": "Create a ReferenceGrant in `shared-search` allowing HTTPRoutes from `orders` to reference Services there." },
+        { "id": "c", "text": "Add the TLS Secret name to the backend reference because certificate ownership authorizes cross-namespace Services." },
+        { "id": "d", "text": "Change the GatewayClass controller name so the controller ignores namespace boundaries for this backend." }
+      ],
+      "correct": ["b"],
+      "explanation": "The owner of the target namespace creates the ReferenceGrant, so `shared-search` explicitly permits the cross-namespace Service reference. Routes cannot grant themselves access, TLS references solve a different relationship, and controller identity should not disable namespace ownership."
+    },
+    {
+      "id": "status-evidence-q4",
+      "type": "single",
+      "scenario": "A pull request applies cleanly, the Gateway reports `Accepted=True` and `Programmed=True`, and the HTTPRoute reports `Accepted=True` but `ResolvedRefs=False` with reason `BackendNotFound`. Which conclusion is most accurate?",
+      "options": [
+        { "id": "a", "text": "The GatewayClass is rejected, so the platform must install a controller before reviewing the backend." },
+        { "id": "b", "text": "The listener is not programmed, so DNS cannot point to any Gateway address." },
+        { "id": "c", "text": "The Route was blocked by the listener namespace policy and never attached to the Gateway." },
+        { "id": "d", "text": "The listener and Route attachment succeeded, but the backend Service name, port, or cross-namespace permission did not resolve." }
+      ],
+      "correct": ["d"],
+      "explanation": "The true Gateway conditions show the listener was accepted and programmed, and Route `Accepted=True` shows attachment succeeded. `ResolvedRefs=False` with `BackendNotFound` narrows the failure to the Service reference, its port, or required cross-namespace permission."
+    },
+    {
+      "id": "weighted-rollout-q5",
+      "type": "multiple",
+      "scenario": "An orders HTTPRoute sends weight 90 to `orders-api` and weight 10 to `orders-api-canary`. Route conditions are healthy, but the release team wants evidence that the rollout is safe and reversible before increasing canary traffic. Which two checks are essential?",
+      "options": [
+        { "id": "a", "text": "Confirm both backend Services have ready endpoints and observe request evidence reaching both versions." },
+        { "id": "b", "text": "Confirm the canary Deployment uses the same Pod IPs as stable so weighted routing remains deterministic." },
+        { "id": "c", "text": "Record a rollback route change that restores stable to 100 and canary to 0, or removes the canary backend." },
+        { "id": "d", "text": "Remove HTTPRoute status from the review because accepted YAML alone proves the installed implementation supports weighting." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Both Services need usable endpoints, and traffic evidence should show that the weighted rule reaches each version. A clear weight rollback makes the change reversible. Stable and canary should not share Pod identities, and controller-written status remains important evidence that the implementation accepted the requested behavior."
+    }
+  ]
+}

@@ -224,6 +224,16 @@ type SectionPracticeLink = {
   kind: ChallengeStep['kind'];
 };
 
+type ArticleQuizLink = {
+  category: string;
+  groupId: string;
+  groupTitle: string;
+  firstQuizStepId: string;
+  firstPracticeStepId?: string;
+  quizStepCount: number;
+  questionCount: number;
+};
+
 type Manifest = {
   version: string;
   generatedAt: string;
@@ -235,6 +245,7 @@ type Manifest = {
   groupsByCategory: Record<string, ChallengeGroupMeta[]>;
   groupsByArticle: Record<string, ChallengeGroupMeta[]>;
   groupsByArticleId: Record<string, ChallengeGroupMeta[]>;
+  articleQuizzesByArticleId: Record<string, ArticleQuizLink[]>;
   sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink[]>>;
   sectionPracticeByArticleId: Record<string, Record<string, SectionPracticeLink[]>>;
 };
@@ -1060,6 +1071,16 @@ function loadGroup(categoryId: string, groupId: string): ChallengeGroupFull | nu
     .map((stepId) => loadStep(groupDir, stepId))
     .filter((step): step is ChallengeStep => step !== null)
     .sort((left, right) => left.order - right.order);
+  const practiceOnly = asBoolean(parsed.data.practiceOnly, false);
+
+  for (const step of steps) {
+    if (step.kind === 'quiz' && step.sectionSlug) {
+      throw new Error(`Quiz step ${categoryId}/${groupId}/${step.id} must not define sectionSlug.`);
+    }
+    if (step.kind !== 'quiz' && !practiceOnly && !step.sectionSlug) {
+      throw new Error(`Article-linked step ${categoryId}/${groupId}/${step.id} requires sectionSlug.`);
+    }
+  }
 
   return {
     id: groupId,
@@ -1069,12 +1090,329 @@ function loadGroup(categoryId: string, groupId: string): ChallengeGroupFull | nu
     order: asNumber(parsed.data.order, 999),
     articleId: asOptionalString(parsed.data.articleId),
     articleSlug: asOptionalString(parsed.data.articleSlug),
-    practiceOnly: asBoolean(parsed.data.practiceOnly, false),
+    practiceOnly,
     tags: asStringArray(parsed.data.tags),
     category: categoryId,
     stepCount: steps.length,
     steps,
   };
+}
+
+function normalizeQuizText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function hasRawUrl(value: string): boolean {
+  const withoutMarkdownLinks = value.replace(/\[[^\]]+\]\(https?:\/\/[^)]+\)/g, '');
+  return /https?:\/\//.test(withoutMarkdownLinks);
+}
+
+function hasProseOrInventoryTextFence(value: string): boolean {
+  const blocks = value.matchAll(/```text\s*\n([\s\S]*?)```/g);
+
+  for (const match of blocks) {
+    const lines = match[1]
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length === 0) continue;
+
+    const outputSignals = lines.some((line) =>
+      /^(?:\$|\{|\}|\[|Error:|WARN\b|INFO\b|HTTP\/|Destination\b|NAME\b|[A-Za-z_][\w.-]*=|\d{4}-\d{2}-\d{2})/.test(line)
+      || /\S\s{2,}\S/.test(line),
+    );
+    const proseLines = lines.filter((line) => line.split(/\s+/).length >= 8 && /[.!?]$/.test(line)).length;
+    const inventoryLines = lines.filter((line) => /^[A-Za-z][A-Za-z0-9 _/-]{2,32}:\s+\S/.test(line)).length;
+
+    if (!outputSignals && (proseLines > 0 || inventoryLines >= Math.ceil(lines.length * 0.6))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function validateQuizCorpus(groupsByCategory: Record<string, ChallengeGroupMeta[]>): void {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const articleGroupOwners = new Map<string, string[]>();
+  const articleQuizOwners = new Map<string, string[]>();
+  const scenarios = new Map<string, string[]>();
+  const explanations = new Map<string, string[]>();
+
+  for (const [categoryId, groups] of Object.entries(groupsByCategory)) {
+    for (const group of groups) {
+      const groupDir = path.join(CHALLENGES_ROOT, categoryId, group.id);
+      const quizStepIds = listStepDirs(groupDir).filter((stepId) => exists(path.join(groupDir, stepId, 'quiz.json')));
+
+      if (group.articleId && !group.practiceOnly) {
+        const owners = articleGroupOwners.get(group.articleId) ?? [];
+        owners.push(`${categoryId}/${group.id}`);
+        articleGroupOwners.set(group.articleId, owners);
+      }
+
+      if (quizStepIds.length > 1) {
+        errors.push(`${categoryId}/${group.id} has ${quizStepIds.length} quiz steps. Consolidate them into one article-level quiz.`);
+      }
+
+      if (quizStepIds.length > 0) {
+        if (!group.articleId) {
+          errors.push(`${categoryId}/${group.id} has a quiz but no resolved articleId.`);
+        } else {
+          const owners = articleQuizOwners.get(group.articleId) ?? [];
+          owners.push(`${categoryId}/${group.id}`);
+          articleQuizOwners.set(group.articleId, owners);
+        }
+      }
+
+      for (const stepId of quizStepIds) {
+        const relativePath = `challenges/${categoryId}/${group.id}/${stepId}/quiz.json`;
+        const quizPath = path.join(ROOT_DIR, relativePath);
+        const challengePath = path.join(groupDir, stepId, 'challenge.md');
+        const source = fs.readFileSync(quizPath, 'utf-8');
+        const challengeSource = fs.readFileSync(challengePath, 'utf-8');
+
+        if (/[–—]/.test(source) || /[–—]/.test(challengeSource)) {
+          errors.push(`${relativePath} or its challenge.md contains an em dash or en dash.`);
+        }
+
+        let quiz: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(source) as unknown;
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            errors.push(`${relativePath} must contain a JSON object.`);
+            continue;
+          }
+          quiz = parsed as Record<string, unknown>;
+        } catch (error) {
+          errors.push(`${relativePath} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+
+        const questions = quiz.questions;
+        if (!Array.isArray(questions)) {
+          errors.push(`${relativePath} must define a questions array.`);
+          continue;
+        }
+
+        if (questions.length < 5 || questions.length > 10) {
+          errors.push(`${relativePath} has ${questions.length} questions. Article quizzes require 5-10 questions.`);
+        }
+
+        const threshold = quiz.passThreshold ?? 1;
+        if (typeof threshold !== 'number' || threshold < 0 || threshold > 1) {
+          errors.push(`${relativePath} has an invalid passThreshold.`);
+        } else if (questions.length < 10 && threshold !== 1) {
+          errors.push(`${relativePath} must use passThreshold 1 when it has fewer than 10 questions.`);
+        }
+
+        const questionIds = new Set<string>();
+        const singleAnswerPositions: number[] = [];
+        const multipleAnswerSignatures: string[] = [];
+        const explanationLinkCounts = new Map<string, number>();
+        let multipleCount = 0;
+
+        questions.forEach((questionValue, questionIndex) => {
+          const questionPath = `${relativePath} question ${questionIndex + 1}`;
+          if (!questionValue || typeof questionValue !== 'object' || Array.isArray(questionValue)) {
+            errors.push(`${questionPath} must be an object.`);
+            return;
+          }
+
+          const question = questionValue as Record<string, unknown>;
+          const id = question.id;
+          const type = question.type;
+          const scenario = question.scenario;
+          const explanation = question.explanation;
+          const options = question.options;
+          const correct = question.correct;
+
+          if (typeof id !== 'string' || id.trim().length === 0) {
+            errors.push(`${questionPath} requires a stable id.`);
+          } else if (questionIds.has(id)) {
+            errors.push(`${relativePath} repeats question id ${id}.`);
+          } else {
+            questionIds.add(id);
+          }
+
+          if (type !== 'single' && type !== 'multiple') {
+            errors.push(`${questionPath} must use type single or multiple.`);
+          }
+
+          if (typeof scenario !== 'string' || scenario.trim().length === 0) {
+            errors.push(`${questionPath} requires a scenario.`);
+          } else {
+            if (scenario.trim().length < 100) {
+              warnings.push(`${questionPath} has a scenario shorter than 100 characters.`);
+            }
+            if (hasProseOrInventoryTextFence(scenario)) {
+              warnings.push(`${questionPath} uses a text fence for prose or an inventory. Use normal Markdown formatting.`);
+            }
+            const key = normalizeQuizText(scenario);
+            const locations = scenarios.get(key) ?? [];
+            locations.push(questionPath);
+            scenarios.set(key, locations);
+          }
+
+          if (typeof explanation !== 'string' || explanation.trim().length === 0) {
+            errors.push(`${questionPath} requires an explanation.`);
+          } else {
+            if (/official reference \d/i.test(explanation)) {
+              errors.push(`${questionPath} uses a numbered generic reference label. Use a descriptive source title.`);
+            }
+            if (hasRawUrl(explanation)) {
+              warnings.push(`${questionPath} contains a raw URL instead of a descriptive Markdown link.`);
+            }
+            for (const link of explanation.matchAll(/\[[^\]]+\]\((https?:\/\/[^)]+)\)/g)) {
+              const url = link[1];
+              explanationLinkCounts.set(url, (explanationLinkCounts.get(url) ?? 0) + 1);
+            }
+            const key = normalizeQuizText(explanation);
+            const locations = explanations.get(key) ?? [];
+            locations.push(questionPath);
+            explanations.set(key, locations);
+          }
+
+          if (!Array.isArray(options) || options.length < 3 || options.length > 6) {
+            errors.push(`${questionPath} requires 3-6 options.`);
+            return;
+          }
+          if (type === 'single' && options.length !== 4) {
+            warnings.push(`${questionPath} uses ${options.length} options. Four plausible options are the default.`);
+          }
+
+          const optionIds: string[] = [];
+          const optionTexts: string[] = [];
+          for (const [optionIndex, optionValue] of options.entries()) {
+            if (!optionValue || typeof optionValue !== 'object' || Array.isArray(optionValue)) {
+              errors.push(`${questionPath} option ${optionIndex + 1} must be an object.`);
+              continue;
+            }
+            const option = optionValue as Record<string, unknown>;
+            if (typeof option.id !== 'string' || option.id.trim().length === 0) {
+              errors.push(`${questionPath} option ${optionIndex + 1} requires an id.`);
+            } else if (optionIds.includes(option.id)) {
+              errors.push(`${questionPath} repeats option id ${option.id}.`);
+            } else {
+              optionIds.push(option.id);
+            }
+            if (typeof option.text !== 'string' || option.text.trim().length === 0) {
+              errors.push(`${questionPath} option ${optionIndex + 1} requires text.`);
+              optionTexts.push('');
+            } else {
+              optionTexts.push(option.text.trim());
+            }
+          }
+
+          if (!Array.isArray(correct) || correct.some((value) => typeof value !== 'string')) {
+            errors.push(`${questionPath} requires a correct array of option ids.`);
+            return;
+          }
+
+          const correctIds = correct as string[];
+          if (new Set(correctIds).size !== correctIds.length || correctIds.some((value) => !optionIds.includes(value))) {
+            errors.push(`${questionPath} has duplicate or unknown correct option ids.`);
+            return;
+          }
+          if (type === 'single' && correctIds.length !== 1) {
+            errors.push(`${questionPath} is single choice and must have exactly one correct option.`);
+          }
+          if (type === 'multiple' && correctIds.length < 2) {
+            errors.push(`${questionPath} is multiple choice and must have at least two correct options.`);
+          }
+          if (type === 'multiple' && correctIds.length >= optionIds.length - 1) {
+            errors.push(
+              `${questionPath} selects every option or every option except one. Use a meaningful subset of plausible choices.`,
+            );
+          }
+
+          const correctPositions = correctIds.map((correctId) => optionIds.indexOf(correctId)).sort((left, right) => left - right);
+          if (type === 'single' && correctPositions[0] >= 0) {
+            singleAnswerPositions.push(correctPositions[0]);
+            const correctLength = optionTexts[correctPositions[0]]?.length ?? 0;
+            const distractorLengths = optionTexts
+              .filter((_, optionIndex) => optionIndex !== correctPositions[0])
+              .map((text) => text.length)
+              .sort((left, right) => left - right);
+            const medianDistractor = distractorLengths[Math.floor(distractorLengths.length / 2)] ?? 0;
+            if (correctLength > medianDistractor * 2.25 && correctLength - medianDistractor > 50) {
+              warnings.push(`${questionPath} has a substantially longer correct option than its distractors.`);
+            }
+          }
+          if (type === 'multiple') {
+            multipleCount += 1;
+            multipleAnswerSignatures.push(correctPositions.join(','));
+            if (correctPositions.every((position, index) => position === index)) {
+              warnings.push(`${questionPath} uses a leading contiguous correct subset. Confirm the answer pattern is not predictable.`);
+            }
+          }
+        });
+
+        if (singleAnswerPositions.length >= 4) {
+          const distinctPositions = new Set(singleAnswerPositions);
+          const counts = new Map<number, number>();
+          for (const position of singleAnswerPositions) {
+            counts.set(position, (counts.get(position) ?? 0) + 1);
+          }
+          const maximumPositionCount = Math.max(...counts.values());
+          if (distinctPositions.size < 3 || maximumPositionCount > Math.ceil(singleAnswerPositions.length / 2)) {
+            errors.push(`${relativePath} has a patterned single-answer key. Spread correct answers across at least three positions.`);
+          }
+        }
+
+        if (multipleAnswerSignatures.length >= 2 && new Set(multipleAnswerSignatures).size === 1) {
+          errors.push(`${relativePath} repeats the same correct-position pattern for every multiple-answer question.`);
+        }
+
+        if (multipleCount > Math.ceil(questions.length / 3)) {
+          warnings.push(`${relativePath} has ${multipleCount} multiple-answer questions out of ${questions.length}. Aim near an 80/20 mix.`);
+        }
+
+        for (const [url, count] of explanationLinkCounts) {
+          if (count >= Math.ceil(questions.length * 0.75)) {
+            warnings.push(`${relativePath} cites ${url} in ${count}/${questions.length} explanations. Confirm the references are question-specific.`);
+          }
+        }
+      }
+    }
+  }
+
+  for (const [articleId, owners] of articleGroupOwners) {
+    if (owners.length > 1) {
+      errors.push(`Article ${articleId} has multiple non-practice challenge groups: ${owners.join(', ')}.`);
+    }
+  }
+
+  for (const [articleId, owners] of articleQuizOwners) {
+    if (owners.length > 1) {
+      errors.push(`Article ${articleId} has quizzes in multiple groups: ${owners.join(', ')}.`);
+    }
+  }
+
+  for (const [scenario, locations] of scenarios) {
+    if (scenario.length >= 80 && locations.length > 1) {
+      errors.push(`Duplicate quiz scenario appears in: ${locations.join(', ')}.`);
+    }
+  }
+
+  for (const [explanation, locations] of explanations) {
+    if (explanation.length >= 80 && locations.length > 1) {
+      errors.push(`Duplicate quiz explanation appears in: ${locations.join(', ')}.`);
+    }
+  }
+
+  const uniqueWarnings = Array.from(new Set(warnings));
+  const warningLimit = 30;
+  for (const warning of uniqueWarnings.slice(0, warningLimit)) {
+    console.warn(`Quiz quality warning: ${warning}`);
+  }
+  if (uniqueWarnings.length > warningLimit) {
+    console.warn(`Quiz quality warning: ${uniqueWarnings.length - warningLimit} additional warnings omitted.`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Quiz corpus validation failed:\n- ${errors.join('\n- ')}`);
+  }
 }
 
 function buildSectionPracticeMap(
@@ -1100,7 +1438,7 @@ function buildSectionPracticeMap(
       }
 
       full.steps.forEach((step, index) => {
-        if (!step.sectionSlug) {
+        if (step.kind === 'quiz' || !step.sectionSlug) {
           return;
         }
 
@@ -1120,6 +1458,45 @@ function buildSectionPracticeMap(
   }
 
   return map;
+}
+
+function buildArticleQuizMap(
+  articleId: string,
+  categories: ChallengeCategoryMeta[],
+  groupsByCategory: Record<string, ChallengeGroupMeta[]>,
+): ArticleQuizLink[] {
+  const links: ArticleQuizLink[] = [];
+
+  for (const category of categories) {
+    if (!category.available) continue;
+
+    for (const meta of groupsByCategory[category.id] ?? []) {
+      if (meta.articleId !== articleId) continue;
+
+      const full = loadGroup(category.id, meta.id);
+      if (!full) continue;
+
+      const quizSteps = full.steps.filter((step): step is QuizChallengeStep => step.kind === 'quiz');
+      const firstStep = quizSteps[0];
+      const firstPracticeStep = full.steps.find((step) => step.kind !== 'quiz');
+      if (!firstStep) continue;
+
+      links.push({
+        category: category.id,
+        groupId: meta.id,
+        groupTitle: meta.title,
+        firstQuizStepId: firstStep.id,
+        firstPracticeStepId: firstPracticeStep?.id,
+        quizStepCount: quizSteps.length,
+        questionCount: quizSteps.reduce((total, step) => {
+          const questions = step.quiz.questions;
+          return total + (Array.isArray(questions) ? questions.length : 0);
+        }, 0),
+      });
+    }
+  }
+
+  return links;
 }
 
 function walkRoadmapArticles(roadmapData: RootModule[]): string[] {
@@ -1333,6 +1710,7 @@ function buildManifest(): Manifest {
     categories.map((category) => [category.id, loadGroupsForCategory(category.id)]),
   );
   const groupsByCategory = resolveArticleIdsForGroups(rawGroupsByCategory, articleCatalog);
+  validateQuizCorpus(groupsByCategory);
 
   const groupsByArticle: Record<string, ChallengeGroupMeta[]> = {};
   const groupsByArticleId: Record<string, ChallengeGroupMeta[]> = {};
@@ -1371,8 +1749,10 @@ function buildManifest(): Manifest {
   }
 
   const sectionPracticeByArticleId: Record<string, Record<string, SectionPracticeLink[]>> = {};
+  const articleQuizzesByArticleId: Record<string, ArticleQuizLink[]> = {};
   for (const articleId of articleIds) {
     sectionPracticeByArticleId[articleId] = buildSectionPracticeMap(articleId, categories, groupsByCategory);
+    articleQuizzesByArticleId[articleId] = buildArticleQuizMap(articleId, categories, groupsByCategory);
   }
 
   return {
@@ -1386,6 +1766,7 @@ function buildManifest(): Manifest {
     groupsByCategory,
     groupsByArticle,
     groupsByArticleId,
+    articleQuizzesByArticleId,
     sectionPracticeByArticle,
     sectionPracticeByArticleId,
   };

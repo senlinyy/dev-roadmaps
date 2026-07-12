@@ -1,7 +1,6 @@
 ---
-title: "Review State Boundaries"
-sectionSlug: separate-state
+title: "File Layout and Environment Isolation"
 order: 3
 ---
 
-Use the plan and backend evidence to decide whether the environment boundary is real. Focus on state ownership before trusting resource names.
+Use directory, backend, workspace, variable, and plan evidence to decide whether a Terraform run targets the intended environment.

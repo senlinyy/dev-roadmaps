@@ -13,5 +13,3 @@ pub fn sample_note() -> Note {
     }
 }
 ~~~
-
-The struct groups related fields into one named type, and the sample value owns its text.

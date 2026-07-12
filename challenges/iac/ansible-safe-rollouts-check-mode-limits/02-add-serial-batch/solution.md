@@ -9,5 +9,3 @@
   roles:
     - orders_web
 ```
-
-The play still targets the full group, but Ansible will process one host per batch.

@@ -1,7 +1,6 @@
 ---
-title: "Identify Release Pieces"
-sectionSlug: what-is-a-release
+title: "What Is a Release in Azure"
 order: 1
 ---
 
-Practice reading a release as more than a successful deploy. Each question asks which part of the release evidence explains the risk.
+Use the article's release model to answer the production scenarios in this quiz.

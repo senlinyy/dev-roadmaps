@@ -28,4 +28,4 @@ pipeline {
 }
 ```
 
-The `post` block is a peer of `stages`, not a child. Putting `failure` here means the Slack notification fires only when the overall pipeline result is a failure, not on warnings or successful builds.
+- The `post` block is a peer of `stages`, not a child. Putting `failure` here means the Slack notification fires only when the overall pipeline result is a failure, not on warnings or successful builds.

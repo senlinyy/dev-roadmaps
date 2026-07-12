@@ -1,1 +1,1 @@
-Each `stage` is its own block: `stage('Build') { steps { sh '...' } }`. Drop the `Everything` stage, then add three new ones inside `stages { ... }`. Each stage needs exactly one `steps { sh '...' }` block.
+Each visible checkpoint should be its own stage inside the existing `stages` block. Replace the single all-purpose stage with separate build, test, and package stages while keeping the top-level pipeline shape intact.

@@ -1,7 +1,7 @@
 ---
 title: "ML System Lifecycle"
 description: "Walk through the full production lifecycle for an ML system, from the business problem to data, training, evaluation, deployment, monitoring, and improvement."
-overview: "A production ML system moves through a loop: define the product decision, collect and validate data, train candidate models, evaluate them, register an approved version, deploy it safely, monitor real behavior, and feed production evidence back into the next cycle. This article uses one fraud-risk model to show how the lifecycle connects every later MLOps topic."
+overview: "A production ML system moves through a loop: define the product decision, collect and validate data, train candidate models, evaluate them, register an approved version, deploy it safely, monitor real behavior, and feed production evidence back into the next cycle. This article uses one grocery demand model to show how the lifecycle connects every later MLOps topic."
 tags: ["MLOps", "core", "lifecycle"]
 order: 2
 id: "article-mlops-mlops-foundations-ml-system-lifecycle"
@@ -23,78 +23,81 @@ id: "article-mlops-mlops-foundations-ml-system-lifecycle"
 ## Start With The Product Decision
 <!-- section-summary: The lifecycle starts by naming the product decision, the prediction target, and the cost of each kind of mistake. -->
 
-A production ML lifecycle starts with a **decision the product needs to make**. The model exists to support that decision. A model that predicts something interesting but never changes a product action becomes a research artifact, not a production system.
+A production ML lifecycle starts with a **decision the product needs to make**. The model exists to support that decision. A model that predicts something interesting but never changes a product action stays an experiment, while a production model shapes a real workflow.
 
-Let's use a payment company called Northstar Pay. The team wants to reduce card fraud without blocking too many real customers. Every time a customer starts a payment, the product has a decision to make: approve the payment, decline it, or send it through extra verification.
+Let's use **FreshBasket Grocers**, a regional grocery chain that wants better demand forecasts for fresh strawberries. Every evening, the store planning tool has a decision to make: how many crates should each store order for tomorrow morning. Order too many and berries spoil. Order too few and customers see empty shelves before dinner.
 
-The ML model helps with that decision by producing a **fraud risk score**. A score near `0.95` means the payment looks very risky. A score near `0.02` means the payment looks ordinary. The product still needs rules around the score. For example, Northstar Pay might approve scores below `0.60`, ask for step-up verification between `0.60` and `0.85`, and decline scores above `0.85`.
+The ML model helps with that decision by producing a **demand forecast**. A forecast of `42` means the store expects to sell about 42 crates tomorrow. The planning tool still needs rules around the forecast. For example, FreshBasket may cap orders when supplier inventory is tight, add a safety buffer before a holiday weekend, or require a planner review when the forecast jumps far above recent history.
 
-A **target label** is the real-world outcome the model learns to predict. For the fraud model, the label could be `is_confirmed_fraud`. That label might come from chargebacks, fraud analyst reviews, customer reports, or bank network signals. The label definition matters because the model learns exactly what the team calls fraud. If analysts include refunded-but-legitimate payments in the fraud label, the model learns a confusing target.
+A **target label** is the real-world outcome the model learns to predict. For the grocery model, the label could be `units_sold_next_day`. That label might come from point-of-sale transactions adjusted for refunds, stockouts, and store closures. The label definition matters because the model learns exactly what the team calls demand. If a store sold only 10 crates because it ran out at noon, the raw sales number hides true demand and can teach the model to under-order again.
 
 Before anyone opens a notebook, the team should write down a small release brief. This brief gives the lifecycle a clear start and prevents model work from drifting into vague experimentation.
 
 ```yaml
-model_name: payment-fraud-risk
-product_decision: approve, verify, or decline a payment
-prediction_target: payment becomes confirmed fraud within 30 days
-primary_metric: recall_at_2_percent_manual_review_rate
+model_name: strawberry-demand-forecast
+product_decision: order strawberry crates for each store tomorrow
+prediction_target: crates sold next business day after stockout adjustment
+primary_metric: weighted_absolute_percentage_error
 guardrail_metrics:
-  false_decline_rate: must not increase by more than 0.1 percent
-  p95_latency_ms: must stay below 80
-  verification_rate: must stay below 3 percent of payments
-business_owner: payments-risk
-ml_owner: fraud-ml-team
-serving_path: online API called during payment authorization
+  under_forecast_rate: must not increase in top-volume stores
+  waste_rate: must stay below 4 percent of ordered crates
+  batch_completion_time: forecast table ready by 04:30 local time
+business_owner: fresh-produce-planning
+ml_owner: demand-forecasting-team
+serving_path: nightly batch job writes forecast table
 ```
 
-The primary metric says what the model tries to improve. The guardrail metrics say what the model must protect while improving. **Recall** measures how many true fraud cases the system catches. **False decline rate** measures how often the system blocks a real customer. In fraud systems, both matter because catching more fraud by blocking everyone would hurt the business and the customer experience.
+The primary metric says what the model tries to improve. The guardrail metrics say what the model must protect while improving. **Weighted absolute percentage error** measures forecast error while giving higher-volume stores more weight. **Under-forecast rate** tracks how often the forecast is too low, which matters for empty shelves. **Waste rate** tracks how often the model encourages too much ordering. In fresh grocery work, both under-ordering and over-ordering hurt the business in different ways.
 
-Now we have a decision, a target, and the cost of mistakes. The next question becomes practical: what data can show the model examples of that decision?
+Now we have a decision, a target, and the cost of mistakes. The next question is practical: what data can show the model examples of that decision?
+
+![Lifecycle loop showing decision, data, training, evaluation, release, monitoring, and feedback](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/lifecycle-loop.png)
+
+*This visual turns the lifecycle into one operating loop, so the product decision, model work, monitoring, and feedback stay connected.*
 
 ## Turn Production Events Into Training Data
 <!-- section-summary: Training data turns messy product history into examples with features, labels, timestamps, and quality checks. -->
 
-**Training data** is the set of past examples the model learns from. For Northstar Pay, each example might represent one payment attempt. The example contains facts known at payment time, such as amount, country, merchant category, device age, account age, recent payment attempts, and whether the customer passed previous verification.
+**Training data** is the set of past examples the model learns from. For FreshBasket, each example might represent one store, one product, and one forecast date. The example contains facts known before the ordering decision, such as recent sales, inventory, promotions, weather forecast, weekday, holiday calendar, store type, and supplier constraints.
 
-The model should learn from information that existed at the moment of the decision. This timing detail matters. If a feature uses data created after the payment finished, the model gets an unfair advantage during training and then fails in production. This problem is called **data leakage**. A fraud model that uses `chargeback_created_at` as an input would look amazing in testing because chargebacks identify fraud, but that field arrives after the payment decision.
+The model should learn from information that existed before the ordering decision. This timing detail matters. If a feature uses tomorrow's final sales or tomorrow's out-of-stock flag, the model gets an unfair advantage during training and then fails in production. This problem is called **data leakage**. A forecast model that uses `tomorrow_units_sold` as an input is learning from the answer.
 
 A practical training row needs a few categories of data. These fields help the team check whether each example uses the right time boundary, joins to the right outcome, and can be traced during debugging.
 
-| Field type | What it means | Fraud example |
+| Field type | What it means | Grocery example |
 |---|---|---|
-| **Entity keys** | IDs used to join events safely | `payment_id`, `customer_id`, `merchant_id` |
-| **Event time** | The time the product made the decision | `payment_created_at` |
-| **Features** | Inputs available before the decision | amount, country, device age, recent attempts |
-| **Label** | The outcome the model learns | confirmed fraud within 30 days |
-| **Label time** | The time the outcome became known | chargeback or analyst decision time |
+| **Entity keys** | IDs used to join events safely | `store_id`, `sku_id`, `forecast_date` |
+| **Event time** | The time the product made the decision | `order_cutoff_at` |
+| **Features** | Inputs available before the decision | recent sales, inventory, promotions, weather |
+| **Label** | The outcome the model learns | stockout-adjusted crates sold next day |
+| **Label time** | The time the outcome is known | after store close and inventory reconciliation |
 | **Split marker** | Which dataset split owns the row | train, validation, or test |
 
-The team also needs **data validation**. Data validation checks whether incoming data has the shape and meaning the pipeline expects. A simple schema check might require `amount_usd` to exist, be numeric, and stay above zero. A statistical check might notice that the share of payments from one country jumped from 5 percent to 40 percent in one day. That jump could be a real product launch, a fraud attack, or a broken upstream field.
+The team also needs **data validation**. Data validation checks whether incoming data has the shape and meaning the pipeline expects. A simple schema check might require `units_sold` to exist, be numeric, and stay above zero. A statistical check might notice that the share of stores with missing inventory jumped from 2 percent to 35 percent in one day. That jump could be a real point-of-sale outage, a warehouse delay, or a broken upstream field.
 
-Here is a small validation contract for the fraud training table. The exact field limits would come from production history and risk review, but the shape shows how a team turns data expectations into checks.
+Here is a small validation contract for the demand training table. The exact field limits would come from production history and planner review, but the shape shows how a team turns data expectations into checks.
 
 ```yaml
-dataset: payment_authorization_examples
+dataset: strawberry_daily_demand_examples
 required_columns:
-  - payment_id
-  - customer_id
-  - payment_created_at
-  - amount_usd
-  - merchant_country
-  - device_age_days
-  - attempts_last_hour
-  - is_confirmed_fraud
+  - store_id
+  - sku_id
+  - forecast_date
+  - order_cutoff_at
+  - units_sold
+  - on_hand_inventory
+  - promotion_flag
+  - weather_temperature_c
+  - stockout_adjusted_units
 checks:
-  amount_usd:
-    min: 0.01
-    max: 10000
-  device_age_days:
+  units_sold:
     min: 0
-  attempts_last_hour:
+  on_hand_inventory:
     min: 0
-    max: 50
-  is_confirmed_fraud:
-    allowed_values: [0, 1]
+  promotion_flag:
+    allowed_values: [true, false]
+  stockout_adjusted_units:
+    min: 0
 ```
 
 The exact tool can change. Some teams use Great Expectations, TensorFlow Data Validation, Deequ, custom SQL checks, dbt tests, or warehouse-native constraints. The important part is the habit: data has to pass checks before it trains a model, because a broken dataset can create a broken model without throwing a normal software error.
@@ -106,36 +109,37 @@ Once the team has trusted examples, the lifecycle moves from data preparation in
 
 A **training run** is one execution of the code that creates a candidate model. It reads a data version, uses a configuration, runs in an environment, and writes outputs. The output includes the model artifact, metrics, logs, and metadata.
 
-In the first experiment, a data scientist may train the fraud model from a notebook. That is a normal starting point. The lifecycle becomes stronger when the team turns the working notebook into a repeatable job. The job should run from version-controlled code, read a named dataset, use a checked-in config file, and write outputs to a predictable location.
+In the first experiment, a data scientist may train the forecast model from a notebook. That is a normal starting point. The lifecycle is stronger when the team turns the working notebook into a repeatable job. The job should run from version-controlled code, read a named dataset, use a checked-in config file, and write outputs to a predictable location.
 
-For Northstar Pay, the training job might use this config. The values make each run easier to compare because the data snapshot, feature list, training settings, and output locations are written down before the job starts.
+For FreshBasket, the training job might use this config. The values make each run easier to compare because the data snapshot, feature list, training settings, and output locations are written down before the job starts.
 
 ```yaml
 model:
-  name: payment-fraud-risk
-  algorithm: lightgbm
+  name: strawberry-demand-forecast
+  algorithm: lightgbm_regressor
 data:
-  training_snapshot: s3://northstar-ml-data/fraud/examples/2026-05-01/
+  training_snapshot: s3://freshbasket-ml-data/demand/strawberries/2026-05-01/
   time_window:
-    train_start: "2025-11-01"
-    train_end: "2026-04-15"
-    validation_start: "2026-04-16"
-    validation_end: "2026-04-30"
+    train_start: "2024-11-01"
+    train_end: "2026-04-30"
+    validation_start: "2026-05-01"
+    validation_end: "2026-05-31"
 features:
-  - amount_usd
-  - merchant_country
-  - device_age_days
-  - attempts_last_hour
-  - account_age_days
-  - customer_velocity_24h
+  - store_id
+  - weekday
+  - recent_units_sold_7d
+  - on_hand_inventory
+  - promotion_flag
+  - weather_temperature_c
+  - holiday_distance_days
 training:
-  seed: 42
+  seed: 20260704
   max_depth: 6
   learning_rate: 0.05
   num_boost_round: 400
 outputs:
-  artifact_uri: s3://northstar-ml-models/payment-fraud-risk/candidates/
-  metrics_uri: s3://northstar-ml-runs/payment-fraud-risk/
+  artifact_uri: s3://freshbasket-ml-models/strawberry-demand/candidates/
+  metrics_uri: s3://freshbasket-ml-runs/strawberry-demand/
 ```
 
 This file makes the run easier to review. A teammate can see which data snapshot, date ranges, feature list, and training settings created the candidate. If the candidate behaves strangely, the team can inspect the config instead of guessing what happened inside a notebook.
@@ -144,13 +148,13 @@ The training job should save a run record. A run record is metadata about the ex
 
 ```json
 {
-  "run_id": "fraud-2026-06-13-1842",
-  "model_name": "payment-fraud-risk",
+  "run_id": "strawberry-demand-2026-06-13-1842",
+  "model_name": "strawberry-demand-forecast",
   "training_commit": "9c7a31f",
-  "data_snapshot": "s3://northstar-ml-data/fraud/examples/2026-05-01/",
-  "container_image": "ghcr.io/northstar/fraud-training:2026-06-13",
-  "config_file": "configs/payment_fraud_risk.yml",
-  "artifact_uri": "s3://northstar-ml-models/payment-fraud-risk/candidates/fraud-2026-06-13-1842/model.pkl",
+  "data_snapshot": "s3://freshbasket-ml-data/demand/strawberries/2026-05-01/",
+  "container_image": "ghcr.io/freshbasket/demand-training:2026-06-13",
+  "config_file": "configs/strawberry_demand.yml",
+  "artifact_uri": "s3://freshbasket-ml-models/strawberry-demand/candidates/strawberry-demand-2026-06-13-1842/model.pkl",
   "started_by": "scheduled-training-pipeline",
   "status": "completed"
 }
@@ -158,55 +162,59 @@ The training job should save a run record. A run record is metadata about the ex
 
 This is where **reproducibility** enters the lifecycle. Reproducibility means the team can explain and recreate the model well enough for debugging, comparison, audit, or rollback. Perfect bit-for-bit reproduction can be difficult with distributed training and specialized hardware, but the team should still preserve the ingredients: code, data, config, environment, seed, and artifact.
 
-Now the team has a candidate model. A candidate is only a model that training produced. It becomes useful after evaluation shows whether it deserves to move forward.
+Now the team has a candidate model. A candidate is only a model that training produced. Evaluation decides whether the candidate deserves to move forward.
 
 ## Evaluate The Candidate Model
 <!-- section-summary: Evaluation compares the candidate with the current production model using metrics, segments, thresholds, and business guardrails. -->
 
 **Evaluation** asks whether a candidate model is good enough for the next stage. In a production lifecycle, evaluation compares the candidate against a baseline, usually the current production model. The question is practical: does this candidate improve the decision without breaking the guardrails?
 
-For the fraud model, the data science team might start with offline metrics. **Precision** measures how often flagged payments really become fraud. **Recall** measures how many fraud cases the model catches. **AUC** measures how well the model ranks risky payments above safer payments across many thresholds. **Calibration** checks whether a score like `0.80` behaves like roughly 80 percent risk across similar examples.
+For the demand model, the data science team might start with offline metrics. **Mean absolute error** measures the average size of the forecast miss. **Weighted absolute percentage error** gives higher-volume stores more influence. **Bias** shows whether the model usually over-forecasts or under-forecasts. Segment checks show whether the model handles holidays, promotions, small stores, and top-volume stores with enough care.
 
-Offline metrics need segment checks. A model can look good overall while causing trouble in one country, one merchant type, one payment method, or one customer group. Segment evaluation helps the team find these hidden regressions before release.
+Offline metrics need segment checks. A model can look good overall while causing trouble in one region, one store format, one promotion type, or one holiday week. Segment evaluation helps the team find these hidden regressions before release.
 
 | Check | Release question | Example pass rule |
 |---|---|---|
-| Overall fraud recall | Does the model catch more fraud at the review budget? | Recall improves by at least 3 percent |
-| False decline rate | Does the model block too many real customers? | Increase stays below 0.1 percent |
-| Country segments | Does one market regress badly? | No top market loses more than 2 percent recall |
-| Merchant segments | Does one merchant category get over-flagged? | Verification rate stays below agreed limit |
-| Latency | Can the model run inside the payment path? | p95 prediction latency stays below 80 ms |
-| Stability | Does the score distribution shift wildly? | Score buckets stay within reviewed ranges |
+| Overall WAPE | Does the model forecast closer to actual demand? | WAPE improves by at least 4 percent |
+| Under-forecast rate | Does the model create more empty shelves? | Under-forecast rate does not increase for top stores |
+| Waste rate | Does the model order too much produce? | Waste estimate stays below 4 percent |
+| Store segments | Does one store type regress badly? | No top segment loses more than 3 percent WAPE |
+| Batch runtime | Can forecasts finish before planners arrive? | Forecast table ready by 04:30 local time |
+| Stability | Does forecast volume jump wildly? | Forecast totals stay within reviewed ranges |
 
 Evaluation should also test the serving code around the model. The model artifact may load in the training environment and fail in the serving container because a package version changed. The input schema may match the training table and fail against the API payload. A lifecycle that stops at offline metrics misses those production problems.
 
 A simple evaluation report gives reviewers a standard packet. Everyone can look at the same baseline, candidate metrics, serving checks, segment results, and release recommendation.
 
 ```yaml
-candidate_model: payment-fraud-risk:v18
-baseline_model: payment-fraud-risk:v17
+candidate_model: strawberry-demand-forecast:v18
+baseline_model: strawberry-demand-forecast:v17
 offline_metrics:
-  recall_at_2_percent_review:
-    baseline: 0.61
-    candidate: 0.65
-  false_decline_rate:
-    baseline: 0.42
-    candidate: 0.47
-  auc:
-    baseline: 0.931
-    candidate: 0.944
+  wape:
+    baseline: 0.184
+    candidate: 0.171
+  under_forecast_rate_top_stores:
+    baseline: 0.122
+    candidate: 0.118
+  estimated_waste_rate:
+    baseline: 0.039
+    candidate: 0.038
 serving_checks:
   model_load: passed
-  input_contract: passed
-  p95_latency_ms: 52
+  batch_contract: passed
+  forecast_table_ready_at: "04:12 local"
 segment_results:
-  merchant_country_us: passed
-  merchant_country_gb: passed
-  new_customers: needs_review
-recommendation: approve_for_shadow_test
+  urban_high_volume: passed
+  coastal_stores: passed
+  holiday_weekends: needs_review
+recommendation: approve_for_planner_shadow
 ```
 
-Notice the `new_customers` segment. A careful lifecycle gives the team room to say, "This model looks strong, but one segment needs review before production traffic." The candidate can move into a shadow test, where it receives production inputs and logs predictions without affecting customer decisions.
+Notice the `holiday_weekends` segment. A careful lifecycle gives the team room to hold the candidate for review when one important segment needs more evidence before planners use it. The candidate can move into a shadow test, where it produces forecasts beside the current production model without changing store orders.
+
+![Release evidence gate with metrics, slices, load checks, shadow testing, canary rollout, and rollback](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/release-evidence.png)
+
+*This visual shows why release decisions need several kinds of proof, not only one good offline metric.*
 
 Once evaluation produces enough evidence, the team needs to store the approved candidate as a versioned production asset. That is the registry stage.
 
@@ -215,26 +223,26 @@ Once evaluation produces enough evidence, the team needs to store the approved c
 
 A **model registry** is a catalog for trained models. It stores model versions, metadata, approval status, evaluation results, lineage, and deployment state. The registry gives the team a shared place to answer, "Which version is approved, what created it, and where is it running?"
 
-Without a registry, model files often spread across object storage, laptops, chat links, and deployment repositories. A file named `model_final_v3_really_final.pkl` tells almost nothing about the data, code, environment, review, or rollout. A registry turns the model into a managed production asset.
+Without a registry, model files often spread across object storage, laptops, chat links, and deployment repositories. A file named `candidate.pkl` tells almost nothing about the data, code, environment, review, or rollout. A registry turns the model into a managed production asset.
 
-For Northstar Pay, the registry entry for version `v18` might look like this. The entry connects the model file to the run, data snapshot, evaluation report, and owners who approved the next step.
+For FreshBasket, the registry entry for version `v18` might look like this. The entry connects the model file to the run, data snapshot, evaluation report, and owners who approved the next step.
 
 ```yaml
-registered_model: payment-fraud-risk
+registered_model: strawberry-demand-forecast
 version: 18
 stage: candidate
 approval_status: pending_manual_approval
-artifact_uri: s3://northstar-ml-models/payment-fraud-risk/candidates/fraud-2026-06-13-1842/model.pkl
+artifact_uri: s3://freshbasket-ml-models/strawberry-demand/candidates/strawberry-demand-2026-06-13-1842/model.pkl
 lineage:
-  run_id: fraud-2026-06-13-1842
+  run_id: strawberry-demand-2026-06-13-1842
   training_commit: 9c7a31f
-  data_snapshot: s3://northstar-ml-data/fraud/examples/2026-05-01/
+  data_snapshot: s3://freshbasket-ml-data/demand/strawberries/2026-05-01/
 evaluation:
-  report_uri: s3://northstar-ml-runs/payment-fraud-risk/fraud-2026-06-13-1842/evaluation.yml
-  recommendation: approve_for_shadow_test
+  report_uri: s3://freshbasket-ml-runs/strawberry-demand/strawberry-demand-2026-06-13-1842/evaluation.yml
+  recommendation: approve_for_planner_shadow
 owners:
-  technical_owner: fraud-ml-team
-  business_owner: payments-risk
+  technical_owner: demand-forecasting-team
+  business_owner: fresh-produce-planning
 ```
 
 The registry supports **promotion**. Promotion means moving a model version through states such as candidate, staging, shadow, canary, production, and archived. Different tools use different names. The important part is that each state has a meaning and an approval path.
@@ -246,61 +254,61 @@ The registry does not serve predictions by itself in many systems. It stores the
 ## Package The Serving Path
 <!-- section-summary: Serving turns the model artifact into a reliable prediction path with input validation, feature retrieval, dependencies, and an API or batch contract. -->
 
-**Serving** means using the trained model to make predictions for new inputs. Serving can happen through an online API, a batch job, a streaming consumer, an edge device, or a database scoring process. Northstar Pay needs online serving because the payment decision happens while the customer waits.
+**Serving** means using the trained model to make predictions for new inputs. Serving can happen through an online API, a batch job, a streaming consumer, an edge device, or a database scoring process. FreshBasket needs batch serving because planners need a forecast table before stores place morning orders.
 
-The serving path contains more than the model file. It needs code that accepts a request, validates the input, retrieves or computes features, loads the model, produces a score, applies thresholds or policy rules, and returns a response. It also needs runtime dependencies, secrets, resource limits, logging, and monitoring hooks.
+The serving path contains more than the model file. It needs code that reads the forecast date, validates feature tables, loads the model, creates predictions, applies planner rules, writes an output table, and records the run result. It also needs runtime dependencies, secrets, resource limits, logging, and monitoring hooks.
 
-Here is a small API contract for the fraud model. The contract gives product engineers, platform engineers, and ML engineers the same expectation for request shape, response shape, latency, and fallback behavior.
+Here is a small batch contract for the demand model. The contract gives product engineers, platform engineers, data engineers, and ML engineers the same expectation for inputs, outputs, timing, and fallback behavior.
 
 ```yaml
-endpoint: POST /v1/fraud-risk
-request:
-  payment_id: string
-  customer_id: string
-  amount_usd: number
-  merchant_country: string
-  device_id: string
-  payment_created_at: timestamp
-response:
-  model_name: payment-fraud-risk
-  model_version: string
-  score: number
-  decision_band: approve | verify | decline
-  reason_codes: list
-latency_budget:
-  p95_ms: 80
+batch_job: strawberry-demand-score
+schedule: daily at 03:30 local time
+inputs:
+  forecast_date: date
+  feature_table: warehouse.ml.strawberry_store_features
+  model_version: strawberry-demand-forecast:v18
+outputs:
+  forecast_table: warehouse.planning.strawberry_order_recommendations
+  columns:
+    - store_id
+    - sku_id
+    - forecast_date
+    - predicted_crates
+    - recommended_order_crates
+    - model_version
+completion_sla:
+  ready_by: 04:30 local time
 fallback:
-  on_timeout: rules_engine_only
-  on_feature_error: step_up_verification
+  on_batch_failure: reuse_previous_forecast_with_planner_warning
+  on_feature_error: route_store_to_manual_planning
 ```
 
-The fallback section matters. A production system needs a behavior for timeouts, missing features, invalid inputs, and model load failures. The fallback should be boring and explicit. For Northstar Pay, a timeout can send the payment to the existing rules engine instead of leaving the checkout flow stuck.
+The fallback section matters. A production system needs a behavior for missing features, invalid inputs, model load failures, and a batch job that misses its deadline. The fallback should be boring and explicit. For FreshBasket, a failed batch can reuse the previous forecast with a planner warning, while stores with bad feature rows move to manual planning.
 
 The serving package also needs an environment. A common pattern is a container image that contains the scoring code, dependency versions, and model-loading logic. Some platforms package the model and code together. Other platforms keep the model artifact in the registry and fetch it at startup. Either way, the release should identify the exact artifact and runtime.
 
 ```yaml
-serving_image: ghcr.io/northstar/fraud-serving:2026-06-13
-model_version: payment-fraud-risk:v18
+serving_image: ghcr.io/freshbasket/demand-serving:2026-06-13
+model_version: strawberry-demand-forecast:v18
 python_version: "3.11"
 dependencies:
   lightgbm: "4.5.0"
   pandas: "2.2.3"
-  fastapi: "0.115.0"
+  pyarrow: "18.1.0"
 runtime:
   cpu: "2"
   memory: "4Gi"
-  min_replicas: 4
-  max_replicas: 40
+  max_parallel_store_partitions: 32
 ```
 
-The serving path should validate inputs before scoring. If `amount_usd` arrives as `"free"` or `merchant_country` arrives empty, the service should reject or route the request through a safe fallback. Input validation protects the model from data shapes it never learned from and gives engineers clear logs when upstream systems change.
+The serving path should validate inputs before scoring. If `on_hand_inventory` arrives as `"unknown"` or `promotion_flag` arrives empty, the job should reject or route the affected store to a safe fallback. Input validation protects the model from data shapes it never learned from and gives engineers clear logs when upstream systems change.
 
 Now the model has a serving path. The next lifecycle step is release, where the team decides how the new version gets traffic and how it can be removed quickly.
 
 ## Release With Gates And Rollback
 <!-- section-summary: Controlled release gates move a model through staging, shadow, canary, and production while preserving a fast rollback path. -->
 
-A **release gate** is a check that must pass before a model version moves forward. Gates turn the lifecycle from a hopeful handoff into an evidence-based release. For Northstar Pay, a gate might require approved offline metrics, successful shadow testing, latency inside budget, product owner approval, and a documented rollback plan.
+A **release gate** is a check that must pass before a model version moves forward. Gates turn the lifecycle from a hopeful handoff into an evidence-based release. For FreshBasket, a gate might require approved offline metrics, successful planner shadow testing, batch completion inside the deadline, product owner approval, and a documented rollback plan.
 
 The release can move through several stages. Each stage gives the team more production evidence while limiting how many customers feel the new model behavior.
 
@@ -309,132 +317,137 @@ The release can move through several stages. Each stage gives the team more prod
 | **Staging** | Test the service with synthetic and replayed requests | The model loads, the API contract works, and dependencies fit the runtime |
 | **Shadow** | Send production inputs to the model without using its decision | The team sees real score distributions and latency with no customer impact |
 | **Canary** | Send a small share of real decisions to the model | The team measures early business and system impact |
-| **Production** | Increase traffic after gates pass | The model becomes the normal decision path |
+| **Production** | Increase coverage after gates pass | The model is the normal forecast source |
 
 Shadow testing is especially useful for ML systems. The candidate model sees real production inputs, and the team can compare its scores with the current production model. Since the candidate does not affect the customer yet, the team can inspect surprises before canary traffic begins.
 
-A canary release starts small. Northstar Pay might send 1 percent of eligible payments to `v18`, then 5 percent, then 25 percent, then 100 percent. Each step checks dashboards before traffic increases. The dashboards should include normal service health and model-specific signals.
+A canary release starts small. FreshBasket might show `v18` recommendations to planners in 10 pilot stores, then one region, then every store. Each step checks dashboards before coverage increases. The dashboards should include normal batch health and model-specific signals.
 
 ```yaml
 release_plan:
-  model_version: payment-fraud-risk:v18
+  model_version: strawberry-demand-forecast:v18
   stages:
     - name: shadow
       duration: 48h
       pass:
-        p95_latency_ms_below: 80
+        batch_ready_before: "04:30 local"
         feature_error_rate_below: 0.1
-        score_distribution_reviewed: true
-    - name: canary_1_percent
+        forecast_distribution_reviewed: true
+    - name: planner_canary_10_stores
       duration: 24h
       pass:
-        auth_success_rate_drop_below: 0.05
-        verification_rate_below: 3.0
-        fraud_ops_alerts_clear: true
-    - name: canary_5_percent
+        under_forecast_rate_not_worse: true
+        planner_override_rate_below: 15.0
+        stockout_alerts_clear: true
+    - name: regional_canary
       duration: 24h
       pass:
-        false_decline_proxy_reviewed: true
-        support_ticket_spike: false
+        waste_rate_reviewed: true
+        store_support_spike: false
 rollback:
-  target_model_version: payment-fraud-risk:v17
+  target_model_version: strawberry-demand-forecast:v17
   max_time_to_restore_minutes: 10
-  owner: fraud-ml-oncall
+  owner: demand-forecasting-oncall
 ```
 
 Rollback means returning the production decision path to a previous safe version or fallback behavior. In ML systems, rollback should include the model version, the serving image, the threshold config, and sometimes the feature pipeline. If the issue comes from a broken feature, rolling back only the model may leave the same bad inputs flowing into the old model.
 
-Once the model reaches production, the lifecycle changes from release work to operating work. The team needs to watch how the system behaves with real users, real attackers, real merchants, and real traffic spikes.
+Once the model reaches production, the lifecycle changes from release work to operating work. The team needs to watch how the system behaves with real stores, real promotions, real suppliers, and real weather swings.
 
 ## Monitor The System And The Model
 <!-- section-summary: Production monitoring watches service health, data quality, drift, prediction behavior, labels, and business outcomes together. -->
 
 **Monitoring** collects signals that show how the production system behaves. An ML system needs normal software monitoring and model monitoring at the same time.
 
-The software side watches request rate, error rate, latency, CPU, memory, dependency failures, deployment health, and queue depth. If the fraud API times out, Northstar Pay has a production incident even if the model quality remains strong.
+The software side watches job start time, job completion time, error rate, CPU, memory, dependency failures, deployment health, and queue depth. If the forecast job misses the planner deadline, FreshBasket has a production incident even if the model quality remains strong.
 
 The model side watches inputs, outputs, labels, and business effects. **Data drift** means production inputs start looking different from the data used in training or evaluation. **Prediction drift** means model scores or decision bands shift in unexpected ways. **Model quality monitoring** compares predictions with later labels when those labels arrive.
 
-For Northstar Pay, the model team might monitor these signals. The table mixes system health, model behavior, label health, and business impact because all of them can explain a production issue.
+For FreshBasket, the model team might monitor these signals. The table mixes system health, model behavior, label health, and business impact because all of them can explain a production issue.
 
 | Signal | Example alert | Why it matters |
 |---|---|---|
-| Feature missing rate | `device_age_days` missing above 2 percent | Missing features can push many payments through fallback logic |
-| Input distribution | `merchant_country` mix changes sharply | Traffic may come from a launch, attack, or upstream bug |
-| Score distribution | High-risk scores double in one hour | The model may be reacting to a real fraud wave or broken features |
-| Decision rate | Verification rate rises above 3 percent | Customers may experience too much friction |
-| Latency | p95 exceeds 80 ms | The payment path may slow down |
-| Delayed labels | Chargeback join fails for two days | Quality dashboards may silently go stale |
-| Business outcome | Support tickets mention blocked payments | The model may hurt customers even while technical metrics look normal |
+| Feature missing rate | `on_hand_inventory` missing above 2 percent | Missing features can push stores through manual planning |
+| Input distribution | promotion share jumps sharply | The model may be seeing a real campaign or an upstream data issue |
+| Forecast distribution | recommended crates double in one region | The model may be reacting to weather, promotion, or broken features |
+| Planner override rate | planners override more than 15 percent of forecasts | The forecast may conflict with domain judgment |
+| Batch completion | forecast table lands after 04:30 | Store orders may miss the supplier cutoff |
+| Delayed labels | sales and spoilage join fails for two days | Quality dashboards may silently go stale |
+| Business outcome | stockout reports rise for strawberries | The model may hurt customers even while technical metrics look normal |
 
 Prediction logs make this possible. The log should connect the request, model version, features or feature references, score, decision, and later label. Sensitive values need privacy controls, access limits, and retention rules, especially in payment systems.
 
 ```json
 {
-  "request_id": "pay_9f13",
-  "model_name": "payment-fraud-risk",
+  "run_id": "strawberry-demand-score-2026-06-13",
+  "model_name": "strawberry-demand-forecast",
   "model_version": "v18",
-  "prediction_timestamp": "2026-06-13T18:42:15Z",
+  "prediction_timestamp": "2026-06-13T03:48:15-05:00",
   "features": {
-    "amount_usd": 142.39,
-    "merchant_country": "US",
-    "device_age_days": 3,
-    "attempts_last_hour": 4
+    "store_id": "store_044",
+    "sku_id": "strawberries_1lb",
+    "promotion_flag": true,
+    "recent_units_sold_7d": 311,
+    "on_hand_inventory": 24
   },
-  "score": 0.78,
-  "decision_band": "verify",
-  "serving_latency_ms": 41,
+  "predicted_crates": 46,
+  "recommended_order_crates": 50,
+  "batch_runtime_seconds": 1180,
   "fallback_used": false
 }
 ```
 
-Monitoring should lead to named actions. A service outage can trigger traffic routing to the fallback rules engine. A feature freshness alert can pause model-based declines and use verification instead. A score distribution alert can ask fraud operations to inspect a possible attack. A quality regression can open a retraining task or roll back to `v17`.
+Monitoring should lead to named actions. A batch outage can reuse the previous forecast with a planner warning. A feature freshness alert can route affected stores to manual planning. A forecast distribution alert can ask produce operations to inspect a promotion, weather event, or supplier change. A quality regression can open a retraining task or roll back to `v17`.
 
-These actions connect monitoring to the final lifecycle step. Production evidence should flow back into the next version, because the world that creates fraud, customer behavior, and payment patterns keeps changing.
+These actions connect monitoring to the final lifecycle step. Production evidence should flow back into the next version because grocery demand, promotions, weather, and supplier availability keep changing.
 
 ## Feed Production Evidence Back Into The Loop
 <!-- section-summary: Feedback turns production predictions, labels, incidents, and human reviews into the next training dataset and release decision. -->
 
 **Feedback** means the lifecycle learns from production after the model ships. Feedback can include labels, human review decisions, customer support signals, incident notes, product metrics, and feature-quality reports. The team uses this evidence to debug, retrain, adjust thresholds, or change the product workflow.
 
-For fraud, labels arrive late. A payment might look safe today and become a confirmed chargeback three weeks later. This delay shapes the lifecycle. The team cannot know the full quality of today's predictions immediately, so it needs proxy signals in the short term and label-based evaluation later.
+For grocery demand, labels arrive after the sales day closes and the inventory system reconciles stockouts, spoilage, and transfers. A forecast can look reasonable in the morning and prove too low after evening shoppers empty the shelf. This delay shapes the lifecycle. The team cannot know the full quality of today's predictions immediately, so it needs proxy signals in the short term and label-based evaluation later.
 
-Northstar Pay can build a feedback table that joins predictions with later outcomes. This table turns scattered production events into training evidence, monitoring evidence, and release-review evidence.
+FreshBasket can build a feedback table that joins predictions with later outcomes. This table turns scattered store events into training evidence, monitoring evidence, and release-review evidence.
 
-| payment_id | model_version | score | decision_band | label_after_30_days | analyst_review | support_signal |
+| store_id | model_version | predicted_crates | ordered_crates | actual_sold_crates | stockout | planner_note |
 |---|---|---:|---|---|---|---|
-| pay_9f13 | v18 | 0.78 | verify | fraud | confirmed | none |
-| pay_2a88 | v18 | 0.91 | decline | legitimate | false_positive | customer_complaint |
-| pay_7b20 | v18 | 0.12 | approve | legitimate | none | none |
+| store_044 | v18 | 46 | 50 | 49 | false | promotion matched forecast |
+| store_118 | v18 | 21 | 24 | 24 | true | evening stockout |
+| store_027 | v18 | 38 | 42 | 30 | false | rain reduced traffic |
 
-This table helps the team answer concrete questions. Did `v18` catch more fraud than `v17`? Did false declines increase for new customers? Did one merchant category receive too many verifications? Did the model perform worse after a product launch or attacker behavior change?
+This table helps the team answer concrete questions. Did `v18` reduce forecast error compared with `v17`? Did under-forecasting increase in top-volume stores? Did waste rise in rainy regions? Did the model perform worse after a supplier packaging change?
 
-Feedback does not always mean retraining immediately. Sometimes the right fix is a threshold change, a feature pipeline bug fix, a product rule change, a better fallback, or a new analyst workflow. Retraining helps when the model needs to learn from newer patterns. A broken feature needs engineering work before retraining, because a new model trained on bad data repeats the problem.
+Feedback can lead to several fixes. Sometimes the right fix is a planner rule change, a feature pipeline bug fix, a product workflow change, a better fallback, or a new dashboard for store operations. Retraining helps when the model needs to learn from newer patterns. A broken feature needs engineering work before retraining, because a new model trained on bad data repeats the problem.
 
 A mature lifecycle names retraining triggers. The triggers can be scheduled, event-based, quality-based, or manual, and each trigger should lead to a clear response instead of a vague improvement request.
 
 | Trigger | Example | Response |
 |---|---|---|
-| Schedule | Train every Monday after 30-day labels close | Create a fresh candidate and evaluate against production |
-| New data | A large batch of analyst-reviewed fraud cases lands | Run training after validation passes |
-| Drift | Device-age distribution changes beyond threshold | Investigate upstream data, then retrain if the change is real |
-| Quality regression | Recall drops below the release target | Open incident review and create a candidate fix |
-| Product change | New payment method launches | Add features or segments before the next release |
+| Schedule | Train every Monday after sales and inventory labels close | Create a fresh candidate and evaluate against production |
+| New data | A large promotion season finishes | Run training after validation passes |
+| Drift | promotion mix changes beyond threshold | Investigate upstream data, then retrain if the change is real |
+| Quality regression | WAPE rises above the release target | Open incident review and create a candidate fix |
+| Product change | New supplier pack size launches | Add features or segments before the next release |
 
-Feedback closes the loop, but it also creates accountability. Every new candidate should carry the evidence that caused it to exist. The reason might be "weekly refresh," "fraud pattern changed," "false declines rose in new customers," or "feature pipeline fixed after incident." That reason helps reviewers understand why a model version moved through the lifecycle.
+Feedback closes the loop, and it also creates accountability. Every new candidate should carry the evidence that caused it to exist. The reason might be "weekly refresh," "promotion season ended," "stockouts rose in top stores," or "inventory feature fixed after incident." That reason helps reviewers understand why a model version moved through the lifecycle.
+
+![Production feedback flowing from predictions, labels, incidents, and human review into an evidence table and next model version](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/production-feedback.png)
+
+*This visual highlights the production evidence that turns monitoring from a dashboard into the next model improvement cycle.*
 
 Now all the parts are visible. The lifecycle can be drawn as one loop that keeps the product decision, data, training, release, monitoring, and feedback connected.
 
 ## Putting It All Together
 <!-- section-summary: The ML system lifecycle is a repeating operating loop that keeps product decisions, data, models, serving, monitoring, and feedback connected. -->
 
-The ML system lifecycle is the path from a product decision to production evidence and back again. Northstar Pay starts with one decision: approve, verify, or decline a payment. That decision defines the target label, the metrics, the guardrails, and the serving pattern.
+The ML system lifecycle is the path from a product decision to production evidence and back again. FreshBasket starts with one decision: how many strawberry crates each store should order tomorrow. That decision defines the target label, the metrics, the guardrails, and the serving pattern.
 
 From there, the team builds training data from production events, validates the data, runs a repeatable training job, evaluates a candidate model, registers an approved version, packages the serving path, releases with gates, monitors real behavior, and feeds labels and incidents into the next cycle. Each stage leaves evidence for the next stage, so the team can explain why a model moved forward or why it stopped.
 
 ```mermaid
 flowchart TB
-    Decision[Product decision<br/>approve, verify, decline]:::plan
+    Decision[Product decision<br/>order crates by store]:::plan
     Data[Training data<br/>events, features, labels]:::data
     Train[Training run<br/>code, config, environment]:::compute
     Eval[Evaluation<br/>metrics, segments, guardrails]:::quality
@@ -460,11 +473,9 @@ Each later MLOps topic fits somewhere in this loop. Data validation protects the
 
 The lifecycle also shows why MLOps is a team practice. Data engineers keep the input pipelines healthy. Data scientists and ML engineers train and evaluate candidates. Platform engineers provide CI/CD, registries, infrastructure, secrets, and monitoring. Product and risk owners define acceptable behavior. Operations teams respond when production signals cross a line.
 
-A production ML system becomes manageable when every model version has a path through this loop. The team knows why the model exists, which data trained it, which metrics approved it, where it runs, what it is doing now, and what evidence should shape the next version.
+A production ML system is manageable when every model version has a path through this loop. The team knows why the model exists, which data trained it, which metrics approved it, where it runs, what it is doing now, and what evidence should shape the next version.
 
----
-
-**References**
+## References
 
 - [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Describes CI, CD, continuous training, data validation, model validation, metadata management, and monitoring for production ML systems.
 - [Microsoft Learn: MLOps model management with Azure Machine Learning](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-management-and-deployment?view=azureml-api-2) - Covers reproducible pipelines, reusable environments, model registration, deployment, lineage, lifecycle events, and monitoring.

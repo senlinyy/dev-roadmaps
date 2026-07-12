@@ -37,5 +37,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   }
 }
 ```
-
-The variable keeps the environment choice outside the resource while still feeding both naming and tags.

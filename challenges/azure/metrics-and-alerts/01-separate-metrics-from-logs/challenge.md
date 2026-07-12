@@ -1,7 +1,6 @@
 ---
-title: "Separate Metrics From Logs"
-sectionSlug: metrics
+title: "Metrics and Alerts"
 order: 1
 ---
 
-This step checks observability judgment for `devpolaris-orders-api`. Use the scenario details to choose the safest operating answer.
+Use the article to answer the monitoring and alerting scenarios with the evidence given in each case.

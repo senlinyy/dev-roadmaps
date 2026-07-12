@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "namespace.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: notifications-staging\n  annotations:\n    platform.devpolaris.io/owner: customer-platform\n    platform.devpolaris.io/purpose: notification-workloads\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "v1", "label": "Namespace API version" },
+      { "path": ["kind"], "equals": "Namespace", "label": "Namespace kind" },
+      { "path": ["metadata", "name"], "equals": "notifications-prod", "label": "production namespace name" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "customer-notification-platform", "label": "platform ownership label" },
+      { "path": ["metadata", "labels", "environment"], "equals": "prod", "label": "production environment label" }
+    ]
+  }
+}

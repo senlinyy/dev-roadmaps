@@ -1,88 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "03-reason-about-priority-and-scope-q1",
       "type": "single",
-      "scenario": "An inbound NSG rule allows TCP 443 from `asg-app-gateway` to `asg-orders-api`. What does it allow?",
+      "scenario": "A change review for `nsg-orders-api` shows two inbound custom rules that both match traffic from the internet to TCP 443 on the API subnet. Rule `Allow-Internet-443` has priority 200. Rule `Deny-Internet-443` has priority 300. No more specific source or destination criteria separate them. When a packet from the internet to port 443 arrives, which rule decides the result?",
       "options": [
         {
           "id": "a",
-          "text": "New HTTPS connections from the application gateway group to the orders API group."
+          "text": "The priority 200 allow, because Azure evaluates matching NSG rules by ascending priority number and stops at the first match."
         },
         {
           "id": "b",
-          "text": "All traffic from the Internet to the API subnet."
+          "text": "The priority 300 deny, because Azure gives matching deny rules precedence over allow rules even when the deny has the higher priority number."
         },
         {
           "id": "c",
-          "text": "Database writes from the API to Azure SQL."
+          "text": "The default deny, because Azure evaluates the built in internet deny rules before custom HTTPS rules on the same port."
         },
         {
           "id": "d",
-          "text": "Management-plane edits to the API resource."
+          "text": "The most recently created custom rule, because Azure uses creation order to break conflicts between matching NSG entries."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The rule names direction, protocol, port, source, and destination. It does not grant database access or management permissions."
+      "explanation": "NSGs are first match evaluators, so the lower priority number wins when two rules match the same packet. The closest distractor is the explicit deny rule because many firewalls treat deny as globally stronger, but Azure NSGs still follow rule priority order first. See [Network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview)."
     },
     {
-      "id": "q2",
-      "type": "single",
-      "scenario": "Why are priority numbers important in NSG rules?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Azure checks lower priority numbers first and stops at the first matching rule."
-        },
-        {
-          "id": "b",
-          "text": "Higher numbers always allow more secure traffic."
-        },
-        {
-          "id": "c",
-          "text": "Priorities decide which resource group owns the NSG."
-        },
-        {
-          "id": "d",
-          "text": "Priority only affects the portal display order."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "NSG rule priority controls evaluation order. A broad earlier rule can prevent a later rule from mattering."
-    },
-    {
-      "id": "q3",
+      "id": "03-reason-about-priority-and-scope-q2",
       "type": "multiple",
-      "scenario": "Which fields are part of the packet decision in an NSG rule?",
+      "scenario": "The Orders API VM has an NSG on `snet-orders-api` and another NSG on the VM NIC. The app can no longer reach Azure SQL on TCP 1433 after a network change, and the team is debating which object to edit first. Which two review statements are the most accurate?",
       "options": [
         {
           "id": "a",
-          "text": "Direction."
-        },
-        {
-          "id": "b",
-          "text": "Source and destination."
+          "text": "Both subnet level and NIC level NSGs can affect the effective decision for that VM."
         },
         {
           "id": "c",
-          "text": "Protocol and destination port."
+          "text": "The presence of a NIC NSG means Azure ignores the subnet NSG for both inbound and outbound traffic."
+        },
+        {
+          "id": "b",
+          "text": "Effective security rules or IP flow verification should be checked before assuming which NSG blocked the traffic."
         },
         {
           "id": "d",
-          "text": "The Git branch that deployed the app."
+          "text": "Removing the subnet NSG would automatically merge its rules into the NIC NSG so the effective decision would stay the same."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "NSGs evaluate network traffic fields. Deployment metadata can help review but it is not a packet-match field."
+      "explanation": "Azure can apply both NSGs to the same path, so effective rule evidence is the right first proof before the team edits anything. The closest distractor is the claim that the NIC NSG takes over completely, but the article explains that subnet and NIC checks both matter and their evaluation order depends on traffic direction. See [Diagnose a virtual machine network traffic filter problem](https://learn.microsoft.com/en-us/azure/virtual-network/diagnose-network-traffic-filter-problem)."
+    },
+    {
+      "id": "03-reason-about-priority-and-scope-q4",
+      "type": "single",
+      "scenario": "A security rule on `nsg-orders-api` uses `asg-orders-api` as the destination. During review, a new engineer asks why the team bothered creating an Application Security Group instead of hard coding every API NIC address into each rule. What is the best answer?",
+      "options": [
+        {
+          "id": "b",
+          "text": "An ASG lets the team scope NSG rules by subnet membership, but not by individual NIC membership."
+        },
+        {
+          "id": "c",
+          "text": "An ASG provides a reusable label for route targeting so NSGs and route tables can point at the same backend definition."
+        },
+        {
+          "id": "a",
+          "text": "An ASG groups NICs by application role so NSG rules can target the workload membership instead of a brittle list of individual IPs."
+        },
+        {
+          "id": "d",
+          "text": "An ASG automatically generates matching allow rules for every member NIC so the team no longer has to manage NSG priorities."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application Security Groups keep NSG targeting tied to workload membership instead of individual addresses, which makes scaling and review easier. The closest distractor is the idea that ASGs can be used as generic reusable network labels, but their actual job here is grouping NICs so NSG rules can follow the workload rather than static IPs. See [Application security groups](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups)."
+    },
+    {
+      "id": "03-reason-about-priority-and-scope-q5",
+      "type": "single",
+      "scenario": "A ticket says only this: \"Open 1433 to the database subnet so the API can connect to Azure SQL tonight.\" It does not identify the source subnet or ASG, the exact destination, inbound versus outbound direction, the NSG attachment point, or the intended priority relative to existing rules. What should the reviewer require before approving the change?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A broader Any to Any TCP 1433 rule so future database consumers do not need another review."
+        },
+        {
+          "id": "a",
+          "text": "The exact source, destination, protocol, port, direction, attachment point, priority, and rollback plan for the one flow being allowed."
+        },
+        {
+          "id": "c",
+          "text": "Only the destination service and port, because the engineer applying the rule can infer the source scope and direction from the attached subnet."
+        },
+        {
+          "id": "d",
+          "text": "A packet capture from the next deployment window, because rule priority and attachment point can be chosen later if the first change misses."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A reviewable NSG change names the exact packet flow and where the rule will be enforced. The closest distractor is the broader 1433 rule because it seems operationally convenient, but it expands access far beyond the one application path the ticket actually described. See [Network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview)."
+    },
+    {
+      "id": "04-review-rule-changes-q1",
+      "type": "single",
+      "scenario": "The architecture requires internet clients to hit Front Door and then Application Gateway before traffic reaches the private API subnet. A pull request adds an inbound NSG rule that allows source `Internet` to destination `asg-orders-api` on TCP 443 so a new monitoring partner can test production quickly. What should the reviewer request instead?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Approve the broad internet rule for the short test window because TLS and application authentication still protect the API from direct exposure."
+        },
+        {
+          "id": "c",
+          "text": "Allow source `Internet` but lower the rule priority beneath the gateway rule so approved gateway traffic still matches first."
+        },
+        {
+          "id": "d",
+          "text": "Allow the monitoring partner's published source range directly to the API subnet, because named partner access is equivalent to preserving the gateway path."
+        },
+        {
+          "id": "a",
+          "text": "Limit the source to the intended gateway path, such as the Application Gateway subnet or the approved gateway target, rather than opening the API to all internet clients."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The review should preserve the intended entry path instead of exposing the private API directly to the internet. The closest distractor is the partner range idea because it sounds narrower than `Internet`, but it still bypasses the approved Front Door and Application Gateway path instead of preserving the designed boundary. See [Application security groups](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups)."
+    },
+    {
+      "id": "04-review-rule-changes-q3",
+      "type": "single",
+      "scenario": "To let one API subnet reach Azure SQL, a proposed outbound rule allows source `Any`, destination `Any`, protocol `TCP`, destination port `1433`. The author argues that limiting the port is enough because only SQL uses 1433 in the environment today. What is the main issue with that rule?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It is much broader than the one application to database flow and can permit unintended SQL traffic between many endpoints."
+        },
+        {
+          "id": "b",
+          "text": "It should switch the destination to a SQL related service tag, because once the destination is narrowed the source can remain `Any` for the release window."
+        },
+        {
+          "id": "c",
+          "text": "The rule is acceptable if the team adds a higher priority deny for other ports, because that keeps the SQL path narrow enough in practice."
+        },
+        {
+          "id": "d",
+          "text": "The main problem is the missing destination scoping helper, because the open source range is less important than the destination still being `Any`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The proposed rule permits far more than the intended path because both the source and destination scopes are wide open. The closest distractor is the service tag idea because service tags can help with destination scoping, but they still do not solve the missing application source boundary in this rule. See [Network security group rules](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview#security-rules)."
+    },
+    {
+      "id": "04-review-rule-changes-q4",
+      "type": "single",
+      "scenario": "After an NSG change, Application Gateway reports every backend in the pool as unhealthy even though the app revision itself is still running. The gateway uses HTTPS health probes, and the architecture expects the gateway subnet to reach the API over port 443. Which review detail was most likely missed?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The host header or probe path expected by the gateway, even if TCP 443 is still allowed."
+        },
+        {
+          "id": "c",
+          "text": "The status code range the health probe accepts, because a new redirect or auth challenge can also make healthy backends appear down."
+        },
+        {
+          "id": "a",
+          "text": "The exact probe path, source path, and port flow that the gateway uses to judge backend health."
+        },
+        {
+          "id": "d",
+          "text": "The backend TLS setting and certificate trust the probe uses, because handshake failures can also mark every backend unhealthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "When health probes fail immediately after a network rule change, the first review target is the gateway probe path through the NSG. The closest distractor is the host header or status code detail because those settings can also make healthy backends appear down, but the question asks what a network review most likely missed after the NSG change, which points first to the exact source and port flow used by the probe. See [Application Gateway health probes](https://learn.microsoft.com/en-us/azure/application-gateway/application-gateway-probe-overview)."
     }
   ]
 }

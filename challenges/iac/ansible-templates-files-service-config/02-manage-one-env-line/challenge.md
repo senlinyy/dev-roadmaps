@@ -1,14 +1,15 @@
 ---
 title: "Manage One Env Line"
-sectionSlug: "making-small-edits-with-lineinfile"
+sectionSlug: "why-file-state-matters"
 order: 2
 ---
 
-Use `lineinfile` to manage one environment setting without appending duplicates.
+The role should own one environment setting without creating a duplicate line on every run. Replace the append-style task with a line-level desired-state edit for the orders API port.
 
-Requirements:
+Your job:
 
-1. **Path:** `/etc/default/devpolaris-orders-api`.
-2. **Match:** `regexp: "^ORDERS_API_PORT="`.
-3. **Line:** `line: "ORDERS_API_PORT={{ orders_api_port }}"`.
-4. **Create:** `create: true`, owner and group `root`, mode `"0644"`.
+1. **Manage the orders API environment file** at `/etc/default/devpolaris-orders-api`.
+2. **Match the existing port line** before writing the desired `ORDERS_API_PORT` value.
+3. **Allow the file to be created** with root ownership and mode `0644`.
+
+The grader checks the parsed task structure, not command output.

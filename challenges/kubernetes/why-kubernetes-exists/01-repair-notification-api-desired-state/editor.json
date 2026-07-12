@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "notification-api-deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: notification-api\n  namespace: notifications-prod\n  labels:\n    app.kubernetes.io/part-of: notification-platform\n    environment: prod\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "apps/v1", "label": "Deployment API version" },
+      { "path": ["kind"], "equals": "Deployment", "label": "Deployment kind" },
+      { "path": ["metadata", "name"], "equals": "notification-api", "label": "Deployment name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications-prod", "label": "production namespace" },
+      { "path": ["spec", "replicas"], "equals": 4, "label": "desired replica count" },
+      { "path": ["spec", "selector", "matchLabels", "app"], "equals": "notification-api", "label": "Deployment selector" },
+      { "path": ["spec", "template", "metadata", "labels", "app"], "equals": "notification-api", "label": "Pod template label" },
+      { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "notification-api", "label": "application container name" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/notification-api:1.4.2", "label": "approved application image" }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "request-shape-q1",
+      "type": "single",
+      "scenario": "A release job in namespace `orders` receives this response while restarting the API:\n\n```text\nUser \"system:serviceaccount:orders:orders-release\" cannot patch resource \"deployments\" in API group \"apps\" in the namespace \"orders\"\n```\n\nWhich review action is the smallest defensible fix?",
+      "options": [
+        { "id": "a", "text": "Bind `orders-release` to `cluster-admin` so future release operations cannot be blocked." },
+        { "id": "b", "text": "Add `get` access to Pods because rollout restart reads Pod status before changing a Deployment." },
+        { "id": "c", "text": "Grant the `orders-release` subject `patch` on `deployments` in API group `apps` within namespace `orders`." },
+        { "id": "d", "text": "Grant every service account in `orders` permission to update all namespaced resources." }
+      ],
+      "correct": ["c"],
+      "explanation": "The error names the caller, verb, resource, API group, and namespace, so the narrow fix is that exact grant. Pod read access does not satisfy a Deployment patch request. Cluster admin and a namespace-wide service account grant are much broader than the release job requires."
+    },
+    {
+      "id": "runtime-identity-q2",
+      "type": "single",
+      "scenario": "The `devpolaris-orders-api` serves HTTP traffic and never calls the Kubernetes API. Its Pod currently uses the same `orders-release` service account as the deployment pipeline. Security review finds that the release identity can patch Deployments. What change best reduces impact if the app container is compromised?",
+      "options": [
+        { "id": "a", "text": "Give the Pod a separate `orders-api` service account and set `automountServiceAccountToken: false`." },
+        { "id": "b", "text": "Keep the shared service account but remove only its permission to list ReplicaSets." },
+        { "id": "c", "text": "Use the `default` service account and copy the release RoleBinding to it for consistency." },
+        { "id": "d", "text": "Keep the release identity in the Pod and rely on the Service to block Kubernetes API calls." }
+      ],
+      "correct": ["a"],
+      "explanation": "Runtime and release jobs need separate identities. Because the app does not call the API, disabling token automount removes an unnecessary credential. Trimming one verb leaves deployment power, copying the binding preserves the risky access, and a Service does not remove the mounted API identity."
+    },
+    {
+      "id": "binding-scope-q3",
+      "type": "single",
+      "scenario": "Platform engineers maintain a reusable ClusterRole named `view` for namespaced read access. The orders developer group should inspect resources only in namespace `orders`, while the same group must have no grant in `payments`. Which binding shape fits the requirement?",
+      "options": [
+        { "id": "a", "text": "A ClusterRoleBinding from the developer group to `view`, because the rules themselves mention namespaced resources." },
+        { "id": "b", "text": "A RoleBinding in `orders` that references ClusterRole `view` and names the developer group as its subject." },
+        { "id": "c", "text": "A Role named `view` in `payments` with no subjects, because an unbound Role denies access elsewhere." },
+        { "id": "d", "text": "A ClusterRoleBinding to `view` plus a second RoleBinding in `payments` that denies the same verbs." }
+      ],
+      "correct": ["b"],
+      "explanation": "A RoleBinding can grant a ClusterRole's namespaced rules only inside the binding namespace. A ClusterRoleBinding grants across the cluster. An unbound Role does not limit another grant, and RBAC grants permissions rather than adding explicit deny rules."
+    },
+    {
+      "id": "access-evidence-q4",
+      "type": "single",
+      "scenario": "A pull request changes the `orders-release` Role. The author provides only this test result: the service account can patch Deployments in `orders`. Reviewers also need evidence that the release identity did not gain access to production credentials. Which additional result completes the intended positive and negative check?",
+      "options": [
+        { "id": "a", "text": "The service account can list ReplicaSets in every namespace." },
+        { "id": "b", "text": "The runtime Pod can patch the orders Deployment using its own identity." },
+        { "id": "c", "text": "The developer group can update Secrets in `orders`." },
+        { "id": "d", "text": "The release service account cannot get Secrets in `orders`." }
+      ],
+      "correct": ["d"],
+      "explanation": "The negative test should prove the sensitive action remains denied for the same release subject and namespace. Cluster-wide ReplicaSet access is broader than required. Runtime deployment access breaks identity separation, and developer Secret updates do not test the release identity."
+    },
+    {
+      "id": "rbac-review-q5",
+      "type": "multiple",
+      "scenario": "An urgent RBAC pull request proposes a ClusterRoleBinding for `orders-release`. The job deploys only to namespace `orders`, the application itself does not call the Kubernetes API, and the review contains no denied-access evidence. Which two review comments follow the article's production checklist?",
+      "options": [
+        { "id": "a", "text": "Replace the cluster-wide binding with a namespace-scoped Role and RoleBinding tied to the release job." },
+        { "id": "b", "text": "Mount the release token into the application Pod so operators can reuse one identity during incidents." },
+        { "id": "c", "text": "Add a negative access test, such as proving `orders-release` cannot read Secrets in `orders`." },
+        { "id": "d", "text": "Grant wildcard resources and verbs temporarily, then rely on the ticket to remind the team to narrow them later." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A namespace-only job should receive a namespace-scoped grant, and the review should prove both intended access and a meaningful denial. Reusing the release identity expands compromise impact. Temporary wildcard access abandons the small, named permission contract the review is meant to preserve."
+    }
+  ]
+}

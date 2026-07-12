@@ -1,142 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The pipeline pushed this image:\n\n111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.7\n\nBut ECS service details show:\nservice taskDefinition: devpolaris-orders-api:41\ntask definition 41 image: ...:2026-05-02.6\nrunningCount: 2\n\nWhat is missing from the release path?",
+      "scenario": "The pipeline pushed this image:\n\n111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.7\n\nBut ECS service details show: Service taskDefinition is devpolaris-orders-api:41. Task definition 41 image is ...:2026-05-02.6. RunningCount is 2.\n\nWhat is missing from the release path?",
       "options": [
+        {
+          "id": "b",
+          "text": "Register a new task definition revision but leave the service on revision 41 until the mutable image tag refreshes."
+        },
+        {
+          "id": "c",
+          "text": "Create a second service for the same production workload so the new image can run beside the old task definition."
+        },
         {
           "id": "a",
           "text": "A new task definition revision that points at the new image, followed by a service update to that revision."
         },
         {
-          "id": "b",
-          "text": "A new cluster, because every image tag requires a separate ECS workspace."
-        },
-        {
-          "id": "c",
-          "text": "A manual SSH restart on the Fargate host so the image tag is reloaded."
-        },
-        {
           "id": "d",
-          "text": "A new ALB certificate, because image tags are selected by TLS."
+          "text": "Force a deployment without registering a revision because the service will resolve a mutable image tag at each health check."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "An ECR image is passive until the runtime recipe and service use it. The task definition revision is the bridge from artifact to running tasks. Updating the service is what starts the deployment path."
+      "explanation": "An ECR image is passive until the runtime recipe and service use it. The task definition revision is the bridge from artifact to running tasks. Updating the service is what starts the deployment path.\n\nLearn more in [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)."
     },
     {
-      "id": "q2",
+      "id": "q-operate-the-service-path-1",
       "type": "single",
-      "scenario": "ECS service snapshot:\n\ndesiredCount: 2\nrunningCount: 1\npendingCount: 1\nevent: was unable to start a task because CannotPullContainerError: manifest unknown\ntask definition image: .../devpolaris-orders-api:2026-05-02.8\n\nWhich piece should be inspected first?",
+      "scenario": "A new Fargate task reaches RUNNING, but the ALB cannot complete its health check. The target and application evidence is:\n\n```text\ntarget=10.0.42.18:3000 state=unhealthy reason=Target.Timeout\nhealth_check=GET /health on traffic port\napp_log=server listening address=127.0.0.1 port=3000\n```\n\nWhich change should the team make before sending production traffic to the task?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Open task inbound port 3000 from the ALB security group but keep the process bound to `127.0.0.1`."
+        },
+        {
+          "id": "c",
+          "text": "Increase the health-check timeout because `Target.Timeout` can indicate a slow but reachable readiness endpoint."
+        },
+        {
+          "id": "d",
+          "text": "Change the target-group port to the container's loopback listener instead of changing the application bind address."
+        },
+        {
+          "id": "a",
+          "text": "Change the app to listen on 0.0.0.0 inside the container so the task ENI can receive ALB traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app is listening only on loopback, so the ALB cannot reach it through the task ENI. Fargate with awsvpc commonly uses IP targets. The public listener can stay on 443 while the private target group forwards to port 3000.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
+    },
+    {
+      "id": "q-diagnose-failed-tasks-1",
+      "type": "single",
+      "scenario": "A stopped task for devpolaris-orders-api shows:\n\n```text\nCannotPullContainerError: failed to resolve ref\n111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.10: not found\n```\n\nWhat should be inspected first?",
       "options": [
         {
           "id": "a",
-          "text": "The task definition image reference and ECR tag or digest, plus execution-role pull permission if the image exists."
+          "text": "The task definition image reference and whether that tag or digest exists in the expected ECR repository and Region."
         },
         {
           "id": "b",
-          "text": "The target group health check path, because manifest unknown means /health returned 404."
+          "text": "Force another deployment of the same task definition so ECR has time to create the missing tag."
         },
         {
           "id": "c",
-          "text": "The task role permissions used by app code after startup."
+          "text": "Add broader ECR permissions to the application task role, even though image pulls use the task execution path."
         },
         {
           "id": "d",
-          "text": "The ALB listener priority, because listener rules pull images from ECR."
+          "text": "Change the target-group health path so ECS can start the container before resolving its image."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "CannotPullContainerError happens before the app starts. The first useful evidence is the image reference, whether the tag exists, and whether ECS can pull it. Target health and app task-role permissions come later in the path."
+      "explanation": "The task never reached application startup because the configured image reference could not be resolved. The first check is the exact repository, Region, tag or digest, and task-definition revision. Repeating the same revision does not create the tag, the application task role is not the image-pull identity, and health configuration is evaluated only after a container starts.\n\nLearn more in [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)."
     },
     {
-      "id": "q3",
-      "type": "single",
-      "scenario": "A teammate says, \"The cluster is unhealthy because I cannot find the EC2 instances for Fargate.\" The service is using launch type FARGATE and has two running tasks.\n\nWhich correction is most useful?",
-      "options": [
-        {
-          "id": "a",
-          "text": "For Fargate, the cluster is a logical ECS workspace for services and tasks, not a host list the team SSHs into."
-        },
-        {
-          "id": "b",
-          "text": "For Fargate, every task runs on a visible EC2 instance that must be patched by the app team."
-        },
-        {
-          "id": "c",
-          "text": "The cluster replaces the task definition, so image and environment settings should be edited on the cluster."
-        },
-        {
-          "id": "d",
-          "text": "The cluster is the public entry point, so browser traffic should target the cluster ARN directly."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Fargate changes the host ownership line. You still operate ECS objects such as services, tasks, task definitions, events, and logs. You do not debug by searching for app-team EC2 hosts to patch."
-    },
-    {
-      "id": "q4",
+      "id": "q-operate-the-service-path-4",
       "type": "multiple",
-      "scenario": "A service map for devpolaris-orders-api includes:\n\nECR image: devpolaris-orders-api:2026-05-02.7\ntask definition: devpolaris-orders-api:42\nservice: desiredCount=2\ntarget group: orders-api-tg, ip targets on 3000\nlogs: /ecs/devpolaris-orders-api\n\nWhich mappings are correct?",
+      "scenario": "The DevPolaris platform team is defining the conditions a replacement ECS task must satisfy before it receives production traffic for devpolaris-orders-api should include:\n\nPublic URL is https://orders.devpolaris.com. ALB listener is HTTPS 443. Target group is HTTP 3000, target type ip. Task security group is inbound 3000 from ALB security group. Node.js log is listening on 0.0.0.0:3000.\n\nWhich entries are part of that contract?",
       "options": [
         {
-          "id": "a",
-          "text": "The task definition is the versioned recipe that names the image, port, roles, config, secrets, and logs."
-        },
-        {
           "id": "b",
-          "text": "A task is one running copy of that recipe."
-        },
-        {
-          "id": "c",
-          "text": "The service keeps the desired number of tasks running and connects them to the load balancer."
+          "text": "The task security group should allow the ALB security group on the app port."
         },
         {
           "id": "d",
-          "text": "The target group stores container images and decides which task definition revision is latest."
+          "text": "Each Fargate task should expose port 3000 directly to the public internet."
+        },
+        {
+          "id": "a",
+          "text": "The target group should register Fargate task IPs on the container port."
+        },
+        {
+          "id": "c",
+          "text": "The Node.js process should listen on the same port the target group checks."
+        },
+        {
+          "id": "e",
+          "text": "Confirm the service deployment is complete and infer that each registered target passed health evaluation."
         }
       ],
       "correct": [
-        "a",
         "b",
+        "a",
         "c"
       ],
-      "explanation": "The core ECS path is image to task definition to service to tasks to target group and logs. The target group handles traffic health, not artifact storage or task definition versioning. Keeping those nouns separate makes incidents much easier to read."
+      "explanation": "The ALB is the public front door, and the tasks stay private. The task IP, security group, container port, and app listener must line up. Exposing each task directly would bypass the load balancer model.\n\nLearn more in [VPC security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)."
     },
     {
-      "id": "q5",
+      "id": "q-trace-the-front-door-5",
       "type": "single",
-      "scenario": "The task starts and logs:\n\nINFO health=ready path=/health\nERROR AccessDenied: arn:aws:sts::111122223333:assumed-role/devpolaris-orders-api-task/9f4a8c1b\nis not authorized to perform s3:GetObject on arn:aws:s3:::devpolaris-invoice-templates/prod/default.html\n\nWhich role is the likely fix target?",
+      "scenario": "During an ECS rollout, the service reports two RUNNING tasks but customers receive 503 responses. Both registered targets show the same result:\n\n```text\n10.0.42.18:3000  unhealthy  Target.Timeout\n10.0.43.27:3000  unhealthy  Target.Timeout\n```\n\nA teammate argues that RUNNING proves the tasks can receive ALB traffic. How should the release captain respond?",
       "options": [
         {
-          "id": "a",
-          "text": "The task role, because the application code is running and calling S3 after startup."
+          "id": "b",
+          "text": "Treat the timeout as a security-group failure without checking whether the app binds the task interface or responds before the timeout."
         },
         {
-          "id": "b",
-          "text": "The execution role, because every AccessDenied after health readiness belongs to ECS setup."
+          "id": "a",
+          "text": "Running tasks are not enough. Target health shows whether the ALB can reach and accept each target's health response."
         },
         {
           "id": "c",
-          "text": "The cluster role, because clusters own all application API calls."
+          "text": "Increase the health-check timeout before confirming whether the ALB can establish the connection."
         },
         {
           "id": "d",
-          "text": "The ALB service-linked role, because target health controls S3 reads."
+          "text": "Change the health path first even though an incorrect reachable path would usually return an HTTP mismatch."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The app has already started and is making an AWS API call. That is task-role territory. The execution role is important for pulling images, fetching injected secrets, and sending logs before or during setup, but this error is inside running app code."
+      "explanation": "ECS running state and ALB target health answer different questions. A process can exist while the ALB cannot reach it, the port is wrong, or the health endpoint times out. Target health is the evidence for the load balancer's view.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
+    },
+    {
+      "id": "q-read-target-health-1",
+      "type": "single",
+      "scenario": "Right after a deployment, target health shows:\n\n```text\n10.0.42.18  3000  healthy\n10.0.43.27  3000  initial  Elb.InitialHealthChecking\n```\n\nWhat should you conclude?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Extend the health-check interval because `initial` means the target has already failed its first probe."
+        },
+        {
+          "id": "c",
+          "text": "Deregister and register the second target again because `initial` means ECS registered the wrong task address."
+        },
+        {
+          "id": "d",
+          "text": "Increase desired count because a task in `initial` indicates the service lacks enough registered targets."
+        },
+        {
+          "id": "a",
+          "text": "One target is ready, and the other may simply be new while initial health checks run."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`initial` is normal for a newly registered target while the ALB checks it. It is not automatically an outage. Watch whether it becomes healthy or moves to an unhealthy reason.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
+    },
+    {
+      "id": "q-diagnose-alb-failures-5",
+      "type": "single",
+      "scenario": "A replacement task is repeatedly stopped before its application finishes booting. ECS events and the final buffered application log establish this order:\n\n```text\n10:41:18 target 10.0.44.92:3000 registered\n10:41:48 task failed load balancer health checks\n10:41:49 task stopped\n10:41:52 buffered log received: HTTP server listening on 0.0.0.0:3000\n```\n\nWhich interpretation best explains the failed rollout?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app starts listening after ECS has already treated the target as failed, so startup timing and grace settings need review."
+        },
+        {
+          "id": "b",
+          "text": "Inspect task security groups and port binding because a timeout means the probe did not receive an HTTP response."
+        },
+        {
+          "id": "c",
+          "text": "Inspect the health-check path first because an invalid route can produce a response-code mismatch rather than a timeout."
+        },
+        {
+          "id": "d",
+          "text": "Increase the health-check grace period without measuring startup time or checking whether the late listener is expected."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence shows a timing problem: health checks fail before the server is ready. Possible fixes include reducing slow startup work, starting the HTTP listener earlier with accurate readiness, or tuning the ECS health check grace period. Always returning `200` would hide the readiness bug.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
     }
   ]
 }

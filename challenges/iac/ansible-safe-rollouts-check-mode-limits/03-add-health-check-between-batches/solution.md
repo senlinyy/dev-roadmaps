@@ -19,5 +19,3 @@
       delay: 3
       until: orders_health.status == 200
 ```
-
-The rollout now checks each host after the role runs, which gives the batch a simple success signal before the next host.

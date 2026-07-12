@@ -1,6 +1,6 @@
 ---
 title: "Explore the Filesystem Hierarchy"
-sectionSlug: the-filesystem-hierarchy-standard
+sectionSlug: where-linux-puts-important-things
 order: 2
 ---
 

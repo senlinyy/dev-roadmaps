@@ -1,6 +1,6 @@
 ---
 title: "Gate Canary Promotion"
-sectionSlug: promoting-the-canary
+sectionSlug: automated-gates
 order: 3
 ---
 

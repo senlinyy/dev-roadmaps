@@ -4,29 +4,93 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The team owns the full `/etc/nginx/nginx.conf` file and it must include `{{ orders_api_port }}` from variables. Which module is the best fit?",
+      "scenario": "The web role owns `/etc/nginx/conf.d/orders-api.conf`. Staging and production use different upstream ports and server names, but the file structure is identical. The team wants reviewed source content and a useful diff before replacement. Which task design best fits?",
       "options": [
-        {
-          "id": "a",
-          "text": "`ansible.builtin.template`, because the whole file is rendered from a source template and variables."
-        },
-        {
-          "id": "b",
-          "text": "`ansible.builtin.lineinfile`, because every config file should be built one line at a time."
-        },
-        {
-          "id": "c",
-          "text": "`ansible.builtin.file`, because it can render Jinja expressions."
-        },
-        {
-          "id": "d",
-          "text": "`ansible.builtin.copy`, because static copy always substitutes variables."
-        }
+        { "id": "a", "text": "Render a Jinja template with inventory values, explicit ownership and mode, and a validator for the candidate file." },
+        { "id": "b", "text": "Copy one production file to every environment, then use a command task to replace strings on each host." },
+        { "id": "c", "text": "Use `lineinfile` once for every line so the playbook assembles the complete Nginx file incrementally." },
+        { "id": "d", "text": "Create the path with `file` and let Nginx write the desired configuration when it starts." }
       ],
-      "correct": [
-        "a"
+      "correct": ["a"],
+      "explanation": "The role owns the whole variable configuration file, so `template` expresses that ownership and renders environment values before installation. Candidate validation protects the live path. A copied production file plus substitutions is harder to review, many line edits create ordering and drift problems, and `file` manages path metadata rather than service configuration content. See [Ansible template module](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Every orders host must trust the same internal CA certificate. Security publishes one reviewed PEM file, and no host-specific values belong inside it. The role must preserve exact content and set mode `0644`. Which module is the clearest ownership signal?",
+      "options": [
+        { "id": "b", "text": "Use `template` and add a harmless variable so the file is rendered separately for each host." },
+        { "id": "a", "text": "Use `copy` with the reviewed certificate as the source and explicit destination metadata." },
+        { "id": "c", "text": "Use `lineinfile` to append each certificate line if that line is not already present." },
+        { "id": "d", "text": "Use `file` with `state: touch`, then fetch the certificate during the service restart." }
       ],
-      "explanation": "Use `template` when the whole file is reviewable and needs variable substitution."
+      "correct": ["a"],
+      "explanation": "`copy` is the direct fit for fixed content from the control node and can manage the destination metadata. Adding fake templating creates needless rendering, line-by-line assembly can corrupt ordering, and `file` does not deliver the certificate content. See [Ansible copy module](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/copy_module.html)."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A role must create `/etc/orders-api`, install one fixed CA file, and render an environment-specific application config. Which two review comments correctly separate content ownership?",
+      "options": [
+        { "id": "a", "text": "Use `file` to manage the directory state and metadata before writing child files." },
+        { "id": "c", "text": "Use `template` for the directory so Jinja can choose its owner and mode." },
+        { "id": "b", "text": "Use `copy` for the fixed CA file and `template` for the configuration that consumes inventory values." },
+        { "id": "d", "text": "Use `lineinfile` for both complete files so each line can be managed independently." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "`file` owns path state and metadata, while `copy` and `template` distinguish fixed content from rendered content. A directory is not a template artifact, and building complete ordered files through many line edits obscures whole-file ownership and makes review harder."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An Nginx template contains this comment:\n\n```jinja2\n# rendered_at={{ ansible_date_time.iso8601 }}\n```\n\nEvery repeat run changes the destination checksum and notifies a reload even when the route inputs are unchanged. What is the best correction?",
+      "options": [
+        { "id": "b", "text": "Keep the timestamp and set `changed_when: false` so the reload is suppressed while the file still changes." },
+        { "id": "c", "text": "Move the timestamp to a host fact so each host continues to render a unique current value." },
+        { "id": "a", "text": "Remove volatile time data from the managed content so the file changes only when meaningful inputs change." },
+        { "id": "d", "text": "Replace the reload handler with an unconditional service task so task status and service behavior stay aligned." }
+      ],
+      "correct": ["a"],
+      "explanation": "A changing timestamp creates artificial drift and service activity. Removing it restores a meaningful checksum and handler signal. Hiding `changed` would make the report inaccurate while still replacing content, moving the volatile value does not stabilize it, and an unconditional service action adds disruption."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A canary template task uses `validate: \"nginx -t -c %s\"`. The candidate contains an invalid directive, and the validator exits nonzero. What should the operator expect at `/etc/nginx/nginx.conf`?",
+      "options": [
+        { "id": "b", "text": "The invalid candidate should replace the live file, but the reload handler should be skipped." },
+        { "id": "c", "text": "The live file should be deleted so Nginx falls back to its package default configuration." },
+        { "id": "d", "text": "The candidate should be installed on the canary only because validation failures are advisory in a serial rollout." },
+        { "id": "a", "text": "The live destination should remain unchanged because validation failed before the candidate replaced it." }
+      ],
+      "correct": ["a"],
+      "explanation": "The validator runs against a temporary candidate and must succeed before Ansible replaces the destination. The failure therefore protects the live file. Validation is not merely a handler gate or an advisory result, and it does not delete the current configuration. See [template validation](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html#parameter-validate)."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "The team owns a vendor-generated file except for one setting, `ORDERS_API_PORT=8080`. Replacing the whole file would erase supported vendor entries, but the one setting must converge without duplicate lines. Which approach is most appropriate?",
+      "options": [
+        { "id": "a", "text": "Use a targeted `lineinfile` rule with a precise regexp for the owned setting." },
+        { "id": "b", "text": "Use `template` for the entire file even though the role cannot reproduce the vendor-managed entries." },
+        { "id": "c", "text": "Use a shell append command and suppress repeated `changed` results with `changed_when: false`." },
+        { "id": "d", "text": "Use `copy` with only the desired setting so the unmanaged entries are removed consistently." }
+      ],
+      "correct": ["a"],
+      "explanation": "A precise line edit fits narrow ownership of one setting in a file the role does not fully own. Full-file template or copy would take responsibility for content the role cannot reconstruct. Appending can duplicate the setting, and hiding the status does not make the operation idempotent."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A template passes syntax validation and is installed on one canary. Nginx reload succeeds, but requests through the load balancer return HTTP 502 while a local readiness endpoint remains healthy. What is the safest next action?",
+      "options": [
+        { "id": "a", "text": "Stop widening, compare the rendered upstream route with load balancer evidence, and roll back the canary if the route is wrong." },
+        { "id": "b", "text": "Continue because template validation proves the route works for real client traffic." },
+        { "id": "c", "text": "Deploy to every host so the load balancer sees a consistent configuration before diagnosis." },
+        { "id": "d", "text": "Disable validation because it did not detect the runtime integration failure." }
+      ],
+      "correct": ["a"],
+      "explanation": "Syntax validation proves the candidate is acceptable to the service, not that upstream routing and client traffic work. The canary has exposed an integration failure, so the rollout should pause while the team checks the rendered values and external path. Broad deployment increases blast radius, and removing validation discards a useful earlier safety gate."
     }
   ]
 }

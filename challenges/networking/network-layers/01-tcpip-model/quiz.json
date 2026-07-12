@@ -4,198 +4,197 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A service inventory for `devpolaris-edge-01` contains:\n\n```text\nProcess: nginx\nListener: 0.0.0.0:443\nProtocol: HTTPS\n```\n\nWhich TCP/IP layer mapping is best supported by this evidence?",
+      "scenario": "A browser opens `https://app.example.com/dashboard`. DNS returns `203.0.113.25`, the host route sends traffic through `10.0.0.1`, TCP port `443` accepts a connection, TLS succeeds, and Nginx forwards the request to `127.0.0.1:3000`. Which sequence best describes how the request advanced through the stack?",
       "options": [
         {
           "id": "a",
-          "text": "Application layer: HTTPS. Transport layer: TCP port 443"
+          "text": "TCP selected the public IP, DNS opened port 443, Ethernet validated the certificate, and HTTP chose the gateway"
         },
         {
           "id": "b",
-          "text": "Internet layer: HTTPS. Network access layer: TCP port 443"
+          "text": "DNS chose the local MAC address, IP selected the Nginx process, TCP resolved the hostname, and HTTP created the route"
         },
         {
           "id": "c",
-          "text": "Transport layer: HTTPS. Application layer: TCP port 443"
+          "text": "DNS resolved the name, IP selected a route, TCP opened the port conversation, TLS protected it, and HTTP carried the application request"
         },
         {
           "id": "d",
-          "text": "Network access layer: HTTPS. Internet layer: nginx"
+          "text": "Ethernet kept the same MAC destination across every router, TCP selected the subnet, and Nginx performed the DNS lookup"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "HTTPS is the application protocol. TCP and its port number belong to the transport layer, which decides which program receives the connection and how reliable delivery works."
+      "explanation": "The request moves from name resolution to IP routing, then TCP connection setup, TLS, HTTP, and the proxy handoff. The other choices assign names, routes, ports, and certificates to layers that do not own those jobs. [RFC 1122](https://datatracker.ietf.org/doc/html/rfc1122) describes the layered internet host model, while [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293.html) defines TCP connection behavior."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "An egress snapshot shows:\n\n```text\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP\n    link/ether 52:54:00:24:08:14\n    inet 10.24.8.14/20 scope global eth0\ndefault via 10.24.0.1 dev eth0\n```\n\nWhich mapping is correct?",
+      "scenario": "A packet review for one HTTPS request shows these fields:\n\n| Evidence | Value |\n| --- | --- |\n| HTTP | `GET /orders` and `Host: api.example.com` |\n| TCP | source port `53142`, destination port `443` |\n| IP | `10.0.0.42` to `203.0.113.25` |\n| Ethernet | laptop MAC to gateway MAC |\n\nThe next router replaces the Ethernet header before forwarding the packet. Which explanation is accurate?",
       "options": [
         {
           "id": "a",
-          "text": "Internet layer: `10.24.8.14/20` and default gateway. Network access layer: `eth0` and the MAC address"
+          "text": "The router must also replace the HTTP Host header because every layer is rewritten at each hop"
         },
         {
           "id": "b",
-          "text": "Application layer: `10.24.8.14/20`. Transport layer: `52:54:00:24:08:14`"
+          "text": "Each layer adds metadata for its own delivery job; the local MAC addresses can change at a hop while the IP destination and inner HTTP request remain meaningful"
         },
         {
           "id": "c",
-          "text": "Network access layer: default gateway. Application layer: `eth0`"
+          "text": "The TCP source port is the physical interface identifier, while the destination MAC identifies the application process"
         },
         {
           "id": "d",
-          "text": "Transport layer: `10.24.0.1`. Internet layer: the MAC address"
+          "text": "The IP header is removed permanently at the first router, leaving only an Ethernet frame for the rest of the path"
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "IP addresses and routing live at the internet layer. Interface state and MAC addresses are network access layer evidence because they describe the local link and frame delivery."
+      "explanation": "Encapsulation lets HTTP, TCP, IP, and the local link carry different delivery information. Routers replace the link-layer frame for the next local hop, but they forward the IP packet without turning MAC addresses into application or process identifiers. [RFC 1122](https://datatracker.ietf.org/doc/html/rfc1122) explains this layered host behavior."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A packet capture during a successful HTTPS connection includes:\n\n```text\n14:23:01 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [S], length 0\n14:23:01 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [S.], length 0\n14:23:01 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [.], length 0\n```\n\nWhich layer is this evidence primarily demonstrating?",
+      "scenario": "A deployment is healthy from one subnet but unreachable from a new worker subnet. DNS resolves correctly. On an affected worker:\n\n```text\n$ ip route get 10.80.12.25\n10.80.12.25 via 10.80.0.1 dev eth0 src 10.80.0.44\n\n$ traceroute 10.80.12.25\n 1  10.80.0.1  1.1 ms\n 2  * * *\n 3  * * *\n```\n\nWhich investigation should come first?",
       "options": [
         {
           "id": "a",
-          "text": "Transport layer, because the SYN, SYN-ACK, and ACK packets are the TCP three-way handshake"
+          "text": "Inspect the application route handler because DNS resolution proves all lower layers are healthy"
         },
         {
           "id": "b",
-          "text": "Physical layer, because flags prove the cable is unplugged"
+          "text": "Renew the TLS certificate because traceroute suppresses certificate errors as asterisks"
         },
         {
           "id": "c",
-          "text": "Application layer, because the capture shows the HTTP response body"
+          "text": "Check whether the worker can resolve the destination's MAC directly, even though the destination is in another subnet"
         },
         {
           "id": "d",
-          "text": "Data link layer, because no IP addresses are involved"
+          "text": "Inspect routing and filtering beyond the first gateway, while confirming with destination probes because traceroute asterisks can also mean that intermediate devices suppress probe replies"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The worker has an address and a route through its gateway, so routing and filtering beyond that gateway are appropriate first checks. The asterisks do not by themselves locate the fault because routers may forward traffic while suppressing TTL-expired replies. Confirm with a probe that resembles the real destination flow and inspect route or policy evidence. DNS success does not prove the IP path, and an off-subnet host does not ARP directly for the destination. [Paris traceroute](https://paris-traceroute.net/about/) explains common traceroute interpretation limits."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Two database nodes should share VLAN 44. `db-a` uses `10.44.8.10/24` and `db-b` uses `10.44.8.20/24`. From `db-a`:\n\n```text\n$ ip neigh show 10.44.8.20\n10.44.8.20 dev eth0 FAILED\n\n$ ip route get 10.44.8.20\n10.44.8.20 dev eth0 src 10.44.8.10\n```\n\nWhat does this evidence support most strongly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A Layer 2 problem such as a VLAN mismatch or failed neighbor discovery, because same-subnet delivery needs the peer's MAC address"
+        },
+        {
+          "id": "b",
+          "text": "A missing default route, because all same-subnet traffic must pass through the gateway"
+        },
+        {
+          "id": "c",
+          "text": "A closed database TCP port, because a failed neighbor entry proves the server sent a reset"
+        },
+        {
+          "id": "d",
+          "text": "An HTTP application failure, because neighbor discovery runs after the database returns a response"
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The article describes TCP's connection setup as SYN, SYN-ACK, and ACK at the transport layer. This capture shows IPs and ports, but the key evidence is the TCP handshake."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "You are classifying incident snapshots for a triage channel. Which layer mappings are accurate?",
-      "options": [
-        {
-          "id": "a",
-          "text": "`ip link show eth0` reports `NO-CARRIER` and `state DOWN`: Physical layer"
-        },
-        {
-          "id": "b",
-          "text": "`ip neigh show` reports a peer as `FAILED`: Data link layer"
-        },
-        {
-          "id": "c",
-          "text": "`traceroute` reaches the first router and then prints `* * *`: Network layer"
-        },
-        {
-          "id": "d",
-          "text": "`telnet 93.184.216.34 8080` returns `Connection refused`: Application layer only"
-        },
-        {
-          "id": "e",
-          "text": "`curl -v` connects to port 443 but reports an expired certificate: Application layer"
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c",
-        "e"
-      ],
-      "explanation": "The article maps no carrier to physical problems, ARP failures to data link, traceroute and routing to network, and TLS certificate failures after connection to application-layer behavior. Connection refused is a transport-layer symptom because the host responded but no process accepted the port."
+      "explanation": "The route says the peer is directly connected, so `db-a` must resolve `db-b` to a local MAC address before sending the frame. The failed neighbor entry points to the local link, not the default gateway, TCP listener, or application protocol. [RFC 1122](https://datatracker.ietf.org/doc/html/rfc1122) describes link-layer handling beneath IP."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A server loses all connectivity after a maintenance window. The first check shows:\n\n```text\n$ ip link show eth0\n2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 state DOWN\n```\n\nWhere should the on-call start?",
+      "scenario": "A capture was taken while a client opened an HTTPS connection:\n\n```text\n12:01:10.100 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [S], seq 100, length 0\n12:01:10.132 IP 203.0.113.25.443 > 10.0.0.42.53142: Flags [S.], seq 200, ack 101, length 0\n12:01:10.132 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [.], ack 201, length 0\n12:01:10.150 IP 10.0.0.42.53142 > 203.0.113.25.443: Flags [P.], length 517\n```\n\nWhat is the strongest conclusion before examining the encrypted payload?",
       "options": [
         {
           "id": "a",
-          "text": "Layer 1 physical checks such as cable, switch port, fiber, or NIC state"
+          "text": "The server returned a successful HTTP response because any packet with `[P.]` contains an HTTP 200 status"
         },
         {
           "id": "b",
-          "text": "Layer 7 certificate renewal because `NO-CARRIER` means TLS expired"
+          "text": "The TLS certificate is valid because the server sent a SYN-ACK from port 443"
         },
         {
           "id": "c",
-          "text": "Layer 4 port binding because the output proves nginx stopped listening"
+          "text": "The TCP three-way handshake completed and application data began flowing, so basic IP reachability and the transport path worked"
         },
         {
           "id": "d",
-          "text": "DNS record changes because interface carrier state is controlled by authoritative nameservers"
+          "text": "The destination MAC stayed unchanged across the entire route because the IP endpoints stayed unchanged"
         }
       ],
       "correct": [
-        "a"
+        "c"
       ],
-      "explanation": "The article's physical-layer failure example uses `NO-CARRIER` and `state DOWN`. If the link is not established, higher-layer configuration cannot restore connectivity by itself."
+      "explanation": "SYN, SYN-ACK, and ACK complete the TCP handshake, and `[P.]` shows that data followed. The capture does not prove the HTTP status or certificate validity because HTTPS payloads are encrypted, and MAC addresses can change at every routed hop. [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293.html) defines the TCP handshake and states, while the [tcpdump manual](https://www.tcpdump.org/manpages/tcpdump.1.html) documents capture output."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "Two hosts should be on the same local subnet, but one cannot reach the gateway. The ARP table shows:\n\n```text\n$ ip neigh show\n192.168.1.1 dev eth0 FAILED\n```\n\nWhich layer is most likely involved first?",
+      "type": "multiple",
+      "scenario": "A checkout outage produces failures at several sites, and the incident commander must route each case without claiming more than the evidence proves. One host reports `NO-CARRIER` and `state DOWN`. At a second site, captures show repeated TCP SYN packets to port 443 with no SYN-ACK. A third client completes the connection but rejects a certificate whose name does not match the hostname. At the final site, Nginx returns 502 and records `connect() failed (111: Connection refused) while connecting to upstream`. Which assignments are justified? Select all that apply.",
       "options": [
         {
           "id": "a",
-          "text": "Data link layer, because ARP failed to map the gateway IP to a MAC address on the local network"
+          "text": "Send the SYN-only case directly to the application team because the capture is sufficient to distinguish an HTTP rejection from network filtering"
         },
         {
           "id": "b",
-          "text": "Application layer, because the HTTP status code was not returned"
+          "text": "Send case amber to the physical or interface owner because the local link has no carrier"
         },
         {
           "id": "c",
-          "text": "Transport layer, because TCP retransmissions are always caused by DNS"
+          "text": "Send the certificate-name case to the routing team first because a completed TLS connection still indicates an unresolved next-hop problem"
         },
         {
           "id": "d",
-          "text": "Physical layer only, because ARP never depends on local switching or VLANs"
+          "text": "Send case blue to the transport-path and service-listener owners because the handshake is incomplete, but the capture alone does not distinguish filtering from an unavailable listener or return path"
+        },
+        {
+          "id": "e",
+          "text": "Send case red to the proxy or upstream service owner because public HTTP reached Nginx and its internal connection was refused"
         }
       ],
       "correct": [
-        "a"
+        "b",
+        "d",
+        "e"
       ],
-      "explanation": "ARP is the glue between IP addresses and local MAC delivery. A failed neighbor entry points to Layer 2 issues such as VLAN mismatch, switch problems, powered-off destination, or blocked broadcast."
+      "explanation": "No carrier is a local interface problem. Repeated SYN packets without a completed handshake keep the investigation below HTTP, but they do not prove one narrow cause: filtering, asymmetric return routing, or listener-side behavior can all require checks. A `502` with an upstream refusal shows that Nginx answered the client but could not connect to its backend. The certificate mismatch belongs to TLS validation. [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293.html) defines TCP setup, and [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) defines HTTP response semantics."
     },
     {
       "id": "q7",
       "type": "single",
-      "scenario": "A `curl -v` capture for an API says:\n\n```text\n* Connected to api.example.com (93.184.216.34) port 443\n* SSL certificate problem: certificate has expired\ncurl: (60) SSL certificate problem: certificate has expired\n```\n\nWhich conclusion is best?",
+      "scenario": "A user reports that checkout is down. The first checks show:\n\n```text\n$ dig +short checkout.example.com\n203.0.113.40\n\n$ nc -vz checkout.example.com 443\nConnection to checkout.example.com (203.0.113.40) 443 port [tcp/https] succeeded!\n\n$ curl -I https://checkout.example.com/ready\ncurl: (60) SSL certificate problem: certificate has expired\n```\n\nWhat should the on-call do next?",
       "options": [
         {
           "id": "a",
-          "text": "Lower network layers and the TCP connection worked; the failure is at the application layer where TLS is validated"
+          "text": "Change the DNS record because certificate expiry means the resolver returned no address"
         },
         {
           "id": "b",
-          "text": "Layer 3 routing failed because the client never reached an IP address"
+          "text": "Open the network firewall because a successful TCP connection means port 443 is blocked"
         },
         {
           "id": "c",
-          "text": "Layer 4 failed because the TCP handshake never completed"
+          "text": "Change the default gateway because the client could not reach the server IP"
         },
         {
           "id": "d",
-          "text": "Layer 2 failed because certificates are MAC-address records"
+          "text": "Inspect and renew the certificate served for the hostname because name resolution and TCP connectivity are already proven"
         }
       ],
       "correct": [
-        "a"
+        "d"
       ],
-      "explanation": "The output proves the client resolved the name, reached the IP, and connected to TCP 443. The remaining failure is TLS certificate validation, which the article places with application-layer failures."
+      "explanation": "DNS returned the expected address and TCP port `443` accepted a connection, so changing DNS, the route, or the firewall ignores evidence that those stages worked. The failure occurs during TLS certificate validation, so the next check is the certificate selected for this hostname. [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) describes HTTPS semantics above the established transport connection."
     }
   ]
 }

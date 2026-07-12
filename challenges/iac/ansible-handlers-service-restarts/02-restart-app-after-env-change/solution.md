@@ -25,5 +25,3 @@
     state: restarted
     daemon_reload: true
 ```
-
-The app restart is now tied to the file that can change the app runtime environment.

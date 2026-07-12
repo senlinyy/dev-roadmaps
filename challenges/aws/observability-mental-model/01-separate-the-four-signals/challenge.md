@@ -1,7 +1,6 @@
 ---
-title: "Separate The Four Signals"
-sectionSlug: the-four-signals
+title: "Observability Basics"
 order: 1
 ---
 
-Use the incident evidence in each question to choose which observability signal answers the next useful question. The goal is to separate logs, metrics, traces, and alarms by what they actually help an engineer decide.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

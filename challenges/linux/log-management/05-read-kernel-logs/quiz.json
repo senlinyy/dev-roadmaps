@@ -1,0 +1,227 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "At `10:21`, users receive `502` for `/api/items`. Nginx access logs show the route and status, while the error log says `connect() failed (111: Connection refused) while connecting to upstream 127.0.0.1:3000`. Which evidence should come next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Nginx package installation history, because every refused upstream connection means the proxy package changed"
+        },
+        {
+          "id": "b",
+          "text": "The application unit journal around `10:21`, because it can show whether the upstream process stopped, restarted, or logged a startup failure"
+        },
+        {
+          "id": "c",
+          "text": "Only the public DNS zone, because a 502 means Nginx never handled the request"
+        },
+        {
+          "id": "d",
+          "text": "The oldest compressed access log, because current error logs cannot describe backend failures"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The access log proves the request reached Nginx, and the error log narrows the failure to the upstream connection. The next layer is the app service at the same time. DNS and package history are not supported by the evidence, while old logs are outside the incident window. The [journalctl manual](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html) documents unit and time filtering."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A service journal contains thousands of normal health checks. During the alert window, these entries appear:\n\n```text\n10:18:31 systemd[1]: app.service: Main process exited, code=killed, status=9/KILL\n10:18:36 systemd[1]: Started app.service\n10:21:13 app[1842]: level=error request_id=req_8K9 path=/api/items duration_ms=12004 error=report_timeout\n```\n\nWhich query strategy produces the most useful first incident view?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Filter the app unit to the alert time window and warning-or-higher priority, then expand around relevant timestamps if context is missing"
+        },
+        {
+          "id": "b",
+          "text": "Read only the first boot entry because older lines always contain the root cause of later failures"
+        },
+        {
+          "id": "c",
+          "text": "Enable debug logging across every service before reading existing warning and error evidence"
+        },
+        {
+          "id": "d",
+          "text": "Sort by message length because the longest log line has the highest severity"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Unit, time, and priority filters reduce routine noise while preserving the strongest signals. Severity is a starting filter, not a substitute for surrounding context, so expand the window when needed. Message length and log age do not determine root cause, and broad debug logging can create more noise. The [journalctl manual](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html) defines these filters."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The app journal says `status=9/KILL` at `10:18:31`, but the application has no shutdown error. A kernel query for the same minute returns:\n\n```text\nJun 24 10:18:31 web-01 kernel: Out of memory: Killed process 1842 (node) total-vm:1840420kB, anon-rss:742312kB\n```\n\nWhat should the timeline conclude?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app performed a clean shutdown because every KILL status comes from its own error handler"
+        },
+        {
+          "id": "b",
+          "text": "Nginx killed the app because a 502 response automatically sends signal 9 to the upstream"
+        },
+        {
+          "id": "c",
+          "text": "The kernel selected the app during host memory pressure, so memory history, recent changes, and service limits should be investigated"
+        },
+        {
+          "id": "d",
+          "text": "The journal timestamp is untrustworthy because kernel entries cannot be correlated with service lifecycle logs"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The kernel entry provides the missing cause for the forced service exit: the OOM killer selected PID `1842`. That leads to memory-pressure and limit checks, not an assumption of graceful app shutdown or proxy behavior. Shared timestamps let the service and kernel evidence form one timeline. The [systemd journal fields documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html) describes metadata available for correlation."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Nginx access logs contain `request_id=req_7J2 status=502`, and the application emits structured JSON with the same request ID. What is the strongest use of that shared field?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the Nginx status as the root cause and ignore application logs because both layers cannot record one request"
+        },
+        {
+          "id": "b",
+          "text": "Use the request ID only to calculate disk retention because it does not identify one execution path"
+        },
+        {
+          "id": "c",
+          "text": "Replace timestamps with the request ID because time is never needed when correlating several services"
+        },
+        {
+          "id": "d",
+          "text": "Follow the same request from proxy outcome into application decisions and downstream logs instead of matching broad time ranges alone"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "A stable request ID connects evidence across layers for the same request. Timestamps still matter for ordering and surrounding host events, but the ID prevents unrelated traffic in the same second from being mixed together. The [Nginx log module](https://nginx.org/en/docs/http/ngx_http_log_module.html) documents configurable request logging."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An online store rotates a 9 GB Nginx access log during a low-disk alert, but the filesystem usage does not fall and the replacement log receives no new requests. The team must recover space without rebooting the production host. An operator captures:\n\n```text\n$ lsof +L1 | grep nginx\nnginx 913 www-data 7w REG 252,1 9126805504 0 812 /var/log/nginx/access.log (deleted)\n```\n\nWhich repair best satisfies the availability requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reboot the filesystem because only a reboot can release a deleted inode held by a process"
+        },
+        {
+          "id": "b",
+          "text": "Correct the rotation hook, signal the Nginx master to reopen logs, then verify new writes, deleted-open descriptors, and recovered disk space"
+        },
+        {
+          "id": "c",
+          "text": "Compress the deleted descriptor because gzip can operate directly on every open kernel file handle"
+        },
+        {
+          "id": "d",
+          "text": "Remove access logging permanently because rotation cannot coexist with long-running services"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Nginx still owns the deleted inode, so its blocks remain allocated. The rotation flow must create the replacement and send the master `USR1` so Nginx reopens its logs and releases the old descriptor. Verifying new writes and `lsof +L1` protects evidence before declaring recovery. Rebooting is unnecessarily disruptive, while compression cannot close another process's descriptor. [Nginx log rotation](https://nginx.org/en/docs/control.html#logs) documents this behavior."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A new application log schema emits:\n\n```json\n{\"level\":\"error\",\"time\":\"2026-06-24T10:21:13Z\",\"request_id\":\"req_8K9\",\"path\":\"/api/reports/export\",\"status\":500,\"duration_ms\":12004,\"authorization\":\"Bearer eyJ...\"}\n```\n\nWhat is the highest-priority review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the stable diagnostic fields but remove the credential, rotate the exposed secret, and review access to stored copies"
+        },
+        {
+          "id": "b",
+          "text": "Remove request ID and duration because structured fields make incidents harder to correlate"
+        },
+        {
+          "id": "c",
+          "text": "Change the timestamp to local time without timezone information so it is shorter"
+        },
+        {
+          "id": "d",
+          "text": "Increase the log level to debug because credentials are safe whenever the message has error severity"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Request ID, path, status, duration, level, and an unambiguous timestamp are valuable structured evidence. Authorization tokens are secrets and must not be logged. Once leaked, remove the source, rotate the credential, and treat retained copies as sensitive. The [systemd journal fields documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html) provides a structured-field model."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "Local journals and Nginx files continue updating, but the central log platform has received nothing from `web-01` for 20 minutes. Which diagnostic path best protects both evidence and application availability?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete local logs immediately so the forwarder is forced to fetch them from memory"
+        },
+        {
+          "id": "b",
+          "text": "Block application writes until the central collector returns because logging must always be synchronous"
+        },
+        {
+          "id": "c",
+          "text": "Check the forwarding service, its journal, network route, credentials, and buffer usage while preserving bounded local retention"
+        },
+        {
+          "id": "d",
+          "text": "Assume the central platform is complete because local and remote logs cannot legitimately differ"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "When local evidence continues but central search is quiet, the shipping path is the fault domain. Inspect the agent and its buffers without blocking application traffic or deleting the only current evidence. Bounded local retention supports debugging during collector outages. The [rsyslog configuration documentation](https://www.rsyslog.com/doc/configuration/index.html) covers forwarding and queue behavior."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "A retail API runs on small autoscaled VMs that are replaced during deployments. After a debug session, the team left `LOG_LEVEL=debug` enabled, and one host later exhausted its disk because journald had no storage cap. The central platform has no copy of the logs from a terminated VM. Nginx rotation creates a replacement error log as `root:root` mode `0600`, sends `USR1` to the master, and has not lost any writes. Which changes address demonstrated risks without altering a working rotation contract? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Increase the VM disk and retain unlimited journals so the next incident has a longer local history"
+        },
+        {
+          "id": "b",
+          "text": "Set journal retention limits that leave free space for the rest of the host"
+        },
+        {
+          "id": "c",
+          "text": "Change the Nginx create owner and mode immediately, even though the reopen signal succeeds and new writes continue"
+        },
+        {
+          "id": "d",
+          "text": "Return production to an intentional normal log level after the debug window"
+        },
+        {
+          "id": "e",
+          "text": "Ship important logs to a central system while keeping short local retention for immediate troubleshooting"
+        }
+      ],
+      "correct": [
+        "b",
+        "d",
+        "e"
+      ],
+      "explanation": "Journal limits protect host capacity, an intentional production log level controls noise and cost, and central shipping preserves evidence when an autoscaled VM disappears. The `root:root` mode observed before reopen is not enough to diagnose lost Nginx logging: on `USR1`, the master reopens logs and assigns ownership suitable for worker processes. Verify the postrotate signal, open descriptors, and new writes before changing a working rotation contract. [Nginx log rotation](https://nginx.org/en/docs/control.html#logs), [journald configuration](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html), and [rsyslog documentation](https://www.rsyslog.com/doc/configuration/index.html) cover these controls."
+    }
+  ]
+}

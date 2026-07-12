@@ -1,6 +1,6 @@
 ---
 title: "Interpret a fail2ban Jail Status Against auth.log"
-sectionSlug: automated-defense-with-fail2ban
+sectionSlug: fail2ban-and-reactive-blocking
 order: 4
 ---
 

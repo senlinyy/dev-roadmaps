@@ -1,6 +1,6 @@
 ---
 title: "Check SQL Retention"
-sectionSlug: restore
+sectionSlug: backup-and-restore
 order: 4
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Explore the Process Tree"
-sectionSlug: pids-ppids-and-the-process-tree
+sectionSlug: pid-and-ppid-badges
 order: 1
 ---
 

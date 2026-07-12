@@ -1,6 +1,6 @@
 ---
 title: "Write the First Orders Playbook"
-sectionSlug: "the-first-orders-playbook"
+sectionSlug: playbooks-plays-and-tasks
 order: 2
 ---
 

@@ -4,93 +4,169 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A developer pushes a commit to a branch named `feature/login`. The repository has this workflow:\n\n```yaml\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n```\n\nThe developer checks the Actions tab and sees no workflow run. They open a PR from `feature/login` into `main`, and the workflow starts. What is the best explanation?",
+      "scenario": "A feature branch push does not start CI. Opening a pull request from that branch into main does start it. The workflow contains:\n\n~~~yaml\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n~~~\n\nWhich explanation matches the event filters?",
       "options": [
-        { "id": "a", "text": "The push event only fires on the branch named in the `branches` filter, which is `main`. The push to `feature/login` did not match. The PR triggers because its base branch is `main`." },
-        { "id": "b", "text": "GitHub Actions does not run on feature branches. Workflows only work on the default branch." },
-        { "id": "c", "text": "The workflow file must exist on `feature/login` for push events to fire, and it was not committed there yet." },
-        { "id": "d", "text": "Push events are disabled by default. Only pull_request events work without additional configuration." }
+        {
+          "id": "a",
+          "text": "The workflow definition from the feature branch is ignored for `push`, but the base branch definition handles the pull request."
+        },
+        {
+          "id": "b",
+          "text": "Push filters the updated branch; pull_request filters the target branch, which is main."
+        },
+        {
+          "id": "c",
+          "text": "A repository ruleset suppresses feature-branch push workflows but requires the same workflow as a pull request check."
+        },
+        {
+          "id": "d",
+          "text": "The `push` filter evaluates the feature branch, while `pull_request` evaluates the source branch after it is compared with `main`."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "The `branches` filter under `push` restricts the event to pushes that land directly on `main`. A push to `feature/login` does not match. The `pull_request` filter checks the base (target) branch of the PR, which is `main`, so it fires. Option C is plausible but incorrect here because the filter, not the file location, is the gating factor."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The same `branches` key applies to different event data: `push` selects the pushed branch, while `pull_request` selects the base branch. The feature push did not match, but the pull request into `main` did. No repository-ruleset evidence is needed to explain the behavior, and the source branch is not what this pull request filter evaluates. See [GitHub Actions events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A workflow has three jobs:\n\n```yaml\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps: [...]\n  test:\n    runs-on: ubuntu-latest\n    needs: lint\n    steps: [...]\n  deploy:\n    runs-on: ubuntu-latest\n    needs: test\n    steps: [...]\n```\n\nThe `lint` job fails because of a formatting error. What happens to `test` and `deploy`?",
+      "scenario": "The test job creates `coverage/report.xml`. A later package job declares `needs: test` but cannot find that file. Both jobs use `ubuntu-latest`, and compliance requires the package job to consume the report produced by this exact workflow run rather than a value restored from an earlier run. What design change is required?",
       "options": [
-        { "id": "a", "text": "Both `test` and `deploy` are cancelled immediately and show a 'Cancelled' status." },
-        { "id": "b", "text": "Both `test` and `deploy` are skipped. They never start because their upstream dependency failed." },
-        { "id": "c", "text": "`test` is skipped, but `deploy` still runs because it only depends on `test`, not `lint`." },
-        { "id": "d", "text": "`test` runs anyway because `needs` is only advisory, and `deploy` is skipped." }
+        {
+          "id": "a",
+          "text": "Cache `coverage/report.xml` in the test job and restore the same cache key in package."
+        },
+        {
+          "id": "b",
+          "text": "Run package on the same runner label and set `needs: test` so GitHub reuses the completed runner."
+        },
+        {
+          "id": "c",
+          "text": "Write the report to a repository-level environment variable and reconstruct the file in package."
+        },
+        {
+          "id": "d",
+          "text": "Upload the report or required build output from test and download it in package, because jobs use separate runners."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "When a job fails, all downstream jobs in the dependency chain are skipped by default. `test` depends on `lint`, so it is skipped. `deploy` depends on `test`, and since `test` was skipped (not successful), `deploy` is also skipped. The failure cascades through the entire chain. Option C is wrong because `deploy` transitively depends on `lint` through `test`."
+      "correct": [
+        "d"
+      ],
+      "explanation": "`needs` controls ordering and success dependency, not filesystem sharing. An artifact is designed to transfer a specific run output between jobs. A cache is optimized for reusable dependencies and can be stale or immutable under a key. Runner labels do not preserve a hosted machine, and environment variables are unsuitable for a report file. See [GitHub-hosted runner execution](https://docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/use-github-hosted-runners)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An engineer pushes three commits in quick succession to the `main` branch. The repository has this configuration:\n\n```yaml\nconcurrency:\n  group: ci-${{ github.ref }}\n  cancel-in-progress: true\n```\n\nThey check the Actions tab and see that the first two runs show 'Cancelled' and only the third run is active. What caused this?",
+      "scenario": "A monorepo test workflow should run for application changes and for changes to its own definition, but changes to other services' workflow files must not start this service's expensive suite. The current paths filter includes src/** and package-lock.json, so a pull request that changes only .github/workflows/test.yml never exercises the new CI logic. Which review change is best?",
       "options": [
-        { "id": "a", "text": "GitHub Actions has a limit of one concurrent run per repository, so older runs are always cancelled." },
-        { "id": "b", "text": "The `concurrency` group groups all three runs under the same key (`ci-refs/heads/main`). With `cancel-in-progress: true`, each new run cancels the previous one." },
-        { "id": "c", "text": "The pushes happened too fast and GitHub rate-limited the first two." },
-        { "id": "d", "text": "The first two workflows had syntax errors and were automatically rejected." }
+        {
+          "id": "a",
+          "text": "Add `.github/workflows/**` to the filter so any workflow change runs every monorepo test suite."
+        },
+        {
+          "id": "b",
+          "text": "Create a second workflow triggered only by changes under `.github/workflows/**` and leave the current filter unchanged."
+        },
+        {
+          "id": "c",
+          "text": "Add the workflow file path to the pull request paths filter."
+        },
+        {
+          "id": "d",
+          "text": "Use `paths-ignore` for documentation and rely on the existing positive paths to include workflow files implicitly."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The `concurrency` key groups runs by a key expression. Since all three pushes target `main`, the group evaluates to the same string. With `cancel-in-progress: true`, GitHub cancels the older in-progress or pending run when a new one enters the same group. This saves runner minutes on builds that are already outdated. Option A is wrong because the limit is per-group, not per-repository."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Adding this workflow's exact path preserves the intended application scope and validates changes to the automation contract. A broad workflow glob may trigger unrelated monorepo suites. A second workflow can work, but it duplicates the test contract and does not directly fix this workflow's skip. Positive `paths` entries do not gain implicit files from `paths-ignore`. See [GitHub workflow syntax for path filters](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A workflow runs on `push` and creates a new Git tag using `GITHUB_TOKEN`. The team expects a second workflow (triggered by `on: create`) to fire when the tag is created, but nothing happens. What is the most likely explanation?",
+      "scenario": "A compatibility matrix tests Node 20 and 22 on Ubuntu and Windows. The first Windows job fails, and GitHub cancels other in-progress matrix jobs. The team wants the complete compatibility picture from every variant. What should change?",
       "options": [
-        { "id": "a", "text": "The `on: create` event does not support tags, only branches." },
-        { "id": "b", "text": "Events generated by the default `GITHUB_TOKEN` do not trigger other workflows. This prevents infinite recursive loops." },
-        { "id": "c", "text": "Tags must be created from the GitHub web UI, not from workflows." },
-        { "id": "d", "text": "The second workflow file has a syntax error that prevents it from running." }
+        {
+          "id": "a",
+          "text": "Set `continue-on-error: true` on every matrix job so all variants finish and the workflow reports their results."
+        },
+        {
+          "id": "b",
+          "text": "Mark the Windows matrix entry as experimental with `continue-on-error`, leaving fail-fast enabled for other variants."
+        },
+        {
+          "id": "c",
+          "text": "Set strategy.fail-fast to false for the matrix."
+        },
+        {
+          "id": "d",
+          "text": "Increase `max-parallel` so all matrix jobs start before the first failure can cancel queued variants."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "This is an intentional safety measure. If actions taken with the default GITHUB_TOKEN could trigger other workflows, a push-triggered workflow that creates a commit would trigger itself again, creating an infinite loop. To chain workflows via tags or commits, use a Personal Access Token (PAT) or a GitHub App token instead. Option A is wrong because `on: create` does support both tags and branches."
+      "correct": [
+        "c"
+      ],
+      "explanation": "Matrix `fail-fast: false` preserves normal failure status while allowing every combination to finish. Setting `continue-on-error` everywhere hides required failures. Marking only Windows experimental changes the acceptance policy, and higher parallelism cannot guarantee every job starts before a failure. See [GitHub matrix strategies](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A workflow uses a matrix strategy to test across multiple Node.js versions:\n\n```yaml\nstrategy:\n  matrix:\n    node-version: [18, 20, 22]\n```\n\nThe build for Node 18 fails because a dependency dropped support for it. What happens to the Node 20 and Node 22 builds by default?",
+      "scenario": "Pull request checks should cancel when a newer commit arrives, but production deployments must finish rather than be interrupted. Which concurrency design fits both workloads?",
       "options": [
-        { "id": "a", "text": "All three jobs run independently. The Node 20 and 22 builds continue and may succeed." },
-        { "id": "b", "text": "By default, GitHub cancels the remaining matrix jobs when any single variant fails (`fail-fast: true`)." },
-        { "id": "c", "text": "Matrix jobs always run to completion regardless of individual failures." },
-        { "id": "d", "text": "The entire workflow is retried from the beginning with all three versions." }
+        {
+          "id": "a",
+          "text": "Cancel stale pull request groups, but queue production groups without cancellation."
+        },
+        {
+          "id": "b",
+          "text": "Use separate pull request and production groups, with cancellation enabled for both to keep only the newest commit."
+        },
+        {
+          "id": "c",
+          "text": "Cancel stale pull request runs, but give each production commit a unique group so deployments can run concurrently."
+        },
+        {
+          "id": "d",
+          "text": "Use one service-level group with cancellation disabled, so pull request checks and deployments queue safely."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The default behavior for matrix strategies is `fail-fast: true`, which cancels all other in-progress matrix jobs as soon as one fails. If you want all variants to complete (for example, to see the full compatibility picture), you must explicitly set `fail-fast: false`. Option A describes the behavior with `fail-fast: false`, not the default."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Stale pull request checks can be discarded, but interrupting or overlapping production deployments can leave uncertain state. Distinct groups with cancellation only for pull requests express those risks. Unique production groups permit overlap, while one shared queue delays checks behind deployments and fails the stale-check requirement. See [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)."
     },
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "Your team wants to run a workflow both on a schedule (every night at 2 AM UTC) and when a developer manually clicks 'Run workflow' in the GitHub UI. Which event triggers should be present in the `on` block?",
+      "scenario": "A compliance workflow audits production automatically every night. During an incident, an authorized engineer must also be able to launch the same workflow for either staging or production and must explicitly choose the target environment. Which trigger and data choices belong in the workflow?",
       "options": [
-        { "id": "a", "text": "`schedule` with a cron expression" },
-        { "id": "b", "text": "`workflow_dispatch`" },
-        { "id": "c", "text": "`repository_dispatch`" },
-        { "id": "d", "text": "`push` with a time-based filter" }
+        {
+          "id": "a",
+          "text": "A reusable `workflow_call` trigger with the schedule passed as a string input."
+        },
+        {
+          "id": "b",
+          "text": "A schedule trigger with a cron expression for the nightly run."
+        },
+        {
+          "id": "c",
+          "text": "A `repository_dispatch` trigger for the manual run, with the environment read from `github.event.client_payload`."
+        },
+        {
+          "id": "d",
+          "text": "A workflow_dispatch trigger with a declared input read through the inputs context."
+        },
+        {
+          "id": "e",
+          "text": "A `workflow_dispatch` trigger with an environment variable declared at workflow scope rather than an input."
+        }
       ],
-      "correct": ["a", "b"],
-      "explanation": "`schedule` uses POSIX cron syntax to trigger workflows at specific times. `workflow_dispatch` adds a 'Run workflow' button to the Actions tab for manual execution. `repository_dispatch` is for external API calls, not manual UI clicks. There is no time-based filter on `push` events."
-    },
-    {
-      "id": "q7",
-      "type": "single",
-      "scenario": "A job uses `permissions: { contents: read }` explicitly. The job also tries to push a commit using `GITHUB_TOKEN`. The push command fails with a 403 error. What is the root cause?",
-      "options": [
-        { "id": "a", "text": "When you declare an explicit `permissions` block, it overrides all defaults. Since `contents` was set to `read`, the token cannot write (push) to the repository." },
-        { "id": "b", "text": "The GITHUB_TOKEN can never push commits. It is read-only by design." },
-        { "id": "c", "text": "The 403 error means the repository is archived and does not accept pushes." },
-        { "id": "d", "text": "Pushing commits requires the `packages: write` permission, not `contents: write`." }
+      "correct": [
+        "b",
+        "d"
       ],
-      "correct": ["a"],
-      "explanation": "An explicit `permissions` block replaces all inherited defaults. If you only grant `contents: read`, the token loses write access to the repository, even if the default would have included it. To push commits, you need `contents: write`. Option B is wrong because the GITHUB_TOKEN can push commits when it has the correct permissions."
+      "explanation": "`schedule` creates time-based runs, while `workflow_dispatch` adds the Run workflow UI and declared inputs. `repository_dispatch` is useful for external API callers but does not provide the requested native manual interface. `workflow_call` must be invoked by another workflow, and a workflow-level environment value is not a required user input. See [GitHub workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)."
     }
   ]
 }

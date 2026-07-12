@@ -1,7 +1,6 @@
 ---
-title: "Keep Builds off the Controller"
-sectionSlug: controller-and-agent-architecture
+title: "Architecture and Agents"
 order: 1
 ---
 
-Each scenario checks whether you understand the controller-agent split. Pick the answer that keeps the controller focused on orchestration and sends build work to agents.
+Diagnose controller, agent, executor, label, connection, workspace, and JVM evidence across one production Jenkins installation.

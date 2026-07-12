@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "pod-replacement-q1",
+      "type": "single",
+      "scenario": "A training PostgreSQL Pod writes customer notification data to `/var/lib/postgresql/data` inside its container. After the Pod is replaced during a node drain, PostgreSQL starts with an empty directory. The image and database command are unchanged. Which repair best addresses the data loss?",
+      "options": [
+        { "id": "a", "text": "Create a PVC and mount it at `/var/lib/postgresql/data` so replacement Pods can attach the durable storage." },
+        { "id": "b", "text": "Increase the Pod termination grace period so files in the old container filesystem transfer to the replacement." },
+        { "id": "c", "text": "Add a readiness probe so Kubernetes copies the database directory before admitting traffic." },
+        { "id": "d", "text": "Change the container restart policy so the scheduler preserves the old writable layer across nodes." }
+      ],
+      "correct": ["a"],
+      "explanation": "A PVC provides storage outside the short-lived container filesystem and can be mounted by a replacement Pod. A grace period affects shutdown time, readiness controls traffic, and restart policy does not move a container writable layer between nodes."
+    },
+    {
+      "id": "pending-claim-q2",
+      "type": "single",
+      "scenario": "A new claim remains `Pending`. Its events contain `storageclass.storage.k8s.io \"fast-ssd\" not found`. The database Pod has not started. What is the most useful next action?",
+      "options": [
+        { "id": "a", "text": "Change the database image because a missing image can prevent a StorageClass from being discovered." },
+        { "id": "b", "text": "Confirm the available StorageClasses with the platform team and correct the claim to an existing supported class." },
+        { "id": "c", "text": "Add `fsGroup` to the Pod because filesystem ownership controls whether a PVC can bind." },
+        { "id": "d", "text": "Delete the Pod repeatedly until the claim receives a generated PV name." }
+      ],
+      "correct": ["b"],
+      "explanation": "The event identifies storage provisioning before application startup: the requested StorageClass does not exist. The image and filesystem ownership matter after scheduling or mounting, while deleting the Pod does not create the missing class."
+    },
+    {
+      "id": "access-mode-q3",
+      "type": "single",
+      "scenario": "A review proposes mounting one PostgreSQL data directory read-write into three replicas on different nodes. The claim uses `ReadWriteMany`, but the application design still expects one writer. What is the best review comment?",
+      "options": [
+        { "id": "c", "text": "Replace the PVC with a ConfigMap because ConfigMaps coordinate writes across replicas." },
+        { "id": "a", "text": "Approve it because a multi-node access mode also provides database-level locking and replication." },
+        { "id": "b", "text": "Reject the design because storage access capability does not make PostgreSQL data files safe for concurrent writers." },
+        { "id": "d", "text": "Use raw block volume mode because block devices make concurrent database writers safe by default." }
+      ],
+      "correct": ["b"],
+      "explanation": "Access modes describe mount capability, not application locking or replication. PostgreSQL's data directory still requires a safe single-writer architecture. ConfigMaps are for configuration, and raw block mode does not add concurrency safety."
+    },
+    {
+      "id": "reclaim-policy-q4",
+      "type": "single",
+      "scenario": "A team plans to delete a database PVC during an environment rebuild. The dynamically provisioned PV uses reclaim policy `Delete`, and the only copy of the test data is on that volume. What should the team conclude before proceeding?",
+      "options": [
+        { "id": "b", "text": "Deleting the PVC only unmounts the volume because reclaim policy applies when Pods are deleted." },
+        { "id": "c", "text": "The PV becomes `Retained` automatically when Kubernetes detects database files." },
+        { "id": "d", "text": "The StorageClass recreates the same data if a claim with the same name is applied later." },
+        { "id": "a", "text": "Deleting the PVC can delete the backing volume, so preserve required data before removing the claim." }
+      ],
+      "correct": ["a"],
+      "explanation": "With reclaim policy `Delete`, removing the claim can remove the backing storage. Pod deletion is a different lifecycle event, and neither the data type nor a reused claim name converts or restores the volume."
+    },
+    {
+      "id": "storage-review-q5",
+      "type": "multiple",
+      "scenario": "A PostgreSQL Pod has a PVC in `Bound` state, but the process logs `permission denied` for `/var/lib/postgresql/data`. Which two checks directly distinguish a mount or filesystem permission problem from a provisioning problem?",
+      "options": [
+        { "id": "a", "text": "Confirm the volume is mounted at the expected database path inside the Pod." },
+        { "id": "c", "text": "Increase the PVC requested capacity because larger volumes grant broader Unix permissions." },
+        { "id": "b", "text": "Inspect directory ownership and the Pod security context, including whether an appropriate `fsGroup` is needed." },
+        { "id": "d", "text": "Change `ReadWriteOnce` to `ReadWriteMany` because multi-node access makes the directory writable to every process." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "A bound claim proves provisioning succeeded, but the mount path and filesystem ownership can still be wrong. Capacity does not grant permissions, and access mode describes attachment capability rather than the process user's Unix access."
+    }
+  ]
+}

@@ -1,1 +1,1 @@
-A `post` block sits as a sibling of `stages` inside `pipeline`. Inside it, named conditions like `failure { ... }`, `success { ... }`, and `always { ... }` each contain the steps that run when that condition is met.
+A pipeline-level post condition is evaluated after the whole run result is known. Add the failure notification beside the stages so the existing Build, Test, and Package work stays untouched.

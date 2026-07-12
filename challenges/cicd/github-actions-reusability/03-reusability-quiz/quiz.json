@@ -4,80 +4,170 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Your team needs to share a standard Node.js setup sequence (install Node, run `npm ci`, run `npm run build`) across 15 repositories. The setup should run inside the caller's existing job, on the same VM, sharing the same workspace. Which GitHub Actions reusability mechanism should you use?",
+      "scenario": "Fifteen Node services repeat setup-node, npm ci, lint, and test inside jobs that already choose their runner and permissions. The platform team wants to maintain the shared logic as action metadata and shell steps, without introducing a custom JavaScript runtime. The shared block must use the caller's workspace. Which abstraction fits best?",
       "options": [
-        { "id": "a", "text": "A Reusable Workflow with `workflow_call`" },
-        { "id": "b", "text": "A Composite Action" },
-        { "id": "c", "text": "A Docker Container Action" },
-        { "id": "d", "text": "Copy the YAML into each repository's workflow and use a linter to keep them in sync" }
+        {
+          "id": "a",
+          "text": "A reusable workflow that exposes runner and permission inputs so callers can keep their existing job design."
+        },
+        {
+          "id": "b",
+          "text": "A composite action that packages the repeated steps inside the caller's job."
+        },
+        {
+          "id": "c",
+          "text": "A local JavaScript action that invokes each setup command through child processes in the caller's job."
+        },
+        {
+          "id": "d",
+          "text": "A reusable workflow job called by each service, with artifacts used to return the updated workspace."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Composite actions bundle multiple steps and run them inside the caller's existing job, sharing the workspace and runner. Reusable workflows (option A) spin up separate jobs on separate VMs, which is overkill for sharing setup steps. Docker actions (option C) add container overhead. Copy-pasting (option D) is the anti-pattern this article teaches you to avoid."
+      "correct": [
+        "b"
+      ],
+      "explanation": "A composite action is a step-level boundary and runs inside the caller's job, so it shares the workspace and runner. A reusable workflow still creates a separate job boundary even when it accepts runner inputs, so workspace state needs explicit transfer. A JavaScript action could work but adds runtime code where declarative steps are sufficient. See [Creating a composite action](https://docs.github.com/en/actions/tutorials/create-actions/create-a-composite-action)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "Your security team wants to mandate a specific compliance-scanning job that runs on a hardened, locked-down VM before any deployment job can proceed. The compliance job needs its own runner, its own secrets, and its own lifecycle. Which mechanism fits?",
+      "scenario": "A composite action includes scripts/summary.sh next to action.yml. A caller checks out checkout-api, invokes the action, and the script lookup incorrectly searches checkout-api/scripts. Which path should the action use?",
       "options": [
-        { "id": "a", "text": "A Composite Action" },
-        { "id": "b", "text": "A Reusable Workflow with `workflow_call`" },
-        { "id": "c", "text": "A shell script committed to each repository" },
-        { "id": "d", "text": "A GitHub App that listens to deployment events" }
+        {
+          "id": "a",
+          "text": "The caller's `GITHUB_WORKSPACE`, after checkout places both the service and action files under that directory."
+        },
+        {
+          "id": "b",
+          "text": "A path supplied by the caller as an action input so each workflow identifies the downloaded action directory."
+        },
+        {
+          "id": "c",
+          "text": "The current shell directory after the action first changes into its own repository checkout."
+        },
+        {
+          "id": "d",
+          "text": "github.action_path, which points to the downloaded action package."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Reusable workflows create entirely separate jobs with their own runners and secrets. This isolation is ideal for compliance scanning where the security team controls the environment. Composite actions (option A) run inside the caller's job and cannot enforce a separate runner. Option C does not provide isolation. Option D is a valid approach but adds significant engineering overhead compared to a reusable workflow."
+      "correct": [
+        "d"
+      ],
+      "explanation": "The caller workspace and action package are different directories. `github.action_path` follows the action's own files, while `GITHUB_WORKSPACE` follows the repository being built. Requiring callers to discover an internal path leaks implementation detail, and relying on a prior directory change is less robust than addressing the package directly. See [Composite action metadata syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A composite action includes a helper script at `./scripts/build.sh` inside the action's repository. A caller workflow executes the action, but the runner fails with:\n\n```\n/home/runner/work/my-app/my-app/scripts/build.sh: No such file or directory\n```\n\nWhat is the fix?",
+      "scenario": "A composite action calculates an image tag that a later caller step must use. The internal shell step currently prints the tag to stdout, but the caller's steps.image.outputs.image-tag is empty. What interface should the action implement?",
       "options": [
-        { "id": "a", "text": "Use `${{ github.workspace }}/scripts/build.sh` to reference the workspace." },
-        { "id": "b", "text": "Use `${{ github.action_path }}/scripts/build.sh` to reference the action's own directory." },
-        { "id": "c", "text": "Copy the script into every caller repository." },
-        { "id": "d", "text": "Run `chmod +x scripts/build.sh` before executing it." }
+        {
+          "id": "a",
+          "text": "Give the internal step an id, write image-tag to GITHUB_OUTPUT, and map that step output in action.yml."
+        },
+        {
+          "id": "b",
+          "text": "Write the tag to an environment variable through `GITHUB_ENV` and document that later caller steps can read it."
+        },
+        {
+          "id": "c",
+          "text": "Declare the action output in `action.yml` and rely on the internal step's stdout to populate it."
+        },
+        {
+          "id": "d",
+          "text": "Write the tag to `GITHUB_STEP_SUMMARY` and have the caller parse the rendered summary in its next step."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "By default, `run` steps execute in the caller's workspace directory, not the action's directory. The error shows it is looking for the script in the caller's repo (`my-app/my-app/scripts/`). `github.action_path` resolves to the directory where the action's code was downloaded, which is where `scripts/build.sh` actually lives. Option A points to the caller's workspace, which is the current (wrong) behavior."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Outputs are an explicit action interface. The producing step needs an id, writes the named value to `GITHUB_OUTPUT`, and `action.yml` maps it for the caller. `GITHUB_ENV` can share a value inside the same job but bypasses the declared action contract. Stdout and the human-readable step summary do not populate the caller-visible output. See [GitHub action metadata syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax)."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A developer converts a normal workflow step into a composite action step but forgets one required field. The workflow fails with a cryptic error about missing required parameters. The step looks like this:\n\n```yaml\nruns:\n  using: \"composite\"\n  steps:\n    - name: Build\n      run: npm run build\n```\n\nWhat is the missing field?",
+      "scenario": "The platform team centralizes a production deployment as a reusable workflow. It must receive an environment name and a deploy token, but callers should not expose undeclared values. Which interface is correct?",
       "options": [
-        { "id": "a", "text": "The `shell` key. Composite actions require every `run` step to explicitly declare its shell (e.g., `shell: bash`)." },
-        { "id": "b", "text": "The `working-directory` key. Composite actions cannot infer the working directory." },
-        { "id": "c", "text": "The `name` key must use a specific prefix like `composite/`." },
-        { "id": "d", "text": "The step needs `uses: actions/checkout@v4` before any `run` step." }
+        {
+          "id": "a",
+          "text": "Declare both values as typed `workflow_call` inputs and mark the deploy token input as required."
+        },
+        {
+          "id": "b",
+          "text": "Declare the environment as an input and use `secrets: inherit` so every caller secret is available to the deployment job."
+        },
+        {
+          "id": "c",
+          "text": "Declare a typed workflow_call input and an explicit workflow_call secret, then require callers to map them."
+        },
+        {
+          "id": "d",
+          "text": "Declare the environment input but read the token from a repository secret with the same name in the called workflow repository."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "In a normal workflow, GitHub defaults to the runner's standard shell. In a composite action, the action might be called from Ubuntu, macOS, or Windows, so GitHub forces you to be explicit. Every `run` step in a composite action must include `shell: bash` (or another shell). Option B is not required. Option C is fabricated. Option D is the caller's responsibility, not the action's."
+      "correct": [
+        "c"
+      ],
+      "explanation": "`workflow_call` defines a reviewable contract for ordinary values and sensitive values. Treating a token as an input handles it as ordinary data. `secrets: inherit` exposes more secrets than this workflow needs, while a secret owned by the called repository changes the credential source and accountability boundary. See [Reusing workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A team has extracted their CI logic into a reusable composite action referenced as `my-org/ci-action@v3`. When a new developer opens a workflow file, they see:\n\n```yaml\nsteps:\n  - uses: my-org/ci-action@v3\n```\n\nThey have no idea what this step does. What is the main engineering tradeoff of this approach?",
+      "scenario": "Forty production repositories call platform/deploy@main. A merge changes a required input, and every caller's next run fails. Which versioning change best limits the next rollout?",
       "options": [
-        { "id": "a", "text": "Abstraction reduces duplication but harms readability. The developer must navigate to the action's repository to understand what commands are being executed." },
-        { "id": "b", "text": "Composite actions are slower than inline steps because they require an extra API call." },
-        { "id": "c", "text": "There is no tradeoff. Abstraction is always beneficial." },
-        { "id": "d", "text": "The tradeoff is cost. Composite actions consume more runner minutes." }
+        {
+          "id": "a",
+          "text": "Keep `main`, but require a release branch and a two-day observation period before merging changes into it."
+        },
+        {
+          "id": "b",
+          "text": "Publish a reviewed version tag or pin a commit, then let callers upgrade through controlled pull requests."
+        },
+        {
+          "id": "c",
+          "text": "Publish a major-version branch such as `v2` and move all callers to it automatically after compatibility tests pass."
+        },
+        {
+          "id": "d",
+          "text": "Pin callers to release tags through an automated dependency update that merges without service review."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Every abstraction trades readability for maintainability. When CI logic is hidden behind a single `uses` line, junior developers cannot immediately see what commands run, what environment variables are set, or where artifacts go. When the action breaks, they cannot debug it without reading the source in another repository. The article recommends waiting until you have felt the pain of updating the same config in three repositories before abstracting."
+      "correct": [
+        "b"
+      ],
+      "explanation": "A release tag or commit pin gives callers an intentional upgrade point and keeps the old contract available. Delaying a merge to `main` improves testing but still moves every caller together. A major-version branch is useful only when consumers choose when to adopt it, and automatic unreviewed updates remove the service-level compatibility decision. See [Sharing actions and workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/share-with-your-organization)."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "A caller workflow passes `node-version: '18'` to a composite action, but the action installs Node 22 anyway. The action's `action.yml` does not have an `inputs` block. What is the problem?",
+      "type": "multiple",
+      "scenario": "A platform team is reviewing repeated setup, security, and deployment automation across thirty repositories. Which design choices use the right GitHub Actions reuse boundary?",
       "options": [
-        { "id": "a", "text": "GitHub silently ignores undeclared inputs. The action must declare `node-version` in its `inputs` block and reference it via `${{ inputs.node-version }}`." },
-        { "id": "b", "text": "The action needs `permissions: { inputs: read }` to accept parameters." },
-        { "id": "c", "text": "Composite actions do not support inputs. Only JavaScript actions do." },
-        { "id": "d", "text": "The caller must use `env` instead of `with` to pass values to composite actions." }
+        {
+          "id": "a",
+          "text": "Package repeated setup and validation steps as a composite action inside the service job."
+        },
+        {
+          "id": "b",
+          "text": "Use a composite action for the organization security scan so it can select a hardened runner and set job permissions."
+        },
+        {
+          "id": "c",
+          "text": "Use a reusable workflow for an organization security job with controlled permissions and reporting."
+        },
+        {
+          "id": "d",
+          "text": "Use a reusable workflow for service-local setup commands that must modify files for later steps in the same caller job."
+        },
+        {
+          "id": "e",
+          "text": "Keep service-specific values as explicit inputs and shared mechanics behind a versioned interface."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Actions only receive inputs that are explicitly declared in the `inputs` block of `action.yml`. If the input is not declared, the value passed via `with` is silently ignored, and any `${{ inputs.node-version }}` reference resolves to an empty string. The step then falls back to whatever is hardcoded. Option C is wrong because composite actions fully support inputs."
+      "correct": [
+        "a",
+        "c",
+        "e"
+      ],
+      "explanation": "Composite actions share steps inside a caller job, while reusable workflows own job-level concerns such as runners and permissions. A composite action cannot select its job runner or permissions. A reusable workflow is a poor fit when later caller steps need the same modified workspace. Explicit inputs plus versioned references preserve product ownership. See [Reusing workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)."
     }
   ]
 }

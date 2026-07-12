@@ -1,6 +1,6 @@
 ---
 title: "Configure the Green Task Set"
-sectionSlug: testing-green-before-users-reach-it
+sectionSlug: the-blue-and-green-environments
 order: 1
 ---
 

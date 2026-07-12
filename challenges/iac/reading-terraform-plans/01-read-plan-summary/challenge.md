@@ -1,7 +1,6 @@
 ---
-title: "Read the Plan Summary"
-sectionSlug: the-summary-line
+title: "What Is Terraform State?"
 order: 1
 ---
 
-Knowledge check for comparing a Terraform plan summary with the pull request intent before review moves into resource details.
+Use action symbols, state context, sensitive values, and drift evidence to decide whether a Terraform plan is safe to approve.

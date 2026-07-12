@@ -29,5 +29,3 @@ jobs:
       - name: Plan
         run: terraform -chdir=infra/orders/prod plan -input=false
 ```
-
-This keeps the workflow focused on review evidence: initialization, formatting, validation, and a speculative plan for the changed production Terraform directory. It does not apply infrastructure from a pull request.

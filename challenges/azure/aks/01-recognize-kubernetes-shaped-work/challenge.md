@@ -1,8 +1,6 @@
 ---
-title: "Recognize Kubernetes-Shaped Work"
-sectionSlug: what-is-aks
+title: "AKS"
 order: 1
-description: "Check whether AKS is solving a real platform problem or just adding Kubernetes around one container."
 ---
 
-Use these scenarios to decide whether Kubernetes is part of the architecture or just extra machinery.
+Apply the linked article to realistic Azure design and operations decisions. Use the evidence in each scenario to choose the most defensible answer.

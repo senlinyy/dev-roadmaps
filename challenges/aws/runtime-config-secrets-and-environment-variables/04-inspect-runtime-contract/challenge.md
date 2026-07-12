@@ -1,6 +1,6 @@
 ---
 title: "Inspect Runtime Contract"
-sectionSlug: ecs-delivery
+sectionSlug: secrets-and-rotation
 order: 4
 ---
 

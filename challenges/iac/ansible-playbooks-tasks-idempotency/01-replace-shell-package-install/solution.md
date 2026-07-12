@@ -13,4 +13,4 @@
         update_cache: true
 ```
 
-The task now describes the desired package state, so a second run can report `ok` when nginx is already installed.
+- The task now describes the desired package state, so a second run can report `ok` when nginx is already installed.

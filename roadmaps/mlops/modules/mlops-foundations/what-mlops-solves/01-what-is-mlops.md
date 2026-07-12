@@ -39,27 +39,15 @@ That whole path is where **MLOps** lives. In this article, we will connect the m
 
 A **machine learning model** is software that learned patterns from data. For the CityEats late-order model, the training data might include restaurant preparation time, distance, courier availability, weather, order size, and the final delivery outcome. The model learns from those examples and later produces a prediction for a new order.
 
-MLOps gives that model a production workflow. A team can answer practical questions like: which data trained the model, which code produced it, which metrics approved it, which environment serves it, who reviewed it, and what production signals show that it still behaves well. Those questions sound simple, but they become painful once the model affects real customers.
+MLOps gives that model a production workflow. A team can answer practical questions like: which data trained the model, which code produced it, which metrics approved it, which environment serves it, who reviewed it, and what production signals show that it still behaves well. Those questions sound simple during exploration. They turn into operational work once the model affects real customers.
 
 The plain version is worth saying directly: **MLOps is how a team turns machine learning from a one-time experiment into a reliable production system.** For CityEats, that means the model can move through training, approval, release, monitoring, and improvement without depending on one person's notebook.
 
 In the CityEats example, the team wants more than a good model in a notebook. They want a repeatable way to create model version `late-order-risk-v12`, compare it with `v11`, deploy it to 5 percent of traffic, watch late-order alerts, and switch back if the customer experience gets worse.
 
-```mermaid
-flowchart LR
-    Data[Production data]:::data --> Train[Training job]:::compute
-    Train --> Eval[Evaluation]:::quality
-    Eval --> Registry[Model registry]:::artifact
-    Registry --> Deploy[Serving API]:::compute
-    Deploy --> Monitor[Monitoring]:::quality
-    Monitor --> Feedback[Labels and feedback]:::data
-    Feedback --> Data
+![MLOps operating loop showing data, training, evaluation, registry, deployment, monitoring, and feedback around a food delivery ETA model](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/mlops-operating-loop.png)
 
-    classDef data fill:#19313a,stroke:#31c6d4,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef quality fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef artifact fill:#24351f,stroke:#6bd95f,stroke-width:2px,color:#fff
-```
+_The loop shows why MLOps keeps data, model versions, release control, monitoring, and feedback connected instead of treating the model as one isolated file._
 
 The loop matters because a model keeps meeting new data after release. Restaurants change menus, weather patterns shift, courier supply changes, and promotions create unusual traffic. MLOps gives the team a way to keep learning from that world without treating every model update like a fresh emergency.
 
@@ -72,7 +60,7 @@ A machine learning system ships code plus a trained model, and that model came f
 
 For CityEats, the application code might call an endpoint named `/predict-late-order`. That endpoint returns a score like `0.82`, which means the model sees an 82 percent risk of lateness. The product logic then decides whether to notify a customer, offer a credit, or do nothing.
 
-The model can create a production issue even if the API stays healthy. The endpoint can return fast responses with `200 OK`, while the predictions slowly become less useful because restaurant behavior changed. That is why MLOps tracks **system health** and **model health** together.
+The model can create a production issue even if the API stays healthy. The endpoint can return fast responses with `200 OK`, while the predictions slowly lose value because restaurant behavior changed. That is why MLOps tracks **system health** and **model health** together.
 
 Here are four production questions that MLOps keeps visible. They are practical questions that come up during releases, incidents, audits, and model improvement work.
 
@@ -91,6 +79,10 @@ This is the first big idea in MLOps: the model lives inside a system. The system
 Once the CityEats team has a useful late-order model, the next problem is traceability. Traceability means the team can connect an output back to the inputs and decisions that produced it. If model version `v12` starts warning too many customers, the team needs more than the file name `model.pkl`.
 
 MLOps treats several things as first-class production assets. Each asset needs a name, version, owner, and place in the release story, because the model can change when any one of them changes.
+
+![Production evidence infographic connecting code commit, data snapshot, model artifact, evaluation report, model release, and owner approval](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/production-evidence.png)
+
+_The evidence view shows the release packet reviewers need before a candidate model reaches customers._
 
 **Code** includes feature-building code, training code, evaluation code, serving code, and pipeline code. A small change in how the team calculates `courier_distance_minutes` can change model behavior, even if the model algorithm stays the same.
 
@@ -173,7 +165,7 @@ flowchart TB
 
 **Monitoring** watches the model after release. The team tracks API latency and errors, plus model-specific signals like input drift, output distribution, prediction quality, and label delay. A model can pass all pre-release checks and still need attention after real users interact with it.
 
-**Feedback** closes the loop. Once CityEats learns which orders actually arrived late, those outcomes become labels for future training and evaluation. Feedback lets the team improve the model with real production evidence instead of guessing from an old dataset.
+**Feedback** closes the loop. Once CityEats learns which orders actually arrived late, those outcomes feed future training and evaluation. Feedback lets the team improve the model with real production evidence instead of guessing from an old dataset.
 
 This lifecycle needs automation because many steps repeat. Manual notebooks and hand-written release notes can work for a tiny prototype, but production teams need pipelines that run the same way each time.
 
@@ -299,7 +291,7 @@ Now the pieces are in place. We can talk about what improves once a team practic
 
 Good MLOps changes the daily work around machine learning. The team spends less time asking where a model came from and more time deciding whether it should ship. That matters because ML projects often fail from messy handoffs rather than weak algorithms.
 
-For CityEats, the first model release might feel slow because the team builds the pipeline, registry entries, dashboards, and review flow. The second release becomes more predictable. The team can reuse the same path, compare metrics with the previous version, and roll out with a known playbook.
+For CityEats, the first model release might take extra time because the team builds the pipeline, registry entries, dashboards, and review flow. The second release follows a known path. The team can reuse the same steps, compare metrics with the previous version, and roll out with a tested playbook.
 
 Here are the main changes a team should feel. Each row connects a common early-stage habit with the production habit that replaces it.
 
@@ -346,6 +338,10 @@ flowchart TB
 
 MLOps connects the model, data, release process, monitoring, and owners into one operating loop. The team treats machine learning as a production system around a changing model, changing data, and changing product behavior. Every model version gets evidence. Every release has a path. Every production signal has an owner. Every serious issue can lead to rollback, retraining, or a product change.
 
+![Notebook to service infographic showing a notebook feeding an MLOps pipeline, then a monitored API and batch job with repeatability, rollback, and alerts](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/notebook-to-service.png)
+
+_The final visual shows the practical shift from a local notebook to a monitored service with repeatable release and rollback paths._
+
 A beginner can feel pressure to start with a platform logo. A more useful starting point is practical: can the team reproduce the model, evaluate it fairly, release it safely, monitor it honestly, and improve it from feedback? Use those answers to choose tools, instead of starting with a platform logo.
 
 ## What's Next
@@ -355,9 +351,7 @@ You now have the broad shape of MLOps: repeatable model lifecycle, versioned ass
 
 That lifecycle gives the rest of the roadmap a map. Data modules, training modules, evaluation modules, serving modules, monitoring modules, and governance modules all fit into different parts of the same operating loop.
 
----
-
-**References**
+## References
 
 - [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Explains CI, CD, and continuous training for ML systems, including why ML pipelines need automation beyond normal software delivery.
 - [AWS SageMaker AI: Why should you use MLOps?](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-projects-why.html) - Describes MLOps as applying DevOps practices to ML workloads and highlights project management, CI/CD, and quality assurance concerns.

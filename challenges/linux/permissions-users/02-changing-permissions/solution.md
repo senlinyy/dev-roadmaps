@@ -5,4 +5,4 @@ chmod 755 /opt/app/logs
 ls -l /opt/app
 ```
 
-`u+x` adds execute for the owner. `600` means owner can read and write, nobody else has access. `755` means owner has full access, group and others can read and traverse.
+- `u+x` adds execute for the owner. `600` means owner can read and write, nobody else has access. `755` means owner has full access, group and others can read and traverse.

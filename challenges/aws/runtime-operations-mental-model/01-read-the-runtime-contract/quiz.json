@@ -1,64 +1,178 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A pipeline record says:\n\nimage pushed: 111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.4\nECS service taskDefinition: devpolaris-orders-api:41\ntask definition 41 image: ...:2026-05-02.3\ntarget health: 2 healthy tasks from revision 41\n\nWhat is missing from the runtime contract?",
+      "scenario": "The DevPolaris release pipeline pushed a new orders API image, but production still reports healthy tasks from the previous task definition.\n\nImage pushed is 111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.4. ECS service taskDefinition is devpolaris-orders-api:41. Task definition 41 image is ...:2026-05-02.3. Target health is 2 healthy tasks from revision 41.\n\nWhat is missing from the runtime contract?",
       "options": [
+        {
+          "id": "b",
+          "text": "Force a new deployment of revision 41 because ECS will resolve the newly pushed tag even though the task definition names the old release tag."
+        },
         {
           "id": "a",
           "text": "The service has not been moved to a task definition revision that points at the new image."
         },
         {
-          "id": "b",
-          "text": "The image is missing from ECR because healthy revision 41 tasks prove no images exist."
-        },
-        {
           "id": "c",
-          "text": "The ALB listener must be recreated for every new tag."
+          "text": "Register a revision for the new image but leave the service on revision 41 until the old targets fail health checks."
         },
         {
           "id": "d",
-          "text": "The CloudWatch log group should run the image directly."
+          "text": "Retag the new image as `2026-05-02.3` so revision 41 picks it up without changing the service record."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The image exists, but production still runs the old recipe. ECS serves traffic from the task definition revision used by the service, not from the newest tag in ECR. The runtime contract must connect artifact, revision, service, and health."
+      "explanation": "The image exists, but production still runs the old recipe. ECS serves traffic from the task definition revision used by the service, not from the newest tag in ECR. The runtime contract must connect artifact, revision, service, and health.\n\nLearn more in [Amazon ECS rolling deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)."
     },
     {
-      "id": "q2",
+      "id": "q-follow-artifact-to-service-1",
       "type": "single",
-      "scenario": "A runtime review table has these rows:\n\nrunning version: devpolaris-orders-api:42\nconfig: task definition environment\nsecrets: task definition secrets\ncapacity: desiredCount=2\nlogs: missing\nrollback target: missing\n\nWhat is the strongest review concern?",
+      "scenario": "The DevPolaris release captain is reviewing a production change and its recorded rollback evidence.\n\nRelease is orders-api-prod-2026-05-02.4. Approved image digest is sha256:8f3d2b9a. Task definition registered is devpolaris-orders-api:42.\n\nTask definition 42 shows: Image is .../devpolaris-orders-api:latest.\n\nWhat is the review concern?",
       "options": [
         {
-          "id": "a",
-          "text": "The team may not be able to explain failures or recover calmly because logs and rollback target are not recorded."
-        },
-        {
           "id": "b",
-          "text": "The service cannot run because capacity must always be missing when logs are missing."
+          "text": "Use the release tag but omit the resolved digest from the release record because repository tag immutability is enabled."
         },
         {
           "id": "c",
-          "text": "Secrets should be moved into logs so recovery is faster."
+          "text": "Keep `latest`, but record the repository digest at approval time and assume ECS resolves the same value during later deployments."
+        },
+        {
+          "id": "a",
+          "text": "The task definition does not clearly pin or record the approved artifact, so production may not run the reviewed digest."
         },
         {
           "id": "d",
-          "text": "Rollback is unnecessary if desiredCount is greater than zero."
+          "text": "Pin the digest in a new task definition but approve it without comparing that digest to the reviewed release artifact."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Logs and rollback target are part of the runtime contract because they help humans operate the service. Running tasks alone do not explain what happened or what known-good recipe to restore. Secrets should stay protected, not logged."
+      "explanation": "A release record should let the team connect the reviewed artifact to the runtime recipe. Floating tags can move and make rollback or audit harder. Pinning or recording the exact digest keeps the release explainable.\n\nLearn more in [Amazon ECR tag immutability](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)."
+    },
+    {
+      "id": "q-diagnose-runtime-failure-2",
+      "type": "single",
+      "scenario": "A deployment reaches RUNNING tasks, but target health says:\n\n```text\nTarget IP       Port   State       Reason\n10.0.18.42      3000   unhealthy   Health checks failed with status code 404\n10.0.27.113     3000   unhealthy   Health checks failed with status code 404\n```\n\nApp routes in the release log: /healthz, /v1/orders\n\nWhat should be fixed?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Change the target group success matcher to include 404 so the current route can pass without modifying the application."
+        },
+        {
+          "id": "c",
+          "text": "Change the success-code matcher to include 404 so the existing `/health` response is considered ready."
+        },
+        {
+          "id": "a",
+          "text": "The health contract: restore /health or update the target group to the readiness route the app serves."
+        },
+        {
+          "id": "d",
+          "text": "Increase health-check grace time because a longer wait changes an existing `/health` 404 into `/healthz`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The tasks are reachable enough to answer with 404. That is a health-path mismatch, not an image-pull failure. The ALB and app need one agreed readiness contract.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
+    },
+    {
+      "id": "q-follow-artifact-to-service-4",
+      "type": "multiple",
+      "scenario": "The DevPolaris release captain must prove that production is running the reviewed artifact, not merely that an image exists in ECR. The captain collects this release evidence.\n\nService taskDefinition is devpolaris-orders-api:43. Task definition image digest is sha256:8f3d2b9a. CloudWatch startup log is release=2026-05-02.4. Target health is two healthy task IPs on port 3000.\n\nWhich evidence helps prove the running version?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The task definition points to the approved image digest or immutable artifact reference."
+        },
+        {
+          "id": "d",
+          "text": "An ECR tag currently resolves to the approved digest, but the running task definition uses a different immutable reference."
+        },
+        {
+          "id": "a",
+          "text": "The service is pointing to the expected task definition revision."
+        },
+        {
+          "id": "c",
+          "text": "Startup logs from the new tasks report the expected release identifier."
+        },
+        {
+          "id": "e",
+          "text": "The deployment reached `COMPLETED`, but startup logs from the replacement tasks do not include a release identifier."
+        }
+      ],
+      "correct": [
+        "b",
+        "a",
+        "c"
+      ],
+      "explanation": "Running-version proof needs a chain from service to recipe to artifact to task logs and health. A generic latest tag in ECR does not prove what the service is running. It is only useful if the runtime recipe points to the reviewed artifact.\n\nLearn more in [Amazon ECR tag immutability](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)."
+    },
+    {
+      "id": "q-read-the-incident-signal-1",
+      "type": "single",
+      "scenario": "DevPolaris promoted orders API release `2026-05-05.2` at 09:12 UTC. Eight minutes later the ALB 5xx alarm is active, the ECS service has only two of three desired tasks running, and one registered target returns `Target.ResponseCodeMismatch`. A third task stopped with `ResourceInitializationError: unable to retrieve secret` and produced no startup log. The release captain must decide whether the image is faulty or the runtime contract failed. What is the best first investigation thread?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Inspect only task execution-role access because the initialization error makes target health and customer impact secondary."
+        },
+        {
+          "id": "a",
+          "text": "Connect ALB target health, ECS task state, task definition secret references, and role permission before rebuilding the image."
+        },
+        {
+          "id": "c",
+          "text": "Rollback immediately without confirming whether the previous revision remains compatible with current secrets and dependencies."
+        },
+        {
+          "id": "d",
+          "text": "Inspect the secret permission in isolation and defer target-health and customer-impact evidence until the task starts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence crosses several runtime checks. The image may exist, while the service can still fail because health checks, task startup, or secret access are wrong. The first pass should connect AWS evidence instead of guessing from one alarm.\n\nLearn more in [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html)."
+    },
+    {
+      "id": "q-choose-the-recovery-action-1",
+      "type": "single",
+      "scenario": "A new orders API rollout is causing checkout errors above the paging threshold. Task definition revision 57 still has one healthy target and was the verified production release before 09:12 UTC. Revision 58 is now primary, but it has one unhealthy target and one stopped task. IAM simulation confirms that revision 58's task execution role receives an implicit deny when ECS retrieves `payments-token` for secret injection. What is the best immediate action?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep revision 58 primary but lower the deployment maximum percent, hoping the remaining healthy revision 57 target absorbs traffic while new tasks retry."
+        },
+        {
+          "id": "c",
+          "text": "Rotate the secret and force another revision 58 deployment before changing IAM, because a fresh secret might bypass the current access denial."
+        },
+        {
+          "id": "d",
+          "text": "Leave both revisions running at the current weights while investigating, because one healthy target means the active customer impact can wait."
+        },
+        {
+          "id": "a",
+          "text": "Stop the rollout pressure, restore traffic to revision 57, then fix the execution-role permission before retrying revision 58."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new revision has a known runtime permission failure and customer impact is active. Returning to the known-good task definition protects users while the team fixes the permission path.\n\nLearn more in [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html)."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A deploy has this evidence:\n\ntask definition: devpolaris-orders-api:42\nimage digest: sha256:8f3d\nrunningCount: 2\nALB target health: 0 healthy, 2 unhealthy Target.ResponseCodeMismatch\nCloudWatch logs: GET /health status=500 reason=config_not_ready\n\nWhich contract part is false?",
+      "scenario": "A DevPolaris orders deployment has created running tasks, but none has earned traffic. The release captain compares artifact, capacity, health, and application evidence.\n\nTask definition is devpolaris-orders-api:42. Image digest is sha256:8f3d. RunningCount is 2. ALB target health is 0 healthy, 2 unhealthy Target.ResponseCodeMismatch. CloudWatch logs is GET /health status=500 reason=config_not_ready.\n\nWhich contract part is false?",
       "options": [
         {
           "id": "a",
@@ -66,77 +180,21 @@
         },
         {
           "id": "b",
-          "text": "Artifact existence, because a task can only run when no image exists."
+          "text": "The artifact contract is false because an existing digest cannot be trusted until health checks pass."
         },
         {
           "id": "c",
-          "text": "Capacity only, because runningCount 2 means the health check must be ignored."
+          "text": "The traffic and readiness contract is false even though task count and artifact evidence look correct."
         },
         {
           "id": "d",
-          "text": "Rollback target only, because config_not_ready is a documentation warning."
+          "text": "The capacity contract is false because two RUNNING tasks cannot be unhealthy at the same time."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Running tasks are not enough. The health endpoint is part of the traffic contract, and the log says config is blocking readiness. The artifact exists, but production still cannot safely send users to the new tasks."
-    },
-    {
-      "id": "q4",
-      "type": "multiple",
-      "scenario": "A complete runtime contract for devpolaris-orders-api should help answer:\n\nWhich build is production using?\nWhich config and secrets does the task read?\nHow does AWS know a task can receive traffic?\nHow many copies should exist?\nWhere can humans read runtime evidence?\n\nWhich items belong in that contract?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Task definition revision and image digest or tag."
-        },
-        {
-          "id": "b",
-          "text": "Environment values, secret references, roles, health check, desired count, and log group."
-        },
-        {
-          "id": "c",
-          "text": "Previous known-good task definition for rollback."
-        },
-        {
-          "id": "d",
-          "text": "A plaintext copy of every secret so operators can compare values quickly."
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c"
-      ],
-      "explanation": "The runtime contract is a map for operating the image safely. It includes version, config, secrets by reference, health, capacity, logs, and rollback target. It should not turn into a secret dump."
-    },
-    {
-      "id": "q5",
-      "type": "single",
-      "scenario": "A task exits immediately, but no application logs appear. The task definition has:\n\nlogConfiguration: missing\ncontainer command: node server.js\nECS event: task stopped after 9 seconds\n\nWhat should be fixed for future diagnosis?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Add a proper awslogs configuration and ensure the execution role can write logs."
-        },
-        {
-          "id": "b",
-          "text": "Remove the container command so ECS falls back to the image default command."
-        },
-        {
-          "id": "c",
-          "text": "Store logs in the Docker image, because runtime logs are not needed after build."
-        },
-        {
-          "id": "d",
-          "text": "Disable task replacement so the failed task stays invisible longer."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Without logs, the team loses one of the first useful questions. ECS can report a stopped task, but app logs explain what the process did before it exited. Logging setup and permission are part of the runtime contract."
+      "explanation": "Running tasks are not enough. The health endpoint is part of the traffic contract, and the log says config is blocking readiness. The artifact exists, but production still cannot safely send users to the new tasks.\n\nLearn more in [Application Load Balancer target health](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html)."
     }
   ]
 }

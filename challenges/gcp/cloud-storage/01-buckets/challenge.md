@@ -1,7 +1,6 @@
 ---
-title: "Choose The Bucket Boundary"
-sectionSlug: buckets
+title: "Cloud Storage"
 order: 1
 ---
 
-Practice reading a bucket as a policy and organization boundary, not just a folder for objects.
+Review production scenarios covering Cloud Storage buckets, objects, names, metadata, access, signed URLs, lifecycle, and versioning decisions.

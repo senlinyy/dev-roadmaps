@@ -11,6 +11,3 @@ jobs:
       - run: ./scripts/check-version.sh "$TEST_URL" "$EXPECTED_TASK_DEFINITION"
       - run: ./scripts/smoke-checkout.sh "$TEST_URL"
 ```
-
-The test listener proves green directly. A passing check against the public URL before the switch would only prove blue still works.
-

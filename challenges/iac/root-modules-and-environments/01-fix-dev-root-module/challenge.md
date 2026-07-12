@@ -1,15 +1,16 @@
 ---
 title: "Fix the Dev Root Module"
-sectionSlug: environment-layout
+sectionSlug: what-lives-in-an-environment-folder
 order: 1
 ---
 
-Fix the development root module in `envs/dev/main.tf`.
+The development environment folder should be a deployable root module. It should choose the shared module source and supply dev-sized values instead of copying production wiring.
 
-Requirements:
+Your job:
 
-1. **Module:** `orders_service`.
-2. **Source:** `../../modules/orders-service`.
-3. **Environment:** `dev`.
-4. **Buckets:** `invoice_bucket_name = "dp-orders-invoices-dev"`, `export_bucket_name = "dp-orders-exports-dev"`.
-5. **Runtime values:** `replica_count = 1`, `deletion_protection = false`.
+1. **Call the orders service module** from the dev root.
+2. **Pass development bucket names** for invoice and export storage.
+3. **Use dev capacity and safety settings** that match a low-risk environment.
+4. **Keep environment-specific values in this root** instead of changing the shared module.
+
+The grader checks the dev root module call in HCL.

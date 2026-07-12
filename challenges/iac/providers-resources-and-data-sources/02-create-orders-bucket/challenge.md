@@ -1,13 +1,15 @@
 ---
 title: "Create the Orders Bucket"
-sectionSlug: resources
+sectionSlug: the-first-managed-object
 order: 2
 ---
 
-Add the invoice bucket resource in `s3.tf` using the existing provider and local values.
+The orders service owns a production invoice bucket. Add the managed resource so Terraform can plan, apply, track, and eventually retire that object through state.
 
-Requirements:
+Your job:
 
-1. **Resource:** `aws_s3_bucket.orders_invoices`.
-2. **Bucket:** `dp-orders-invoices-prod`.
-3. **Tags:** `service = "devpolaris-orders"`, `environment = "prod"`, `owner = "platform"`.
+1. **Create the invoice bucket resource** for the orders production bucket.
+2. **Use the existing local naming value** where the starter files already provide it.
+3. **Apply service, environment, and owner tags** so plan review shows the ownership boundary.
+
+The grader checks the HCL resource, not a cloud API call.

@@ -20,6 +20,3 @@ jobs:
     steps:
       - run: ./scripts/deploy-ecs.sh orders-api-prod "${{ needs.build.outputs.image_digest }}"
 ```
-
-The digest is the artifact identity that staging proved. Production should consume that same output rather than rebuilding or trusting a tag that can move.
-

@@ -1,7 +1,6 @@
 ---
-title: "Match Workload Shape"
-sectionSlug: workload-shape
+title: "What Is GCP Compute"
 order: 1
 ---
 
-Practice choosing a runtime from the shape of the work instead of from a product list. The questions compare request services, event handlers, servers, and Kubernetes workloads.
+Review production scenarios covering matching GCP runtimes to workload shape, start signal, scaling behavior, and operating responsibility.

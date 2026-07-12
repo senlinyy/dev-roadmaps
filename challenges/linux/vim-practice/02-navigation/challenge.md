@@ -1,6 +1,6 @@
 ---
 title: "Navigation Practice"
-sectionSlug: moving-around-navigation
+sectionSlug: move-through-a-config-file
 order: 2
 ---
 

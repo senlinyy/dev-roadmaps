@@ -1,6 +1,6 @@
 ---
 title: "Configure Branch-Filtered Triggers"
-sectionSlug: a-real-scenario-pr-vs-push-events
+sectionSlug: push-and-pull-request-triggers
 order: 2
 ---
 

@@ -1,9 +1,8 @@
 ---
-title: "ECS Deployments"
-description: "Practice task definition revisions, ECS service updates, target health, completed deployment evidence, and rollback targets."
+title: "Verification, Rollback, and Runtime Operations"
+description: "Practice ECS service updates, target health, rollback targets, scaling evidence, queues, workers, and operational controls."
 articleId: article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service
-articleSlug: ecs-deployments
 difficulty: medium
 order: 33
-tags: ["aws", "ecs", "deployments", "task-definitions", "rollback"]
+tags: ["aws", "ecs", "deployments", "scaling", "queues", "operations", "rollback"]
 ---

@@ -1,7 +1,6 @@
 ---
-title: "Read Events and Invocations"
-sectionSlug: events
+title: "Lambda"
 order: 1
 ---
 
-Use the event payload, handler behavior, and invocation evidence to choose the safest Lambda operating decision. Focus on the contract between the trigger and the Node.js handler.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

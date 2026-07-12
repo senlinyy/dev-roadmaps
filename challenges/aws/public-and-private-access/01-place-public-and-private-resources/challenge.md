@@ -1,7 +1,6 @@
 ---
-title: "Place Public and Private Resources"
-sectionSlug: route-tables-make-public-and-private-concrete
+title: "Public vs Private Subnets"
 order: 1
 ---
 
-Knowledge check on deciding which `devpolaris-orders-api` resources should be public, private, or private with outbound access before changing route tables or addresses.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

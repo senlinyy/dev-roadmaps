@@ -1,6 +1,6 @@
 ---
 title: "Check Key Vault Access"
-sectionSlug: managed-identity-access
+sectionSlug: run-the-launch-rehearsal
 order: 5
 ---
 

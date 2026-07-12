@@ -1,59 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A customer reports checkout failed once at 09:42 UTC. Application Insights has operation ID `checkout-5001`, request `POST /checkout`, result `500`, and a SQL dependency timeout. What is the best way to explain the incident?",
+      "scenario": "Support reports one failed checkout at 09:42 UTC. In Application Insights, the failed `POST /checkout` request has result `500`, duration `1840 ms`, and operation ID `checkout-5001`. A timed-out SQL `InsertOrder` dependency and an `order write failed` trace share that operation ID, while the metrics table contains only an aggregate failed-request count for the five-minute window. Which telemetry record should anchor the customer-facing investigation?",
       "options": [
         {
-          "id": "a",
-          "text": "Follow the operation ID through request, dependency, exception, and trace evidence."
+          "id": "b",
+          "text": "Start with the request row because it records the incoming operation, result, duration, role, and operation ID."
         },
         {
-          "id": "b",
-          "text": "Read only the final exception text, because the exception is always the full story."
+          "id": "a",
+          "text": "Start with the SQL dependency because it captures the downstream timeout and identifies the database call that likely drove the failure."
         },
         {
           "id": "c",
-          "text": "Start with dashboard colors, because a red chart explains one customer request."
+          "text": "Start with the trace because it may carry the business message that support needs, even if the request row is also present."
         },
         {
           "id": "d",
-          "text": "Ignore dependencies, because backend APIs fail only inside their own process."
+          "text": "Start with the aggregate failed-request metric and infer the dependency failure from the matching time window."
         }
       ],
       "correct": [
-        "a"
+        "b"
       ],
-      "explanation": "Application Insights is strongest when the team follows one operation across requests, dependencies, exceptions, and traces. The final exception is useful, but it is only one part of the story."
+      "explanation": "The request row is the best anchor because it represents the customer-facing operation and gives the operation ID used to gather the rest of the telemetry. The SQL dependency is the closest distractor, but it is one child record inside the operation rather than the operation record the customer experienced. The trace adds context, and the metric is aggregated across many requests. See [Microsoft Learn: Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete) and the [AppRequests table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/apprequests)."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "The request succeeded, but users say checkout felt slow. Application Insights shows `POST /checkout` took 1400 ms and the receipt Blob write took 90 ms. Which evidence should the team compare next?",
+      "scenario": "An engineer joins telemetry for operation ID `checkout-5001` and gets this timeline:\n\n| Time | Table | Evidence |\n| --- | --- | --- |\n| 09:42:12.005 | `AppRequests` | `POST /checkout`, `500`, `1840 ms` |\n| 09:42:12.120 | `AppDependencies` | payment API, `200`, `210 ms` |\n| 09:42:12.421 | `AppDependencies` | SQL `InsertOrder`, `Timeout`, `1500 ms` |\n| 09:42:13.925 | `AppExceptions` | `SqlTimeoutException` in `OrdersRepository.InsertOrder` |\n\nWhat is the most defensible diagnosis from this evidence?",
       "options": [
         {
           "id": "a",
-          "text": "Dependency durations for the same operation, because a slow downstream call can make a successful request feel slow."
+          "text": "The payment provider caused the checkout failure because it was the first dependency in the timeline."
         },
         {
           "id": "b",
-          "text": "Action group email receivers, because receiver names explain slow calls."
-        },
-        {
-          "id": "c",
-          "text": "The resource group location only, because location fully explains every slow request."
+          "text": "The request row proves only an Application Gateway issue because HTTP status is edge telemetry."
         },
         {
           "id": "d",
-          "text": "The current article title, because the UI route might be stale."
+          "text": "The SQL timeout is the strongest lead because its duration, failure, and exception align with the failed request, but the team should still verify the database and code path."
+        },
+        {
+          "id": "c",
+          "text": "The exception proves the database platform failed and no application behavior needs review."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The failed SQL dependency consumes most of the request duration and is followed by a matching repository exception, so it is the strongest lead without becoming automatic proof of the ultimate root cause. The payment call succeeded, request telemetry is application telemetry, and the exception does not remove the need to inspect database and application behavior. See the [AppDependencies table reference](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/appdependencies) and [Microsoft Learn: Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Five minutes after release `2026.07.09.2`, Container Apps reports CPU at 38 percent, memory at 44 percent, and two healthy replicas. Application Insights reports `POST /checkout` failures rising from 0.2 percent to 4.8 percent, all from `devpolaris-orders-api`, with repository exceptions on the new release. What should the responder investigate first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Scale the Container App because any increase in HTTP failures should be treated as host saturation."
+        },
+        {
+          "id": "a",
+          "text": "Follow the failing checkout operations in Application Insights and compare their dependencies, exceptions, traces, and release properties."
+        },
+        {
+          "id": "c",
+          "text": "Compare failed checkout operations against successful ones from the same release window, because differences in correlated dependencies or exceptions can isolate the broken code path."
+        },
+        {
+          "id": "d",
+          "text": "Start with aggregate failure-rate metrics by role and release only, because operation-level traces can wait until the responder confirms whether one route or all routes are failing."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Dependency timing helps explain where request time went. The request can succeed while one downstream call consumes most of the latency."
+      "explanation": "Normal host metrics do not prove that every application path works. The operation-level failures, exception location, and release property point to application telemetry as the first useful evidence. Scaling first or stopping at aggregate metrics would skip the exact failing operations, while comparing successful and failed checkouts is useful after the responder has already anchored the investigation on the failing operations themselves. See [Microsoft Learn: Application Insights overview](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The incident lead wants another engineer to reconstruct `checkout-5001` without relying on a screenshot. The handoff must prove the incoming result and the work that occurred inside the request. Which two evidence sets create the most useful operation story? Select two.",
+      "options": [
+        {
+          "id": "b",
+          "text": "The `AppRequests` row with route, result, duration, application role, and operation ID."
+        },
+        {
+          "id": "a",
+          "text": "The five-minute failed-request metric split by route and role, because it shows incident scope even though it does not reconstruct one operation."
+        },
+        {
+          "id": "d",
+          "text": "The correlated dependency, exception, and trace rows with matching operation or parent-child identifiers and aligned timestamps."
+        },
+        {
+          "id": "c",
+          "text": "The release annotation and deployment timestamp for the service, because it helps place the operation in change context even though it does not show the internal request work."
+        }
+      ],
+      "correct": [
+        "b",
+        "d"
+      ],
+      "explanation": "A replayable story needs the incoming request plus the correlated work and errors inside that operation. Aggregate metrics and release annotations add scope and context, but they still do not reconstruct the internal sequence of one customer operation. See [Microsoft Learn: Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Application Map combines telemetry from `devpolaris-orders-api` and `devpolaris-receipt-worker` into one node named `api`. Both services call Azure SQL, and responders cannot tell which component owns a failing dependency edge. Which instrumentation change best fixes the attribution problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Send each service to a separate Application Insights resource because each component must have its own telemetry backend to appear distinctly on the map."
+        },
+        {
+          "id": "b",
+          "text": "Keep one Application Insights resource, but stamp both services with the same role name so related telemetry stays grouped under one node."
+        },
+        {
+          "id": "d",
+          "text": "Remove dependency telemetry and rely on request spans plus logs, because dependency edges create most map-attribution mistakes."
+        },
+        {
+          "id": "c",
+          "text": "Set distinct application role or service names and continue propagating trace context across service boundaries."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Distinct role or service names let Application Insights attribute telemetry to the emitting component, while propagated trace context keeps the cross-service request story connected. The closest distractor is splitting the services into separate Application Insights resources, but separate backends are not required to model separate components and can make one request harder to follow. Reusing the same role name collapses the nodes again, and removing dependencies removes the failing edge you need to inspect. See [Microsoft Learn: Application Map](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-map) and [Microsoft Learn: Application Insights telemetry data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete)."
+    },
+    {
+      "id": "03-use-correlation-carefully-q1",
+      "type": "single",
+      "scenario": "A production deployment accidentally injects the development `APPLICATIONINSIGHTS_CONNECTION_STRING` into `devpolaris-orders-api`. Production requests still succeed, but the production Application Insights component has no recent `AppRequests` rows while the development component suddenly shows the production role name and release version. What is the safest correction?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Restore the production connection string through runtime configuration, restart or revise the app as required, then run a known request and verify the production tables."
+        },
+        {
+          "id": "a",
+          "text": "Keep the current connection string and create a cross-workspace query or workbook, because the telemetry is still available even if it lands in the wrong component."
+        },
+        {
+          "id": "c",
+          "text": "Change only the cloud role name back to the production value, because the missing `AppRequests` rows are mainly an attribution problem rather than an ingestion-target problem."
+        },
+        {
+          "id": "d",
+          "text": "Clone the production sampling settings into the development component, because inconsistent telemetry volume often explains why one component receives the recent request rows."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The application exporter is sending telemetry to the component identified by the injected connection string. Restoring the environment-specific value and validating a known request repairs the telemetry path. Cross-workspace queries can help analysis, but they do not fix the wrong ingestion target, and changing role names or sampling settings does not redirect telemetry back to the production component. See [Microsoft Learn: Application Insights connection strings](https://learn.microsoft.com/en-us/azure/azure-monitor/app/connection-strings)."
+    },
+    {
+      "id": "03-use-correlation-carefully-q3",
+      "type": "single",
+      "scenario": "Telemetry cost doubles after health probes increase to 300 requests per minute. The exporter also records full authorization headers in traces, while checkout incidents still require complete request and dependency timelines. Which change best balances usefulness, privacy, and cost?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Disable dependency collection globally and rely on request duration to infer downstream latency."
+        },
+        {
+          "id": "b",
+          "text": "Keep health probes and raw request headers for diagnostic completeness, then reduce workspace retention to control cost."
+        },
+        {
+          "id": "d",
+          "text": "Filter or downsample routine health probes, redact sensitive headers before export, and use trace-consistent sampling that preserves coherent checkout operations."
+        },
+        {
+          "id": "c",
+          "text": "Sample each telemetry item independently so requests and dependencies from the same trace can be dropped separately."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Filtering low-value probes, removing sensitive data before ingestion, and keeping sampled traces coherent preserves incident value while controlling volume. Disabling dependencies weakens diagnosis, short retention does not justify collecting secrets, and independent item sampling can break operation timelines. See [Microsoft Learn: OpenTelemetry sampling in Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-sampling)."
     }
   ]
 }

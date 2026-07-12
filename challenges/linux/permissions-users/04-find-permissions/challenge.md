@@ -1,6 +1,6 @@
 ---
 title: "Finding Files by Permission"
-sectionSlug: special-permission-bits
+sectionSlug: change-permissions-with-chmod
 order: 4
 ---
 

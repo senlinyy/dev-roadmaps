@@ -1,6 +1,6 @@
 ---
 title: "Check Lifecycle And Protection"
-sectionSlug: lifecycle
+sectionSlug: access-tiers-and-lifecycle-rules
 order: 4
 ---
 

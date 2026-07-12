@@ -1,7 +1,6 @@
 ---
-title: "Map The Job To The Service Family"
-sectionSlug: the-job-based-map
+title: "AWS Core Services by Job"
 order: 1
 ---
 
-Knowledge check for choosing an AWS service family by the job it does in the DevPolaris orders architecture. Each scenario asks you to reason from the system need before naming a product.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

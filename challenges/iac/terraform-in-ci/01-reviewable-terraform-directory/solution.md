@@ -22,5 +22,3 @@ resource "aws_s3_bucket" "orders_invoices" {
   bucket = "dp-orders-invoices-prod"
 }
 ```
-
-The provider version constraint makes CI and local review target the same provider line, while credentials stay outside committed Terraform files.

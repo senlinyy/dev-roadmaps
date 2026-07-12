@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "workload-choice-q1",
+      "type": "single",
+      "scenario": "A release must run `node scripts/migrate-notifications.js` once, record whether it completed, and stop after success. The same image normally starts an HTTP server. Which workload and manifest behavior best fit?",
+      "options": [
+        { "id": "a", "text": "A Job with an explicit migration command and a Pod restart policy valid for finite work." },
+        { "id": "b", "text": "A Deployment with one replica because replica count one makes an exiting script complete only once." },
+        { "id": "c", "text": "A CronJob with a frequent schedule because every one-time release task needs calendar ownership." },
+        { "id": "d", "text": "A standalone Pod with `Always` restart policy because repeated exits prove migration success." }
+      ],
+      "correct": ["a"],
+      "explanation": "A Job tracks finite work to successful completion, and an explicit command avoids starting the image's HTTP service. A Deployment keeps replacing an exiting process, a CronJob is for repeated schedules, and a standalone Pod does not provide Job completion tracking."
+    },
+    {
+      "id": "parallelism-q2",
+      "type": "single",
+      "scenario": "A delivery-status backfill has 20 independent shards. PostgreSQL capacity permits four shard workers at once. Which Job settings express the total work and active pressure?",
+      "options": [
+        { "id": "a", "text": "Set `completions: 4` and `parallelism: 20` so the database sees only four total successes." },
+        { "id": "b", "text": "Set `completions: 20` and `parallelism: 4`, using indexed completion when each Pod needs a stable shard number." },
+        { "id": "c", "text": "Set `backoffLimit: 20` and `activeDeadlineSeconds: 4` because retries represent shards." },
+        { "id": "d", "text": "Create one Deployment with 20 replicas and scale it to four after the first shard completes." }
+      ],
+      "correct": ["b"],
+      "explanation": "Completions describes the 20 required successful units, while parallelism caps concurrent Pods at four. Retry and deadline fields do not partition work, and a Deployment does not track finite shard completion."
+    },
+    {
+      "id": "retry-safety-q3",
+      "type": "single",
+      "scenario": "A migration Pod times out after updating some rows. The Job still has retry budget. The script sends provider requests and does not record an operation key. What is the safest next decision?",
+      "options": [
+        { "id": "c", "text": "Increase parallelism so another Pod can determine which rows the first Pod changed." },
+        { "id": "a", "text": "Let retries continue because `backoffLimit` guarantees each business action runs once." },
+        { "id": "b", "text": "Stop and inspect application evidence before retrying, then add idempotency or deduplication for repeated business actions." },
+        { "id": "d", "text": "Shorten the active deadline because faster termination rolls back partial external effects." }
+      ],
+      "correct": ["b"],
+      "explanation": "Kubernetes controls Pod attempts, not business-side exactly-once behavior. Partial writes and provider calls require evidence plus idempotency or deduplication before a safe retry. Parallelism and deadlines do not discover or roll back external effects."
+    },
+    {
+      "id": "missed-run-q4",
+      "type": "single",
+      "scenario": "A cleanup CronJob is due at 02:15 UTC with `startingDeadlineSeconds: 900`. The control plane recovers at 02:28 and there is no active previous Job. What behavior should the team expect?",
+      "options": [
+        { "id": "b", "text": "Kubernetes must skip it because CronJobs only start at the exact scheduled minute." },
+        { "id": "c", "text": "Kubernetes replaces the previous successful Job because missed runs imply `Replace` concurrency." },
+        { "id": "d", "text": "Kubernetes converts the CronJob into a Deployment until the next schedule arrives." },
+        { "id": "a", "text": "Kubernetes can still start the missed run because recovery is within the 15-minute deadline." }
+      ],
+      "correct": ["a"],
+      "explanation": "The control plane recovered 13 minutes after the schedule, inside the 900-second starting deadline, so the missed Job can still be created. Exact-minute-only behavior, automatic replacement, and workload conversion are not part of this setting."
+    },
+    {
+      "id": "cronjob-incident-q5",
+      "type": "multiple",
+      "scenario": "At 02:15, the stale-delivery cleanup is still running from the previous night. Operators also want an emergency brake while they investigate duplicate-looking application records. Which two controls or checks directly support this incident?",
+      "options": [
+        { "id": "a", "text": "Use `concurrencyPolicy: Forbid` to prevent a new scheduled Job from overlapping the active one." },
+        { "id": "c", "text": "Set successful history limit to zero because deleting Job objects proves the business action ran once." },
+        { "id": "b", "text": "Set `suspend: true` to stop new Jobs while separately checking any Jobs already active." },
+        { "id": "d", "text": "Increase `backoffLimit` because more Pod attempts remove duplicate external records." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Forbid prevents overlap at a schedule boundary, and suspension stops future Job creation while existing Jobs are checked separately. Removing history discards evidence, and increasing retries can worsen duplicate business effects when the script is not safely idempotent."
+    }
+  ]
+}

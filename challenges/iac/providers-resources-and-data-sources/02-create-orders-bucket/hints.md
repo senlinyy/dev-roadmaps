@@ -1,1 +1,1 @@
-The provider and locals already exist. Add only the bucket resource in `s3.tf`, and reuse `local.invoice_bucket_name` and `local.common_tags` if you want a shorter resource block.
+A resource means this root owns the object's lifecycle. Use the starter locals when they already encode the intended name or tags.

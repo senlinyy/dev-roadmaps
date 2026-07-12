@@ -1,10 +1,10 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "After checkout succeeds, the system needs to send a receipt when a queue message arrives. The job does not need a public API endpoint. Which Azure compute shape fits first?",
+      "scenario": "The Orders platform publishes a queue message after checkout commits. One handler should read the message, update a receipt record, and finish in a few seconds. Duplicate delivery is acceptable because the handler can be idempotent. Which compute shape best matches that job?",
       "options": [
         {
           "id": "a",
@@ -12,50 +12,184 @@
         },
         {
           "id": "b",
-          "text": "A public App Service app with a polling loop."
+          "text": "AKS with a permanently running worker Deployment so the consumer runs as one long-lived process that owns queue polling and retry behavior."
         },
         {
           "id": "c",
-          "text": "A VM that runs only when someone signs in."
+          "text": "App Service with one web route dedicated to polling the queue every few seconds."
         },
         {
           "id": "d",
-          "text": "A DNS zone because the job has a name."
+          "text": "Azure Container Apps with a full application container because any background task is better hosted as a service."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The work starts from an event, so a function trigger is a good fit."
+      "explanation": "This is the bounded event-driven shape Azure Functions is meant to run: one trigger, one handler, one short unit of work. The closest distractor is the always-running worker service because it can process queue messages too, but the article's whole distinction is that Functions is simpler when the work is event-shaped, short, and independently retryable. Polling from a web route or forcing the task into a full-time container adds host-shaped overhead without evidence that the job needs it. Official docs: [Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview)."
     },
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "The orders product has the main checkout API plus several smaller jobs that run because something happened elsewhere. The team wants to choose Functions only where the work naturally starts from an event. Which jobs are reasonable Azure Functions candidates around the orders API?",
+      "scenario": "A retailer wants to replace an always-on queue worker that spends most of the day idle. Each message starts less than 10 seconds of work, the handler can remain stateless between invocations, and duplicate delivery is acceptable because writes are idempotent. Which two workload characteristics most strongly support Azure Functions?",
       "options": [
         {
           "id": "a",
-          "text": "Send a receipt from an orders queue message."
-        },
-        {
-          "id": "b",
-          "text": "Clean old export files on a timer."
+          "text": "The work starts from an event source such as a queue, timer, HTTP request, or stream."
         },
         {
           "id": "c",
-          "text": "Run the always-on checkout API that users call all day."
+          "text": "The workload depends on a large in-memory cache that must survive between events."
+        },
+        {
+          "id": "b",
+          "text": "The handler can stay bounded, stateless between invocations, and observable."
         },
         {
           "id": "d",
-          "text": "Handle a storage event when a new invoice export appears."
+          "text": "The job requires a custom host image with OS-level packages installed on a specific machine for hours at a time."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "d"
+        "b"
       ],
-      "explanation": "Functions fit small pieces of work that start from events. An always-on API may use another runtime even if it shares code with functions."
+      "explanation": "Event-driven start conditions and bounded stateless handlers are the fit signals the article emphasizes. The closest distractor is the custom host dependency because teams do often need packages, but once the workload depends on host affinity or long-running machine state, it stops looking like the simple handler model Functions fits best. Official docs: [Azure Functions triggers and bindings concepts](https://learn.microsoft.com/en-us/azure/azure-functions/functions-triggers-bindings)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A nightly reconciliation job runs for roughly three hours, shells out to tools installed on one specific VM, and expects local state to remain available between phases. The team asks whether it should become a timer-triggered function with no other redesign. What is the strongest concern?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The first migration risk is the timer schedule itself, because nightly work is mainly limited by cron precision rather than by the job's runtime shape."
+        },
+        {
+          "id": "c",
+          "text": "The first migration risk is the retry model, because long-running background jobs become safe in Functions as long as retries are configured carefully."
+        },
+        {
+          "id": "a",
+          "text": "The work looks host-shaped, so the team should review runtime duration, local dependencies, and whether a VM or container service is a better fit."
+        },
+        {
+          "id": "d",
+          "text": "The main blocker is the current hosting plan size, because adding more CPU would let the same host-bound job fit the Functions model without redesign."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The problem is not that Functions lacks scheduling. The problem is that the workload depends on long duration, host-local tools, and machine-shaped assumptions that the article treats as signs to review a service or VM boundary instead. The closest distractor is the retry claim because operational behavior does matter, but it still misses the bigger mismatch between the workload and the hosting model. Official docs: [Azure Functions scaling and hosting](https://learn.microsoft.com/en-us/azure/azure-functions/functions-scale)."
+    },
+    {
+      "id": "03-choose-trigger-boundaries-q1",
+      "type": "single",
+      "scenario": "A function should start when an order-fulfillment message reaches a specific Service Bus queue. The message body already contains the data needed for one attempt, and operators want the platform's backlog and retry behavior to follow that queue directly. Which trigger boundary is the best fit?",
+      "options": [
+        {
+          "id": "b",
+          "text": "An HTTP trigger called by a human after checking the queue."
+        },
+        {
+          "id": "a",
+          "text": "A Service Bus trigger for the queue or topic subscription."
+        },
+        {
+          "id": "c",
+          "text": "A timer trigger that polls the queue each minute so processing cadence is controlled independently of message arrival."
+        },
+        {
+          "id": "d",
+          "text": "A Blob trigger because messages are similar to files."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The trigger should match the source that actually owns the work. The closest distractor is the timer poll because teams sometimes add polling to gain control, but the article argues that the event source itself usually gives the clearest scaling, retry, and failure path. Manual HTTP and blob triggers move the boundary away from the real queue. Official docs: [Azure Service Bus trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus-trigger)."
+    },
+    {
+      "id": "03-choose-trigger-boundaries-q3",
+      "type": "single",
+      "scenario": "A media pipeline runs a timer-triggered function every minute to list Blob Storage for new uploads. Most polls find nothing, processing begins up to 60 seconds late, and the storage account can already emit Event Grid notifications. Which redesign should the team evaluate first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the timer schedule should become every five seconds and maintain a checkpoint of the last processed blob so polling behaves more like near-real-time processing."
+        },
+        {
+          "id": "c",
+          "text": "Whether the team should keep the timer but shard the container into prefixes so each poll scans fewer blobs before deciding what is new."
+        },
+        {
+          "id": "d",
+          "text": "Whether the team should receive Event Grid notifications in a custom webhook and then invoke the function over HTTP instead of using the native event-driven binding."
+        },
+        {
+          "id": "a",
+          "text": "Whether event-driven blob notifications would reduce polling delay and unnecessary reads."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's trigger-boundary lesson is to start work from the event itself when the source can emit one. The closest distractor is the faster polling schedule because it reduces delay, but it still spends cycles on empty checks and keeps the wrong boundary. Loading every blob or involving SQL backup settings adds complexity without addressing the root issue. Official docs: [Handle Event Grid events in Azure Functions](https://learn.microsoft.com/en-us/azure/event-grid/handler-functions)."
+    },
+    {
+      "id": "03-choose-trigger-boundaries-q4",
+      "type": "single",
+      "scenario": "An HTTP-triggered function accepts a video upload request and then keeps the client connection open while a 45-minute conversion runs. Users often abandon the request even though the conversion finishes later. What boundary concern should the design review raise first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Hand long work to a queue or durable workflow instead of blocking HTTP."
+        },
+        {
+          "id": "b",
+          "text": "Keep the HTTP trigger but increase every timeout in the path so the browser waits for the conversion to finish."
+        },
+        {
+          "id": "c",
+          "text": "Split upload and conversion into separate steps, but keep the conversion running synchronously inside the same client request before returning a response."
+        },
+        {
+          "id": "d",
+          "text": "Increase instance size and concurrency so browsers are less likely to disconnect while the conversion continues inside the HTTP-triggered execution."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The design mistake is coupling a user-facing HTTP request to long-running background work. The closest distractor is the timeout increase because timeouts do matter, but the article's point is that long work should usually move behind a queue or orchestration boundary rather than keep one client request open. More CPU and Key Vault do not solve the request-shape problem. Official docs: [Durable Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview)."
+    },
+    {
+      "id": "03-choose-trigger-boundaries-q5",
+      "type": "single",
+      "scenario": "An Azure Storage Queue trigger processes `orders-inbox`. One malformed message has now exceeded the configured `maxDequeueCount`, while healthy messages continue to flow. The team wants the failed payload isolated for investigation without putting it back on the hot path. What should the review verify?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the queue trigger retries indefinitely in place until the malformed message succeeds."
+        },
+        {
+          "id": "c",
+          "text": "Whether Service Bus dead-letter forwarding is enabled so the Storage Queue message can be inspected there."
+        },
+        {
+          "id": "b",
+          "text": "Whether the message was moved to the automatically named `orders-inbox-poison` queue and whether that queue is monitored."
+        },
+        {
+          "id": "d",
+          "text": "Whether the function copies the message back to `orders-inbox` after each failure so the retry history restarts."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "For Azure Storage Queue triggers, a message that exceeds the dequeue limit is moved to a poison queue named after the original queue. The closest distractor is the dead-letter idea because it sounds operationally similar, but that model belongs to Service Bus rather than Azure Storage Queues. Indefinite in-place retries or copying the message back would keep the bad payload in normal processing. Official docs: [Azure Queue storage trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue-trigger)."
     }
   ]
 }

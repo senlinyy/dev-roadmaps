@@ -1,44 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "An order has line items, payment attempts, refunds, and support queries that join across those facts. Which data shape is this?",
+      "scenario": "The Orders API needs to create an order header, several line items, a payment authorization record, and a shipment row that all reference the same order ID. Which storage choice best matches that shape?",
       "options": [
-        { "id": "a", "text": "Relational application data." },
-        { "id": "b", "text": "A single receipt object." },
-        { "id": "c", "text": "Only a mounted file path." },
-        { "id": "d", "text": "A GKE cluster mode." }
+        {
+          "id": "b",
+          "text": "Cloud Storage, because each line item can be written as a separate JSON object and listed later."
+        },
+        {
+          "id": "c",
+          "text": "Firestore, storing the order and each related record in separate documents and enforcing cross-document relationships in application code."
+        },
+        {
+          "id": "d",
+          "text": "BigQuery, inserting each checkout event into analytical tables and using scheduled queries to assemble the current order state."
+        },
+        {
+          "id": "a",
+          "text": "Cloud SQL, because the data has relationships, constraints, and SQL queries across related tables."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Related business records that need constraints and joins are relational."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cloud SQL is the right fit for related records that need constraints and queries. Cloud Storage objects are poor for transactional relationships, Secret Manager stores sensitive configuration values rather than order rows, and logs are evidence, not the source of truth for orders. See [Google Cloud docs documentation](https://cloud.google.com/sql/docs/introduction)."
     },
     {
-      "id": "q2",
+      "id": "transactions-q1",
       "type": "single",
-      "scenario": "The app needs to keep receipt PDF bytes and order status. Where should order status live?",
+      "scenario": "Checkout writes an order row, reserves inventory, and records payment authorization. The payment write fails after the order row commits. What database behavior should the application use?",
       "options": [
-        { "id": "a", "text": "In Cloud SQL or another operational database record, with the object name pointing to Cloud Storage." },
-        { "id": "b", "text": "Only in the PDF file name." },
-        { "id": "c", "text": "Only in a lifecycle rule." },
-        { "id": "d", "text": "Only in a signed URL." }
+        {
+          "id": "d",
+          "text": "A retry workflow that commits each write independently and compensates later when the payment record is missing."
+        },
+        {
+          "id": "a",
+          "text": "A transaction that commits all related writes together or rolls them back together."
+        },
+        {
+          "id": "b",
+          "text": "Three independent writes with a dashboard note if one fails."
+        },
+        {
+          "id": "c",
+          "text": "A batch reconciliation query that finds partial orders after checkout and repairs them outside the user transaction."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Cloud Storage keeps bytes. The database keeps business state."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The checkout action needs all related writes to succeed or fail as one unit, which is a transaction. Independent writes create partial state, lifecycle rules do not repair relational consistency, and traffic split controls app revisions rather than database commits. See [Google Cloud docs documentation](https://cloud.google.com/sql/docs/introduction)."
+    },
+    {
+      "id": "backups-and-ha-q3",
+      "type": "single",
+      "scenario": "An API in Cloud Run connects to Cloud SQL over a public IP with authorized networks set to 0.0.0.0/0 for a temporary test. What should the production review prefer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a controlled private connectivity pattern or tightly scoped connection path rather than broad public authorization."
+        },
+        {
+          "id": "b",
+          "text": "Keep the public IP and narrow 0.0.0.0/0 to the office VPN, even though the caller is a Cloud Run runtime outside that laptop path."
+        },
+        {
+          "id": "c",
+          "text": "Leave the broad authorized network and rely on database passwords as the only production exposure control."
+        },
+        {
+          "id": "d",
+          "text": "Place the database behind a public DNS name with a short TTL so the application can fail over without private connectivity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Production database access should use a narrow, controlled path such as private connectivity where appropriate. Broad public authorization is too exposed, a laptop VPN is not a service architecture, and backups are unrelated to reducing network exposure. See [Google Cloud private ip documentation](https://cloud.google.com/sql/docs/mysql/private-ip)."
+    },
+    {
+      "id": "backups-and-ha-q4",
+      "type": "multiple",
+      "scenario": "A readiness sheet has one row labeled database resilience. The instance has regional high availability, but no one has tested recovery from a successful bad migration. Which two controls should the sheet track separately?",
+      "options": [
+        {
+          "id": "c",
+          "text": "A screenshot of the instance display name as proof of both failover and data recovery."
+        },
+        {
+          "id": "d",
+          "text": "Application retries as proof that the database can reconstruct data removed by a committed migration."
+        },
+        {
+          "id": "a",
+          "text": "High availability for an instance or zone failure that should trigger failover."
+        },
+        {
+          "id": "b",
+          "text": "Backups, point-in-time recovery, and restore testing for bad writes, schema changes, or deletion."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "High availability keeps service running through infrastructure failure, while backups and restore procedures recover earlier data after a logical mistake. A name screenshot and client retries prove neither capability. See [Cloud SQL high availability documentation](https://cloud.google.com/sql/docs/mysql/high-availability) and [backup documentation](https://cloud.google.com/sql/docs/mysql/backup-recovery/backups)."
     },
     {
       "id": "q3",
-      "type": "multiple",
-      "scenario": "Which are relational database signals?",
+      "type": "single",
+      "scenario": "Northstar Retail stores each shopping cart as one JSON object in Cloud Storage. Marketing now needs consistent queries for abandoned carts by product, region, and promotion code while checkout workers update carts concurrently, and results must not depend on downloading every object. Which design direction best fits the new access pattern?",
       "options": [
-        { "id": "a", "text": "Transactions across related writes." },
-        { "id": "b", "text": "Constraints between records." },
-        { "id": "c", "text": "Queries that join business tables." },
-        { "id": "d", "text": "Only storing one image blob." }
+        {
+          "id": "b",
+          "text": "Continue storing one JSON object per cart and download every object into the application for product and regional filtering."
+        },
+        {
+          "id": "c",
+          "text": "Move the cart blobs to Secret Manager because access control is more important than query and update behavior."
+        },
+        {
+          "id": "d",
+          "text": "Create a metadata index outside the bucket while keeping cart updates and consistency split across the index and opaque objects."
+        },
+        {
+          "id": "a",
+          "text": "The query pattern has moved toward structured relational or analytical storage, so the team should model the data instead of hiding it in opaque blobs."
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "Cloud SQL fits when relationships and consistency rules matter."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new access pattern needs modeled fields and query support. Downloading every object is operationally brittle, Secret Manager is not an analytics database, and Cloud Run memory does not turn opaque blobs into queryable records. See [Google Cloud docs documentation](https://cloud.google.com/sql/docs/introduction)."
+    },
+    {
+      "id": "transactions-q5",
+      "type": "single",
+      "scenario": "A worker retries failed payment-authorized events by inserting a new order row each time. Duplicate orders appear when the same event is delivered twice. What should the data model add?",
+      "options": [
+        {
+          "id": "d",
+          "text": "Increase the worker timeout so the original event finishes before Pub/Sub can deliver the same business event again."
+        },
+        {
+          "id": "a",
+          "text": "An idempotency key or uniqueness constraint that makes repeated handling of the same business event safe."
+        },
+        {
+          "id": "b",
+          "text": "Use the Pub/Sub message delivery attempt as the order key, even though the value changes when the same event is delivered again."
+        },
+        {
+          "id": "c",
+          "text": "Check for an existing order in application code before insert, without a uniqueness constraint or transaction protecting concurrent retries."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Repeated events need a stable business key or uniqueness rule so the database can reject or reuse duplicate work. Random suffixes hide duplicates, backups do not prevent them, and firewall rules decide connectivity, not idempotency. See [Google Cloud docs documentation](https://cloud.google.com/sql/docs/introduction)."
+    },
+    {
+      "id": "backups-and-ha-q2",
+      "type": "single",
+      "scenario": "A developer ran a migration that dropped the wrong column at 11:08 UTC. The Cloud SQL instance is healthy and serving traffic. What recovery feature matters most?",
+      "options": [
+        {
+          "id": "c",
+          "text": "A larger CPU tier, because dropped columns reappear when capacity increases."
+        },
+        {
+          "id": "d",
+          "text": "A new firewall rule, because dropped columns are caused by blocked network packets."
+        },
+        {
+          "id": "a",
+          "text": "Backups and point-in-time recovery planning, because HA will not undo a successful bad schema change."
+        },
+        {
+          "id": "b",
+          "text": "More standby zones, because HA reverses bad migrations by default."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Bad data or schema changes require restore planning, not just availability. HA keeps the service available but does not undo a committed bad migration, CPU does not restore columns, and firewall rules do not repair schema. See [Google Cloud backup and recovery documentation](https://cloud.google.com/sql/docs/mysql/backup-recovery/backups)."
     }
   ]
 }

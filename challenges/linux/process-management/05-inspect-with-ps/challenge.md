@@ -1,6 +1,6 @@
 ---
 title: "Inspect Processes with ps"
-sectionSlug: inspecting-processes-with-ps-top-and-htop
+sectionSlug: ask-linux-what-is-running
 order: 5
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Resources, Names, and Labels"
 description: "Learn how GCP resource names, project IDs, bucket names, labels, and tags keep production changes reviewable."
-overview: "Once a workload has a project and region, every alert, deploy, cost review, and access request needs exact resource identity. This article follows an Orders API through resource paths, project IDs, bucket names, labels, tags, and the evidence bundle a team should collect before changing production."
+overview: "Once resources exist, every alert, deploy, cost review, and access request needs exact identity. Follow a photo gallery backend through resource names, project IDs, resource IDs, bucket names, labels, tags, and evidence bundles."
 tags: ["gcp", "resources", "labels", "names"]
 order: 3
 id: article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths
@@ -13,74 +13,82 @@ aliases:
 
 ## Table of Contents
 
-1. [The Pieces We Need](#the-pieces-we-need)
+1. [Why Exact Identity Matters](#why-exact-identity-matters)
 2. [Resource Names](#resource-names)
-3. [Project IDs](#project-ids)
-4. [Bucket Names](#bucket-names)
-5. [Labels](#labels)
-6. [Tags](#tags)
-7. [Evidence Before Changes](#evidence-before-changes)
+3. [Project IDs and Resource IDs](#project-ids-and-resource-ids)
+4. [Bucket Names Need Extra Care](#bucket-names-need-extra-care)
+5. [Labels Help People and Cost Reports](#labels-help-people-and-cost-reports)
+6. [Tags Support Governed Policy](#tags-support-governed-policy)
+7. [Evidence Bundles Before Changes](#evidence-bundles-before-changes)
 8. [A Production Naming Review](#a-production-naming-review)
+9. [References](#references)
 
-## The Pieces We Need
-<!-- section-summary: A production GCP resource needs an exact address, a project boundary, a local name, useful metadata, and stronger governed tags when policy depends on metadata. -->
+## Why Exact Identity Matters
+<!-- section-summary: Once resources exist, exact names let another engineer find, bill, change, and debug the same target. -->
 
-In the previous article, the workload got placed inside the GCP control plane. The team picked a project, linked billing, enabled service APIs, checked quota, and chose a primary region. Now imagine the commerce team has an **Orders API** running in that project. It has a Cloud Run service, a Cloud SQL database, a Cloud Storage bucket for receipts, a Secret Manager secret for payment webhooks, and a service account used by the runtime.
+Once resources exist, you need exact names to find them, bill them, change them, and debug them. A loose phrase like "the gallery bucket" might work for three people sharing one project. It breaks down once production, staging, old migration buckets, dashboards, alerts, cost exports, and incident tickets enter the picture.
 
-At first, the names feel obvious because the team is small. Everyone knows what "orders" means in Slack, and the console search bar usually finds something close. That habit starts to break as soon as there is staging, production, old migration infrastructure, dashboards, incident tickets, and cost reports. The word `orders` can point at several resources across several projects.
-
-This article is about turning loose names into reviewable resource identity. We need five ideas, and they connect in a practical order.
-
-| Piece | Simple definition | Orders API example |
-|---|---|---|
-| **Resource name** | The API address for one managed object. | `projects/devpolaris-orders-prod/locations/us-central1/services/orders-api` |
-| **Project ID** | The stable project identifier used by many commands and APIs. | `devpolaris-orders-prod` |
-| **Resource ID** | The short name of a resource inside its parent scope. | `orders-api`, `orders-db`, `stripe-webhook-secret` |
-| **Labels** | Lightweight key-value metadata for inventory, ownership, and cost reporting. | `env=prod`, `team=commerce`, `service=orders-api` |
-| **Tags** | Governed key-value resources that supported policy systems can evaluate. | `environment=prod` attached through Resource Manager tags |
+Use a photo gallery backend as the running example. Users upload photos, the backend stores originals and thumbnails, a metadata database tracks albums, a secret stores the image moderation API key, and operations needs evidence after upload failures. Every one of those resources needs identity that a second engineer can verify.
 
 ![Exact identity for one resource](/content-assets/articles/article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths/exact-resource-identity.png)
 *Exact identity combines the project, location, resource type, short ID, labels, and governed tags so another engineer can find the same target.*
 
-The important habit is simple: a production change should point to one exact target. A ticket that says "fix the orders bucket" still leaves room for confusion. A ticket that names the project, resource type, bucket name, location, labels, and supporting evidence gives another engineer enough information to find the same thing.
+The identity pieces connect in a simple order:
+
+| Piece | Plain definition | Photo gallery example |
+|---|---|---|
+| **Resource name** | The API path that identifies one managed object. | `projects/devpolaris-gallery-prod/locations/us-central1/services/gallery-api` |
+| **Project ID** | The permanent project identifier people and tools usually type. | `devpolaris-gallery-prod` |
+| **Resource ID** | The short name of a resource inside its parent scope. | `gallery-api`, `gallery-db`, `moderation-api-key` |
+| **Bucket name** | The globally unique name of a Cloud Storage bucket. | `devpolaris-gallery-uploads-prod` |
+| **Labels** | Lightweight key-value metadata for search, ownership, and cost reporting. | `env=prod`, `team=media`, `service=gallery` |
+| **Tags** | Governed key-value resources that supported policy systems can evaluate. | `environment=prod` attached through Resource Manager tags |
+| **Evidence bundle** | The small set of facts proving the exact target before a change. | Project, location, resource name, caller identity, labels, and policy output |
+
+For AWS readers, this is the same habit from incident tickets that include an account ID, Region, ARN, tag set, and IAM evidence. GCP resource names and tags are shaped differently, so the safest approach is to collect GCP's exact identifiers instead of translating everything into AWS terms.
 
 ## Resource Names
-<!-- section-summary: A resource name is the API address that tells Google Cloud which managed object a request means. -->
+<!-- section-summary: A resource name is the API path that tells Google Cloud which managed object a request means. -->
 
-A **resource name** is the address an API uses for a Google Cloud resource. It usually follows a path shape with collection names and IDs, such as `projects/{project}/locations/{location}/services/{service}`. The collection names are words like `projects`, `locations`, and `services`; the IDs are the actual values for your project, region, and service.
+A **resource name** is the address an API uses for a Google Cloud resource. It usually follows a path shape with collection names and IDs, such as `projects/{project}/locations/{location}/services/{service}`. The collection names are words like `projects`, `locations`, and `services`; the IDs are your actual project, region, and service values.
 
-For the Orders API, the Cloud Run service can be described with this resource name. This YAML snippet is a simplified inventory record, not a deployable config. It gives reviewers the exact coordinates they need before changing production.
-
-```yaml
-cloud_run_service: projects/devpolaris-orders-prod/locations/us-central1/services/orders-api
-```
-
-That string gives us the project, the location, the resource type, and the local service ID. The short name `orders-api` helps humans, and the resource name gives the API enough coordinates to find the right service. The same short service name can exist in another region or another project, so the coordinates matter during deploys and incidents.
-
-Different GCP services use different path shapes because their resources live under different parents. A Cloud Run service is regional, so the path includes `locations/us-central1`. A Secret Manager secret lives under a project, so its common path leaves the region out. A Cloud SQL instance belongs to a project and also has region configuration on the instance. The exact fields vary by service, and the review habit stays the same: collect the parent project, the resource type, the location when the service has one, and the exact ID.
+For the photo gallery, the backend service can have this Cloud Run-style resource name:
 
 ```yaml
-cloud_run_service: projects/devpolaris-orders-prod/locations/us-central1/services/orders-api
-cloud_sql_instance: projects/devpolaris-orders-prod/instances/orders-db
-secret: projects/devpolaris-orders-prod/secrets/stripe-webhook-secret
-bucket_uri: gs://devpolaris-orders-receipts-prod
+gallery_api_service: projects/devpolaris-gallery-prod/locations/us-central1/services/gallery-api
 ```
 
-You will also see **full resource names** in places where one Google service needs to point at resources from many possible APIs. A full resource name adds the owning API service name at the front, with a double slash. Tag bindings are a common place to see this shape because a tag can attach to supported resources across Google Cloud.
+Important details in that string:
+
+- `projects/devpolaris-gallery-prod` identifies the project boundary.
+- `locations/us-central1` identifies the regional placement for the service.
+- `services/gallery-api` identifies the local service ID inside that parent path.
+- The full path removes ambiguity across projects or regions with similar service names.
+
+Different Google Cloud services use different path shapes because their resources live under different parents. A regional service includes a location. A Secret Manager secret commonly sits under a project path. A bucket often appears as a `gs://` URI in storage workflows. The review habit stays the same: collect the parent project, resource type, location for location-scoped services, and exact ID.
+
+```yaml
+gallery_api_service: projects/devpolaris-gallery-prod/locations/us-central1/services/gallery-api
+metadata_database: projects/devpolaris-gallery-prod/instances/gallery-db
+moderation_secret: projects/devpolaris-gallery-prod/secrets/moderation-api-key
+uploads_bucket: gs://devpolaris-gallery-uploads-prod
+```
+
+You may also see a **full resource name** in cross-API references. A full resource name adds the owning API service name at the front with a double slash.
 
 ```yaml
 project_full_resource_name: //cloudresourcemanager.googleapis.com/projects/123456789012
-cloud_run_full_resource_name: //run.googleapis.com/projects/devpolaris-orders-prod/locations/us-central1/services/orders-api
+gallery_service_full_resource_name: //run.googleapis.com/projects/devpolaris-gallery-prod/locations/us-central1/services/gallery-api
 ```
 
-This is separate from an HTTPS URL. The HTTPS URL talks to an API endpoint. The resource name identifies the resource inside the API. That distinction matters because logs, IAM conditions, tag bindings, APIs, and CLI output may each show a different form of the same target.
+For AWS readers, a full resource name often plays the cross-service identity role you may expect from an ARN. It uses a different format from an ARN or HTTPS URL. The resource name identifies the managed object; an HTTPS endpoint is how a client reaches an API or application.
 
-For daily work, the `gcloud` CLI helps you pin down a resource before changing it. This command describes the Cloud Run service and prints only the fields that help a reviewer recognize the target. The variables make the target explicit, `--project` avoids hidden local defaults, `--region` selects the regional service, and `--format` keeps the output focused.
+The `gcloud` CLI helps you prove a resource before changing it. The command below describes the gallery backend and prints only the fields that help another engineer recognize the target.
 
 ```bash
-PROJECT_ID=devpolaris-orders-prod
+PROJECT_ID=devpolaris-gallery-prod
 REGION=us-central1
-SERVICE=orders-api
+SERVICE=gallery-api
 
 gcloud run services describe "$SERVICE" \
   --project="$PROJECT_ID" \
@@ -88,175 +96,190 @@ gcloud run services describe "$SERVICE" \
   --format="yaml(metadata.name,metadata.labels,status.url,spec.template.spec.serviceAccountName)"
 ```
 
-Useful output should show the service name, labels, URL, and runtime service account. If the incident is about secret access, the service account will matter as much as the service name.
+Useful output connects the service ID, labels, URL, and runtime service account:
 
 ```yaml
 metadata:
   labels:
     component: api
     env: prod
-    service: orders-api
-    team: commerce
-  name: orders-api
+    service: gallery
+    team: media
+  name: gallery-api
 spec:
   template:
     spec:
-      serviceAccountName: orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
+      serviceAccountName: gallery-api-prod@devpolaris-gallery-prod.iam.gserviceaccount.com
 status:
-  url: https://orders-api-uc.a.run.app
+  url: https://gallery-api-uc.a.run.app
 ```
 
-Resource names give production changes an address. The next layer is the project ID, because many resource names and service account emails carry the project identity directly.
+The output is more useful than a screenshot of a console page because the command records the project, region, and service inputs. During an incident, those inputs tell the reviewer which target you inspected.
 
-## Project IDs
-<!-- section-summary: A project ID identifies the project in commands and resource names, while display names and project numbers serve different roles. -->
+## Project IDs and Resource IDs
+<!-- section-summary: Project IDs identify the workload boundary, while resource IDs identify a specific object inside its parent scope. -->
 
-A **project ID** is the project identifier you choose during project creation. Google Cloud requires it to be globally unique, and after creation it stays permanent. It appears in many commands, resource names, service account emails, billing exports, logs, and dashboards, so it deserves more care than a friendly display label.
+A **project ID** is the permanent project identifier you choose during project creation. Google Cloud requires it to be globally unique, and many commands, resource names, service account emails, billing exports, logs, and dashboards use it. A display name can be friendly, but the project ID is the value engineers usually type.
 
-A project also has a **display name** and a **project number**. The display name helps people scan the console, and teams can make it friendlier, such as `Orders API Production`. The project number is generated by Google Cloud and appears in service agents, some full resource names, APIs, and audit evidence. The project ID is the value engineers usually type in commands.
+A **resource ID** is the short name of a resource inside its parent scope. The service ID `gallery-api` makes sense inside `devpolaris-gallery-prod` and `us-central1`. The secret ID `moderation-api-key` makes sense inside its project. The database ID `gallery-db` makes sense inside its product and project.
 
-This read-only command prints all three identifiers and the parent location. A runbook should keep this output or an equivalent record because generated identities may use the project number while humans use the project ID.
+For AWS readers, the project ID gives part of the boundary you might normally look for in an AWS account ID. A GCP resource ID is closer to the final named segment inside an ARN, but it usually needs its project and location to be unambiguous.
+
+This read-only command prints the project identifiers. Keep this output or an equivalent inventory record because generated identities can use the project number while humans use the project ID.
 
 ```bash
-gcloud projects describe devpolaris-orders-prod \
+gcloud projects describe devpolaris-gallery-prod \
   --format="yaml(projectId,projectNumber,name,parent)"
 ```
 
 ```yaml
-projectId: devpolaris-orders-prod
+projectId: devpolaris-gallery-prod
 projectNumber: '123456789012'
-name: Orders API Production
+name: Gallery Production
 parent:
   id: '345678901234'
   type: folder
 ```
 
-Service account emails show why the project ID matters. A runtime service account like this tells you its home project immediately. This YAML snippet belongs in an inventory or runbook, and IAM policy evidence should sit next to it during review.
+Service account emails show why the project ID matters. A runtime identity like this tells you which project owns the workload identity:
 
 ```yaml
-runtime_service_account: orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
+runtime_service_account: gallery-api-prod@devpolaris-gallery-prod.iam.gserviceaccount.com
 ```
 
-That email reveals the account's home project. IAM bindings still decide permissions, so the email and the policy evidence belong together in the review. During an incident, the service account email helps you connect the Cloud Run service to IAM evidence, Secret Manager access, Cloud SQL access, and audit logs.
+The email alone is not permission evidence. IAM bindings still decide what the identity can do. During a review, keep the service account email next to policy output, secret access evidence, database access evidence, and audit logs.
 
-Short **resource IDs** live under a parent scope. The Cloud Run service ID `orders-api` makes sense inside `devpolaris-orders-prod` and `us-central1`. The Secret Manager secret ID `stripe-webhook-secret` makes sense inside its project. The Cloud SQL instance ID `orders-db` makes sense inside its project. The bucket name has different rules, and we will slow down on that in the next section.
+Short names work well only with the larger coordinates already present:
 
-| Short thing someone says | Stronger production evidence |
+| Loose phrase | Stronger production evidence |
 |---|---|
-| "the orders service" | Project ID, region, Cloud Run service ID, URL, runtime service account |
-| "the orders database" | Project ID, Cloud SQL instance ID, region, database engine, connection name |
-| "the Stripe secret" | Project ID, secret ID, replication setting, IAM policy, latest enabled version |
-| "the receipts bucket" | Bucket name, location, labels, retention or lifecycle settings, access configuration |
+| "the gallery service" | Project ID, region, service ID, URL, runtime service account |
+| "the gallery database" | Project ID, database instance ID, region, engine, connection name |
+| "the moderation secret" | Project ID, secret ID, replication setting, IAM policy, latest enabled version |
+| "the uploads bucket" | Bucket name, location, labels, retention or lifecycle settings, access configuration |
 
-This is where naming standards help. A project ID such as `devpolaris-orders-prod` carries company, workload, and environment. A service ID such as `orders-api` stays short because the project and region already carry the bigger context. A database ID such as `orders-db` tells engineers what role the instance has. Names should help people recognize the target, and the full evidence should prove the target.
+Good naming standards make the short IDs predictable. The project ID `devpolaris-gallery-prod` carries organization, workload, and environment. The service ID `gallery-api` stays short because the project and region carry the bigger context. The secret ID `moderation-api-key` describes the purpose without storing the secret value in the name.
 
-## Bucket Names
-<!-- section-summary: Cloud Storage bucket names live in a global namespace, so they need stronger naming care than many local resource IDs. -->
+## Bucket Names Need Extra Care
+<!-- section-summary: Cloud Storage bucket names live in a global namespace, so they need stronger collision and privacy review. -->
 
-A **Cloud Storage bucket** is a named container for objects, such as receipts, exports, uploads, backups, and data files. Bucket names have a special rule that surprises many beginners: all Cloud Storage users share one bucket-name namespace. Every bucket name must be globally unique across Cloud Storage, across all projects and organizations.
+A **Cloud Storage bucket** is a named container for objects, such as uploaded photos, thumbnails, exports, backups, and data files. Bucket names have a rule that surprises many beginners: all Cloud Storage users share one bucket-name namespace. Every bucket name must be globally unique across Cloud Storage.
 
-That means a generic name like `orders` or `receipts` will probably fail during creation because another organization can already own it. A production bucket name should include enough ownership context to avoid collisions and still avoid sensitive data. For the Orders API, a name like `devpolaris-orders-receipts-prod` gives the company, workload, purpose, and environment without adding customer data.
+That global namespace means names like `photos`, `uploads`, or `gallery` are poor production names. Another organization may already own them, and even if the name is available, it tells the world too little about ownership. A name like `devpolaris-gallery-uploads-prod` gives the company, workload, purpose, and environment without exposing customer data.
 
-This command creates the receipts bucket in the approved region. `--location` places the data, and `--uniform-bucket-level-access` makes IAM the main access control path for bucket objects.
+For AWS readers, this part maps closely to S3 bucket naming. GCP Cloud Storage bucket names, like S3 bucket names, are globally unique and visible enough that naming should avoid sensitive information.
+
+The command below creates the upload bucket in the approved location. It uses uniform bucket-level access so IAM is the main access path for objects.
 
 ```bash
-gcloud storage buckets create gs://devpolaris-orders-receipts-prod \
+gcloud storage buckets create gs://devpolaris-gallery-uploads-prod \
   --location=us-central1 \
   --uniform-bucket-level-access
 ```
 
-Useful output is short, but it should confirm the exact bucket URI. If the bucket name already exists globally, the command will fail before any application deploy should depend on it.
+Important details in that command:
+
+- `gs://devpolaris-gallery-uploads-prod` is the exact bucket URI.
+- `--location=us-central1` places the bucket data in the approved location.
+- `--uniform-bucket-level-access` keeps access control centered on IAM for the bucket.
+
+Expected output should confirm the bucket URI:
 
 ```console
-Creating gs://devpolaris-orders-receipts-prod/...
+Creating gs://devpolaris-gallery-uploads-prod/...
 ```
 
-Bucket names are visible enough that they need privacy review. Customer email addresses, user IDs, project numbers, internal ticket IDs, and security-sensitive names should stay out of bucket names. People can probe for bucket existence, and bucket names often appear in URLs, logs, documentation, config files, and error messages.
+Bucket names need privacy review. Customer emails, user IDs, project numbers, private ticket IDs, and security-sensitive names should stay out of bucket names. Bucket names can appear in URLs, logs, docs, config files, and error messages, so treat them as visible identifiers.
 
-Deletion also needs more care with buckets. After a bucket is deleted, Google Cloud may release the name for reuse, and another party may claim it. If old clients, scripts, DNS records, documentation, or exports still send requests to that old bucket name, those requests can point at someone else's new bucket. Teams often remove references first, keep redirects and clients under control, and sometimes keep an empty bucket reserved while old dependencies age out.
+Deletion needs care too. After a bucket is deleted, the name may later be available for reuse. If old scripts, clients, docs, or redirects still point at that name, a future owner of the same bucket name could receive traffic or requests meant for the original bucket. Many teams remove references first, keep old names reserved during migration, or empty a bucket instead of deleting it while old dependencies age out.
 
-This bucket behavior explains why the naming standard needs different rules for different resources. A Cloud Run service called `orders-api` can exist in staging and production because the project and region separate those services. A bucket name acts more like a public global name, so it needs stronger collision resistance and less sensitive information.
-
-## Labels
+## Labels Help People and Cost Reports
 <!-- section-summary: Labels are lightweight key-value metadata that help teams search resources, group ownership, and analyze cost. -->
 
-**Labels** are key-value metadata pairs attached to Google Cloud resources. They help people and tools answer inventory and cost questions: which resources belong to the Orders API, which team owns them, which environment they run in, and which cost center should pay for them. Labels also flow into billing analysis for supported resources, which makes them useful for chargeback and budget reviews.
+**Labels** are lightweight key-value metadata attached to Google Cloud resources. They help people and tools answer inventory and cost questions: which environment is this, which team owns it, which service uses it, which component is it, and which cost center should see the spend.
 
-For the Orders API, a small shared label set can cover most day-to-day questions. The table below uses short values because labels work best as stable metadata rather than long descriptions.
+For the photo gallery, a shared label set can cover most day-to-day questions. The values should be stable and low-cardinality. A label value like `prod` is useful. A label value containing a request ID, customer email, or one-off incident number creates noise and risk.
 
 | Label key | Example value | What it helps answer |
 |---|---|---|
-| `env` | `prod` | Which environment is this resource part of? |
-| `team` | `commerce` | Which team owns the alerts and reviews? |
-| `service` | `orders-api` | Which application or product area uses it? |
-| `component` | `api`, `db`, `receipts` | Which part of the service map is this? |
-| `cost_center` | `commerce-platform` | Which budget should receive the cost? |
+| `env` | `prod` | Which environment owns this resource? |
+| `team` | `media` | Which team receives alerts and reviews? |
+| `service` | `gallery` | Which product or workload uses it? |
+| `component` | `api`, `uploads`, `db` | Which part of the service map is this? |
+| `cost_center` | `media-platform` | Which budget should see the cost? |
 | `managed_by` | `terraform` | Which workflow should make changes? |
 
-The key idea is shared vocabulary. If one team uses `prod`, another uses `production`, and a third uses `live`, cost reporting turns into cleanup work. A small allowed list for `env`, `team`, `service`, and `cost_center` gives finance, platform, and engineering one language for reports.
+For AWS readers, GCP labels are closest to AWS cost and inventory tags in everyday reporting work. The important difference is that GCP also has Resource Manager tags for governed policy, so avoid assuming the word "tag" means the same thing in both clouds.
 
 ![Labels and tags do different jobs](/content-assets/articles/article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths/labels-tags-different-jobs.png)
 *Labels help reporting and inventory. Governed tags help supported policy systems make conditional decisions.*
 
-Labels have limits and shape rules. A resource can have up to 64 labels, each label has one key and one value, and keys must stay unique on that resource. Keys and values have length and character restrictions, so labels work best as small metadata fields rather than long notes.
+Labels need a shared vocabulary to stay useful. If one team uses `prod`, another uses `production`, and another uses `live`, cost reporting needs cleanup before it can answer simple questions. A small approved list for `env`, `team`, `service`, and `cost_center` gives finance, platform, and engineering one language.
 
-Sensitive data should stay out of labels. Customer emails, person names, ticket numbers with private details, request IDs, and one-off timestamps create risk and clutter. High-cardinality labels also hurt reporting because every unique value adds another slice to inventory and billing views. Labels should describe stable ownership and purpose instead of individual requests.
-
-In infrastructure as code, labels should come from one shared map instead of being hand-typed on every resource. Terraform is a common way teams manage GCP resources, and a local label map keeps the naming vocabulary visible during review. This config is consumed by Terraform when it creates the Cloud Run service and bucket. `common_labels` is safe to reuse across environments when values such as `env` and `cost_center` come from reviewed variables.
+Infrastructure as code should apply labels from one shared map instead of hand-typing them on every resource. This Terraform snippet is a small review example that shows how a shared label map can flow into a service and a bucket.
 
 ```hcl
 locals {
   common_labels = {
     env         = "prod"
-    team        = "commerce"
-    service     = "orders-api"
-    cost_center = "commerce-platform"
+    team        = "media"
+    service     = "gallery"
+    cost_center = "media-platform"
     managed_by  = "terraform"
   }
 }
 
-resource "google_cloud_run_v2_service" "orders_api" {
-  name     = "orders-api"
+resource "google_cloud_run_v2_service" "gallery_api" {
+  name     = "gallery-api"
   location = var.region
   labels   = merge(local.common_labels, { component = "api" })
 }
 
-resource "google_storage_bucket" "receipts" {
-  name     = "devpolaris-orders-receipts-prod"
+resource "google_storage_bucket" "uploads" {
+  name     = "devpolaris-gallery-uploads-prod"
   location = var.region
-  labels   = merge(local.common_labels, { component = "receipts" })
+  labels   = merge(local.common_labels, { component = "uploads" })
 }
 ```
 
-After Terraform applies the config, a read-only command should confirm labels on live resources. The command below checks the bucket because bucket labels show up in inventory and billing workflows.
+Important details in the snippet:
+
+- `common_labels` keeps shared ownership and cost metadata in one visible place.
+- `component` changes per resource because the API and bucket do different jobs.
+- `managed_by=terraform` tells operators which workflow should own changes.
+- Labels describe metadata; IAM, retention, network, and runtime configuration still need their own review.
+
+After deployment, a read-only command should confirm labels on live resources:
 
 ```bash
-gcloud storage buckets describe gs://devpolaris-orders-receipts-prod \
+gcloud storage buckets describe gs://devpolaris-gallery-uploads-prod \
   --format="yaml(name,location,labels)"
 ```
 
 ```yaml
 labels:
-  component: receipts
-  cost_center: commerce-platform
+  component: uploads
+  cost_center: media-platform
   env: prod
   managed_by: terraform
-  service: orders-api
-  team: commerce
+  service: gallery
+  team: media
 location: US-CENTRAL1
-name: devpolaris-orders-receipts-prod
+name: devpolaris-gallery-uploads-prod
 ```
 
-The important boundary is that labels organize resources and costs. IAM, organization policy, network controls, retention settings, and runtime configuration decide whether production has the right protection. A label can say `env=prod`, while the service configuration still needs its own review.
+Labels organize resources and costs. Access, production controls, and safety evidence come from settings such as IAM, retention, network policy, and runtime configuration. A bucket can have `env=prod` and still need a separate review for IAM, retention, lifecycle, encryption, and public exposure.
 
-## Tags
+## Tags Support Governed Policy
 <!-- section-summary: Tags are governed metadata resources that supported IAM, organization policy, and network systems can use for conditional decisions. -->
 
-**Tags** in Resource Manager are governed key-value resources. They may look like labels because they also have keys and values. Tags are managed more strictly because administrators create tag keys and tag values under an organization or project, control who can attach them, and supported policy systems can evaluate them.
+**Tags** in Resource Manager are governed key-value resources. Administrators create tag keys and tag values, control who can attach them, and supported policy systems can evaluate them. Tags may look like labels, but they serve a stronger governance role.
 
-For the Orders API, the platform or security team might create a tag key called `environment` with allowed values such as `prod` and `non-prod`. That tag vocabulary gives policies a controlled value to reference. A random label value can drift across teams; a governed tag value has IAM around who can create it and who can bind it.
+For the photo gallery, the platform team might create a tag key called `environment` with values such as `prod` and `non-prod`. Security policy can then refer to that governed production classification instead of trusting every team to type the same label value correctly.
 
-These commands create a tag key and a production tag value. `--parent` places the key under the organization, and the second command places the value under the key returned by the first command. The numeric tag key ID in the example is realistic placeholder output; in production, copy it from the create or describe command.
+For AWS readers, this is a place to slow down. AWS tags often cover cost, inventory, automation, and sometimes policy conditions. In GCP, labels handle much of the cost and inventory job, while Resource Manager tags are the governed metadata used by supported policy systems.
+
+These commands create a tag key and a production tag value. In a real organization, platform automation usually owns this vocabulary because tags affect governance.
 
 ```bash
 gcloud resource-manager tags keys create environment \
@@ -268,7 +291,13 @@ gcloud resource-manager tags values create prod \
   --description="Production resources"
 ```
 
-Expected output should give the names that later commands use. A beginner should save the `tagKeys/...` and `tagValues/...` identifiers because display names alone are not enough for binding commands.
+Important details in those commands:
+
+- `--parent=organizations/...` places the tag key under the organization.
+- The tag value belongs under a tag key, such as `tagKeys/456789012345`.
+- The numeric names from output are the identifiers later binding commands use.
+
+Expected output gives the identifiers to save:
 
 ```yaml
 name: tagKeys/456789012345
@@ -280,7 +309,7 @@ shortName: prod
 parent: tagKeys/456789012345
 ```
 
-After a tag value exists, an authorized user or automation can bind it to a supported resource. The binding needs the target resource's full resource name, which brings us back to exact addresses.
+After a tag value exists, an authorized user or automation can bind it to a supported resource. The binding needs the target resource's full resource name.
 
 ```bash
 gcloud resource-manager tags bindings create \
@@ -288,7 +317,7 @@ gcloud resource-manager tags bindings create \
   --parent=//cloudresourcemanager.googleapis.com/projects/123456789012
 ```
 
-Healthy output should show the tag value and the parent full resource name. If the parent is wrong, the policy signal attaches to the wrong target.
+Healthy output should show the tag value and the parent full resource name:
 
 ```yaml
 name: tagBindings/%2F%2Fcloudresourcemanager.googleapis.com%2Fprojects%2F123456789012/tagValues/567890123456
@@ -296,25 +325,25 @@ parent: //cloudresourcemanager.googleapis.com/projects/123456789012
 tagValue: tagValues/567890123456
 ```
 
-Tags show up in policy work. IAM Conditions can use tags for conditional access on supported resources. Organization policies can use tags to scope rules. Firewall features can use tag concepts too, although Google Cloud has multiple tag types in networking, including older VM network tags and newer secure tags for firewall policy designs. The exact feature decides which tag type it understands, so production designs should check the service documentation before building a control around tags.
+Tags can support IAM Conditions, organization policies, and some network policy designs, depending on the feature. Google Cloud also has older VM network tags and newer secure tags for firewall policy designs, so check the service documentation before building a control around the word "tag." The safe habit is to name which tag type a policy uses and save the binding evidence with the change.
 
-The split between labels and tags is practical. Labels answer reporting questions: owner, service, environment, cost center, and management tool. Tags answer governed policy questions when a supported control needs reliable metadata. Many resources need both: labels for humans and billing, tags for conditional control.
+## Evidence Bundles Before Changes
+<!-- section-summary: A production change should include enough evidence for another engineer to find the same resource and understand why it is the target. -->
 
-## Evidence Before Changes
-<!-- section-summary: Production changes should start with a small evidence bundle that lets another engineer find the same resource and understand why it is the target. -->
+An **evidence bundle** is the small set of facts that proves the target before a production change. It should tell another engineer which project, resource, location, identity, labels, and policy output you used to reach your conclusion. The goal is simple: another engineer should be able to find the same resource and understand why it is the one being changed.
 
-Now bring the pieces together during a real incident. A ticket says, "Orders API fails to read the Stripe webhook secret in production." That sentence gives a symptom and still leaves the target unproven. Before changing IAM, the engineer needs evidence for the caller, the resource, the project, and the access path.
+Imagine an alert says photo uploads are failing because the backend cannot access the moderation API key. The symptom gives only part of the story. Before changing IAM, you need evidence for the caller, the secret, the project, and the current policy.
 
 ![Evidence bundle before a change](/content-assets/articles/article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths/change-evidence-bundle.png)
 *A good change ticket names the project, target resource, caller identity, policy evidence, labels, and reason before production is changed.*
 
-A reviewable evidence bundle for this incident can include the Cloud Run service, runtime identity, secret, IAM policy, labels, and region. The commands below keep the project and region explicit so the evidence comes from command inputs rather than a local CLI default.
+The commands below collect the service, runtime identity, secret metadata, and secret IAM policy. They keep project and region explicit so the evidence comes from command inputs.
 
 ```bash
-PROJECT_ID=devpolaris-orders-prod
+PROJECT_ID=devpolaris-gallery-prod
 REGION=us-central1
-SERVICE=orders-api
-SECRET=stripe-webhook-secret
+SERVICE=gallery-api
+SECRET=moderation-api-key
 
 gcloud run services describe "$SERVICE" \
   --project="$PROJECT_ID" \
@@ -330,92 +359,95 @@ gcloud secrets get-iam-policy "$SECRET" \
   --format="yaml(bindings)"
 ```
 
-Useful output should connect the service to the identity and the identity to the secret policy. If the service account is missing from the policy, the change request can name the exact binding being added and the exact secret receiving it.
+Important details in those commands:
+
+- The service output identifies the caller through `serviceAccountName`.
+- The secret output confirms the exact secret and its labels.
+- The IAM policy output shows whether the caller already has secret access.
+- The explicit variables make the evidence repeatable in a review.
+
+Useful output should connect the runtime service account to the secret policy:
 
 ```yaml
 bindings:
 - members:
-  - serviceAccount:orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
+  - serviceAccount:gallery-api-prod@devpolaris-gallery-prod.iam.gserviceaccount.com
   role: roles/secretmanager.secretAccessor
 ```
 
-The same habit applies to bucket work. A ticket that says "fix the orders bucket" should identify which bucket, which project owns the workload, where the bucket lives, which labels show ownership, which object prefix is affected, and which setting needs review.
+The same habit applies to bucket work. A ticket about failed image uploads should identify the exact bucket, its location, labels, access mode, retention policy, and the object prefix affected.
 
 ```bash
-BUCKET=devpolaris-orders-receipts-prod
+BUCKET=devpolaris-gallery-uploads-prod
 
 gcloud storage buckets describe "gs://$BUCKET" \
   --format="yaml(name,location,labels,iamConfiguration.uniformBucketLevelAccess.enabled,retentionPolicy)"
 ```
 
-Expected output should show the bucket name, location, labels, uniform bucket-level access setting, and retention policy if one exists. A missing label or disabled uniform access setting may be the real review finding.
+Expected output should show enough facts for review:
 
 ```yaml
 iamConfiguration:
   uniformBucketLevelAccess:
     enabled: true
 labels:
-  component: receipts
+  component: uploads
   env: prod
-  service: orders-api
-  team: commerce
+  service: gallery
+  team: media
 location: US-CENTRAL1
-name: devpolaris-orders-receipts-prod
+name: devpolaris-gallery-uploads-prod
 retentionPolicy:
   retentionPeriod: '31536000'
 ```
 
-A good evidence bundle helps the review. It lets another engineer open the same project, find the same resource, understand the caller, and review the exact change. It also helps after the incident because the ticket records why the team touched that resource instead of a similarly named staging service or old migration bucket.
+A strong evidence bundle does not need to be huge. It needs to be specific:
 
-| Change request field | Strong Orders API example |
+| Change request field | Strong photo gallery example |
 |---|---|
-| Project | `devpolaris-orders-prod` plus project number from `gcloud projects describe` |
-| Resource type | Cloud Run service, Secret Manager secret, Cloud Storage bucket, Cloud SQL instance |
-| Location | `us-central1` for regional resources, or the bucket location for Cloud Storage |
-| Exact target | Resource path, service ID, secret ID, bucket URI, or full resource name |
+| Project | `devpolaris-gallery-prod` plus project number |
+| Resource type | Backend service, secret, bucket, database, service account |
+| Location | `us-central1` for regional resources, or bucket location for Cloud Storage |
+| Exact target | Resource name, service ID, secret ID, bucket URI, or full resource name |
 | Caller identity | Runtime service account or human identity requesting access |
-| Labels | `env=prod`, `team=commerce`, `service=orders-api`, `component=api` |
+| Labels | `env=prod`, `team=media`, `service=gallery`, `component=api` |
 | Policy evidence | IAM binding, organization policy, tag binding, retention setting, or network rule |
-| Reason | The alert, deploy, access request, or cost report that points to this target |
+| Reason | Alert, deploy, access request, cost report, or audit finding |
 
-This section connects back to the first table in the article. Project IDs narrow the boundary. Resource names identify the object. Bucket names need global-name care. Labels show ownership and reporting context. Tags support governed policy where the service can use them. Evidence ties those pieces to a real production decision.
+Evidence ties the naming pieces together. Project IDs narrow the boundary. Resource names identify the object. Bucket names need global-name care. Labels show ownership and reporting context. Tags support governed policy where the service can use them.
 
 ## A Production Naming Review
 <!-- section-summary: A naming review checks that resource identity, labels, tags, and evidence habits are ready before production resources multiply. -->
 
-A naming and metadata review should happen while the workload is still small. Later, renaming resources often means recreating infrastructure, migrating data, changing dashboards, updating IAM bindings, rewriting runbooks, and coordinating downtime. Early review costs much less than late cleanup.
+A naming and metadata review should happen while the workload is still small. Later renames can require data migration, IAM updates, dashboard changes, alert changes, runbook edits, and coordinated downtime. Early review gives the team a clean vocabulary before production depends on confusing names.
 
-For the Orders API, the review can be plain and concrete. It checks the names people will say out loud and the exact identifiers tools will use.
+For the photo gallery, the review can stay plain and concrete. It checks the names people say out loud and the identifiers tools use.
 
 | Review item | Healthy production answer |
 |---|---|
-| Project ID | `devpolaris-orders-prod` includes organization, workload, and environment. |
-| Project number | Recorded in the runbook because service agents, APIs, and full resource names may use it. |
-| Primary region | `us-central1` appears in deploy variables, dashboards, alerts, and service paths. |
-| Cloud Run service ID | `orders-api` stays consistent across deploys, logs, alerts, and runbooks. |
-| Runtime service account | `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com` maps to one runtime purpose. |
-| Database ID | `orders-db` clearly maps to the relational database for the service. |
-| Bucket name | `devpolaris-orders-receipts-prod` avoids generic global names and sensitive values. |
-| Secret IDs | `stripe-webhook-secret` and similar IDs describe purpose without storing secret values in the name. |
+| Project ID | `devpolaris-gallery-prod` includes organization, workload, and environment. |
+| Project number | Recorded because service agents, APIs, and full resource names may use it. |
+| Primary region | `us-central1` appears in deploy variables, dashboards, alerts, and resource paths. |
+| Backend service ID | `gallery-api` stays consistent across deploys, logs, alerts, and runbooks. |
+| Runtime service account | `gallery-api-prod@devpolaris-gallery-prod.iam.gserviceaccount.com` maps to one runtime purpose. |
+| Database ID | `gallery-db` clearly maps to the metadata database. |
+| Bucket name | `devpolaris-gallery-uploads-prod` avoids generic global names and sensitive values. |
+| Secret IDs | `moderation-api-key` describes purpose without exposing the secret value. |
 | Required labels | `env`, `team`, `service`, `component`, `cost_center`, and `managed_by` exist on supported resources. |
-| Governed tags | Production classification uses Resource Manager tags when IAM, organization policy, or firewall policy needs governed metadata. |
+| Governed tags | Production classification uses Resource Manager tags where IAM, organization policy, or firewall policy needs governed metadata. |
 | Change evidence | Production tickets include project, resource type, location, exact target, labels, caller identity, and policy evidence. |
 
-The final result is a workload that people can operate under pressure. An alert points to a specific service instead of a loose word. A cost report groups resources by service and team. A security review can tell the difference between helpful labels and governed tags. A production change has enough evidence for another engineer to reach the same conclusion.
+The result is a workload people can operate under pressure. An alert points to a specific service instead of a loose word. A cost report groups resources by service and team. A security review can tell the difference between reporting labels and governed tags. A production change has enough evidence for another engineer to reach the same target.
 
-That is the foundation this article is trying to build. Before IAM, networking, compute, databases, and observability get more detailed, every resource needs a name people can recognize and an identity tools can verify.
+## References
 
----
-
-**References**
-
-- [Google API resource names](https://cloud.google.com/apis/design/resource_names) - Defines resource names, full resource names, and the path-style patterns used by Google APIs.
+- [Google API resource names](https://cloud.google.com/apis/design/resource_names) - Defines resource names, full resource names, and path-style resource identity.
 - [Google Cloud resource hierarchy](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy) - Explains organizations, folders, projects, project IDs, project numbers, and hierarchy relationships.
-- [Create and manage projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects) - Documents project ID uniqueness, project number behavior, project names, and project ID requirements.
-- [Cloud Storage bucket naming guidelines](https://cloud.google.com/storage/docs/buckets#naming) - Documents bucket-name rules, global uniqueness, public visibility, and reuse risks after deletion.
-- [Labels overview](https://cloud.google.com/resource-manager/docs/labels-overview) - Explains labels, label limits, billing use cases, sensitive-data guidance, and the difference between labels and tags.
+- [Create and manage projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects) - Documents project ID uniqueness, project numbers, project names, and project creation.
+- [Cloud Storage bucket naming guidelines](https://cloud.google.com/storage/docs/buckets#naming) - Documents bucket-name rules, global uniqueness, public visibility, and reuse risk after deletion.
+- [Labels overview](https://cloud.google.com/resource-manager/docs/labels-overview) - Explains labels, label limits, billing use cases, sensitive-data guidance, and differences between labels and tags.
 - [Best practices for labels](https://cloud.google.com/resource-manager/docs/best-practices-labels) - Gives practical label design guidance for ownership, cost, and operational reporting.
 - [Tags overview](https://cloud.google.com/resource-manager/docs/tags/tags-overview) - Explains tag keys, tag values, tag bindings, inheritance, and supported policy integrations.
-- [Create and manage tags](https://cloud.google.com/resource-manager/docs/tags/tags-creating-and-managing) - Documents the CLI flow for tag keys, tag values, and tag bindings.
+- [Create and manage tags](https://cloud.google.com/resource-manager/docs/tags/tags-creating-and-managing) - Documents CLI flows for tag keys, tag values, and tag bindings.
 - [Tags and conditional access](https://cloud.google.com/iam/docs/tags-access-control) - Explains how IAM Conditions can use tags for conditional access on supported resources.
 - [Secure tags for firewalls](https://cloud.google.com/firewall/docs/tags-firewalls-overview) - Explains secure tags, network tags, and firewall policy support.

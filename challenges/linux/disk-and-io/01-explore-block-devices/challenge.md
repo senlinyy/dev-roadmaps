@@ -1,6 +1,6 @@
 ---
 title: "Explore Block Devices and Mounts"
-sectionSlug: block-devices-and-lsblk
+sectionSlug: block-devices-and-filesystems
 order: 1
 ---
 

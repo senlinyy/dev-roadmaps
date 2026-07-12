@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "production-coordination-q1",
+      "type": "single",
+      "scenario": "A notification team can start one API container on a VM, but production now needs six API copies across several machines. After a machine restart, two copies remain absent until an engineer notices. Releases also require manually editing host scripts. Which change most directly addresses the operating problem described in the article?",
+      "options": [
+        { "id": "a", "text": "Keep the host scripts and add a larger VM so every copy can run on one machine." },
+        { "id": "b", "text": "Store the image, replica count, and runtime intent as Kubernetes objects so the cluster places and reconciles the copies." },
+        { "id": "c", "text": "Build a separate container image for each machine so placement decisions are encoded in the package." },
+        { "id": "d", "text": "Give each container a permanent IP and let callers maintain the current list during releases." }
+      ],
+      "correct": ["b"],
+      "explanation": "Kubernetes addresses the coordination problem by storing desired state, placing Pods, and reconciling missing work across nodes. A larger single VM preserves a machine failure boundary. Per-machine images mix packaging with placement, and permanent caller-managed addresses do not provide reconciliation or controlled releases."
+    },
+    {
+      "id": "hierarchy-q2",
+      "type": "single",
+      "scenario": "During an incident, an engineer sees one `notification-api` application copy running on `worker-03`. The production environment has five worker machines managed through one Kubernetes API. Which description maps the evidence to the article's hierarchy most accurately?",
+      "options": [
+        { "id": "a", "text": "The application copy is a Pod, `worker-03` is a node, and the five managed machines form the cluster." },
+        { "id": "b", "text": "The application copy is a node, `worker-03` is a Pod, and the API record is the cluster." },
+        { "id": "c", "text": "The application copy is a Service, `worker-03` is a Deployment, and the five machines form one Pod." },
+        { "id": "d", "text": "The application copy is the control plane, `worker-03` is a Service, and each machine is a separate cluster." }
+      ],
+      "correct": ["a"],
+      "explanation": "A Pod is the scheduled application unit, a node is the machine that runs Pods, and a cluster is the group of nodes managed together. Services provide stable traffic, Deployments manage replaceable Pods, and the control plane coordinates the cluster rather than acting as one application copy."
+    },
+    {
+      "id": "reconciliation-q3",
+      "type": "single",
+      "scenario": "The stored Deployment requests four `notification-api` Pods. A node failure removes one running Pod, leaving three. No engineer changes the manifest. Ten seconds later Kubernetes begins creating a replacement on a healthy node. What best explains this behavior?",
+      "options": [
+        { "id": "a", "text": "The Service increased the Deployment replica count after detecting fewer backend IPs." },
+        { "id": "b", "text": "The container image started a second process because every image is responsible for cluster recovery." },
+        { "id": "c", "text": "A controller compared current state with the stored desired state and acted to close the replica gap." },
+        { "id": "d", "text": "The failed node moved its original Pod process to another machine without creating a replacement." }
+      ],
+      "correct": ["c"],
+      "explanation": "Reconciliation repeatedly compares the stored request with current reality and takes action toward the desired state. A Service routes traffic but does not change Deployment replicas. Images package the app, and a lost Pod process is not moved between machines."
+    },
+    {
+      "id": "stable-traffic-q4",
+      "type": "single",
+      "scenario": "A rollout replaces four API Pods. Their names and IP addresses change, but checkout must keep calling one destination and must avoid new Pods until their readiness checks pass. Which Kubernetes object provides that caller contract?",
+      "options": [
+        { "id": "a", "text": "A ConfigMap, because ordinary settings also maintain the list of ready Pod addresses." },
+        { "id": "b", "text": "A Secret, because sensitive values create a stable route to whichever Pods consume them." },
+        { "id": "c", "text": "A node, because callers can use the machine address while Pods are replaced." },
+        { "id": "d", "text": "A Service, because it keeps a stable name and port while routing to selected ready Pods." }
+      ],
+      "correct": ["d"],
+      "explanation": "A Service gives callers a stable network name and port while eligible Pod endpoints change. ConfigMaps and Secrets deliver runtime data, and a node address does not express the selected ready application copies behind a rollout."
+    },
+    {
+      "id": "platform-fit-q5",
+      "type": "multiple",
+      "scenario": "A platform review compares two workloads. The customer notification system has live traffic, background workers, several replicas, daily releases, and automatic recovery requirements. A second workload is a one-hour internal demo run by one developer. Which two conclusions follow from the article?",
+      "options": [
+        { "id": "a", "text": "The notification system is a strong Kubernetes candidate because repeated placement, traffic, release, and recovery work needs a shared operating loop." },
+        { "id": "b", "text": "The demo must use Kubernetes because packaging any process in a container requires a cluster." },
+        { "id": "c", "text": "The demo may not justify Kubernetes because the platform complexity can outweigh its operational benefit for a small short-lived workload." },
+        { "id": "d", "text": "The notification system should stay on handwritten SSH scripts because multiple teams need separate operating methods." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Kubernetes earns its complexity when repeated scaling, recovery, traffic, releases, and shared operations need one platform. A small short-lived demo may not need that machinery. Containers do not require Kubernetes, and separate handwritten methods weaken the shared operating model needed by the notification system."
+    }
+  ]
+}

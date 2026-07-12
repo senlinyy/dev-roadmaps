@@ -1,7 +1,6 @@
 ---
-title: "Separate Backup And Restore"
-sectionSlug: backup-vs-restore
+title: "Backups and Retention"
 order: 1
 ---
 
-Use these scenarios to check whether the team has a real restore path, not only a backup feature.
+Use the scenario evidence to choose the best Azure recovery decision.

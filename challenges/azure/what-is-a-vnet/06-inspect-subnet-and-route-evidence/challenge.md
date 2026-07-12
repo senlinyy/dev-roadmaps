@@ -1,6 +1,6 @@
 ---
 title: "Inspect Subnet And Route Evidence"
-sectionSlug: route-tables
+sectionSlug: route-tables-and-effective-routes
 order: 6
 ---
 

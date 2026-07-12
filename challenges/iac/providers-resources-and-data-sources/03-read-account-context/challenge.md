@@ -1,15 +1,16 @@
 ---
 title: "Read Account Context"
-sectionSlug: data-sources
+sectionSlug: state-and-ownership
 order: 3
 ---
 
-Add AWS data sources in `data.tf` and wire their values through `locals.tf`.
+The account and region are provider context, not objects this root module owns. Read them as existing facts and wire those facts into locals so later resources can tag and name themselves with the active target.
 
-Requirements:
+Your job:
 
-1. **Caller identity data source:** `data "aws_caller_identity" "current" {}`.
-2. **Region data source:** `data "aws_region" "current" {}`.
-3. **Account value:** use `data.aws_caller_identity.current.account_id`.
-4. **Region value:** use `data.aws_region.current.name`.
-5. **Do not use** hardcoded account ID `123456789012`.
+1. **Read the current AWS account identity** with a provider data source.
+2. **Read the active AWS region** with a provider data source.
+3. **Replace copied context values** in locals with references to those data sources.
+4. **Do not keep the starter account ID literal** as the source of truth.
+
+The grader checks the data source declarations and references in HCL.

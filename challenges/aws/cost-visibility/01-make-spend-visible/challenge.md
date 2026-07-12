@@ -1,7 +1,6 @@
 ---
-title: "Make Spend Visible"
-sectionSlug: cost-visibility
+title: "Cost Visibility"
 order: 1
 ---
 
-Use the cost evidence to decide how the team should make AWS spend visible before tuning it. The questions focus on workload tags, Cost Explorer movement, budgets, ownership, and monthly snapshots.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

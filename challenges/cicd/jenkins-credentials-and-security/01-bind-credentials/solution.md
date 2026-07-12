@@ -28,4 +28,4 @@ pipeline {
 }
 ```
 
-The two credentials are bound for the duration of the closure, exposed as env vars, and masked in the build log. Once the closure exits, the variables go out of scope. The `environment { ... }` block is gone because anything inside it is dumped to stdout at startup, which would defeat the masking.
+- The two credentials are bound for the duration of the closure, exposed as env vars, and masked in the build log. Once the closure exits, the variables go out of scope. The `environment { ... }` block is gone because anything inside it is dumped to stdout at startup, which would defeat the masking.

@@ -1,10 +1,8 @@
-Open vim for each script, type the contents, save, and make executable:
-
 ```bash
 $ vim pathutil.sh
 ```
 
-Press `i` and type:
+- Press `i` and type:
 
 ```bash
 #!/usr/bin/env bash
@@ -18,13 +16,11 @@ basename="${filename%.*}"
 echo "$directory" "$filename" "$basename"
 ```
 
-Press `Esc`, then `:wq`. Next:
+- Press `Esc`, then `:wq`. Next:
 
 ```bash
 $ vim greet.sh
 ```
-
-Type:
 
 ```bash
 #!/usr/bin/env bash
@@ -38,8 +34,10 @@ greet() {
 greet DevPolaris
 ```
 
-Save with `:wq`, then:
+- Save with `:wq`, then:
+
+```bash
 $ chmod +x pathutil.sh greet.sh
 ```
 
-`${filepath%/*}` strips the shortest match of `/*` from the end, giving the directory. `${filepath##*/}` strips the longest match of `*/` from the beginning, giving the filename. `local` inside functions prevents variable leakage to the global scope.
+- `${filepath%/*}` strips the shortest match of `/*` from the end, giving the directory. `${filepath##*/}` strips the longest match of `*/` from the beginning, giving the filename. `local` inside functions prevents variable leakage to the global scope.

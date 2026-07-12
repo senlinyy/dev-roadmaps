@@ -1,6 +1,6 @@
 ---
 title: "Verify Expiry Settings"
-sectionSlug: ttl
+sectionSlug: ttl-and-temporary-state
 order: 4
 ---
 

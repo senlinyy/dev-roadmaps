@@ -1,7 +1,7 @@
 ---
 title: "What Is GCP Observability"
-description: "Understand how Google Cloud connects logs, metrics, traces, errors, profiles, audit logs, labels, and alerts around one production incident."
-overview: "GCP observability gives a team enough evidence to answer what users saw, where the request ran, what code failed, who changed the system, and whether the fix worked. This article follows one checkout-api incident through the first set of signals."
+description: "Understand how Google Cloud connects logs, metrics, traces, errors, audit logs, labels, and alerts around one production incident."
+overview: "GCP observability gives a team enough evidence to answer what users saw, where the request ran, what code failed, who changed the system, and whether the fix worked. The example follows one image-upload incident through logs, metrics, traces, errors, audit logs, and labels."
 tags: ["gcp", "observability", "logging", "monitoring", "trace", "labels", "audit-logs"]
 order: 1
 id: article-cloud-providers-gcp-observability-what-is-gcp-observability
@@ -9,285 +9,184 @@ id: article-cloud-providers-gcp-observability-what-is-gcp-observability
 
 ## Table of Contents
 
-1. [The Production Question](#the-production-question)
+1. [Your App Is Running Somewhere Else](#your-app-is-running-somewhere-else)
 2. [What GCP Observability Means](#what-gcp-observability-means)
-3. [The Signals GCP Collects](#the-signals-gcp-collects)
-4. [The Context That Connects The Signals](#the-context-that-connects-the-signals)
-5. [The First Incident Walkthrough](#the-first-incident-walkthrough)
-6. [Application Monitoring And Service Views](#application-monitoring-and-service-views)
-7. [A Practical First Setup](#a-practical-first-setup)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+3. [Logs: What Happened](#logs-what-happened)
+4. [Metrics: How Often, How Big, How Slow](#metrics-how-often-how-big-how-slow)
+5. [Traces: The Request Path](#traces-the-request-path)
+6. [Errors And Audit Logs](#errors-and-audit-logs)
+7. [Labels And Context](#labels-and-context)
+8. [A First Incident Walkthrough](#a-first-incident-walkthrough)
+9. [AWS Bridge](#aws-bridge)
+10. [Putting It All Together](#putting-it-all-together)
+11. [References](#references)
 
-## The Production Question
-<!-- section-summary: A production incident gives every observability signal a clear job, so the module starts with one concrete GCP story. -->
+## Your App Is Running Somewhere Else
+<!-- section-summary: Observability answers a remote production problem: users report trouble, and the team needs evidence from the running system. -->
 
-Let's use one story for the whole module. The DevPolaris shop runs a service called `checkout-api` on Cloud Run in project `shop-prod` and region `us-central1`. The service accepts `POST /checkout`, checks inventory through `inventory-api`, calls a payment provider, writes the order to Cloud SQL, and publishes a receipt job to Pub/Sub.
+Your app is no longer on your laptop. It is running on Cloud Run, serving real users, storing files in Cloud Storage, writing metadata to Cloud SQL, and publishing background work to Pub/Sub. A user tells support, "My product photo upload keeps spinning, and sometimes it fails after I choose the file."
 
-At 14:05 UTC, support reports that customers can open the checkout page, but payment submission returns HTTP `500`. The last deployment moved traffic to Cloud Run revision `checkout-api-00042-n9p` a few minutes earlier. The on-call engineer now needs answers that live outside a normal local debugger.
+That report is useful, but it is not enough to fix production. You need evidence from the place where the app is actually running. You need to know whether one user hit a bad file, whether every upload is slow, whether the new release broke image resizing, whether Cloud Storage is rejecting writes, and whether someone changed the service right before the reports arrived.
 
-The first question is plain: how many customers are affected? After that, the team needs the exact failing request, the code path that failed, the dependency that returned the error, the revision that served the request, the person or pipeline that changed production, and the graph that proves the fix worked. Those answers live in different signals, so observability is the way the team connects them.
+The example service in this module is `image-upload-api`. It receives `POST /uploads`, stores the original image in Cloud Storage, creates a thumbnail, writes upload metadata, and publishes a Pub/Sub message so another worker can scan the image later. The incident is simple: upload latency rises, some requests return HTTP `500`, and users cannot tell whether the file saved.
 
-![Infographic showing one checkout-api HTTP 500 incident connected to metrics, logs, traces, audit logs, error groups, and labels.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/incident-signals.png)
-*One incident creates several different questions. Metrics give scope, logs give event detail, traces show the request path, and audit logs show production changes.*
+![Infographic showing one image upload incident connected to metrics, logs, traces, audit logs, error groups, and labels.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/incident-signals.png)
+*One user report creates several production questions. Metrics show scope, logs show events, traces show the request path, and audit logs show recent cloud changes.*
 
 ## What GCP Observability Means
-<!-- section-summary: GCP observability is the Google Cloud evidence system for understanding running applications and infrastructure from the outside. -->
+<!-- section-summary: GCP observability is the evidence system that helps you understand a running application from outside the process. -->
 
-**GCP observability** is the Google Cloud set of services that helps teams understand the behavior, health, and performance of applications and infrastructure. In plain words, it is the evidence trail for production. It collects logs for events, metrics for numbers over time, traces for request timelines, errors for grouped exceptions, profiles for runtime cost, audit logs for control-plane changes, and labels for sorting all of that evidence.
+**Observability** means you can understand what a running system is doing from the evidence it emits. In Google Cloud, **GCP observability** usually means Cloud Logging, Cloud Monitoring, Cloud Trace, Error Reporting, Cloud Audit Logs, dashboards, alerts, and the shared context that connects those signals.
 
-The important beginner idea is that observability starts before an incident. The application has to emit useful telemetry while it runs. Google Cloud managed services add a lot of platform evidence, but the application still has to name its service, preserve trace context, log important business steps, avoid secrets in telemetry, and attach release or environment fields that help a tired responder filter the data.
+The plain job is this: because your app runs somewhere else, you need enough evidence to answer production questions without attaching a debugger to the container. You need event records, numbers over time, request timing, grouped exceptions, control-plane change history, and labels that tell you which project, region, service, release, and team produced the evidence.
 
-For `checkout-api`, a useful evidence trail can answer a full production sentence: production checkout in `us-central1` started returning `500` responses after release `2026-06-14.3`, most failed requests came from revision `checkout-api-00042-n9p`, traces show slow payment authorization calls, logs show `provider_timeout`, and audit logs show the deployment came from `ci-deploy@shop-prod.iam.gserviceaccount.com`.
+Think of observability as the set of instruments on a remote system. If your laptop app fails, you can stare at the terminal, inspect files, restart the process, and add a quick print statement. In production, the app may run in many instances, disappear after scale-down, and handle user traffic while you investigate. Observability gives you the permanent evidence trail that survives beyond one container instance.
 
-That is why this topic deserves a module instead of one quick definition. Logs, metrics, traces, and audit records are different tools, but they serve one workflow during an incident. The team moves from user symptom, to scope, to detailed request evidence, to change evidence, to a verified recovery.
+The evidence pieces have different jobs. Logs are event records. Metrics are numbers over time. Traces are request timelines. Error groups collect repeated failures. Audit logs show cloud control-plane changes. Labels and resource fields connect those records so one incident story can move from chart to log to trace to change history.
 
-## The Signals GCP Collects
-<!-- section-summary: Logs, metrics, traces, errors, profiles, and audit logs answer different incident questions, so teams use them together. -->
+For `image-upload-api`, a good observability trail can answer a full sentence: production uploads in `us-central1` started failing after release `2026-06-14.3`, most failed requests came from Cloud Run revision `image-upload-api-00042-n9p`, traces show thumbnail generation taking too long, logs show `thumbnail_timeout`, and audit logs show the deployment came from `ci-deploy@media-prod.iam.gserviceaccount.com`.
 
-The first signal many engineers open is **logs**. A log is a timestamped event record from an application, platform, service, or audit source. For Cloud Run, container output and request logs can reach Cloud Logging automatically, and application code can emit structured JSON logs with fields such as `severity`, `message`, `checkout_id`, `release`, `error_code`, and trace fields.
+## Logs: What Happened
+<!-- section-summary: Logs are event records, and structured logs give responders fields they can search during an incident. -->
 
-**Metrics** are numeric measurements stored over time. Cloud Monitoring stores metrics as time series, which means each data point belongs to a metric type, a monitored resource, labels, and a timestamp interval. During the checkout incident, the team watches request count, `5xx` count, latency percentiles, Cloud Run instance count, CPU, memory, and any custom business metrics such as completed checkouts.
+A **log** is a record of something that happened. It might come from your application code, a managed platform, a load balancer, a database, a security control, or a Google Cloud API. In Cloud Run, application output to stdout and stderr can land in Cloud Logging, and request logs can show each HTTP request the platform handled.
 
-**Traces** follow one request across services. Cloud Trace stores spans, and each span represents one timed piece of work. A failed checkout trace might include the incoming Cloud Run handler, an inventory call, a payment provider call, a Cloud SQL insert, and a Pub/Sub publish step. The trace helps the team see the slow or failing hop instead of lining up logs from several services by hand.
+The everyday picture is a timestamped notebook entry from the running system. A person might write "the upload failed." A production log should write the same idea with details a responder can search: which route, which release, which operation, which error code, and which trace. That turns one sentence into evidence.
 
-**Error Reporting** groups similar application errors. If `checkout-api` throws the same `PaymentGatewayTimeout` exception one thousand times, the team should see one error group with first seen time, recent count, stack frames, and affected versions. That grouping keeps the investigation from turning into a scroll through repeated stack traces.
+Logs are strongest for **specific events**. They explain one request, one retry, one rejected input, one dependency failure, or one control-plane change. They are weaker for broad questions such as "how many users are affected?" because that requires counting across many records. That is why logs usually sit beside metrics rather than replacing them.
 
-**Cloud Profiler** shows where an application spends CPU time, heap, or other runtime resources when profiling is enabled for a supported runtime. A profiler matters when the incident looks like high CPU, memory growth, or slow code without a clean exception. In the checkout story, a profile would help if release `2026-06-14.3` made every request spend too much time serializing a payment payload or waiting inside a client library.
+For the upload incident, a weak log says `upload failed`. A useful log says the route was `POST /uploads`, the release was `2026-06-14.3`, the operation was `thumbnail.generate`, the error code was `thumbnail_timeout`, and the active trace ID was available for follow-up. That extra shape matters because responders search fields, group repeated patterns, and paste evidence into incident notes.
 
-**Cloud Audit Logs** record Google Cloud API activity. They help answer who changed what and when. For this incident, audit evidence can show the Cloud Run service update, the service account that deployed the revision, IAM changes, secret updates, networking changes, or policy-denied events around the same time window.
+Good logs also avoid leaking private data. Your image upload service should not log raw image bytes, access tokens, signed URLs, full user profiles, or session cookies. It can log a safe upload ID, route, file size range, operation name, sanitized error code, release, and trace fields.
 
-## The Context That Connects The Signals
-<!-- section-summary: Project, region, resource labels, service names, releases, and trace IDs turn scattered telemetry into one investigation path. -->
+## Metrics: How Often, How Big, How Slow
+<!-- section-summary: Metrics are numbers over time, so they show the size and shape of the production symptom. -->
 
-GCP telemetry carries **monitored resource** context. For Cloud Run revision telemetry, the monitored resource is `cloud_run_revision`, and its resource labels include values such as project ID, location, service name, revision name, and configuration name. This context is much stronger than searching for a service name inside log text because Google Cloud stores it as structured metadata.
+A **metric** is a number recorded over time. Metrics answer questions like how many, how often, how slow, how full, and how much. Cloud Monitoring stores metric data as time series, which means each point has a metric type, a monitored resource, labels, a timestamp interval, and a value.
 
-The project is the first boundary because production, staging, and development often live in separate projects. The region narrows the runtime location. The service name tells the team which application emitted the signal. The revision name tells the team which deployed version handled a request. In Cloud Run, the revision matters because traffic can split between revisions during a rollout or rollback.
+Think of metrics as the dashboard gauges for a remote system. One gauge can show request count, another can show error rate, another can show p95 latency, and another can show memory use. You do not read every request one by one; you watch the shape of the system over minutes and hours.
 
-User-defined labels add ownership and operating context. A team might use labels like `env=prod`, `team=checkout`, `service=checkout-api`, `release=2026-06-14.3`, and `cost_center=commerce`. These labels should stay low-cardinality, which means they should have a small and predictable set of values. Values like customer IDs, checkout IDs, and request IDs belong in logs or traces, because using them as metric or resource labels can create too many series and can leak sensitive data.
+Metrics are strongest for **scope and trend**. A single error log might be one unusual upload. A metric graph showing `5xx` rate rising from 0.2 percent to 9 percent tells the team the symptom is broad enough to investigate urgently. A latency graph showing p95 rising after a new revision gives the team a time boundary for the rest of the evidence.
 
-Trace IDs connect request-level evidence. If the active trace ID appears in a log entry, then Cloud Logging can show the logs for the same request that Cloud Trace displays as spans. This gives the responder two directions of travel. A trace can lead to the exact log lines written by the failing span, and a structured error log can lead back to the trace timeline for that request.
+For `image-upload-api`, useful metrics include request count, HTTP `5xx` rate, p95 latency, container instance count, CPU, memory, Cloud Storage write latency, Pub/Sub backlog, and custom application metrics such as successful uploads per minute. A graph that shows p95 latency rising from 400 ms to 6 seconds tells the team that users are not just imagining a slow upload flow.
 
-![Infographic showing logs, metrics, traces, and audit records joined by shared fields such as project, region, service, revision, release, and trace ID.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/shared-context.png)
-*The shared fields do the joining work. A responder can move from a metric spike to logs, traces, and audit events because the evidence names the same service, revision, release, and trace.*
+Metrics usually begin the response because they show scope. One error log can be a single bad request. A sustained error-rate graph shows a production symptom. The team should use metrics to decide whether to page someone, then use logs and traces to explain the cause.
 
-Here is the shape of a useful application log from `checkout-api`:
+## Traces: The Request Path
+<!-- section-summary: Traces show the path and timing of one request as it moves through services and dependencies. -->
 
-```json
-{
-  "severity": "ERROR",
-  "message": "payment provider rejected checkout request",
-  "checkout_id": "chk_9f21",
-  "route": "POST /checkout",
-  "dependency": "payment-provider",
-  "error_code": "provider_timeout",
-  "release": "2026-06-14.3",
-  "logging.googleapis.com/trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736",
-  "logging.googleapis.com/spanId": "00f067aa0ba902b7",
-  "logging.googleapis.com/trace_sampled": true,
-  "logging.googleapis.com/labels": {
-    "team": "checkout",
-    "env": "prod",
-    "service": "checkout-api"
-  }
-}
-```
+A **trace** follows one request or operation through the system. A trace is made of spans, and each span records one timed unit of work. For the upload flow, one trace might include the incoming `POST /uploads` handler, a Cloud Storage write, thumbnail generation, a metadata insert, and a Pub/Sub publish.
 
-This log gives the team several handles. `severity` makes the event easy to filter. `route` and `dependency` describe the code path. `checkout_id` helps the support team connect the ticket to internal evidence. `release` ties the event to rollout history. The trace fields let Cloud Logging and Cloud Trace talk about the same request.
+The easiest picture is a delivery route map. The package starts at the browser, reaches `image-upload-api`, goes through storage, thumbnail generation, metadata write, and Pub/Sub publish, then returns a response. A trace draws that route with timing. Instead of asking "the upload was slow somewhere," the team can see which stop on the route consumed the time.
 
-## The First Incident Walkthrough
-<!-- section-summary: A good first pass moves from customer symptom to exact runtime evidence, then to change evidence and recovery proof. -->
+Traces are strongest for **one representative request**. Metrics show that many uploads are slow. Logs show repeated `thumbnail_timeout` events. A trace shows the exact path for one failed upload and how long each step took. That makes tracing especially useful after metrics and logs have already narrowed the problem.
 
-The first useful movement is from user symptom to metric scope. Cloud Monitoring shows `run.googleapis.com/request_count` for Cloud Run, filtered to `checkout-api`, `us-central1`, and response code class `5xx`. If the graph jumps from a quiet baseline to a sustained spike, the team knows the issue is broad enough to treat as an incident.
+Traces help with user actions that split into several service calls. Without tracing, the team might open five log queries and compare timestamps by hand. With tracing, the responder can see that the request spent 4.8 seconds in `thumbnail.generate`, while the Cloud Storage write and database insert were quick.
 
-The second movement is from scope to exact events. The team uses Cloud Logging to filter by resource type, service name, location, revision, severity, and time window. Resource fields narrow the search before the team reads payload details:
+Traces need instrumentation. Managed services can add some platform evidence, but your application still has to preserve trace context, create useful spans, and attach stable attributes such as service name, environment, route, release, and dependency name. OpenTelemetry is the common standard path for that application instrumentation.
 
-```bash
-gcloud logging read \
-  'resource.type="cloud_run_revision"
-   resource.labels.service_name="checkout-api"
-   resource.labels.location="us-central1"
-   resource.labels.revision_name="checkout-api-00042-n9p"
-   severity>=ERROR
-   timestamp>="2026-06-14T14:00:00Z"' \
-  --project=shop-prod \
-  --limit=25 \
-  --format=json
-```
+## Errors And Audit Logs
+<!-- section-summary: Error groups show repeated application failures, while audit logs show who changed cloud resources. -->
 
-The filter starts with `resource.type` because the team is investigating Cloud Run revision logs, then narrows to one service, region, and revision. `severity>=ERROR` keeps routine request noise out of the first pass, and the timestamp window keeps the query tied to the incident instead of the whole day.
+**Errors** are failed application events that need grouping. Cloud Error Reporting can group similar exceptions so the team sees one repeated failure pattern instead of hundreds of nearly identical stack traces. If `ThumbnailTimeoutError` appears thousands of times after a release, the error group gives responders a faster way to find the pattern and owner.
 
-A useful result has repeated errors from the same revision and enough payload detail to continue the investigation:
-
-```json
-[
-  {
-    "timestamp": "2026-06-14T14:04:12.221Z",
-    "severity": "ERROR",
-    "resource": {
-      "type": "cloud_run_revision",
-      "labels": {
-        "service_name": "checkout-api",
-        "revision_name": "checkout-api-00042-n9p",
-        "location": "us-central1"
-      }
-    },
-    "jsonPayload": {
-      "message": "payment provider rejected checkout request",
-      "route": "POST /checkout",
-      "error_code": "provider_timeout",
-      "release": "2026-06-14.3"
-    },
-    "trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736"
-  }
-]
-```
-
-Healthy output during a calm period might return no rows or a small number of unrelated handled errors. Suspicious output during this incident shows many rows with the same `error_code`, the same release, the same revision, and timestamps that line up with the `5xx` metric spike.
-
-The third movement is from one error event to one request story. If a matching log entry includes `trace`, the team can query every log with the same trace ID and open the trace to see the request timeline. The trace might show `POST /checkout` spending 2.8 seconds inside `payment.authorize`, followed by an exception and an HTTP `500` response.
-
-The fourth movement is from runtime evidence to change evidence. Cloud Audit Logs can show whether a deployment, secret update, IAM change, or networking change happened just before the metric spike. If the audit log shows that the CI/CD service account updated the Cloud Run service at 13:58 UTC and the spike started at 14:01 UTC, the team has a strong rollout suspect.
-
-The last movement is recovery proof. A rollback or fix should move the same user-facing metric back toward normal, reduce error logs, stop new error-group events, and show healthy traces for the same route. The team should close the incident with evidence from the same signals that opened it.
-
-## Application Monitoring And Service Views
-<!-- section-summary: Application Monitoring gives teams a higher-level view of services, workloads, topology, and connected telemetry. -->
-
-Google Cloud also has **Application Monitoring**, which focuses on applications, services, workloads, and topology. A raw log query is great when the team knows the exact service and field. A service view helps when the system has several pieces and the responder needs to see how the pieces relate before drilling into one signal.
-
-For the checkout system, the service view might show `checkout-api`, `inventory-api`, a payment worker, Cloud SQL, Pub/Sub, and external provider calls. The value is orientation. The responder can see which service reports errors, which dependency looks slow, and which telemetry types support that view.
-
-Application Monitoring still depends on good telemetry hygiene. Services need stable names, useful labels, and instrumentation that emits traces and metrics. A clean set of OpenTelemetry resource attributes such as `service.name=checkout-api`, `deployment.environment=prod`, and `service.version=2026-06-14.3` helps the service view, dashboards, logs, and traces agree with each other.
-
-This is also where production teams decide ownership. The checkout team owns the application telemetry and runbook. The platform team might own shared collectors, log routing, metrics scopes, and cross-project views. The security team might own organization-level audit log exports. A strong setup lets each team do its part without making an incident responder jump through five unrelated tools.
-
-## A Practical First Setup
-<!-- section-summary: A beginner-friendly GCP setup covers platform metrics, structured logs, trace context, audit evidence, dashboards, and a small alert set. -->
-
-A useful first GCP observability setup starts smaller than every possible feature. It needs enough evidence for the first real incident. For `checkout-api`, that means the team can answer whether customers are affected, which request failed, which dependency failed, which revision served it, what changed, and whether the fix worked.
-
-The platform layer starts with Cloud Run's built-in metrics and logs. Cloud Monitoring can graph request count, response code class, latency, and instance behavior. Cloud Logging can store request logs, container logs, and application logs. The team should verify that production Cloud Run services have labels for environment, team, and service ownership.
-
-The first verification can be very concrete. Before creating a dashboard, confirm the service identity, revision, labels, and runtime service account:
-
-```bash
-gcloud run services describe checkout-api \
-  --project=shop-prod \
-  --region=us-central1 \
-  --format='yaml(metadata.labels,spec.template.metadata.labels,spec.template.spec.serviceAccountName,status.latestReadyRevisionName,status.url)'
-```
-
-This command is read-only. `--region` selects the Cloud Run region, `--project` selects the production project, and the `--format` expression prints only the fields an incident responder needs at the start: labels, runtime service account, latest ready revision, and service URL.
+An error group for the upload incident might look like this in the console:
 
 ```yaml
-metadata:
+errorGroup: ThumbnailTimeoutError
+service: image-upload-api
+version: 2026-06-14.3
+firstSeen: '2026-06-14T14:03:58Z'
+lastSeen: '2026-06-14T14:21:07Z'
+events: 1842
+topFrame: src/thumbnail/render.ts:88
+sampleMessage: thumbnail generation timed out after 4500ms
+```
+
+- `errorGroup` tells the team the repeated failure shape.
+- `service` and `version` connect the error to a deployed Cloud Run revision.
+- `events` shows this is a repeated pattern, not one unusual request.
+- `topFrame` gives the owning code area for the next debugging step.
+
+From there, open the related logs for the group and compare route, release, image-size band, and trace ID. If every sample points at `release=2026-06-14.3` and `operation=thumbnail.generate`, the team can investigate that release path instead of reading hundreds of unrelated error logs.
+
+**Audit logs** record Google Cloud API activity. They answer who changed what and at what time. During the upload incident, Cloud Audit Logs can show a Cloud Run service update, an IAM change, a Secret Manager change, a Cloud Storage policy change, or another control-plane action near the time uploads started failing.
+
+An audit-log event for the matching Cloud Run change might look like this:
+
+```yaml
+timestamp: '2026-06-14T14:01:42Z'
+protoPayload:
+  authenticationInfo:
+    principalEmail: deploy-bot@media-prod.iam.gserviceaccount.com
+  serviceName: run.googleapis.com
+  methodName: google.cloud.run.v2.Services.UpdateService
+  resourceName: projects/media-prod/locations/us-central1/services/image-upload-api
+  request:
+    template:
+      containers:
+      - image: us-central1-docker.pkg.dev/media-prod/apps/image-upload-api:2026-06-14.3
+resource:
   labels:
-    env: prod
-    service: checkout-api
-    team: checkout
-spec:
-  template:
-    metadata:
-      labels:
-        release: "2026-06-14.3"
-    spec:
-      serviceAccountName: checkout-runtime@shop-prod.iam.gserviceaccount.com
-status:
-  latestReadyRevisionName: checkout-api-00042-n9p
-  url: https://checkout-api-7f9c2d4-uc.a.run.app
+    project_id: media-prod
 ```
 
-Healthy output names the expected production labels and the expected runtime service account. Suspicious output might show a missing `team` label, a revision the team did not expect, or a runtime service account with broader access than the service normally needs.
+- `principalEmail` names the identity that changed production.
+- `methodName` shows the type of control-plane change.
+- `resourceName` points at the service affected by the incident.
+- The image tag connects the audit event to the same release that appears in logs, metrics, traces, and the error group.
 
-Then confirm that the service emits request logs and application errors with the resource fields the team expects:
+The ordering matters during incident response. Logs and metrics explain the runtime symptom first. Audit logs then help you connect the symptom to production changes. If the metric spike begins right after a Cloud Run revision update, the audit record gives the team a concrete change to review.
 
-```bash
-gcloud logging read \
-  'resource.type="cloud_run_revision"
-   resource.labels.service_name="checkout-api"
-   resource.labels.location="us-central1"
-   severity>=ERROR' \
-  --project=shop-prod \
-  --freshness=1h \
-  --limit=20 \
-  --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.message,textPayload)'
-```
+## Labels And Context
+<!-- section-summary: Labels, resource fields, release names, and trace IDs connect separate signals into one incident story. -->
 
-The `--freshness=1h` flag is useful during live triage because the responder wants recent evidence first. The table format is a quick scan view, while JSON is better when the team needs the full payload.
+Telemetry needs connected pieces to help during an incident. **Labels and context** are the fields that tell you where evidence came from and how it relates to other evidence. Google Cloud monitored resources add fields such as project ID, region, service name, revision name, and resource type. Your application can add release, team, environment, route, dependency, and trace fields.
 
-```console
-TIMESTAMP                    REVISION_NAME              SEVERITY  MESSAGE                                      TEXT_PAYLOAD
-2026-06-14T14:04:12.221Z     checkout-api-00042-n9p     ERROR     payment provider rejected checkout request
-2026-06-14T14:04:18.904Z     checkout-api-00042-n9p     ERROR     payment authorization timed out after retry
-```
+For Cloud Run, the monitored resource type for revision logs and metrics is often `cloud_run_revision`. Its resource labels can include project ID, location, service name, revision name, and configuration name. Those fields are better than searching for service names inside message text because Cloud Logging and Cloud Monitoring store them as structured metadata.
 
-Healthy output during normal traffic has few or no `ERROR` rows, and routine request logs still carry the expected Cloud Run resource labels. Suspicious output repeats the same revision and message while the dashboard shows a rising `5xx` ratio.
+Use low-cardinality labels for things with a small, predictable set of values, such as `env=prod`, `team=media`, `service=image-upload-api`, and `release=2026-06-14.3`. Put high-cardinality values such as upload IDs, request IDs, or user IDs in logs or traces only after privacy review. High-cardinality metric labels can create too many time series and can make dashboards expensive or hard to read.
 
-The application layer starts with structured logs and traces. The app should write JSON logs with stable fields, should keep secrets and payment data out of telemetry, and should attach trace and span fields when possible. OpenTelemetry is the normal production direction because it gives standard APIs and attributes across languages, collectors, metrics, logs, and traces.
+![Infographic showing logs, metrics, traces, and audit records joined by shared fields such as project, region, service, revision, release, and trace ID.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/shared-context.png)
+*Shared fields do the joining work. A responder can move from a metric spike to logs, traces, and audit events because the evidence names the same service, revision, release, and trace.*
 
-The audit layer starts with Cloud Audit Logs and a retention plan. Admin Activity audit logs should be easy to query during incidents, and security-sensitive logs often need central routing to a controlled project or BigQuery dataset. Data Access audit logs can be high volume, so teams enable them deliberately for the resources where that evidence matters.
+## A First Incident Walkthrough
+<!-- section-summary: A good first response moves from user symptom to scope, request detail, request path, change history, and recovery proof. -->
 
-The audit check should use the same incident time window as the runtime evidence. A deployment audit query might look like this:
+The upload incident opens with the user report. The team opens a Cloud Monitoring chart for Cloud Run request count, `5xx` rate, and p95 latency filtered to `image-upload-api` in `us-central1`. If p95 latency and `5xx` rate both rise after the latest revision started serving traffic, the incident has a clear production shape.
 
-```bash
-gcloud logging read \
-  'logName="projects/shop-prod/logs/cloudaudit.googleapis.com%2Factivity"
-   protoPayload.serviceName="run.googleapis.com"
-   protoPayload.methodName:"UpdateService"' \
-  --project=shop-prod \
-  --freshness=24h \
-  --limit=20 \
-  --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.methodName,protoPayload.resourceName)'
-```
+The team then opens Cloud Logging and filters by resource type, service name, region, revision, severity, and time window. The first result should tell the team whether errors share a route, release, dependency, or sanitized error code. A repeated `thumbnail_timeout` error points the investigation toward image processing instead of storage, database, or Pub/Sub.
 
-This audit query reads the Admin Activity log for Cloud Run service updates. The `protoPayload.serviceName` field narrows the evidence to Cloud Run API activity, and `protoPayload.methodName:"UpdateService"` catches service update methods whose full method names can include versioned API paths.
+If a log entry has a trace field, the team follows that trace in Cloud Trace. A representative trace might show a normal Cloud Storage write, a long thumbnail span, and then a failed HTTP response. That request path gives engineers a concrete next step: inspect the release changes around thumbnail generation, timeout settings, image-size handling, and worker CPU or memory.
 
-```console
-TIMESTAMP                 PRINCIPAL_EMAIL                                  METHOD_NAME                         RESOURCE_NAME
-2026-06-14T13:58:44Z      ci-deploy@shop-prod.iam.gserviceaccount.com       google.cloud.run.v2.Services.UpdateService   namespaces/shop-prod/services/checkout-api
-```
-
-Healthy audit output shows an approved deployment principal, a known resource, and a change time that matches the release notes. Suspicious output includes a human account making an emergency change without an incident record, an unexpected service account, a secret or IAM change near the same time, or a deployment that starts just before the error spike.
-
-The response layer starts with a small dashboard and a small alert set. The top row should show user-facing health: checkout success, `5xx` rate, and p95 latency. The lower rows should show Cloud Run instances, dependency latency, database health, Pub/Sub backlog, recent deployment markers, and current incidents. The first alerts should page on sustained user impact, while brief infrastructure wiggles usually belong on dashboards or lower-priority tickets.
-
-| Setup item | Why it matters during the first incident |
-|---|---|
-| Cloud Run request metrics | Shows traffic, `5xx` rate, latency, and revision-level scope |
-| Structured application logs | Gives searchable fields for route, dependency, release, and error code |
-| Trace context and Cloud Trace | Connects one failed checkout across services and dependencies |
-| Error Reporting | Groups repeated exceptions so responders see the pattern quickly |
-| Cloud Audit Logs | Shows deployment, IAM, secret, and configuration changes |
-| Log routing and retention | Keeps operational and audit evidence available for the right team |
-| Dashboards and alert policies | Turns telemetry into response instead of passive charts |
-
-This setup is enough to begin operating like a production team. Later refinements can add service-level objectives, burn-rate alerts, Prometheus metrics, custom business metrics, synthetic checks, profiling, cross-project metrics scopes, and deeper security exports.
+The team also checks Cloud Audit Logs for the same time window. If the CI/CD service account updated the Cloud Run service shortly before the metric spike, the team can connect runtime evidence with change evidence. A rollback or fix should then reduce the same user-facing metric, stop the repeated error logs, and show healthy traces for new uploads.
 
 ![Infographic showing the first production observability loop: detect, narrow, inspect logs, follow traces, verify audit changes, and recover by watching the same metrics improve.](/content-assets/articles/article-cloud-providers-gcp-observability-what-is-gcp-observability/observability-loop.png)
-*The first setup is useful because it supports a repeatable response loop. The team starts with user impact, follows evidence, checks change history, and verifies recovery with the same signals.*
+*The first setup supports a repeatable response loop. The team checks user impact, follows evidence, checks change history, and verifies recovery with the same signals.*
+
+## AWS Bridge
+<!-- section-summary: AWS has similar observability jobs, while GCP often connects them through Cloud Operations resources, monitored resources, and integrated logging and monitoring workflows. -->
+
+If you know AWS, map the jobs instead of forcing exact product matches. Cloud Logging is closest to CloudWatch Logs for application and platform logs. Cloud Monitoring covers much of the CloudWatch metrics, dashboards, and alarms space. Cloud Trace is closest to AWS X-Ray for distributed tracing. Cloud Audit Logs play the change-history role that CloudTrail often plays in AWS incident review.
+
+The GCP difference you should notice is the Cloud Operations shape around monitored resources. Logs and metrics often carry Google Cloud resource labels such as `cloud_run_revision`, service name, region, and revision. Those resource fields make it natural to filter evidence by the running GCP service before reading application payloads.
+
+For `image-upload-api`, the AWS-style question might be, "Which CloudWatch Logs group, metric alarm, X-Ray trace, and CloudTrail event explain this upload failure?" The GCP version asks the same job questions through Cloud Logging, Cloud Monitoring, Cloud Trace, and Cloud Audit Logs, then leans heavily on project, resource, label, revision, and trace context.
 
 ## Putting It All Together
-<!-- section-summary: GCP observability works when every signal has a job and enough shared context to join the incident story. -->
+<!-- section-summary: GCP observability works through signals with clear jobs and enough shared context to join the incident story. -->
 
-The checkout incident now has a connected shape. Cloud Monitoring notices the customer symptom through error rate and latency. Cloud Logging shows structured application events, platform logs, and audit evidence. Cloud Trace follows one failed checkout through service calls. Error Reporting groups repeated exceptions. Cloud Profiler helps when runtime cost or memory pressure causes the symptom. Labels and resource fields connect every signal to project, region, service, revision, release, team, and trace ID.
+GCP observability is the production evidence loop for your running application. Logs explain events. Metrics show numbers over time. Traces show the request path. Error groups collect repeated exceptions. Audit logs show cloud changes. Labels and context connect the signals to project, region, service, revision, release, team, and trace ID.
 
-The operating habit is steady: start with the user symptom, narrow by resource context, read structured evidence, follow the trace, check change history, fix the cause, and verify the same user-facing metric. Google Cloud gives the services, but the team still has to make the telemetry useful by naming services clearly, writing structured logs, preserving context, and labeling production resources consistently.
+For the image upload incident, the team should be able to say what users saw, how broad the problem was, which request path failed, which release served it, which dependency or operation was slow, who changed production, and whether the fix worked. That is the practical standard for the rest of this observability module.
 
-## What's Next
+## References
 
-The next article goes deeper into Cloud Logging and audit evidence. We will keep the same `checkout-api` incident and look at `LogEntry` fields, structured JSON logs, trace-linked logs, audit queries, Log Router sinks, retention choices, and log-based metrics.
-
----
-
-**References**
-
-- [Google Cloud Observability overview](https://docs.cloud.google.com/stackdriver/docs) - Defines Google Cloud Observability and describes logs, metrics, traces, and application health.
-- [Cloud Logging documentation](https://cloud.google.com/logging/docs) - Explains Cloud Logging concepts, log storage, querying, routing, and analysis.
-- [Cloud Monitoring documentation](https://docs.cloud.google.com/monitoring) - Covers metrics, dashboards, alerting, uptime checks, and service health workflows.
+- [Google Cloud Observability overview](https://docs.cloud.google.com/stackdriver/docs) - Official overview for Google Cloud Observability products and workflows.
+- [Cloud Logging documentation](https://cloud.google.com/logging/docs) - Documents log storage, querying, routing, and analysis.
+- [Cloud Monitoring documentation](https://docs.cloud.google.com/monitoring) - Documents metrics, dashboards, alerting, uptime checks, and service health workflows.
 - [Cloud Trace documentation](https://cloud.google.com/trace/docs) - Documents distributed tracing and latency analysis in Google Cloud.
-- [Error Reporting documentation](https://cloud.google.com/error-reporting/docs) - Explains grouped application errors and exception visibility.
-- [Cloud Profiler documentation](https://cloud.google.com/profiler/docs) - Documents continuous profiling for supported applications.
-- [Cloud Logging monitored resource list](https://docs.cloud.google.com/logging/docs/api/v2/resource-list) - Lists monitored resource types and resource labels such as Cloud Run revision labels.
-- [Cloud Run monitoring](https://cloud.google.com/run/docs/monitoring) - Documents Cloud Run request logs, metrics, and service monitoring workflows.
-- [Google Cloud SDK: gcloud run services describe](https://docs.cloud.google.com/sdk/gcloud/reference/run/services/describe) - Documents the service inspection command used to verify labels, revision, URL, and runtime settings.
+- [Error Reporting documentation](https://cloud.google.com/error-reporting/docs) - Documents grouped application errors and exception visibility.
+- [Find log entries with error groups](https://docs.cloud.google.com/logging/docs/analyze/find-logs-error-groups) - Shows how Error Reporting groups can be used to find related log entries.
+- [Cloud Audit Logs](https://docs.cloud.google.com/logging/docs/audit) - Documents Admin Activity, Data Access, System Event, and Policy Denied audit logs.
+- [Cloud Run monitoring](https://cloud.google.com/run/docs/monitoring) - Documents Cloud Run metrics, logs, and service monitoring workflows.

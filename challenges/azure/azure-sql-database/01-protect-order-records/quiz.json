@@ -1,59 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The order service writes a customer, order header, line items, payment status, and fulfillment state during checkout. Support often asks questions that join these records together. Which storage choice best matches that shape?",
+      "scenario": "The Orders API writes payment-authorized orders to `sql-orders-prod`. Checkout stores orders, payments, refunds, and shipment references in one relational workflow, the reporting team already uses T-SQL, and Friday's release must keep transactions, constraints, and point-in-time restore. Which Azure service is the best fit for that primary record store?",
       "options": [
         {
           "id": "a",
-          "text": "Azure SQL Database, because relational records, constraints, and transactions fit this checkout data."
+          "text": "Azure SQL Database, because it matches the relational schema, transaction, constraint, and restore requirements while staying in the SQL Server family."
         },
         {
           "id": "b",
-          "text": "Blob Storage, because each order can be written as a JSON file."
+          "text": "Azure Cosmos DB for NoSQL, because one JSON document per order aggregate avoids joins and lets the team infer relational rules in application code."
         },
         {
           "id": "c",
-          "text": "Azure Files, because several processes might need a shared folder."
+          "text": "Azure Database for PostgreSQL flexible server, because it is also a managed relational platform with transactions and constraints."
         },
         {
           "id": "d",
-          "text": "Managed Disks, because block storage keeps data close to a VM."
+          "text": "Blob Storage with one JSON object per order, because immutable files preserve history and can be replayed into another system later."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Order records need relational consistency and queries across related facts. Azure SQL Database is the managed relational choice in this module."
+      "explanation": "Azure SQL Database is the best fit because the scenario needs a managed relational store with transactions, constraints, restore, and existing T-SQL operations. Azure Database for PostgreSQL is the closest distractor because it is also a managed relational option, but the scenario explicitly points at the SQL Server family and an existing Azure SQL production path. Cosmos DB and Blob Storage can hold order-shaped data, yet they do not make relational integrity the natural default. See [Microsoft Learn: Azure SQL Database overview](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview?view=azuresql)."
     },
     {
-      "id": "q2",
+      "id": "q3",
       "type": "single",
-      "scenario": "A deploy adds a nullable `coupon_code` column and a later release will start writing values. The team wants to avoid breaking old and new app versions during rollout. What review fits the article?",
+      "scenario": "The Orders API writes payment-authorized orders to `sql-orders-prod`, and the Friday release must preserve transactional integrity and restore options. A developer proposes storing credit decisions in one free-form text column because the UI can parse it later. What should the reviewer challenge?",
       "options": [
         {
-          "id": "a",
-          "text": "Check that the schema change is compatible while both app versions can run."
-        },
-        {
           "id": "b",
-          "text": "Skip database review because nullable columns cannot affect production behavior."
+          "text": "Keep the free-form column, but add a computed field for the most common query and leave the rest of the structure to application parsing."
         },
         {
           "id": "c",
-          "text": "Move coupon data to Blob Storage until every server has the new code."
+          "text": "Move the free-form text into a reporting table for now, then keep the same unstructured payload in the transactional table until the model settles."
+        },
+        {
+          "id": "a",
+          "text": "Important business fields should be modeled so constraints, queries, auditing, and later changes remain reliable."
         },
         {
           "id": "d",
-          "text": "Restart the SQL server after deployment so old connections see the new column."
+          "text": "Increase the service tier first, because schema flexibility is mainly a performance problem rather than a data-integrity problem."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Schema changes are part of deployment. The safe question is whether old and new application versions can both tolerate the database state during rollout."
+      "explanation": "Credit decisions are business-critical facts, so they should be modeled in relational columns and tables that the database can validate and query cleanly. The closest distractor is adding a computed field on top of one free-form payload, but that still leaves the main transactional fact unstructured and hard to constrain or audit. Moving the same payload elsewhere or buying more capacity does not fix the data-model problem. See [Microsoft Learn: Design a relational database in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/design-first-database-tutorial?view=azuresql)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After Friday's Orders API release, support reports that several payment-authorized orders changed status unexpectedly. The incident record contains screenshots of the API response but no database timeline. The team must determine whether a transaction, schema change, or application write changed the rows before attempting recovery. Which evidence request is most useful?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The logical server name, database name, current service tier, and CPU charts during the release window."
+        },
+        {
+          "id": "a",
+          "text": "The affected table and keys, the approximate change window, the caller or release context, and the available restore points."
+        },
+        {
+          "id": "c",
+          "text": "The app's outbound IP list, firewall rules, and private-endpoint status for the SQL connection path."
+        },
+        {
+          "id": "d",
+          "text": "The Azure Activity Log for database configuration changes and the most recent alert history for the logical server."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "To investigate changed rows and choose a safe recovery path, the team needs row-level context, timing, caller or release evidence, and restore options. The closest distractor is the service-tier and CPU snapshot, because it helps with performance review, but it still does not identify which rows changed or how to recover them. Network-path evidence and control-plane logs are even farther from the row-change question. See [Microsoft Learn: Recover a database using backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups?view=azuresql)."
+    },
+    {
+      "id": "03-handle-sql-failure-modes-q1",
+      "type": "single",
+      "scenario": "The Orders API begins timing out when connecting to `sql-orders-prod` immediately after a private-networking deployment. Database CPU and session counts remain normal, and no application artifact changed. Responders need to determine whether name resolution or reachability broke before changing SQL capacity. Which evidence should they inspect first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Database CPU and storage charts, because saturation is the normal cause of connection timeouts."
+        },
+        {
+          "id": "c",
+          "text": "The server name in the connection string and whether the client resolves the expected private endpoint or public endpoint hostname."
+        },
+        {
+          "id": "d",
+          "text": "The recent firewall, private endpoint, and private DNS-zone changes applied during the networking deployment."
+        },
+        {
+          "id": "a",
+          "text": "Connection target, private endpoint or firewall path, DNS result, and application identity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The correct answer follows the Azure SQL connection path end to end. Checking only server-level metrics is weaker because the scenario points at a fresh networking change rather than engine saturation, while hostname resolution details and recent private-network changes are narrower pieces of the broader connection-path review in answer `a`. See [Microsoft Learn: Database Connectivity Architecture](https://learn.microsoft.com/en-us/azure/azure-sql/database/connectivity-architecture?view=azuresql)."
+    },
+    {
+      "id": "03-handle-sql-failure-modes-q2",
+      "type": "multiple",
+      "scenario": "The Orders API shows elevated latency and failed writes against `sql-orders-prod`. The incident commander wants the two checks that most directly reveal whether the problem is inside the database engine right now, rather than only in last week's release history. Which checks belong first? Select two.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Service-tier capacity, DTU or vCore pressure, and wait categories."
+        },
+        {
+          "id": "c",
+          "text": "Recent schema or deployment changes, because they can explain a new pattern even though they do not directly show current engine pressure."
+        },
+        {
+          "id": "b",
+          "text": "Blocking, deadlocks, and long-running queries affecting current transactions."
+        },
+        {
+          "id": "d",
+          "text": "Connection retries and timeout patterns from the API logs, because client-side behavior can confirm symptoms even though it does not directly show database-engine pressure."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Capacity, waits, blocking, deadlocks, and long-running queries are the two most direct checks for what the database engine is doing right now. Recent schema or deployment changes are the closest distractor because they can explain why the problem started, but they do not directly reveal whether the engine is saturated or contended at this moment. API retry and timeout patterns help confirm symptoms from the client side, yet they still do not directly show the internal state of the database engine. See [Microsoft Learn: Monitor and tune Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/monitor-tune-overview?view=azuresql)."
+    },
+    {
+      "id": "03-handle-sql-failure-modes-q4",
+      "type": "single",
+      "scenario": "A password rotation for `sql-orders-prod` causes an outage because the old password was copied into three App Service settings and one pipeline variable. Security requires future rotations without editing several release surfaces, and the runtime already has a managed identity. Which remediation best reduces credential drift?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use managed identity for SQL access where the workload supports it, or reduce remaining secret use to one controlled reference path and inventory every SQL caller."
+        },
+        {
+          "id": "b",
+          "text": "Keep SQL passwords, but store one shared secret in Key Vault and reference that secret from every caller so rotation touches only the secret value."
+        },
+        {
+          "id": "c",
+          "text": "Move the database password into slot settings only, because App Service slots are the supported place for credentials that several deployments share."
+        },
+        {
+          "id": "d",
+          "text": "Pause rotation until every legacy caller is discovered, because controlled rotation is riskier than leaving the known password in place."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed identity removes the repeated password-distribution problem altogether for supported workloads, and a single controlled secret path is the next-best reduction for any remaining legacy caller. The closest distractor is centralizing one password in Key Vault, which is better than copying the same secret into several places, but it still leaves a password lifecycle to manage when managed identity is already available. Slot settings and pausing rotation both preserve unnecessary credential risk. See [Microsoft Learn: Microsoft Entra authentication for Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview?view=azuresql)."
+    },
+    {
+      "id": "03-handle-sql-failure-modes-q5",
+      "type": "single",
+      "scenario": "The Orders API writes payment-authorized orders to `sql-orders-prod`, and the Friday release must preserve transactional integrity and restore options. An app retries every failed SQL write immediately and creates a thundering herd during maintenance. What is the best review finding?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep retries immediate so writes complete as soon as maintenance ends, but cap the total retry count."
+        },
+        {
+          "id": "c",
+          "text": "Move the retry loop into a background worker so the API returns quickly, even if duplicate writes still need cleanup later."
+        },
+        {
+          "id": "a",
+          "text": "Use bounded retries with backoff, idempotency, and explicit failure handling."
+        },
+        {
+          "id": "d",
+          "text": "Retry once immediately and let the database reject duplicates, because SQL transactions are already responsible for concurrency control."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Bounded retries with backoff and idempotent write behavior reduce pressure during transient faults instead of amplifying it. The closest distractor is capping immediate retries, but immediate repeated retries can still create a thundering herd during maintenance or failover. Offloading the same non-idempotent pattern to a worker or relying on duplicate rejection alone still leaves the application behaving unsafely under transient SQL failures. See [Microsoft Learn: Troubleshoot transient connection issues in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/troubleshoot-common-connectivity-issues?view=azuresql)."
     }
   ]
 }

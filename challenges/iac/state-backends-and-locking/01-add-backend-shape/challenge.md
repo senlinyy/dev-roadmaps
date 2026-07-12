@@ -1,15 +1,15 @@
 ---
 title: "Add Backend Shape"
-sectionSlug: an-s3-backend
+sectionSlug: backend-configuration-in-tf-files
 order: 1
 ---
 
-Add the shared production backend in `main.tf`.
+The production root module still uses local state. Add a backend configuration that points this stack at the shared protected state location, while keeping credentials out of the Terraform files.
 
-Requirements:
+Your job:
 
-1. **Backend type:** `s3`.
-2. **Bucket:** `dp-terraform-state-prod`.
-3. **Key:** `devpolaris-orders/prod/terraform.tfstate`.
-4. **Region:** `eu-west-2`.
-5. **Do not add** inline credential fields or AWS credential environment names.
+1. **Configure the S3 backend** for the orders production state record.
+2. **Use the production state bucket, key, and region** from the platform handoff.
+3. **Leave credential material out of backend configuration** so the runner identity supplies access.
+
+The grader checks the backend block in HCL.

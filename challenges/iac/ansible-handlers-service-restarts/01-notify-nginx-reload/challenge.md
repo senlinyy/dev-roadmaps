@@ -1,6 +1,6 @@
 ---
 title: "Notify Nginx Reload"
-sectionSlug: "reloading-nginx-after-config-changes"
+sectionSlug: notify-and-handlers
 order: 1
 ---
 

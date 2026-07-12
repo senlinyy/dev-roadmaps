@@ -1,142 +1,200 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
-    {
-      "id": "q1",
-      "type": "single",
-      "scenario": "A task definition review lists:\n\nenvironment:\n  NODE_ENV=production\n  PORT=3000\n  ORDER_TIMEOUT_MS=2500\n  PUBLIC_BASE_URL=https://orders.devpolaris.com\nsecrets:\n  DATABASE_URL from Secrets Manager\n  PAYMENT_WEBHOOK_SECRET from SSM Parameter Store\n\nWhich review comment is best?",
-      "options": [
-        {
-          "id": "a",
-          "text": "This split is sensible: ordinary values are visible but intentional, and access-bearing values are referenced as secrets."
-        },
-        {
-          "id": "b",
-          "text": "PORT and NODE_ENV must be moved to Secrets Manager because every env var is sensitive."
-        },
-        {
-          "id": "c",
-          "text": "DATABASE_URL should be plaintext environment so operators can debug faster."
-        },
-        {
-          "id": "d",
-          "text": "PUBLIC_BASE_URL should be baked into the image so production cannot change it."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The useful distinction is what the value can do. Ordinary config can be visible and still reviewed carefully. Database URLs and webhook secrets grant access or trust, so the task definition should reference them without exposing values."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "A diff changes this field:\n\nenvironment:\n  DATABASE_PASSWORD=prod-super-secret-value\n\nThe reviewer says it makes rollback easier because the value is visible in the task definition. What should the team do?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Move the password to a secret reference and keep the task definition from becoming a secret document."
-        },
-        {
-          "id": "b",
-          "text": "Accept it because rollback is more important than secret handling."
-        },
-        {
-          "id": "c",
-          "text": "Move all ordinary values into the same plaintext block so they are consistent."
-        },
-        {
-          "id": "d",
-          "text": "Put the password in CloudWatch startup logs and remove it from the task definition."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Rollback records should name secret references, not secret values. Plaintext credentials in task definitions are easy to leak through reviews, history, and screenshots. A secret reference keeps the runtime contract visible without exposing the credential."
-    },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "The Node.js config helper contains this default:\n\nDATABASE_URL = process.env.DATABASE_URL || \"postgres://localhost/orders\"\n\nProduction logs show:\nWARN DATABASE_URL missing, using default localhost\nERROR connect ECONNREFUSED 127.0.0.1:5432\n\nWhat is the best fix?",
+      "scenario": "The Node.js config helper contains this default:\n\nDATABASE_URL = process.env.DATABASE_URL || \"postgres://localhost/orders\"\n\n```text\nProduction logs show:\nWARN DATABASE_URL missing, using default localhost\nERROR connect ECONNREFUSED 127.0.0.1:5432\n```\n\nWhat is the best fix?",
       "options": [
+        {
+          "id": "b",
+          "text": "Allow the localhost default in each environment, but add a metric when production uses it."
+        },
         {
           "id": "a",
           "text": "Fail startup clearly when required production DATABASE_URL is missing instead of using a quiet default."
         },
         {
-          "id": "b",
-          "text": "Keep the default because localhost is safe and proves the app can start."
-        },
-        {
           "id": "c",
-          "text": "Increase desired count so at least one task finds a local database."
+          "text": "Use a non-secret production endpoint as the default and keep credentials in a second variable."
         },
         {
           "id": "d",
-          "text": "Move localhost into Secrets Manager so the default becomes a secret."
+          "text": "Make `DATABASE_URL` required in production and permit the local fallback only in an explicitly selected development environment."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Defaults are fine only when the fallback is genuinely safe. A production database URL is required config, so missing should stop startup with a clear message. Quiet defaults turn config mistakes into confusing runtime failures."
+      "explanation": "Defaults are fine only when the fallback is genuinely safe. A production database URL is required config, so missing should stop startup with a clear message. Quiet defaults turn config mistakes into confusing runtime failures.\n\nLearn more in [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)."
+    },
+    {
+      "id": "q-validate-before-traffic-1",
+      "type": "single",
+      "scenario": "A deployment log shows:\n\n```text\nINFO boot service=devpolaris-orders-api release=2026-05-02.6\nWARN DATABASE_URL missing, continuing startup\nINFO http listening address=0.0.0.0 port=3000\nERROR POST /v1/orders status=500 reason=no_database_config\n```\n\nWhat should change?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Keep listening and return unhealthy readiness indefinitely, even though the missing value cannot arrive without a new task definition."
+        },
+        {
+          "id": "c",
+          "text": "Validate only when the first checkout request arrives so deployment health can complete before production traffic."
+        },
+        {
+          "id": "a",
+          "text": "Validate required config during startup and fail before serving traffic when DATABASE_URL is missing."
+        },
+        {
+          "id": "d",
+          "text": "Let the target group reject requests while the service polls for configuration because ECS will eventually replace unhealthy tasks."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Required production config is part of the startup contract. Failing fast with a clear missing-name message is kinder than letting the app accept traffic and fail orders. The log should name the missing variable without printing secret values.\n\nLearn more in [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)."
+    },
+    {
+      "id": "q-diagnose-without-leaking-5",
+      "type": "single",
+      "scenario": "A DevPolaris release captain is validating task definition 39 before using it as the production rollback target. Its secret reference is:\n\nDATABASE_URL -> arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/old-database-url-a1b2\n\nSecrets Manager metadata says: Old-database-url-a1b2 is DeletedDate 2026-04-28T11:00:00Z.\n\nWhat should the team consider before rollback?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Rollback to revision 39 after recreating a secret with the same friendly name, without checking the full ARN stored in the revision."
+        },
+        {
+          "id": "c",
+          "text": "Validate the deleted secret reference only, assuming the rest of revision 39 remains compatible with current dependencies."
+        },
+        {
+          "id": "a",
+          "text": "Revision 39 may not be a safe rollback target because its secret reference no longer exists."
+        },
+        {
+          "id": "d",
+          "text": "Create revision 40 with current secret references and call it the rollback target before testing startup and target health."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback restores a runtime recipe, and that recipe must still be compatible with current config and secrets. A deleted secret reference can make the rollback fail during initialization. Check the contract before pointing production back.\n\nLearn more in [AWS Secrets Manager concepts](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A value classification review includes:\n\nNODE_ENV=production\nORDER_TIMEOUT_MS=2500\nDATABASE_URL=postgres://orders:password@db.prod/orders\nPAYMENT_WEBHOOK_SECRET=whsec_live_123\nDEFAULT_PAGE_SIZE=25\n\nWhich statements are correct?",
+      "scenario": "DevPolaris rotates the production database secret while ECS tasks remain running. Existing tasks received the secret through task-definition secret injection at startup, and a new checkout implementation is protected by a feature flag. The team wants to rotate credentials and expose the feature gradually without sending traffic to tasks that still use the old secret. Which three actions belong in the rollout?",
       "options": [
         {
-          "id": "a",
-          "text": "DATABASE_URL is a secret if it includes credentials or access details."
-        },
-        {
           "id": "b",
-          "text": "PAYMENT_WEBHOOK_SECRET is a secret because it proves trusted webhook events."
-        },
-        {
-          "id": "c",
-          "text": "ORDER_TIMEOUT_MS is ordinary config, but a wrong value can still harm production behavior."
+          "text": "Deploy replacement tasks that resolve the new secret version and prove readiness before old credentials are retired."
         },
         {
           "id": "d",
-          "text": "DEFAULT_PAGE_SIZE must be treated like a password because it is numeric."
+          "text": "Assume existing task environment variables update when Secrets Manager rotates the value, so no task replacement is required."
+        },
+        {
+          "id": "a",
+          "text": "Keep the feature flag separate from artifact deployment so candidate behavior can be enabled gradually after runtime health is proven."
+        },
+        {
+          "id": "c",
+          "text": "Maintain a controlled overlap or rollback path for the old credential until replacement tasks and database access are verified."
+        },
+        {
+          "id": "e",
+          "text": "Print both database passwords in startup logs so operators can compare which tasks refreshed successfully."
         }
       ],
       "correct": [
-        "a",
         "b",
+        "a",
         "c"
       ],
-      "explanation": "Secrets are about access, identity, signing, or trust. Ordinary values can still break behavior and should be reviewed. Safe defaults belong only where the fallback is optional and harmless."
+      "explanation": "Secret injection into an ECS task happens at startup, so rotation normally requires replacement tasks to receive the new value. Credential overlap or another controlled transition prevents old tasks from losing access before the new tasks are healthy. A feature flag can then expose candidate behavior independently. Existing environment values do not refresh automatically, and secret values must not be logged.\n\nLearn more in [Passing Secrets Manager secrets to ECS containers](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html)."
     },
     {
-      "id": "q5",
+      "id": "q1",
       "type": "single",
-      "scenario": "A release changes only runtime values:\n\nORDER_TIMEOUT_MS: 2500 to 500\nPUBLIC_BASE_URL: https://orders.devpolaris.com to https://api.devpolaris.com\nimage digest: unchanged\n\nHow should this be treated?",
+      "scenario": "A task definition review lists:\n\n```text\nenvironment:\n  NODE_ENV=production\n  PORT=3000\n  ORDER_TIMEOUT_MS=2500\n  PUBLIC_BASE_URL=https://orders.devpolaris.com\nsecrets:\n  DATABASE_URL from Secrets Manager\n  PAYMENT_WEBHOOK_SECRET from SSM Parameter Store\n```\n\nWhich review comment is best?",
       "options": [
         {
-          "id": "a",
-          "text": "As a real runtime release that needs review, deployment evidence, and rollback notes."
+          "id": "b",
+          "text": "Move each value to Secrets Manager so all runtime configuration shares one retrieval and rotation path."
         },
         {
-          "id": "b",
-          "text": "As harmless metadata because no source code changed."
+          "id": "a",
+          "text": "This split is sensible: ordinary values are visible but intentional, and access-bearing values are referenced as secrets."
         },
         {
           "id": "c",
-          "text": "As a secret rotation because every config value grants access."
+          "text": "Keep credentials in plaintext environment entries because ECS task-definition access is already controlled by IAM."
         },
         {
           "id": "d",
-          "text": "As an ALB certificate change because URLs cannot live in task definitions."
+          "text": "Bake stable values such as `PORT` and `PUBLIC_BASE_URL` into the image, while referencing only credentials at runtime."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Runtime config changes can alter behavior even when the image stays the same. A shorter timeout or wrong public URL can affect users. The team should review and record the change like any other production recipe update."
+      "explanation": "The useful distinction is what the value can do. Ordinary config can be visible and still reviewed carefully. Database URLs and webhook secrets grant access or trust, so the task definition should reference them without exposing values.\n\nLearn more in [AWS Secrets Manager concepts](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html)."
+    },
+    {
+      "id": "q-validate-before-traffic-2",
+      "type": "single",
+      "scenario": "A healthy startup log says:\n\n```text\nINFO config node_env=production port=3000 order_timeout_ms=2500\nINFO config secrets_present=DATABASE_URL,PAYMENT_WEBHOOK_SECRET\nINFO database=startup_check_ok latency_ms=42\nINFO health=ready path=/health\n```\n\nWhy is this log shape useful?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Log the names of present secrets and the successful database check, but omit release and ordinary config metadata."
+        },
+        {
+          "id": "c",
+          "text": "Treat this startup event as sufficient traffic evidence and skip target-health verification."
+        },
+        {
+          "id": "d",
+          "text": "Treat secret-name presence as proof that the values are current and authorized for each downstream operation."
+        },
+        {
+          "id": "a",
+          "text": "It proves safe parts of the runtime contract and secret presence without leaking secret values."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Good startup logs expose metadata and readiness, not credentials. They tell operators which config names were present and whether a fast dependency check passed. Target health and request metrics still matter after startup.\n\nLearn more in [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)."
+    },
+    {
+      "id": "q-diagnose-without-leaking-2",
+      "type": "single",
+      "scenario": "An operator is investigating a missing production secret from the DevPolaris runbook. Before changing IAM or secret resources, the operator checks the command context.\n\nAws sts get-caller-identity Account is 222222222222. Expected production account is 111122223333. Aws region is us-west-2. Orders service region is us-east-1. Error is secret prod/orders/DATABASE_URL not found.\n\nWhat should happen first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop and fix the AWS account and Region context before reading deeper secret or ECS evidence."
+        },
+        {
+          "id": "b",
+          "text": "Assume the secret was deleted because `ResourceNotFoundException` is independent of account and Region."
+        },
+        {
+          "id": "c",
+          "text": "Switch only the Region first and leave the account mismatch for the role-permission investigation."
+        },
+        {
+          "id": "d",
+          "text": "Correct the Region but continue using account `222222222222` because the secret name matches production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Wrong workspace evidence is a hard stop. Many secret-not-found errors are just account or Region mistakes. Fix the context before changing production resources or permissions.\n\nLearn more in [AWS STS GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)."
     }
   ]
 }

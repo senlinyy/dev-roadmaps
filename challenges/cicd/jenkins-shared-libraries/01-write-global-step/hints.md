@@ -1,1 +1,1 @@
-A `vars/foo.groovy` file with a `def call(Map config = [:])` is what makes `foo(...)` callable from a Jenkinsfile. Inside `call`, you can declare a full declarative pipeline; Jenkins's CPS runtime treats it the same as a Jenkinsfile-defined pipeline. Use `config.someKey ?: 'default'` for fallbacks. Inside `sh '...'`, you can interpolate Groovy via the `${...}` GString syntax.
+A global step file in `vars/` becomes callable through its entry point. Use the config map for the service name, Maven goals, and agent label, with safe defaults where callers omit optional fields.

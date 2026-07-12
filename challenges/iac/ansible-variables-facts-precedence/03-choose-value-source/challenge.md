@@ -1,7 +1,6 @@
 ---
-title: "Choose Value Source"
-sectionSlug: "values-need-a-home"
+title: "Variable Precedence"
 order: 3
 ---
 
-Choose the best home for a value that belongs to every orders web host.
+Use host, inventory, and runtime evidence to decide where Ansible values belong and which source wins.

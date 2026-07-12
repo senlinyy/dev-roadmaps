@@ -1,6 +1,6 @@
 ---
 title: "Viewing and Counting"
-sectionSlug: everything-is-text
+sectionSlug: streams-pipes-and-redirection
 order: 1
 ---
 

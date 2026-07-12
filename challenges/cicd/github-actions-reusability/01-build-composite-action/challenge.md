@@ -1,6 +1,6 @@
 ---
 title: "Build a Composite Action"
-sectionSlug: creating-a-composite-action
+sectionSlug: composite-actions
 order: 1
 ---
 

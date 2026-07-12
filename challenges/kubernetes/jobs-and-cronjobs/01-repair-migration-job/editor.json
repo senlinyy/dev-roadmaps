@@ -1,0 +1,23 @@
+{
+  "language": "yaml",
+  "filename": "notification-migration-job.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: notification-add-provider-status-20260614\n  namespace: notifications\nspec:\n  template:\n    spec:\n      containers:\n        - name: migrate\n          image: ghcr.io/customer-notification/notification-api:2026.06.14-2\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "batch/v1", "label": "batch API version" },
+      { "path": ["kind"], "equals": "Job", "label": "Job kind" },
+      { "path": ["metadata", "name"], "equals": "notification-add-provider-status-20260614", "label": "release Job name" },
+      { "path": ["metadata", "namespace"], "equals": "notifications", "label": "application namespace" },
+      { "path": ["spec", "backoffLimit"], "equals": 2, "label": "retry limit" },
+      { "path": ["spec", "activeDeadlineSeconds"], "equals": 900, "label": "active deadline" },
+      { "path": ["spec", "ttlSecondsAfterFinished"], "equals": 86400, "label": "finished Job TTL" },
+      { "path": ["spec", "template", "spec", "restartPolicy"], "equals": "Never", "label": "Job restart policy" },
+      { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/notification-api:2026.06.14-2", "label": "approved migration image" },
+      { "path": ["spec", "template", "spec", "containers", 0, "command"], "includes": "node", "label": "Node command" },
+      { "path": ["spec", "template", "spec", "containers", 0, "args"], "includes": "scripts/migrate-notifications.js", "label": "migration script" },
+      { "path": ["spec", "template", "spec", "containers", 0, "args"], "includes": "--operation=provider-status-20260614", "label": "operation key" }
+    ]
+  }
+}

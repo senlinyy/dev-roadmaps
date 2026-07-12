@@ -1,86 +1,84 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A folder has one Cargo.toml and a src directory. What article word names the project Cargo manages?",
+      "scenario": "A command-line application has 900 lines in `src/main.rs`. Parsing, domain rules, and terminal formatting are interleaved, and integration tests cannot exercise domain behavior without spawning the binary. The package already has one Cargo.toml. Which refactor creates the clearest testable boundary?",
       "options": [
-        {
-          "id": "a",
-          "text": "Package"
-        },
-        {
-          "id": "b",
-          "text": "Pattern"
-        },
-        {
-          "id": "c",
-          "text": "Reference"
-        },
-        {
-          "id": "d",
-          "text": "Formatter"
-        }
+        { "id": "a", "text": "Move reusable parsing and domain behavior into `src/lib.rs` modules, then keep `main.rs` as a thin binary entry point" },
+        { "id": "b", "text": "Create a second Cargo.toml for every source file so each function becomes an independently versioned package" },
+        { "id": "c", "text": "Move domain code into target/debug because integration tests can import generated artifacts as source" },
+        { "id": "d", "text": "Keep all code in main.rs and duplicate the domain rules inside each integration test" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "A package is the Cargo-managed project described by Cargo.toml."
+      "correct": ["a"],
+      "explanation": "A library crate gives the package a reusable, directly testable API, while the binary crate handles process concerns such as arguments and output. Extra manifests and duplicated rules create new maintenance boundaries without solving the design problem. `target` is generated output, not source. [Cargo project layout](https://doc.rust-lang.org/cargo/guide/project-layout.html) describes library and binary roots."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "What are src/main.rs and src/lib.rs in the article vocabulary?",
+      "scenario": "A developer adds `src/parser.rs` with `pub fn parse(...)`, then writes `parser::parse(input)` in `src/lib.rs`. The build reports `use of unresolved module or unlinked crate parser`. The function compiles when pasted directly into lib.rs. Which change addresses the module-tree problem?",
       "options": [
-        {
-          "id": "a",
-          "text": "Crate roots"
-        },
-        {
-          "id": "b",
-          "text": "Lockfiles"
-        },
-        {
-          "id": "c",
-          "text": "Registries"
-        },
-        {
-          "id": "d",
-          "text": "Release channels"
-        }
+        { "id": "a", "text": "Add parser.rs to Cargo.lock because local modules are resolved as external dependencies" },
+        { "id": "b", "text": "Declare the module from the crate tree, such as `mod parser;`, then use an appropriate crate-relative path" },
+        { "id": "c", "text": "Move parser.rs into tests because integration test files are automatically production modules" },
+        { "id": "d", "text": "Make the parse function unsafe because unresolved paths are caused by safe visibility rules" }
       ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "A crate root is where Rust starts reading a binary or library crate."
+      "correct": ["b"],
+      "explanation": "A source file participates only when it is declared in the module tree. Visibility controls access after the module exists; it does not discover files. Cargo.lock and unsafe code solve unrelated problems. [Defining modules](https://doc.rust-lang.org/book/ch07-02-defining-modules-to-control-scope-and-privacy.html) explains declarations and paths."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A file named src/parser.rs exists, but lib.rs does not declare mod parser; or pub mod parser;. What does the article say?",
+      "scenario": "An integration test imports `notes_cli::Note` and tries `Note { title, body }`. Compilation fails because the fields are private. The library already provides `Note::new` and `summary`, and maintainers want freedom to add validation without breaking callers. What should the review recommend?",
       "options": [
-        {
-          "id": "a",
-          "text": "The file is not automatically part of the crate just because it exists."
-        },
-        {
-          "id": "b",
-          "text": "Cargo will always include it by file name."
-        },
-        {
-          "id": "c",
-          "text": "It becomes a dependency in Cargo.lock."
-        },
-        {
-          "id": "d",
-          "text": "It replaces src/main.rs."
-        }
+        { "id": "a", "text": "Move the integration test into target/debug so privacy checks do not apply" },
+        { "id": "b", "text": "Make every field public because a public type cannot otherwise be used outside its module" },
+        { "id": "c", "text": "Keep fields private and use the public constructor and methods as the supported API boundary" },
+        { "id": "d", "text": "Remove the constructor because private fields and public methods cannot coexist on one type" }
       ],
-      "correct": [
-        "a"
+      "correct": ["c"],
+      "explanation": "A public type can retain private representation and expose deliberate construction and behavior methods. That boundary lets maintainers add invariants without making every field assignment part of the public contract. Generated output does not bypass privacy, and constructors are a normal way to expose controlled creation. [Rust visibility](https://doc.rust-lang.org/book/ch07-02-defining-modules-to-control-scope-and-privacy.html) describes this boundary."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "One package must ship `notes-import` and `notes-export`. Both commands use the same `Note`, parser, and validation code, but have different argument parsing and output. Which layout avoids copying the domain implementation?",
+      "options": [
+        { "id": "a", "text": "Use one main.rs and choose the program name by editing Cargo.lock before each build" },
+        { "id": "b", "text": "Create two copies of lib.rs so each executable can modify domain rules independently" },
+        { "id": "c", "text": "Place both entry points in one integration test because tests are the package's deployable binaries" },
+        { "id": "d", "text": "Put shared behavior in the library crate and add separate files under `src/bin/` for the two binary entry points" }
       ],
-      "explanation": "Rust asks the crate root to declare modules explicitly."
+      "correct": ["d"],
+      "explanation": "Additional files under `src/bin` provide separate executable crate roots, while `src/lib.rs` holds shared package behavior. Copying the library invites drift, tests are not the deployment entry points, and Cargo.lock does not select program structure. [Cargo targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html) documents multiple binaries and libraries."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A test under `tests/note_summary.rs` imports `notes_cli::Note`. After `summary` changes from `pub fn` to `fn`, the test fails with `method summary is private`. Unit tests inside the module still pass. What does this evidence mean?",
+      "options": [
+        { "id": "a", "text": "The integration test behaves like an external crate and has detected that the public API no longer exposes summary" },
+        { "id": "b", "text": "The test runner lost Cargo.lock, so method visibility changed during dependency resolution" },
+        { "id": "c", "text": "Integration tests can access private items only when unit tests pass first" },
+        { "id": "d", "text": "The method must move into main.rs because binary crates automatically expose all private methods" }
+      ],
+      "correct": ["a"],
+      "explanation": "Files under `tests` compile as separate crates and exercise the library through its public surface. Module-local unit tests can see different private details, so their success does not preserve an external API. The failure is therefore useful compatibility evidence. [Cargo test targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#integration-tests) explains this boundary."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A maintainer reviews this proposed repository before approving a split from one large binary:\n\n```text\nCargo.toml\nCargo.lock\nsrc/lib.rs\nsrc/main.rs\nsrc/parser.rs\nsrc/bin/export.rs\ntests/parser_contract.rs\ntarget/debug/\n```\n\nWhich review conclusions are supported? Select all that apply.",
+      "options": [
+        { "id": "a", "text": "lib.rs and main.rs are default library and binary crate roots within one package" },
+        { "id": "b", "text": "target/debug should be reviewed and edited as the source of truth for module boundaries" },
+        { "id": "c", "text": "parser_contract.rs can test the library through its public API as a separate crate" },
+        { "id": "d", "text": "parser.rs becomes part of the crate automatically even if no module declaration reaches it" },
+        { "id": "e", "text": "export.rs can provide another binary that reuses the package library" }
+      ],
+      "correct": ["a", "c", "e"],
+      "explanation": "The package can contain default library and binary roots, an additional binary, and external-style integration tests. `parser.rs` still needs a declaration in the module tree, and target contains generated artifacts rather than maintainable source. [Cargo project layout](https://doc.rust-lang.org/cargo/guide/project-layout.html) documents these roles."
     }
   ]
 }

@@ -1,115 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
-      "id": "q1",
+      "id": "q5",
       "type": "single",
-      "scenario": "A customer request to `orders.devpolaris.com` times out. Application logs for `devpolaris-orders-api` have no matching request ID. Which layer should the team inspect before changing the Node.js handler?",
+      "scenario": "The Orders API runs in a private subnet inside `vnet-devpolaris-prod`. It must call a payment provider on the public internet, but the platform team does not want to assign public IP addresses to each workload. The review says simple outbound SNAT is required, and no deep packet inspection or central egress policy has been requested. Which Azure network component is the best first fit?",
       "options": [
         {
           "id": "a",
-          "text": "The public name, entry point, and network path before the backend receives the request."
+          "text": "NAT Gateway attached to the egress subnet."
         },
         {
           "id": "b",
-          "text": "The Azure SQL schema because checkout eventually writes an order."
+          "text": "Azure Firewall with egress rules, if the team wants central inspection and policy on the outbound path."
         },
         {
           "id": "c",
-          "text": "The deployment slot because any timeout means the release process failed."
+          "text": "A Standard Load Balancer outbound rule for the subnet's internet egress path."
         },
         {
           "id": "d",
-          "text": "The resource group tags because ownership metadata controls runtime traffic."
+          "text": "Public IP addresses attached directly to each workload so every service owns its own outbound identity."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "If the app logs never saw the request, the first evidence should come from the path in front of the app: DNS, the entry point, routing, and security rules."
+      "explanation": "NAT Gateway is the best first fit because the scenario asks for explicit outbound internet access without per-workload public IPs or extra inspection requirements. Azure Firewall is the closest distractor because it can also own the egress path, but it introduces a different inspection and policy model than the stated need. Load Balancer outbound rules and per-workload public IPs are both possible shapes, yet NAT Gateway is the cleaner first fit for simple subnet egress. See [Microsoft Learn: What is Azure NAT Gateway?](https://learn.microsoft.com/en-us/azure/nat-gateway/nat-overview)."
     },
     {
-      "id": "q2",
+      "id": "03-diagnose-network-failure-q1",
       "type": "single",
-      "scenario": "The API can reach Azure SQL from staging, but production returns a connection timeout. Both environments use the same container image. What does that evidence suggest?",
+      "scenario": "During a production test, a VM in the same VNet resolves `api.contoso.internal` to `10.20.4.10`. The VM still cannot establish a TCP connection to `10.20.4.10:443`. DNS resolution is stable and the name remains in the correct private zone. Which review area should the engineer check next?",
       "options": [
         {
-          "id": "a",
-          "text": "The container image is invalid in both environments."
-        },
-        {
           "id": "b",
-          "text": "The production network path, private endpoint, DNS, or security rule needs inspection."
+          "text": "Public DNS delegation, because a successful private answer usually still hides an upstream public-zone problem."
         },
         {
           "id": "c",
-          "text": "The production subscription should be replaced."
+          "text": "The database backup retention policy, because TCP timeouts often begin when SQL backup storage is full."
+        },
+        {
+          "id": "a",
+          "text": "Effective routes, NSG or firewall policy, and whether the listener or backend is actually accepting traffic on 443."
         },
         {
           "id": "d",
-          "text": "The checkout code should retry more often before any network review."
+          "text": "The release branch name that introduced the last application change, because name resolution proves the packet path is healthy."
         }
       ],
       "correct": [
-        "b"
+        "a"
       ],
-      "explanation": "Same image plus different network behavior points at the environment around the app. The next step is to inspect production network evidence."
+      "explanation": "Once DNS is working, the next question is whether the packet path and destination listener are healthy. Public DNS is the closest distractor because engineers often keep checking names, but the scenario already proves the private name resolves correctly. Backup policy and source control do not explain a TCP connection failure inside the VNet path. See [Microsoft Learn: Azure virtual network traffic routing](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview) and [Microsoft Learn: Network security groups](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview)."
     },
     {
-      "id": "q3",
-      "type": "multiple",
-      "scenario": "Which evidence helps explain the request path for `devpolaris-orders-api` without relying on memory?",
+      "id": "03-diagnose-network-failure-q3",
+      "type": "single",
+      "scenario": "A subnet route table sends `0.0.0.0/0` to a virtual appliance. The Orders API now fails whenever it calls a public payment endpoint, and the firewall team confirms there is no allow rule for that destination. Which outcome best matches the route design?",
       "options": [
         {
-          "id": "a",
-          "text": "The public DNS record for `orders.devpolaris.com`."
+          "id": "b",
+          "text": "Azure ignores the route because user-defined routes do not apply to public destinations."
         },
         {
-          "id": "b",
-          "text": "The entry point backend health for the orders API pool."
+          "id": "a",
+          "text": "Outbound traffic follows the user-defined route to the appliance and can be dropped there."
         },
         {
           "id": "c",
-          "text": "The subnet, route table, NSG, and private endpoint records used by the API."
+          "text": "The route table automatically grants a matching firewall policy when the next hop is a virtual appliance."
         },
         {
           "id": "d",
-          "text": "A screenshot of the Azure portal landing page with no resource details."
+          "text": "Private DNS stops resolving because a default route always overrides VNet name resolution."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The packets follow the user-defined route, so the firewall policy becomes part of the path and can block the destination. The closest distractor is the claim that Azure ignores the route for public traffic, but a `0.0.0.0/0` user-defined route can absolutely steer that traffic to the appliance. Route tables do not create firewall policy, and DNS can still resolve while packets are denied. See [Microsoft Learn: Azure virtual network traffic routing](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview)."
+    },
+    {
+      "id": "04-review-before-changing-network-q1",
+      "type": "single",
+      "scenario": "A change request proposes expanding production subnet `snet-orders-api` from `/26` to `/24` so future services can share the same address range. The subnet already participates in peering and has live dependencies. Before anyone approves the change, what should the reviewer verify first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the proposed CIDR looks cleaner on diagrams, because Azure networking changes are easiest to review visually."
+        },
+        {
+          "id": "c",
+          "text": "Whether the old subnet name should also change, because renaming and resizing should happen in the same review."
+        },
+        {
+          "id": "d",
+          "text": "Whether the private DNS TTL is below 60 seconds, because subnet changes mainly affect DNS caching."
+        },
+        {
+          "id": "a",
+          "text": "Whether the new range overlaps anything, whether the VNet has free address space, and what dependent routes or peers would be affected."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Address-space overlap, remaining capacity, and dependency impact are the first safety checks because subnet changes affect the real packet map, not just naming. The cleaner-diagram option is the closest distractor because teams often want tidy CIDRs, but visual neatness does not prove the change is safe. DNS TTL and subnet renaming are secondary concerns, not the first approval gate. See [Microsoft Learn: What is Azure Virtual Network?](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview)."
+    },
+    {
+      "id": "07-reason-about-route-changes-q1",
+      "type": "single",
+      "scenario": "A new route sends `10.30.0.0/16` from the API subnet to a virtual appliance. Immediately after the change, calls to partner system `10.30.5.12` fail, even though the destination address did not change. Which check is most important first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the appliance has an allow rule and a valid return path for `10.30.5.12` traffic."
+        },
+        {
+          "id": "b",
+          "text": "Whether private DNS rewrote the destination after the packet left the subnet."
+        },
+        {
+          "id": "c",
+          "text": "Whether Key Vault access policies changed, because route updates and secret permissions are usually reviewed together."
+        },
+        {
+          "id": "d",
+          "text": "Whether the application setting that stores the partner IP needs a shorter value to match the new route."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new next hop is the important change, so the first check is whether the appliance can pass traffic both ways for that prefix. DNS is the closest distractor because the destination is named elsewhere in the system, but the route change is what altered the path to the same IP. Key Vault and app-setting length do not explain the failure. See [Microsoft Learn: Azure virtual network traffic routing](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview)."
+    },
+    {
+      "id": "07-reason-about-route-changes-q3",
+      "type": "single",
+      "scenario": "A change window attaches a new route table to the API subnet. After the change, connections to a private endpoint begin failing even though private DNS still resolves the same private IP address as before. Which review step best matches the article's routing model?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Inspect the public DNS registrar because a private endpoint failure usually begins with the public zone owner."
+        },
+        {
+          "id": "c",
+          "text": "Inspect the SQL table indexes because private endpoint failures usually come from database query plans."
+        },
+        {
+          "id": "a",
+          "text": "Inspect the effective routes on the source NIC or subnet and confirm which next hop Azure is actually using for that private IP."
+        },
+        {
+          "id": "d",
+          "text": "Inspect the alert action-group recipient list because route changes can disable connection notifications."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The route-table attachment changed the path decision, so the right review is the effective route and resulting next hop for the private IP. DNS is the closest distractor because the traffic uses a private name, but the scenario already says resolution is unchanged. Database internals and alert recipients do not determine the packet path. See [Microsoft Learn: Azure virtual network traffic routing](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview)."
+    },
+    {
+      "id": "08-pick-a-safe-network-fix-q3",
+      "type": "multiple",
+      "scenario": "After a network deployment, Application Gateway still reaches the private API, but the API cannot resolve the Azure SQL private endpoint. In the same change set, one NSG rule was broadened from a specific application subnet to a much wider source range. The team confirms there was no route-table change. Which two repairs address the observed problems without exposing the database publicly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Repair the private DNS zone link or record path used for the SQL private endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Replace the private endpoint with a public SQL endpoint so name resolution works without private DNS."
+        },
+        {
+          "id": "b",
+          "text": "Narrow the NSG or firewall rule back to the intended source and destination scope."
+        },
+        {
+          "id": "d",
+          "text": "Leave the wide source rule in place and open `0.0.0.0/0` temporarily so the application team can keep testing."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
-      ],
-      "explanation": "Useful evidence names resources and current behavior. A generic screenshot does not show which boundary accepted, routed, blocked, or dropped traffic."
-    },
-    {
-      "id": "q4",
-      "type": "single",
-      "scenario": "A teammate suggests granting wider RBAC because network and permission failures both look like access problems in tickets. What is the better first response?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Grant Contributor for one hour, then remove it after the incident."
-        },
-        {
-          "id": "b",
-          "text": "Check whether the failure is a management permission problem or a data-plane network path problem."
-        },
-        {
-          "id": "c",
-          "text": "Move the app to a new resource group so old rules stop applying."
-        },
-        {
-          "id": "d",
-          "text": "Restart the app because network settings reload after process start."
-        }
-      ],
-      "correct": [
         "b"
       ],
-      "explanation": "RBAC controls management or service access decisions. It does not open network paths by itself. The team should classify the boundary first."
+      "explanation": "The DNS repair fixes the name-resolution failure, and the narrower rule restores the intended trust boundary. The closest distractor is moving back to a public SQL endpoint because it might seem to bypass the DNS issue, but it changes the architecture and exposure model instead of fixing the broken private path. Leaving the wide rule or opening `0.0.0.0/0` expands access beyond the article's design. See [Microsoft Learn: Azure private endpoint DNS configuration](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns) and [Microsoft Learn: Network security groups](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview)."
     }
   ]
 }

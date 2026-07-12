@@ -1,142 +1,195 @@
 {
-  "passThreshold": 0.8,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A container image build log includes `PAYMENT_API_KEY` as a build argument. The image is pushed to Azure Container Registry and promoted through staging and production. What is the main risk?",
+      "scenario": "The Orders team is reviewing a production release for `ca-orders-api-prod`. The Dockerfile still accepts `PAYMENT_API_KEY` as a build argument, the CI job prints the full `docker build` command into retained logs, and the same image digest is promoted from staging to production. The app could instead request a token at runtime and read the value from Key Vault. What is the main risk the reviewer should record?",
       "options": [
         {
           "id": "a",
-          "text": "The secret can travel with the artifact and be exposed anywhere the image or build logs are available."
+          "text": "The secret can follow the artifact and the build evidence into every environment where the image and logs are copied."
         },
         {
           "id": "b",
-          "text": "Build arguments make the container unable to start in Azure Container Apps."
+          "text": "The risk is limited to the CI run itself, because pushed image digests no longer preserve build time secret exposure."
         },
         {
           "id": "c",
-          "text": "Azure Container Registry automatically rotates any secret found in an image."
+          "text": "The main concern is only the running container, because registry layers and retained build logs do not keep the copied secret value."
         },
         {
           "id": "d",
-          "text": "The secret becomes safer after promotion because production images have stricter tags."
+          "text": "Promoting one immutable image digest is acceptable if each environment uses different tags, because the copied artifact no longer carries the original build evidence."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Secrets should not be shipped inside artifacts or exposed in build logs. Managed identity and secret stores let runtime fetch private values without baking them into the image."
-    },
-    {
-      "id": "q2",
-      "type": "single",
-      "scenario": "The app currently stores a storage account key in an environment variable so it can upload invoices. The team wants to reduce long-lived secrets. What is the better Azure direction?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Use a managed identity with the narrow storage data permission the app needs, then remove the stored account key."
-        },
-        {
-          "id": "b",
-          "text": "Keep the account key but rename it so it is harder to recognize in logs."
-        },
-        {
-          "id": "c",
-          "text": "Put the key in the image label because labels are not part of the app environment."
-        },
-        {
-          "id": "d",
-          "text": "Give every developer the key so failures can be debugged from laptops."
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "Managed identity replaces stored app passwords for Azure resource access. Renaming or spreading the key does not reduce credential risk."
+      "explanation": "Baking the secret into the build path risks exposing it anywhere the image layers, cache, or retained logs are available. The closest distractor is the idea that the risk ends after the registry push, but the secret may already have been copied into artifacts and retained build evidence before runtime ever starts. Managed identities avoid shipping that long lived credential in the first place. See [Managed identities for Azure resources overview](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)."
     },
     {
       "id": "q3",
       "type": "multiple",
-      "scenario": "Which signs suggest a credential is being shipped or stored in the wrong place? The team is reviewing a production release package before promotion, including the Dockerfile, CI logs, pipeline variables, and release notes.",
+      "scenario": "A release review for the Orders platform compares the Dockerfile, CI variables, Key Vault references, and release notes. The runtime plan says `ca-orders-api-prod` will use a managed identity after deployment, but the review still finds one legacy secret path. Which two findings should block promotion because they prove the team is still carrying long lived credential risk?",
       "options": [
         {
           "id": "a",
-          "text": "A secret appears in Docker build arguments or build logs."
+          "text": "The CI job prints a client secret in build output or passes it as a Docker build argument."
         },
         {
           "id": "b",
-          "text": "A connection string is committed into repository configuration."
+          "text": "The release notes record the managed identity principal ID that will be used at runtime."
         },
         {
           "id": "c",
-          "text": "A pipeline variable with a long-lived client secret is shared across unrelated environments."
+          "text": "One shared client secret is reused by staging and production deployment jobs."
         },
         {
           "id": "d",
-          "text": "The app has a managed identity object ID recorded in the release notes."
+          "text": "The app setting stores the Key Vault URI and the user assigned identity client ID."
         }
       ],
       "correct": [
         "a",
-        "b",
         "c"
       ],
-      "explanation": "Build logs, repositories, and shared long-lived secrets are risk signals. Recording a managed identity object ID is normal evidence, not a secret by itself."
+      "explanation": "A secret printed in logs or reused across environments still behaves like a spreadable long lived credential, so both findings should stop the release. The closest distractor is the Key Vault URI plus client ID because it looks like configuration, but those identifiers help the app choose the right managed identity and do not authenticate by themselves. See [Managed identities for Azure resources overview](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)."
     },
     {
-      "id": "q4",
+      "id": "02-separate-identity-from-permission-q1",
       "type": "single",
-      "scenario": "A teammate says, `Managed identity sounds like magic. I would rather use one service principal secret because I can see it.` What is the best teaching response?",
+      "scenario": "An engineer enables a system assigned managed identity on `ca-orders-api-prod` and confirms the resource overview now shows a principal ID. The next deployment starts successfully, but the app still gets `403 Forbidden` when it reads a secret from `kv-devpolaris-prod`. There is no evidence that the identity attachment itself failed. What does that result prove?",
       "options": [
         {
-          "id": "a",
-          "text": "Managed identity lets Azure issue tokens to the running workload, so the app can prove itself without storing a reusable secret."
-        },
-        {
           "id": "b",
-          "text": "Managed identity removes the need for RBAC because Azure trusts every app it hosts."
+          "text": "The managed identity does not really exist because Key Vault secret access is automatic as soon as identity is enabled."
         },
         {
           "id": "c",
-          "text": "Managed identity stores the same client secret in the app setting but hides it from the portal."
+          "text": "System assigned identities cannot read Key Vault secrets, so the app must switch to a user assigned identity."
+        },
+        {
+          "id": "a",
+          "text": "The app has a caller identity, but that identity still needs the correct Key Vault access model or role assignment."
         },
         {
           "id": "d",
-          "text": "Managed identity only works for humans signing in to the portal."
+          "text": "Key Vault can be used only with a stored client secret, even when the workload already has a managed identity."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "Managed identity is not magic and it does not remove permission checks. It changes how the workload gets a token so the app does not need to carry a reusable secret."
+      "explanation": "The failure separates identity from authorization: the app can present a caller, but the vault still decides whether that caller may read secret values. The closest distractor is the suggestion to switch identity type, but both system assigned and user assigned managed identities can request tokens; the missing piece here is permission at the target service. See [Managed identities best practice recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)."
     },
     {
-      "id": "q5",
+      "id": "02-separate-identity-from-permission-q2",
       "type": "single",
-      "scenario": "A security scan finds `AZURE_CLIENT_SECRET` in a production app setting. The app runs on Azure and only calls Key Vault and Blob Storage. What should the migration plan focus on first?",
+      "scenario": "The same managed identity on `ca-orders-api-prod` can read `kv-devpolaris-prod`, but a `Put Blob` call to `stordersprod` fails from the same running revision. Release logs show the secret read succeeded after the app started, then the blob write failed a few seconds later. What is the best interpretation?",
       "options": [
         {
-          "id": "a",
-          "text": "Assign a managed identity to the app, grant narrow access to Key Vault and Blob Storage, then remove the client secret after testing."
+          "id": "b",
+          "text": "The successful Key Vault read proves the token is fully authorized for every Azure data service the app contacts."
         },
         {
-          "id": "b",
-          "text": "Move the client secret into another app setting with a less obvious name."
+          "id": "a",
+          "text": "One access path is working, but blob write permission must still be checked at the storage scope."
         },
         {
           "id": "c",
-          "text": "Give the secret a longer expiration date to avoid rotation incidents."
+          "text": "Storage automatically inherits the Key Vault role assignment when the same managed identity is used for both calls."
         },
         {
           "id": "d",
-          "text": "Put the secret in a resource tag so it is outside the runtime configuration."
+          "text": "A second managed identity is required because one workload identity cannot hold roles on both Key Vault and Storage."
         }
       ],
       "correct": [
         "a"
       ],
-      "explanation": "The app is an Azure workload calling Azure services, which is a strong fit for managed identity. The migration should test identity, RBAC, and runtime behavior before removing the old secret."
+      "explanation": "A successful Key Vault read proves only that the app has one valid role assignment on one target. The closest distractor is the idea that one token should authorize every later call, but Azure services still evaluate the role assignments and scopes that apply to their own resources. See [Managed identities best practice recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)."
+    },
+    {
+      "id": "02-separate-identity-from-permission-q3",
+      "type": "single",
+      "scenario": "The production API and a background worker both attach `mi-orders-runtime-prod`. The API only needs Blob read access for invoice downloads, but the worker also needs Blob write access for export generation. Security is reviewing whether one shared user assigned identity is still appropriate. Which review comment is strongest?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The API can safely ignore Blob RBAC because the worker already has write permission through the shared identity."
+        },
+        {
+          "id": "c",
+          "text": "Azure automatically splits read and write actions by resource once the same user assigned identity is attached to two workloads."
+        },
+        {
+          "id": "d",
+          "text": "Keep the shared identity and rely on the API code path not to use the worker's extra storage write permission."
+        },
+        {
+          "id": "a",
+          "text": "Sharing one identity may give the API more storage power than its job needs, so separate identities may better enforce least privilege."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A shared user assigned identity means shared permissions, so the review should focus on whether the API is receiving unnecessary write power. The closest distractor is the idea that the API can simply self restrict in code while keeping the broader shared role, but least privilege is enforced by the granted role scope, not by hoping the workload avoids the extra permission at runtime. See [Managed identities best practice recommendations](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations)."
+    },
+    {
+      "id": "02-separate-identity-from-permission-q5",
+      "type": "single",
+      "scenario": "A teammate proposes assigning `Contributor` on `rg-devpolaris-prod` to the API identity because the app needs to read one secret from Key Vault and write invoices into one Blob container. The reviewer wants the smallest useful scope and only the actions the app performs at runtime. What should the reviewer recommend?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant the secret read and blob data permissions the app actually needs at the vault and storage scopes instead of broad `Contributor` on the resource group."
+        },
+        {
+          "id": "b",
+          "text": "Keep `Contributor` because one broad management role is safer than combining data plane and resource specific roles."
+        },
+        {
+          "id": "c",
+          "text": "Use `Owner` so incident response is not blocked if the app later needs to change its own role assignments."
+        },
+        {
+          "id": "d",
+          "text": "Replace the managed identity with a human break glass account because broad group scope is expected for production apps."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Least privilege means giving the runtime only the roles and scopes required for its real jobs, not a broad management role over the whole resource group. The closest distractor is `Contributor` because it feels operationally convenient, but it grants far more control than secret read plus blob write. See [Azure built in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles)."
+    },
+    {
+      "id": "03-separate-runtime-and-pipeline-callers-q2",
+      "type": "single",
+      "scenario": "A GitHub Actions deployment job uses workload identity federation and successfully reads a Key Vault secret before it updates the Container App revision. Minutes later, the new production revision starts serving traffic and fails with `Forbidden` on the same secret read. Nothing in the incident suggests the federated sign in path failed. Which caller did the successful predeploy check most likely prove?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The future production runtime identity, because reading the same secret during deployment normally proves the next app revision will inherit that authorization."
+        },
+        {
+          "id": "c",
+          "text": "The release workflow as a whole, because a successful predeploy secret test usually validates every Azure caller involved in that deployment."
+        },
+        {
+          "id": "a",
+          "text": "The pipeline identity used by GitHub Actions, not the managed identity attached to the running app revision."
+        },
+        {
+          "id": "d",
+          "text": "The Container App resource identity that will be attached after deployment, because the pipeline is acting on behalf of the target workload."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The pipeline and the running workload are different callers with different jobs, so a successful federated pipeline check does not prove the app's managed identity has the same permission. The closest distractor is the assumption that the pipeline tested the future revision, but the article separates deployment identity from runtime identity precisely because that assumption causes production incidents. See [Workload identity federation concepts](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)."
     }
   ]
 }

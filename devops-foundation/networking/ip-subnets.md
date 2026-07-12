@@ -21,11 +21,13 @@ id: article-devops-foundation-networking-ip-subnets
 ## What IP Addresses, Subnets, and Routes Do
 <!-- section-summary: IP addresses identify packet endpoints, subnets group nearby addresses, and routes choose the next hop. -->
 
-After DNS gives the browser `203.0.113.25`, the laptop or server still has a practical problem: where should the first packet go? The browser does not choose the Wi-Fi adapter, Ethernet adapter, VPN tunnel, source address, or gateway. The operating system makes that decision before any firewall, TLS, Nginx, or app code sees the request.
+DNS gives the browser an address such as `203.0.113.25`. That answer is only the start of the trip. The laptop or server still has to decide where the first packet should leave, which source address it should use, and which gateway should receive it.
+
+The browser does not choose the Wi-Fi adapter, Ethernet adapter, VPN tunnel, source address, or gateway. The operating system makes that decision before any firewall, TLS, Nginx, or app code sees the request.
 
 The first piece is the **IP address**. The packet needs a destination address from DNS, and it also needs a source address so replies can come back. The source address usually comes from the network interface the operating system selects.
 
-The second piece is the **subnet**. A subnet tells the machine which addresses are local neighbors. If the destination sits inside the local subnet, the machine can send directly on the local network. If the destination is outside that subnet, the machine needs a gateway.
+The second piece is the **subnet**. A subnet tells the machine which addresses are local neighbors. If the destination sits inside the local subnet, the machine can send directly on the local network. If the destination is outside that subnet, the machine sends the packet to a gateway.
 
 The third piece is the **route**. A route tells the operating system where traffic should go next: directly on the local network, through a default gateway, over a VPN, or through a cloud VPC router. These three pieces answer the routing question that comes after DNS.
 
@@ -33,12 +35,9 @@ For `https://app.example.com/dashboard`, the name lookup might return this addre
 
 ```bash
 dig +short app.example.com
-```
 
-Example output:
-
-```console
-203.0.113.25
+# Example output:
+# 203.0.113.25
 ```
 
 The `dig` output gives the destination IP. It does not choose the source IP, gateway, network interface, or route. Those choices come from the machine's local addressing and routing state. When the browser asks the operating system to open a connection to `203.0.113.25` on port `443`, the system checks that state before any firewall, TLS, Nginx, or application code sees the traffic.
@@ -47,13 +46,10 @@ On a laptop or server, that decision can look like this:
 
 ```bash
 ip route get 203.0.113.25
-```
 
-Example output:
-
-```console
-203.0.113.25 via 10.0.0.1 dev eth0 src 10.0.0.42 uid 1000
-    cache
+# Example output:
+# 203.0.113.25 via 10.0.0.1 dev eth0 src 10.0.0.42 uid 1000
+#     cache
 ```
 
 The route output tells you:
@@ -65,18 +61,18 @@ The route output tells you:
 
 That output is one of the most useful next-step clues in networking. If the source address is wrong, the reply may return to the wrong network. If the gateway is wrong, packets may leave through a VPN or private route that cannot reach the destination. If the interface is wrong, the host may be using Wi-Fi, Ethernet, or a tunnel in a way the operator did not expect.
 
-IP addressing and subnetting are the rules behind that decision. If those rules are wrong, the browser never reaches the firewall, TLS, Nginx, or app. The request can fail before the server knows anything happened.
+IP addressing and subnetting are the rules behind that decision. If those rules are wrong, the browser never reaches the firewall, TLS, Nginx, or app. The request can fail before the server knows anything happened, which is why route output is often the first useful clue after DNS.
 
 ## What an IP Address Represents
 <!-- section-summary: An IP address identifies a host location on a network, while the subnet mask tells which part is the network and which part is the host. -->
 
-A machine can have more than one network door. A laptop may have Wi-Fi, Ethernet, a VPN tunnel, and loopback. A cloud server may have a primary network interface, a private interface, and a container bridge. Each of those doors can have its own address.
+A machine can have more than one network door. A laptop may have Wi-Fi, Ethernet, a VPN tunnel, and loopback. A cloud server may have a primary network interface, a private interface, and a container bridge. Each of those doors can have its own address, and each address can send traffic from a different place in the network.
 
 An **IP address** belongs to a network interface, not only to the machine as a whole. That detail explains why a server can show several addresses at once. One address may receive private app traffic, another may handle admin traffic, and `127.0.0.1` stays inside the host for local processes.
 
 IPv4 addresses look like `10.0.0.42` or `203.0.113.25`. They contain four numbers from `0` to `255`. Each number is an **octet**, which means 8 bits. Four octets give IPv4 a 32-bit address space.
 
-For routing, an IP address gets split into two useful parts. The **network portion** identifies the local network. The **host portion** identifies one address inside that network. A subnet mask tells the machine where that split lives.
+For routing, an IP address gets split into two useful parts. The **network portion** identifies the local network. The **host portion** identifies one address inside that network. A subnet mask tells the machine where that split lives, so the host can decide whether another address is nearby or somewhere beyond a gateway.
 
 For a common home or small-office subnet:
 
@@ -91,23 +87,23 @@ The `/24` means the first 24 bits are the network portion. In dotted form, that 
 
 This matters to routing. If your machine is `192.168.1.42/24` and it wants to reach `192.168.1.50`, the destination is on the same subnet. The machine can use ARP to find the destination MAC address and send a local frame. If it wants to reach `203.0.113.25`, the destination is outside the subnet. The packet goes to the default gateway.
 
-The under-the-hood check is a bit comparison. The host applies the subnet mask to its own address and to the destination address. If the network portions match, the destination is local. If they differ, the destination needs a route through a gateway. The host performs this decision before TCP, TLS, Nginx, or the app sees anything.
+Under the hood, the host performs a bit comparison. It applies the subnet mask to its own address and to the destination address. If the network portions match, the destination is local. If they differ, the destination needs a route through a gateway. The host performs this decision before TCP, TLS, Nginx, or the app sees anything.
 
 The local-or-remote decision happens constantly. A wrong subnet mask can create strange symptoms: the IP can look valid, the gateway can look valid, and the app can still be unreachable because the host classified a destination incorrectly.
 
 ## Subnets and CIDR
 <!-- section-summary: CIDR notation uses the slash number to show how many address bits belong to the network prefix. -->
 
-Cloud networks and office networks rarely route one address at a time. A route table needs to say things like "send this whole group of app-server addresses to the private subnet" or "send every unknown public address to the internet gateway." Subnets give those groups names.
+Cloud networks and office networks rarely route one address at a time. A route table needs to say things like "send this whole group of app-server addresses to the private subnet" or "send every unknown public address to the internet gateway." Subnets give those groups a clear range.
 
-**CIDR**, short for Classless Inter-Domain Routing, is the slash notation used to describe those ranges. A CIDR block like `10.0.0.0/16` means all addresses whose first 16 bits match `10.0`. A block like `10.0.32.0/20` is smaller because the first 20 bits are fixed.
+**CIDR**, short for Classless Inter-Domain Routing, is the slash notation used to describe those ranges. A CIDR block like `10.0.0.0/16` covers every address whose first 16 bits match `10.0`. A block like `10.0.32.0/20` is smaller because the first 20 bits are fixed.
 
 The slash number is the **prefix length**. A smaller prefix gives a larger network. A larger prefix gives a smaller network. The prefix exists so routers can store destinations as ranges instead of one row for every single host address.
 
 | CIDR | Total IPv4 addresses | Typical use |
 | --- | ---: | --- |
 | `/32` | 1 | One exact host address |
-| `/28` | 16 | Small cloud subnet, minimum-sized AWS subnet |
+| `/28` | 16 | Small AWS subnet where the service using it does not require a larger block |
 | `/24` | 256 | Home network or small server subnet |
 | `/20` | 4,096 | Common app-tier or private cloud subnet |
 | `/16` | 65,536 | Common VPC-level allocation |
@@ -130,16 +126,13 @@ print("total:", net.num_addresses)
 print("first usable:", list(net.hosts())[0])
 print("last usable:", list(net.hosts())[-1])
 PY
-```
 
-Example output:
-
-```console
-network: 10.0.32.0
-broadcast: 10.0.47.255
-total: 4096
-first usable: 10.0.32.1
-last usable: 10.0.47.254
+# Example output:
+# network: 10.0.32.0
+# broadcast: 10.0.47.255
+# total: 4096
+# first usable: 10.0.32.1
+# last usable: 10.0.47.254
 ```
 
 The output shows the range `10.0.32.0` through `10.0.47.255`. The next adjacent `/20` starts at `10.0.48.0`. Clean subnet plans use boundaries like this so blocks line up and do not overlap.
@@ -151,12 +144,16 @@ The fields map to real design choices:
 - `total` tells you how much address room the subnet has before provider reservations.
 - `first usable` and `last usable` show the host range for ordinary IPv4 networks.
 
-The next design decision is size. A subnet for a few bastion hosts can be small. A subnet for autoscaling app workers, Kubernetes nodes, load balancer addresses, or serverless VPC connectors needs room for growth and provider reservations. Address room is much easier to plan before workloads depend on the subnet.
+The next design decision is size. A subnet for a few bastion hosts can be small. A subnet for autoscaling app workers, Kubernetes nodes, load balancer addresses, or serverless VPC connectors needs room for growth and provider reservations. Address room is much easier to plan while the network is still empty than after workloads depend on the subnet.
+
+![CIDR boundary infographic showing an IP address split into network bits and host bits with a slash prefix](/content-assets/articles/article-devops-foundation-networking-ip-subnets/cidr-boundary.png)
+
+_The image makes the slash prefix visible by separating the network part from the host part of an address._
 
 ## Private and Public Address Ranges
 <!-- section-summary: Private ranges are for internal networks, while public ranges can be routed across the internet. -->
 
-Two homes can both have a laptop at `192.168.1.42`. They do not collide because that address is private. It only has meaning inside each home network. The public internet never has to decide which house owns `192.168.1.42`.
+Two homes can both have a laptop at `192.168.1.42`. They do not collide because that address is private. It only has meaning inside each home network. The public internet never has to decide which house owns `192.168.1.42`, because that address should stay inside local networks.
 
 A **public IP address** can be routed across the internet. A **private IP address** is reserved for internal networks and should stay behind routers, VPNs, VPCs, or NAT gateways.
 
@@ -189,6 +186,10 @@ The production rule is important: networks that need to talk to each other need 
 
 A real cloud network usually uses both public and private addresses. A user resolves `app.example.com` to the public address of a load balancer. Behind that load balancer, the app servers usually live on private IPs inside a VPC. Public traffic enters the cloud edge, then internal traffic moves through private subnets toward the app.
 
+That layout gives each subnet a job. Public subnets hold resources that need an internet-facing route, such as load balancer nodes or NAT gateways. Private subnets hold app servers, containers, workers, and databases that should receive traffic through controlled internal paths.
+
+Service requirements can set a larger minimum than the VPC platform itself. An AWS Application Load Balancer needs one subnet in each enabled Availability Zone, and each of those subnets must use at least a `/27` block with at least eight free IP addresses. A `/28` is a valid AWS subnet size, but it is too small for an ALB subnet. Those free addresses let AWS replace and scale load balancer nodes without exhausting the subnet.
+
 A common AWS layout starts with a `/16` VPC:
 
 ```
@@ -208,7 +209,7 @@ Each line reserves a separate address range for a different job:
 - `Private subnet A: 10.0.32.0/20` reserves private addresses for app servers, containers, workers, or internal services in one zone.
 - `Private subnet B: 10.0.48.0/20` gives the private tier a second zone, so one zone failure does not remove every private app address.
 
-Public subnets hold internet-facing load balancers or NAT gateways. Private subnets hold app servers, containers, databases, and internal services. The route tables differ. A public subnet has a route to an internet gateway. A private subnet usually routes outbound internet traffic through a NAT gateway and keeps inbound public traffic away from direct instance addresses.
+The address plan is only half the design. The route tables make the subnets act public or private. A public subnet has a route to an internet gateway. A private subnet usually routes outbound internet traffic through a NAT gateway and keeps inbound public traffic away from direct instance addresses.
 
 The route difference is what makes "public" and "private" meaningful:
 
@@ -238,27 +239,21 @@ for i, left in enumerate(subnets):
 else:
     print("checked", len(subnets), "subnets")
 PY
-```
 
-Example output:
-
-```console
-checked 4 subnets
+# Example output:
+# checked 4 subnets
 ```
 
 The output means the four CIDR blocks do not overlap each other. If the script printed `OVERLAP`, the two listed ranges would compete for the same addresses, and routing between those networks would be unsafe.
 
-Route tables complete the layout. A Linux host shows routes with `ip route`:
+Route tables complete the layout. A Linux host shows its local view with `ip route`:
 
 ```bash
 ip route
-```
 
-Example output:
-
-```console
-default via 10.0.32.1 dev eth0
-10.0.32.0/20 dev eth0 proto kernel scope link src 10.0.32.14
+# Example output:
+# default via 10.0.32.1 dev eth0
+# 10.0.32.0/20 dev eth0 proto kernel scope link src 10.0.32.14
 ```
 
 The route table has two important ideas:
@@ -268,10 +263,14 @@ The route table has two important ideas:
 
 Cloud route tables express the same idea at VPC and subnet level. If a private subnet misses the default route to a NAT gateway, app servers may still receive load balancer traffic while outbound package installs, webhooks, and certificate renewal fail. If a public subnet misses the route to an internet gateway, public IP addresses alone will not make the subnet reachable.
 
+![VPC subnet plan infographic showing a larger VPC CIDR split into public and private subnets across two zones](/content-assets/articles/article-devops-foundation-networking-ip-subnets/vpc-subnet-plan.png)
+
+_The image shows why subnet planning reserves separate address ranges for public entry points and private workloads._
+
 ## IPv6 for the Same Service
 <!-- section-summary: IPv6 uses larger addresses and common /64 subnets, while the service still needs DNS, routing, firewall, TLS, proxy, and app handling. -->
 
-Many services need to work for clients on both IPv4 and IPv6 networks. The service name can stay the same, but DNS, firewall rules, route tables, certificates, and proxy listeners may need entries for both address families. The operating idea stays familiar: an address identifies an endpoint, and a prefix describes a network range.
+Many services need to work for clients on both IPv4 and IPv6 networks. The service name can stay the same, but DNS, firewall rules, route tables, certificates, and proxy listeners may need entries for both address families. The familiar idea still applies: an address identifies an endpoint, and a prefix describes a network range.
 
 IPv6 addresses look different because they are 128 bits instead of 32. IPv6 exists because IPv4 address space is small for the modern internet. It also gives networks enough room to assign large subnets without tight address conservation. An IPv6 address might look like this:
 
@@ -285,12 +284,9 @@ DNS uses AAAA records for IPv6:
 
 ```bash
 dig +short app.example.com AAAA
-```
 
-Example output:
-
-```console
-2001:db8:10:20::25
+# Example output:
+# 2001:db8:10:20::25
 ```
 
 That answer is the IPv6 version of an A record. If a browser receives both A and AAAA answers, it may try IPv6 first depending on the client and network.
@@ -303,40 +299,34 @@ A Linux host can show IPv6 addresses and routes:
 
 ```bash
 ip -6 addr show dev eth0
-```
 
-Example output:
-
-```console
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
-    inet6 2001:db8:10:20::14/64 scope global
-    inet6 fe80::42:acff:fe11:2/64 scope link
+# Example output:
+# 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
+#     inet6 2001:db8:10:20::14/64 scope global
+#     inet6 fe80::42:acff:fe11:2/64 scope link
 ```
 
 Now ask how the host would reach one IPv6 destination:
 
 ```bash
 ip -6 route get 2001:db8:10:20::25
-```
 
-Example output:
-
-```console
-2001:db8:10:20::25 from :: dev eth0 src 2001:db8:10:20::14 metric 256 pref medium
+# Example output:
+# 2001:db8:10:20::25 from :: dev eth0 src 2001:db8:10:20::14 metric 256 pref medium
 ```
 
 The address output shows `2001:db8:10:20::14/64` as the host's global IPv6 address. The route output says the host would send traffic for `2001:db8:10:20::25` through `eth0` and use `2001:db8:10:20::14` as the source address.
 
-Many production environments run dual stack. That means they publish both A and AAAA records and allow clients to choose IPv4 or IPv6. A dual-stack service needs both address families tested because a broken IPv6 path can affect users even while IPv4 looks healthy from your own machine. The next production decision is simple: when you publish an AAAA record, also verify IPv6 routes, firewall rules, load balancer listeners, TLS, and application logs from an IPv6-capable client.
+Many production environments run dual stack. That means they publish both A and AAAA records and allow clients to choose IPv4 or IPv6. A dual-stack service needs both address families tested because a broken IPv6 path can affect users even while IPv4 looks healthy from your own machine. When you publish an AAAA record, also verify IPv6 routes, firewall rules, load balancer listeners, TLS, and application logs from an IPv6-capable client.
 
 ## Subnet Failure Modes
 <!-- section-summary: Subnet incidents usually come from overlapping ranges, exhausted address pools, wrong masks, missing routes, or IPv4 and IPv6 policy drift. -->
 
-Subnet problems can make an app look flaky even while the app process is fine. A request may leave through the wrong gateway, a new instance may fail to get an address, or a private server may lose outbound internet access. The common patterns below are the ones operators check before blaming the web layer.
+Subnet problems can make an app look flaky even while the app process is fine. A request may leave through the wrong gateway, a new instance may fail to get an address, or a private server may lose outbound internet access. These problems sit underneath HTTP, so operators check them before blaming the web layer.
 
 **Overlapping CIDRs block network connections between environments.** Two VPCs both use `10.0.0.0/16`, and later the team wants VPC peering. The router cannot decide which side owns `10.0.12.34`, so the peering design fails. The real fix is renumbering one side or building an application-layer bridge that avoids direct routing. Renumbering is slow work, so planning non-overlap early is worth the time.
 
-**Subnet exhaustion stops scaling.** A small app subnet starts as `/27`. It feels roomy on day one. Later, autoscaling, load balancer addresses, ENIs, Pods, or serverless VPC connectors consume the pool. New workloads fail with messages about insufficient IP addresses. Cloud subnets usually cannot be resized in place. Teams add a new subnet and migrate workloads, which is far more disruptive than choosing a larger block at the start.
+**Subnet exhaustion stops scaling.** A small app subnet starts as `/27`. It has enough room on day one. Later, autoscaling, load balancer addresses, ENIs, Pods, or serverless VPC connectors consume the pool. New workloads fail with messages about insufficient IP addresses. Cloud subnets usually cannot be resized in place. Teams add a new subnet and migrate workloads, which is far more disruptive than choosing a larger block at the start.
 
 **Wrong masks send traffic to the wrong place.** A host configured as `10.0.32.14/24` inside a real `10.0.32.0/20` subnet thinks `10.0.40.20` is remote, even though it is actually in the same `/20`. Traffic takes the gateway path instead of the local path. Depending on security rules and routes, that can create timeouts that only affect some destinations.
 
@@ -348,38 +338,29 @@ A short triage sequence connects these symptoms to commands:
 
 ```bash
 ip addr show dev eth0
-```
 
-Example output:
-
-```console
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
-    inet 10.0.32.14/20 brd 10.0.47.255 scope global eth0
+# Example output:
+# 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
+#     inet 10.0.32.14/20 brd 10.0.47.255 scope global eth0
 ```
 
 The `inet` line tells you the host address is `10.0.32.14` and the prefix is `/20`. That means the local subnet runs from `10.0.32.0` through `10.0.47.255`.
 
 ```bash
 ip route get 203.0.113.25
-```
 
-Example output:
-
-```console
-203.0.113.25 via 10.0.32.1 dev eth0 src 10.0.32.14 uid 1000
-    cache
+# Example output:
+# 203.0.113.25 via 10.0.32.1 dev eth0 src 10.0.32.14 uid 1000
+#     cache
 ```
 
 This says the host will send traffic for `203.0.113.25` to gateway `10.0.32.1` through `eth0`. If that gateway is missing or unexpected, the problem is still in local routing.
 
 ```bash
 ip neigh show
-```
 
-Example output:
-
-```console
-10.0.32.1 dev eth0 lladdr 02:11:22:33:44:55 REACHABLE
+# Example output:
+# 10.0.32.1 dev eth0 lladdr 02:11:22:33:44:55 REACHABLE
 ```
 
 This means the host has a neighbor-table entry for the gateway. If the entry is missing, stale, or failed, same-link discovery needs attention before higher layers.
@@ -399,10 +380,15 @@ These commands tell you the local address, the selected route, the local neighbo
 
 If those checks look good, traffic is ready for the next gate: firewall rules.
 
+![IP subnets summary infographic showing addresses, CIDR, private ranges, VPC planning, IPv6, routes, and failure modes](/content-assets/articles/article-devops-foundation-networking-ip-subnets/ip-subnets-summary.png)
+
+_The summary image collects the subnet and routing checks used when traffic lands in the wrong place._
+
 ## References
 
 - [RFC 4632: Classless Inter-domain Routing](https://datatracker.ietf.org/doc/html/rfc4632) - CIDR architecture and address aggregation.
 - [RFC 1918: Address Allocation for Private Internets](https://datatracker.ietf.org/doc/html/rfc1918) - Defines the private IPv4 address ranges used in internal networks.
 - [AWS VPC CIDR Blocks](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html) - Official AWS guidance for VPC and subnet CIDR choices, including reserved addresses.
+- [Application Load Balancer subnets](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#subnets-load-balancer) - Documents the `/27` minimum and eight-free-address capacity requirement for each enabled Availability Zone.
 - [Python `ipaddress` Documentation](https://docs.python.org/3/library/ipaddress.html) - Standard library module for validating and calculating IP networks.
 - [RFC 8200: Internet Protocol, Version 6](https://datatracker.ietf.org/doc/html/rfc8200) - Core IPv6 protocol specification.

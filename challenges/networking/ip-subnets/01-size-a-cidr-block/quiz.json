@@ -4,197 +4,224 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A platform team requests one AWS subnet for a bursty worker pool. They need at least 3,900 assignable IPv4 addresses during peak deploys. IPAM has these free aligned blocks in the target VPC: `/22`, `/21`, `/20`, and `/19`. AWS reserves 5 addresses in every subnet. Which is the smallest block that satisfies the request?",
+      "scenario": "A build worker resolves `packages.example.net` to `203.0.113.25`, but downloads leave through an unexpected VPN. The worker reports:\n\n```text\n$ ip route get 203.0.113.25\n203.0.113.25 via 10.90.0.1 dev tun0 src 10.90.12.8 uid 1000\n```\n\nWhich conclusion should guide the next check?",
       "options": [
         {
           "id": "a",
-          "text": "`/22`, because it has 1,024 total addresses and reserves do not apply to private subnets"
+          "text": "DNS selected `tun0`, so the authoritative DNS zone must be changed to name the Ethernet interface"
         },
         {
           "id": "b",
-          "text": "`/21`, because 2,048 total addresses leaves enough room after AWS reservations"
+          "text": "The destination is local to `10.90.12.8`, so the worker should ARP directly for `203.0.113.25`"
         },
         {
           "id": "c",
-          "text": "`/20`, because 4,096 total addresses leaves 4,091 usable after AWS reserves"
+          "text": "The output proves the remote TLS certificate is invalid because the route uses a private source address"
         },
         {
           "id": "d",
-          "text": "`/19`, because every subnet with more than 1,000 hosts must use 8,192 addresses"
+          "text": "The operating system selected gateway `10.90.0.1`, interface `tun0`, and source `10.90.12.8`, so route priority and VPN policy should be reviewed before the application"
         }
       ],
       "correct": [
-        "c"
+        "d"
       ],
-      "explanation": "The article gives the formula `2^(32 - prefix)` total addresses and notes AWS reserves 5 per subnet. A `/20` has 4,096 total and 4,091 usable in AWS, so it is the smallest listed block that clears 3,900. `/21` and `/22` are too small. `/19` works but is not the smallest satisfying choice."
+      "explanation": "`ip route get` shows the route the kernel selected for this destination, including next hop, interface, and source address. DNS supplied only the destination IP. The public destination is not a local neighbor, and the evidence says nothing about TLS yet. [RFC 1122](https://datatracker.ietf.org/doc/html/rfc1122) describes host IP routing responsibilities."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "During a peer review, someone writes `10.50.4.130/25` on a firewall ticket and asks for the subnet boundary before approving the rule. What are the network and broadcast addresses for this subnet?",
+      "scenario": "A platform team needs an AWS subnet for 3,900 worker interfaces at peak. IPAM offers aligned `/22`, `/21`, `/20`, and `/19` blocks. The design must use the smallest block that fits after AWS reserves five addresses. Which block should be allocated?",
       "options": [
         {
           "id": "a",
-          "text": "Network `10.50.4.0`, broadcast `10.50.4.255`"
+          "text": "`/21`, because its 2,048 total addresses are doubled when the subnet is private"
         },
         {
           "id": "b",
-          "text": "Network `10.50.4.128`, broadcast `10.50.4.255`"
+          "text": "`/20`, because 4,096 total addresses leave 4,091 usable after the provider reservations"
         },
         {
           "id": "c",
-          "text": "Network `10.50.4.130`, broadcast `10.50.4.130`"
+          "text": "`/19`, because AWS requires 8,192 addresses whenever a workload exceeds 1,000 interfaces"
         },
         {
           "id": "d",
-          "text": "Network `10.50.4.64`, broadcast `10.50.4.191`"
+          "text": "`/22`, because provider reservations replace the normal address-count formula"
         }
       ],
       "correct": [
         "b"
       ],
-      "explanation": "A `/25` splits a `/24` into two blocks of 128 addresses: `.0` through `.127`, and `.128` through `.255`. The address `.130` is in the second half, so the network is `10.50.4.128` and the broadcast is `10.50.4.255`. The key mental model is that subnet boundaries align to the block size."
+      "explanation": "IPv4 CIDR capacity is `2^(32 - prefix)`. A `/20` has 4,096 total addresses and 4,091 usable in an AWS subnet, making it the smallest offered block above 3,900. The `/21` and `/22` are too small, while `/19` wastes more of the parent allocation than required. [RFC 4632](https://datatracker.ietf.org/doc/html/rfc4632) defines CIDR, and [Amazon VPC subnet sizing](https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html) documents reserved addresses."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A VPC plan starts with `10.0.0.0/16`. Two `/20` subnets are already allocated:\n\n```text\n10.0.0.0/20\n10.0.16.0/20\n```\n\nThe team wants the next adjacent `/20` without overlap or gaps. Which block should IPAM allocate next?",
+      "scenario": "A vendor asks to peer a new analytics VPC with the company network. The routed inventory is:\n\n| Network | CIDR |\n| --- | --- |\n| production | `10.0.0.0/16` |\n| office VPN | `192.168.1.0/24` |\n| vendor proposal | `10.0.128.0/17` |\n\nWhat is the blocking design issue?",
       "options": [
         {
           "id": "a",
-          "text": "`10.0.20.0/20`, because the previous block starts at 16"
+          "text": "The vendor range is public because `/17` prefixes cannot be used with RFC 1918 addresses"
         },
         {
           "id": "b",
-          "text": "`10.0.24.0/20`, because each block advances by 8 in the third octet"
+          "text": "The office VPN overlaps the vendor range because all private ranges are one routing domain"
         },
         {
           "id": "c",
-          "text": "`10.0.32.0/20`, because a `/20` advances by 16 in the third octet"
+          "text": "The vendor `/17` is contained inside production's `10.0.0.0/16`, so destination ownership would be ambiguous across the peering path"
         },
         {
           "id": "d",
-          "text": "`10.0.255.0/20`, because it is the last subnet in the `/16`"
+          "text": "The ranges are safe because longest-prefix match automatically makes overlapping peered networks operationally unambiguous"
         }
       ],
       "correct": [
         "c"
       ],
-      "explanation": "A `/20` has 4,096 addresses, which is 16 full values in the third octet. The sequence inside `10.0.0.0/16` is `10.0.0.0/20`, `10.0.16.0/20`, `10.0.32.0/20`, and so on. Starting at 20 or 24 is not aligned to the `/20` boundary and would overlap an existing block or be invalid."
+      "explanation": "`10.0.128.0/17` is a subset of `10.0.0.0/16`. Networks that must route to each other need non-overlapping address space, even when both use valid private ranges. The office VPN does not overlap this proposal, and longest-prefix match cannot create unique ownership for duplicate destinations. [RFC 1918](https://datatracker.ietf.org/doc/html/rfc1918) defines private IPv4 space, while [RFC 4632](https://datatracker.ietf.org/doc/html/rfc4632) defines prefix routing."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A cloud route table has 47 entries and the soft limit is 50. A team wants to add 12 new `/24` application subnets from `10.30.0.0/16` behind the same transit gateway attachment. What allocation strategy best avoids the route limit?",
+      "scenario": "A payments company is moving a three-tier service into a VPC. Its draft places the internet-facing load balancer, application workers, and database in one subnet with `0.0.0.0/0 -> internet-gateway`. Workers need outbound package access, but the security requirement allows direct internet traffic only to the load balancer and requires the database to remain internal. Which subnet revision best meets those constraints?",
       "options": [
         {
           "id": "a",
-          "text": "Scatter the `/24` blocks across the `/16` so future teams have more choices"
+          "text": "Place the load balancer in public subnets, place workers in private subnets with outbound NAT, and keep database subnets on controlled internal routes"
         },
         {
           "id": "b",
-          "text": "Allocate the `/24` blocks inside one aligned supernet, for example a `/20`, and advertise the single covering route"
+          "text": "Keep every workload public and rely on application authentication as the only network boundary"
         },
         {
           "id": "c",
-          "text": "Use `/32` host routes so each instance can move independently"
+          "text": "Place the load balancer in database subnets and give the database the internet gateway route for health checks"
         },
         {
           "id": "d",
-          "text": "Avoid CIDR notation and write the subnet mask in dotted decimal instead"
+          "text": "Remove every default route because private workloads cannot initiate outbound internet connections through NAT"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Subnet role comes from routing and exposure, not merely from using a private IP. Public subnets support the internet-facing entry point, private app subnets can use NAT for outbound access, and database subnets should avoid direct internet routes. Keeping all tiers public expands the attack surface, while removing outbound paths can break required dependencies. [Amazon VPC route table documentation](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html) describes subnet route behavior."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A VPC route table contains these entries:\n\n| Destination | Target |\n| --- | --- |\n| `10.0.0.0/16` | local |\n| `10.0.32.0/20` | inspection appliance |\n| `0.0.0.0/0` | NAT gateway |\n\nA host sends a packet to `10.0.35.12`. Which route wins?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The default route, because it appears last and therefore overrides earlier rows"
+        },
+        {
+          "id": "b",
+          "text": "The local `/16`, because local routes always override more specific destinations"
+        },
+        {
+          "id": "c",
+          "text": "All three routes, because routers duplicate packets across every matching prefix"
+        },
+        {
+          "id": "d",
+          "text": "The `10.0.32.0/20` route, because it is the longest and therefore most specific matching prefix"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "`10.0.35.12` matches all three prefixes, but `/20` is more specific than `/16` and `/0`. Route order does not replace longest-prefix matching, and matching routes do not cause packet duplication. [RFC 4632](https://datatracker.ietf.org/doc/html/rfc4632) explains classless prefix routing and aggregation."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A platform team is approving an AWS network before deployment. The worker tier may reach 1,500 interfaces in `10.20.0.0/22`, while an application tier expected to reach 40 interfaces is assigned `10.20.16.0/27`. Each Availability Zone receives an ALB subnet sized `/28`, despite the service requirement for at least `/27` with eight free addresses. The environment must also route through a branch using `192.168.0.0/16` to a vendor advertising `192.168.40.0/24`. Which findings should block approval? Select all that apply.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The branch and vendor ranges are acceptable because private allocations may overlap when the VPN uses longest-prefix routing"
+        },
+        {
+          "id": "b",
+          "text": "The `/22` worker subnet is too small because it has only 1,024 total addresses before AWS reservations"
+        },
+        {
+          "id": "c",
+          "text": "The `/28` edge subnet is unsuitable for the ALB because AWS requires at least a `/27` and eight free addresses per Availability Zone subnet"
+        },
+        {
+          "id": "d",
+          "text": "The `/27` app subnet can support 40 interfaces if autoscaling launches them gradually rather than in one deployment"
+        },
+        {
+          "id": "e",
+          "text": "The branch `/16` contains the vendor `/24`, so direct VPN routing would have overlapping destination ownership"
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The `/22` cannot fit 1,500 interfaces. The ALB proposal also fails its service-specific requirement: each Availability Zone subnet must be at least `/27` with eight free addresses. The vendor `/24` sits inside the branch `/16`, creating overlapping route ownership. The app `/27` cannot hold 40 interfaces after provider reservations. [Elastic Load Balancing subnet requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#subnets-load-balancer) and [Amazon VPC subnet sizing](https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html) document these constraints."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A dual-stack service publishes both records:\n\n```text\napi.example.com. 300 IN A    198.51.100.25\napi.example.com. 300 IN AAAA 2001:db8:10:20::25\n```\n\nIPv4 monitoring succeeds, but users on IPv6-preferred networks time out before TLS. Which response is most appropriate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete the A record because publishing IPv4 prevents clients from using IPv6 routes"
+        },
+        {
+          "id": "b",
+          "text": "Rotate the certificate first because an IPv6 timeout proves the certificate lacks an AAAA extension"
+        },
+        {
+          "id": "c",
+          "text": "Test the IPv6 route, listener, and firewall policy because the AAAA record exposes a separate path that IPv4-only checks do not validate"
+        },
+        {
+          "id": "d",
+          "text": "Replace the `/64` subnet with `/24` because IPv6 uses the same prefix sizes as IPv4"
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Publishing an AAAA record gives clients a distinct IPv6 path. IPv4 success does not prove the IPv6 route, firewall rules, load balancer listener, or required ICMPv6 behavior. TLS has not started in a connection timeout, and `/64` is a normal IPv6 subnet size rather than an IPv4-style error. [RFC 8200](https://datatracker.ietf.org/doc/html/rfc8200) specifies IPv6 behavior."
+    },
+    {
+      "id": "q8",
+      "type": "single",
+      "scenario": "A private application subnet was created as `/27` for 12 workers. Six months later, autoscaling requests 10 more workers, but deployments fail with `InsufficientFreeAddressesInSubnet`. Existing workers and the load balancer still serve traffic. What is the best long-term response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restart the existing workers because address exhaustion is an application memory leak"
+        },
+        {
+          "id": "b",
+          "text": "Add a correctly sized non-overlapping subnet and migrate or spread workloads, then update capacity planning because cloud subnets usually cannot be enlarged in place"
+        },
+        {
+          "id": "c",
+          "text": "Publish a public DNS record for every worker because public names create additional private addresses"
+        },
+        {
+          "id": "d",
+          "text": "Change the worker mask locally without changing the VPC allocation because hosts can claim adjacent cloud addresses independently"
         }
       ],
       "correct": [
         "b"
       ],
-      "explanation": "The article explains route summarization: adjacent, power-of-two-aligned blocks can be advertised as one shorter prefix. A `/20` covers 16 `/24`s, enough for the 12 requested subnets plus room. Scattering the allocations prevents summarization and consumes route entries. `/32` routes make the limit problem worse."
-    },
-    {
-      "id": "q5",
-      "type": "single",
-      "scenario": "A team asks for `10.70.8.0/29` in AWS for a tiny internal load balancer tier because they only expect two resources. What is the correct review response?",
-      "options": [
-        {
-          "id": "a",
-          "text": "Reject it, AWS VPC subnets cannot be smaller than `/28`, and AWS reserves 5 addresses in each subnet"
-        },
-        {
-          "id": "b",
-          "text": "Approve it, because `/29` has 8 addresses and 2 resources fit"
-        },
-        {
-          "id": "c",
-          "text": "Approve it only if it is a private subnet with no route to an internet gateway"
-        },
-        {
-          "id": "d",
-          "text": "Reject it only if the subnet is in `192.168.0.0/16`"
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The VPC practice section says AWS rejects anything smaller than `/28`. Even when a tiny block looks sufficient on paper, cloud provider constraints and reserved addresses matter. The right move is to allocate at least a `/28`, and often a larger block if the tier may grow."
-    },
-    {
-      "id": "q6",
-      "type": "multiple",
-      "scenario": "You are reviewing a subnet plan. Which comments are valid based on CIDR sizing and the AWS constraints covered in the article? Select all that apply.\n\n```text\nworker subnet: 10.10.0.0/22 for 1,500 instances\npublic edge:   10.10.8.0/28 for a small load balancer tier\ndata tier:     10.10.16.0/21 for 1,000 instances with growth headroom\nlegacy tier:   10.10.24.0/30 for one appliance ENI\n```",
-      "options": [
-        {
-          "id": "a",
-          "text": "The worker subnet is undersized because a `/22` has only 1,024 total addresses before AWS reservations"
-        },
-        {
-          "id": "b",
-          "text": "The public edge `/28` is the smallest AWS-allowed subnet size, with 11 usable addresses after reserves"
-        },
-        {
-          "id": "c",
-          "text": "The data tier `/21` has 2,048 total addresses, so it fits 1,000 instances with reasonable headroom"
-        },
-        {
-          "id": "d",
-          "text": "The legacy tier `/30` is acceptable in AWS because one ENI needs only one usable IP"
-        },
-        {
-          "id": "e",
-          "text": "Every listed subnet must be changed to `/24` because cloud VPCs cannot route mixed prefix lengths"
-        }
-      ],
-      "correct": [
-        "a",
-        "b",
-        "c"
-      ],
-      "explanation": "A `/22` cannot hold 1,500 instances. A `/28` is the AWS minimum and leaves 11 usable addresses after the 5 reserved addresses. A `/21` provides 2,048 total addresses, enough for 1,000 with room. A `/30` is below AWS's allowed minimum, so it should be rejected. VPCs routinely route mixed prefix lengths."
-    },
-    {
-      "id": "q7",
-      "type": "single",
-      "scenario": "A VM is configured with IP `10.0.1.50` and mask `255.255.255.0`. The actual cloud subnet is `10.0.0.0/20`. The VM can reach `10.0.1.80`, but traffic to `10.0.2.100` takes the default gateway path and intermittently fails. What is the root cause?",
-      "options": [
-        {
-          "id": "a",
-          "text": "The VM has the wrong mask, so it thinks only `10.0.1.0/24` is local even though `10.0.2.100` is inside the real `/20`"
-        },
-        {
-          "id": "b",
-          "text": "The VM needs a public IP because private addresses cannot communicate across subnets"
-        },
-        {
-          "id": "c",
-          "text": "The broadcast address for `10.0.0.0/20` is `10.0.1.255`, so `10.0.2.100` is outside the VPC"
-        },
-        {
-          "id": "d",
-          "text": "The default gateway must be removed because gateways are never used inside a VPC"
-        }
-      ],
-      "correct": [
-        "a"
-      ],
-      "explanation": "The article's wrong-mask failure mode matches this exactly. The host was configured as `/24`, so it treats only `10.0.1.0` through `10.0.1.255` as local. In the actual `/20`, `10.0.2.100` is local and should be reached directly. The mismatched mask sends same-subnet traffic to the gateway and creates confusing intermittent failures."
+      "explanation": "The error identifies subnet address exhaustion, not an application or DNS problem. A host cannot safely expand the provider-managed CIDR by changing its own mask. The durable fix is additional planned address space and workload migration or distribution, followed by capacity controls that include autoscaling and provider reservations. [Amazon VPC subnet sizing](https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html) documents subnet address constraints."
     }
   ]
 }

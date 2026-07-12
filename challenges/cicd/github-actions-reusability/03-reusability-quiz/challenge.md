@@ -1,7 +1,6 @@
 ---
-title: "Reusability Concepts and Debugging"
-sectionSlug: diagnosing-reusability-failures
+title: "Actions and Reusability"
 order: 3
 ---
 
-Knowledge check covering composite actions vs reusable workflows, debugging common failures, and the abstraction tradeoff.
+Choose clear boundaries for composite actions, reusable workflows, inputs, outputs, secrets, and versioned rollout.

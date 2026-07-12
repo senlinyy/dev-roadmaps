@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "filename": "notification-cleanup-cronjob.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: notification-expire-stale-deliveries\n  namespace: notifications\nspec:\n  jobTemplate:\n    spec:\n      template:\n        spec:\n          containers:\n            - name: cleanup\n              image: ghcr.io/customer-notification/notification-worker:2026.06.14-2\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["kind"], "equals": "CronJob", "label": "CronJob kind" },
+      { "path": ["metadata", "name"], "equals": "notification-expire-stale-deliveries", "label": "cleanup CronJob name" },
+      { "path": ["spec", "schedule"], "equals": "15 2 * * *", "label": "nightly schedule" },
+      { "path": ["spec", "timeZone"], "equals": "Etc/UTC", "label": "UTC time zone" },
+      { "path": ["spec", "concurrencyPolicy"], "equals": "Forbid", "label": "overlap policy" },
+      { "path": ["spec", "startingDeadlineSeconds"], "equals": 900, "label": "missed-run deadline" },
+      { "path": ["spec", "successfulJobsHistoryLimit"], "equals": 3, "label": "successful Job history" },
+      { "path": ["spec", "failedJobsHistoryLimit"], "equals": 3, "label": "failed Job history" },
+      { "path": ["spec", "jobTemplate", "spec", "backoffLimit"], "equals": 2, "label": "child Job retry limit" },
+      { "path": ["spec", "jobTemplate", "spec", "template", "spec", "restartPolicy"], "equals": "Never", "label": "child Pod restart policy" },
+      { "path": ["spec", "jobTemplate", "spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/customer-notification/notification-worker:2026.06.14-2", "label": "approved cleanup image" },
+      { "path": ["spec", "jobTemplate", "spec", "template", "spec", "containers", 0, "command"], "includes": "node", "label": "Node command" },
+      { "path": ["spec", "jobTemplate", "spec", "template", "spec", "containers", 0, "args"], "includes": "scripts/expire-stale-deliveries.js", "label": "cleanup script" }
+    ]
+  }
+}

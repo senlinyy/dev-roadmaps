@@ -1,7 +1,6 @@
 ---
-title: "Workflow Events and Failure Modes"
-sectionSlug: common-failure-modes
+title: "Workflows and Events"
 order: 4
 ---
 
-Knowledge check covering the event-driven model, job dependencies, concurrency, and common failure patterns.
+Apply event filters, job boundaries, matrices, contexts, and concurrency to realistic workflow failures.

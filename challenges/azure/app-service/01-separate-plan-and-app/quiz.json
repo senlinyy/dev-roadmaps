@@ -1,61 +1,195 @@
 {
-  "passThreshold": 0.75,
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "The orders team sees `asp-devpolaris-orders-prod` and `app-devpolaris-orders-api-prod`. Which description is correct?",
+      "scenario": "The Orders API and an internal admin app share App Service plan asp-orders-prod-eus. At noon the admin app exports large reports and the API latency doubles. Which boundary should the review focus on first?",
       "options": [
         {
           "id": "a",
-          "text": "The App Service plan is the app code, and the web app is only DNS."
+          "text": "The App Service plan, because apps in the same dedicated plan share the worker capacity and resource pressure."
         },
         {
           "id": "b",
-          "text": "The App Service plan is the compute capacity boundary, while the web app holds the application runtime settings, host name, identity, and deployment behavior."
+          "text": "The Orders API Web App configuration, because per-app settings and startup behavior usually determine whether one app can consume more CPU than another."
         },
         {
           "id": "c",
-          "text": "The web app and plan are duplicate names for the same Azure resource."
+          "text": "The deployment slot strategy, because staging and production slots reserve separate worker capacity inside the same plan."
         },
         {
           "id": "d",
-          "text": "The plan stores secrets and the web app stores only static files."
+          "text": "The shared downstream dependency path, because both apps might be waiting on the same database or secret call during the noon export."
         }
       ],
       "correct": [
-        "b"
+        "a"
       ],
-      "explanation": "App Service separates the plan that pays for and supplies capacity from the web app that represents the running backend."
+      "explanation": "The shared App Service plan is the first boundary to review because dedicated-plan apps share worker CPU, memory, and scaling capacity. The shared dependency path is the closest distractor, but the scenario ties the latency spike to another app's scheduled export on the same plan. Web App settings affect only that app, and slots still run on the same plan workers. See [Microsoft Learn: App Service Overview Hosting Plans](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans)."
     },
     {
       "id": "q2",
-      "type": "multiple",
-      "scenario": "The team is reviewing `app-devpolaris-orders-api-prod` after a failed release. They need to know which facts describe the web app runtime itself, not only the App Service plan that supplies capacity. Which evidence belongs to the web app side of an App Service review?",
+      "type": "single",
+      "scenario": "A Web App fails after a release even though plan CPU is below 30 percent. The startup command was changed from npm start to node missing.js. Which object contains the broken setting?",
       "options": [
         {
-          "id": "a",
-          "text": "Runtime version such as Node 20."
-        },
-        {
           "id": "b",
-          "text": "App settings and Key Vault references."
+          "text": "The App Service plan, because worker-pool settings control how every app process starts on that plan."
         },
         {
           "id": "c",
-          "text": "Deployment slots and health check path."
+          "text": "The staging slot configuration, because a slot can carry a different startup command and make it live after swap."
+        },
+        {
+          "id": "a",
+          "text": "The Web App resource, because runtime stack, startup behavior, app settings, identity, and health path live at the app level."
         },
         {
           "id": "d",
-          "text": "The number of workers purchased by the plan only."
+          "text": "The deployment pipeline metadata, because App Service stores the active startup command in the release record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The startup command is an app-level setting on the Web App resource. The staging slot is the closest distractor because slot-specific configuration can become live after a swap, but the question asks which object owns the setting itself. The plan provides shared workers, and release metadata is evidence about the change, not the place where App Service stores runtime configuration. See [Microsoft Learn: App Service Configure Common](https://learn.microsoft.com/en-us/azure/app-service/configure-common)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The Orders API runs on a Standard S1 App Service plan, uses a staging slot, and has a 15-minute post-swap watch window. Finance wants to lower cost by moving five low-traffic preview apps into that same production plan. What should the reviewer challenge first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether autoscale can add workers during preview tests, because additional workers would preserve isolation between apps on the shared plan."
+        },
+        {
+          "id": "a",
+          "text": "Whether sharing the plan is acceptable for production isolation, feature needs, scale, and noisy-neighbor risk."
+        },
+        {
+          "id": "c",
+          "text": "Whether the preview apps can use deployment slots, because slot usage changes release flexibility even though slots still run on the shared plan workers."
+        },
+        {
+          "id": "d",
+          "text": "Whether the preview apps should move into a separate App Service plan, because plan boundaries determine worker isolation more directly than per-app configuration."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Apps in the same dedicated App Service plan share worker capacity, so preview load can affect production even when each app has separate configuration. Autoscale adds shared workers rather than workload isolation. Deployment slots change release workflow, not worker isolation, and a separate App Service plan is the more direct way to separate preview traffic from production capacity. Standard S1 is consistent with the stated slot requirement, unlike a Basic plan, which does not support deployment slots. See [Microsoft Learn: App Service hosting plans](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans) and [Microsoft Learn: App Service deployment slots](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A platform engineer is preparing the release record for `app-orders-api-prod` before a staging-slot swap. The record separates app-specific runtime configuration from the shared worker capacity in `asp-orders-prod`. Which two evidence sets must be recorded against the Web App rather than the App Service plan?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Health check path /healthz and startup command npm start."
+        },
+        {
+          "id": "c",
+          "text": "Worker size, pricing tier, and worker count."
+        },
+        {
+          "id": "b",
+          "text": "System-assigned managed identity and app settings such as APPLICATIONINSIGHTS_CONNECTION_STRING."
+        },
+        {
+          "id": "d",
+          "text": "Region and operating system family for the paid compute pool."
         }
       ],
       "correct": [
         "a",
-        "b",
-        "c"
+        "b"
       ],
-      "explanation": "The web app is where the team checks the runtime behavior. Worker count is plan capacity evidence, not the whole web app picture."
+      "explanation": "Health path, startup command, managed identity, and app settings are Web App-level runtime profile facts. Worker size, tier, count, region, and OS family describe the App Service plan capacity. See [Microsoft Learn: App Service Configure Common](https://learn.microsoft.com/en-us/azure/app-service/configure-common)."
+    },
+    {
+      "id": "03-reason-about-slots-q2",
+      "type": "single",
+      "scenario": "The Orders API runs on App Service plan `asp-orders-prod`, uses a staging slot, and has a 15-minute post-swap watch window. A staging slot passes health checks, but the managed identity on staging has no Key Vault access. The swap would make that slot production. What should happen before swap?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Swap anyway because the production slot identity will apply automatically as soon as traffic moves."
+        },
+        {
+          "id": "c",
+          "text": "Copy the production slot's identity configuration to staging later, because the slot can be treated as ready as long as the code package and health probe pass now."
+        },
+        {
+          "id": "d",
+          "text": "Treat the slot as ready because a successful health probe is enough evidence for swap, even if secret reads fail."
+        },
+        {
+          "id": "a",
+          "text": "Verify the slot-specific managed identity and Key Vault access path, because slot identities can differ from production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed identity can be slot-specific, so the slot that is about to become production must prove it can read the required secret before swap. The closest distractor is treating a passing health check as sufficient, but that misses a real dependency failure on the slot that will soon serve production traffic. Traffic movement does not replace the slot identity, and delaying identity validation until after swap only moves the failure into production. See [Microsoft Learn: App Service Overview Managed Identity](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)."
+    },
+    {
+      "id": "04-diagnose-app-service-failures-q1",
+      "type": "single",
+      "scenario": "app-orders-api-prod returns 503 after a deploy. Plan CPU is low, but the process log shows Cannot find module '/home/site/wwwroot/server.js'. What should be checked first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Web App deployment package, startup command, and runtime stack, because the app process is failing before serving requests."
+        },
+        {
+          "id": "b",
+          "text": "Scale the App Service plan first, because 503 during deployment often means the worker pool cannot initialize the new package fast enough."
+        },
+        {
+          "id": "c",
+          "text": "The health check endpoint and restart loop first, because a bad probe path can produce 503 even when the code package is present."
+        },
+        {
+          "id": "d",
+          "text": "The entry service backend-health probe first, because a failing front-end route is the usual cause of 503 after deployment."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The process log already shows the app cannot load its expected entry file, so the first review target is the deployed package and startup configuration on the Web App. The closest distractor is the health check path, because a bad probe can also surface 503, but it does not explain a missing local module on startup. Low CPU also weakens the scale-first theory, and entry-service health is downstream of the broken app process here. See [Microsoft Learn: App Service Overview Diagnostics](https://learn.microsoft.com/en-us/azure/app-service/overview-diagnostics)."
+    },
+    {
+      "id": "04-diagnose-app-service-failures-q2",
+      "type": "single",
+      "scenario": "The API starts but returns 500 only when it reads ORDERS_DB_PASSWORD. The app setting is a Key Vault reference and the managed identity was recreated yesterday. What should the incident review inspect?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The Key Vault reference status and the exact secret URI or version in the app setting, because a stale reference can break only that password read."
+        },
+        {
+          "id": "c",
+          "text": "Whether the app setting is marked slot-specific and points at the expected secret for this slot, because a slot can carry a different reference than production."
+        },
+        {
+          "id": "a",
+          "text": "The app or slot managed identity object and its Key Vault access to the referenced secret."
+        },
+        {
+          "id": "d",
+          "text": "The app restart and configuration-refresh timeline, because a recreated identity can leave cached configuration state behind until the app reloads the reference."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A Key Vault reference succeeds only if the current app or slot identity can authenticate and is authorized to read the secret. The stale secret URI is the closest distractor, and it should be checked if identity looks correct, but the recreated managed identity is the stronger first lead in this scenario. Slot-specific settings and configuration-refresh timing can matter next, yet neither replaces identity access as the first thing to verify after the identity changed. See [Microsoft Learn: App Service Overview Managed Identity](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity)."
     }
   ]
 }

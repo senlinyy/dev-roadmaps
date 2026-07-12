@@ -1,7 +1,6 @@
 ---
-title: "Separate Config and Secrets"
-sectionSlug: runtime-config
+title: "Runtime Configuration and Safe Rollouts"
 order: 1
 ---
 
-Classify runtime values from concrete task-definition and log evidence. The goal is to separate ordinary values, secrets, and unsafe defaults without treating every env var the same way.
+Apply the linked article to realistic AWS design, release, and incident decisions. Use the evidence and constraints in each case to choose the single best response or the complete valid subset.

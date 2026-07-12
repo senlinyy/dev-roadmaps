@@ -1,7 +1,6 @@
 ---
-title: "Choose The Right Signal"
-sectionSlug: telemetry
+title: "What Is Observability"
 order: 1
 ---
 
-This step checks observability judgment for `devpolaris-orders-api`. Use the scenario details to choose the safest operating answer.
+Use the article's observability model to answer the production scenarios in this quiz.

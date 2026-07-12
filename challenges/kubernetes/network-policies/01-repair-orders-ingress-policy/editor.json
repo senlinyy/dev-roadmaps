@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "network-policy.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-checkout-web-to-orders-api\n  namespace: orders\n  labels:\n    app.kubernetes.io/part-of: orders\nspec:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["apiVersion"], "equals": "networking.k8s.io/v1", "label": "NetworkPolicy API version" },
+      { "path": ["kind"], "equals": "NetworkPolicy", "label": "resource kind" },
+      { "path": ["metadata", "name"], "equals": "allow-checkout-web-to-orders-api", "label": "policy name" },
+      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["spec", "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "orders-api", "label": "protected orders API Pods" },
+      { "path": ["spec", "policyTypes", 0], "equals": "Ingress", "label": "ingress isolation" },
+      { "path": ["spec", "ingress", 0, "from", 0, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"], "equals": "checkout", "label": "checkout namespace source" },
+      { "path": ["spec", "ingress", 0, "from", 0, "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "checkout-web", "label": "checkout web source Pods" },
+      { "path": ["spec", "ingress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 8080 }, "label": "orders API Pod port" }
+    ]
+  }
+}

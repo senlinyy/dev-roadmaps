@@ -1,7 +1,6 @@
 ---
-title: "Review Second Run"
-sectionSlug: "running-the-same-playbook-twice"
+title: "Idempotency"
 order: 3
 ---
 
-Choose the recap that best proves a playbook is repeatable.
+Use repeat-run evidence and task behavior to decide whether an Ansible playbook reports state truthfully.

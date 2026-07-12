@@ -1,7 +1,6 @@
 ---
-title: "Trace Public DNS"
-sectionSlug: public-dns
+title: "Public Entry Points and Load Balancing"
 order: 1
 ---
 
-Practice identifying what DNS proves and what it does not. The questions follow `orders.devpolaris.com` toward a public GCP entry point.
+Review production scenarios covering tracing DNS, HTTPS, load balancer frontends, serverless backends, and health evidence for public GCP services.

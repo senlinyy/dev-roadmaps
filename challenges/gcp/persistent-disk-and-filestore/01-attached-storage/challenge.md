@@ -1,7 +1,6 @@
 ---
-title: "Recognize Attached Storage"
-sectionSlug: attached-storage
+title: "Persistent Disk and Filestore"
 order: 1
 ---
 
-Practice deciding when a workload needs a disk or filesystem path instead of an object, database, or warehouse.
+Review production scenarios covering attached-storage choices for GCP workloads that need block devices, snapshots, placement, or shared filesystem paths.

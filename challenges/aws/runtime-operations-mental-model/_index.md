@@ -1,9 +1,8 @@
 ---
-title: "What Is Runtime Operations"
-description: "Practice reading releases as runtime contracts, artifacts, evidence, health, capacity, and rollback targets."
+title: "What Is a Release in AWS"
+description: "Practice tracing releases through runtime contracts, ALB and ECS evidence, secret access, health, and rollback verification."
 articleId: article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model
-articleSlug: what-is-runtime-operations
 difficulty: medium
 order: 32
-tags: ["aws", "runtime", "releases", "health", "rollback"]
+tags: ["aws", "runtime", "incidents", "ecs", "alb", "secrets", "rollback"]
 ---

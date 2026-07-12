@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "state-inventory-q1",
+      "type": "single",
+      "scenario": "A completed namespace backup contains Deployments, Services, ConfigMaps, Secrets, and PVC objects for the notification platform. Delivery history is stored in managed PostgreSQL, attachments are in object storage, and pending jobs are in a managed broker. The team calls the platform fully recoverable based only on the namespace backup. What is the best review response?",
+      "options": [
+        { "id": "a", "text": "Accept the claim because PVC objects include every database record, bucket object, and broker message used by the namespace." },
+        { "id": "b", "text": "Add recovery paths for the managed database, object store, and broker because cluster objects do not restore external state." },
+        { "id": "c", "text": "Replace the namespace backup with an etcd snapshot because etcd includes provider-managed services outside the cluster." },
+        { "id": "d", "text": "Store extra Deployment replicas because replicas provide recoverable copies of every external dependency." }
+      ],
+      "correct": ["b"],
+      "explanation": "The state inventory must cover each real storage location, including managed services outside Kubernetes. PVC and API objects do not contain external database records, bucket contents, or broker state. An etcd snapshot protects control plane objects, and extra application replicas are not backups of external dependencies."
+    },
+    {
+      "id": "secret-recovery-q2",
+      "type": "single",
+      "scenario": "During a restore drill, an engineer proposes exporting decoded production Secret values into the runbook so recovery is faster. The current design can resync the Secret from an external manager, and drill evidence only needs to prove that `DATABASE_URL` and `WEBHOOK_SIGNING_KEY` exist. Which approach best protects recovery capability?",
+      "options": [
+        { "id": "a", "text": "Resync from the approved secret source and verify only the Secret name and key names without printing values." },
+        { "id": "b", "text": "Commit decoded values beside the manifests so GitOps can recreate the Secret without external access." },
+        { "id": "c", "text": "Print values into drill logs, then rely on namespace deletion to remove every copy of those logs." },
+        { "id": "d", "text": "Skip Secret recovery because Pods can start with missing credentials and receive them after traffic resumes." }
+      ],
+      "correct": ["a"],
+      "explanation": "Resyncing from the protected source preserves recovery while limiting exposure, and key-name checks prove structure without revealing credentials. Plain Git and drill logs create durable secret leaks, while starting without required credentials does not prove a usable restore."
+    },
+    {
+      "id": "snapshot-consistency-q3",
+      "type": "single",
+      "scenario": "A VolumeSnapshot for the training PostgreSQL PVC reaches `readyToUse: true`, but the restored database reports inconsistent files. The snapshot controller and storage platform completed without errors. What is the most accurate conclusion?",
+      "options": [
+        { "id": "a", "text": "A ready snapshot guarantees database-level consistency, so the restore error must come from the Service manifest." },
+        { "id": "b", "text": "The PVC namespace determines transaction consistency, so moving the snapshot to another namespace fixes the files." },
+        { "id": "c", "text": "The application may need a filesystem freeze, database-native backup, or operator-managed snapshot hook for a usable copy." },
+        { "id": "d", "text": "Changing the restored claim to `ReadWriteMany` repairs files captured during active database writes." }
+      ],
+      "correct": ["c"],
+      "explanation": "Snapshot readiness proves the storage copy completed, not that an active database reached an application-consistent point. Database-native coordination or snapshot hooks may be required. Namespace and access mode do not repair inconsistent data captured during writes."
+    },
+    {
+      "id": "recovery-objectives-q4",
+      "type": "single",
+      "scenario": "Product owners accept at most 15 minutes of lost delivery history and require notification workers to return within one hour. The backup job runs every four hours, while the last restore drill took 35 minutes. Which gap should the team address first?",
+      "options": [
+        { "id": "a", "text": "The RTO is missed because any restore longer than 15 minutes violates the one-hour service target." },
+        { "id": "b", "text": "Both objectives are already met because the drill finished in less time than the backup interval." },
+        { "id": "c", "text": "The one-hour RTO requires backups every hour, regardless of how much data loss the business accepts." },
+        { "id": "d", "text": "The four-hour backup interval cannot support a 15-minute RPO even though the 35-minute drill is within the one-hour RTO." }
+      ],
+      "correct": ["d"],
+      "explanation": "RPO measures acceptable data loss, so a four-hour interval cannot reliably recover to within 15 minutes. RTO measures return time, and the 35-minute drill is currently inside the one-hour target. Backup frequency and restore duration prove different objectives."
+    },
+    {
+      "id": "restore-drill-q5",
+      "type": "multiple",
+      "scenario": "The team is planning a safe recovery exercise after changing storage and secret delivery. Which two actions provide the strongest proof without putting production state or customers at risk?",
+      "options": [
+        { "id": "a", "text": "Restore into a separate drill namespace or test cluster and connect non-production dependencies before enabling test traffic." },
+        { "id": "b", "text": "Restore directly over the healthy production namespace so stale backups are tested against live traffic." },
+        { "id": "c", "text": "Verify that restored workloads start, the recovery Pod reads expected data, and a controlled test notification succeeds." },
+        { "id": "d", "text": "Stop after the backup tool reports `Completed` because application verification could modify restored state." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Isolation prevents a drill from overwriting healthy state or reaching customers, while application-level checks prove the restored system and data are usable. Restoring over production is unsafe, and a completed backup status alone does not prove recovery."
+    }
+  ]
+}

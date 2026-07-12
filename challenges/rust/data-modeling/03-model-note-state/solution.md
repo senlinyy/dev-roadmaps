@@ -21,5 +21,3 @@ pub fn published_note() -> Note {
     }
 }
 ~~~
-
-The enum makes the possible note states explicit and attaches the publish date only to the published case.
