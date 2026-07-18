@@ -1,23 +1,12 @@
 ---
 title: "Production Features"
 description: "Turn notebook feature ideas into owned, tested, versioned feature definitions that training and serving teams can trust."
-overview: "Production feature engineering turns useful model inputs into shared product logic. This tutorial follows a grocery substitution model from warehouse schema to feature definition, Feast deployment, tests, review, release, and rollback."
+overview: "Production feature engineering turns useful model inputs into owned product logic. This tutorial owns the feature lifecycle: contract, source and time rules, implementation, tests, versioned release, operation, and retirement. Later articles own offline-online consistency and feature-store architecture."
 tags: ["MLOps", "production", "features"]
 order: 1
 id: "article-mlops-data-for-ml-systems-feature-engineering-in-production"
 ---
 
-## Table of Contents
-
-1. [What Production Features Are](#what-production-features-are)
-2. [The Feature Contract](#the-feature-contract)
-3. [Source Schemas And Time Rules](#source-schemas-and-time-rules)
-4. [Write The Feature Definition](#write-the-feature-definition)
-5. [Test The Feature Before Release](#test-the-feature-before-release)
-6. [Release And Version The Feature](#release-and-version-the-feature)
-7. [Operate The Feature](#operate-the-feature)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## What Production Features Are
 <!-- section-summary: Production features are model inputs with reviewed business meaning, source data, timing rules, owners, tests, and release history. -->
@@ -29,6 +18,20 @@ Imagine FreshBasket, a grocery delivery company. When an item is out of stock, F
 In a notebook, a data scientist may create a useful column called `customer_brand_affinity_90d`. It measures how often a customer chose the same brand family during the last 90 days. The notebook version proves the idea has signal. The production version has to answer harder questions. Which purchases count? Which timestamp defines the 90-day window? What happens for a new customer? Can the online service fetch this value fast enough during checkout? Who approves a change?
 
 That is the difference this article focuses on. Feature engineering in production is less about inventing clever columns and more about making the column safe for repeated use. The model should train and serve with the same meaning. Reviewers should understand the business rule. On-call engineers should know what broke when the feature goes stale.
+
+```mermaid
+flowchart LR
+    Idea["Feature idea and product hypothesis"] --> Contract["Meaning, entity, source, time, owner"]
+    Contract --> Implement["Shared transformation definition"]
+    Implement --> Test["Value, time, parity, and segment tests"]
+    Test --> Release["Versioned feature release"]
+    Release --> Consume["Training and serving consumers"]
+    Consume --> Observe["Freshness, quality, and incidents"]
+    Observe --> Change["Review, new version, or retirement"]
+    Change --> Contract
+```
+
+The lifecycle makes feature ownership visible. A useful calculation enters a reviewed contract, passes implementation and tests, receives a version, and then operates as a dependency of models and products. Monitoring and incidents feed a controlled change rather than a silent edit under the old name.
 
 ![Notebook to production pipeline for turning a feature idea into reviewed code, an artifact, evaluation, release, and monitoring](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/production-feature-pipeline.png)
 
@@ -149,7 +152,7 @@ customer_brand_affinity_source = SparkSource(
 customer_brand_affinity = FeatureView(
     name="customer_brand_affinity",
     entities=[customer],
-    ttl=timedelta(days=91),
+    ttl=timedelta(days=2),
     schema=[
         Field(name="brand_affinity_90d", dtype=Float32),
         Field(name="completed_items_90d", dtype=Int64),
@@ -169,7 +172,7 @@ substitution_ranker_features = FeatureService(
 )
 ```
 
-The code mirrors the contract. The entity is `customer`. The source table has an event timestamp and a created timestamp. The TTL is slightly longer than the 90-day window so late materialization can still fetch the needed value. `online=True` says the values should load into the online store for serving.
+The code mirrors the contract. The entity is `customer`. The source table has an event timestamp and a created timestamp. In Feast, **TTL** means time to live, and the `FeatureView.ttl` value limits how far Feast looks back from each entity timestamp while it builds a historical dataset. Online-key expiration belongs in the online store's settings, while the feature's 90-day business window belongs in the aggregation logic. FreshBasket produces a new 90-day aggregate every day, so a two-day historical lookback tolerates one delayed daily row. The platform monitors materialization freshness separately. `online=True` marks the view for online retrieval after materialization.
 
 The CI job should register this definition only after tests pass. Feast `apply` scans Python files in the feature repository, validates object definitions, and syncs metadata to the registry. A team can run it from CI after code review.
 
@@ -336,7 +339,7 @@ Good feature engineering reaches this point. The feature is no longer a clever n
 ## Putting It Together
 <!-- section-summary: Production feature engineering turns feature ideas into shared, tested, versioned, monitored model inputs. -->
 
-Production features are model inputs with business meaning. They need clear definitions, source schemas, time rules, feature-store code, tests, release packets, and operational checks. The more models that share a feature, the more important this discipline is.
+Production features are model inputs with business meaning. They need clear definitions, source schemas, time rules, implementation code, tests, release packets, and operational checks. The more models that share a feature, the more important this discipline is.
 
 FreshBasket's substitution feature started as a useful notebook column. The production version defined the customer entity, purchase-history window, cutoff time, default value, feature definition, materialization command, tests, release packet, and monitoring query. That is the work that lets training and serving use the same meaning.
 

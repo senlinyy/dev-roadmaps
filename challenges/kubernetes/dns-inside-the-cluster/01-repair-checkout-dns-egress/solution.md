@@ -4,6 +4,11 @@ kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
   namespace: checkout
+  labels:
+    app.kubernetes.io/part-of: checkout
+    app.kubernetes.io/managed-by: platform-team
+  annotations:
+    devpolaris.io/change-ticket: NET-1842
 spec:
   podSelector:
     matchLabels:

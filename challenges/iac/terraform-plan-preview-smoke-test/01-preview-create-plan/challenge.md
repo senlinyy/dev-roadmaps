@@ -3,12 +3,13 @@ title: "Preview a Create Plan"
 order: 1
 ---
 
-The editor starts with a small Terraform AWS root module that creates a private artifact bucket from empty state. Use this as a local smoke test for the Plan Preview panel.
+The editor starts with an incomplete Terraform AWS root module for a private staging artifact bucket. Finish the relationships between its input, local values, resources, and output, then use the Plan Preview panel to inspect the create plan.
 
 Your job:
 
-1. **Open the preview** without changing anything first.
-2. **Confirm the plan summary** shows two resources to add.
-3. **Change `environment`** in `variables.tf` from `dev` to `staging`, then preview again and confirm the bucket name updates.
+1. **Set the environment input** to `staging` and derive the artifact bucket name from that input.
+2. **Apply the shared local tags** to the bucket.
+3. **Complete the public access block** so all four S3 public access controls are enabled and it references the bucket resource.
+4. **Expose the bucket name** from the managed resource, then preview the result and confirm two resources are added.
 
-The grader checks that the authored Terraform shape is still intact. The Preview Plan button checks the local parser output, not a real cloud account.
+The grader checks the authored Terraform relationships and safety controls. The Preview Plan button checks the local parser output, not a real cloud account.

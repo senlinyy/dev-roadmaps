@@ -4,6 +4,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-checkout-web-to-orders-api
   namespace: orders
+  labels:
+    app.kubernetes.io/part-of: orders
 spec:
   podSelector:
     matchLabels:

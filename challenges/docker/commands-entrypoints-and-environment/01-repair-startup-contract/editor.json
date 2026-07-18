@@ -1,0 +1,41 @@
+{
+  "language": "dockerfile",
+  "filename": "Dockerfile",
+  "initialValue": "FROM node:22-alpine\nCOPY src /app/src\nCMD node /app/src/server.js\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "^WORKDIR\\s+/app\\s*$",
+        "label": "application working directory",
+        "flags": "m"
+      },
+      {
+        "pattern": "^ENV\\s+NODE_ENV=production\\s*$",
+        "label": "production environment",
+        "flags": "m"
+      },
+      {
+        "pattern": "^USER\\s+node\\s*$",
+        "label": "non-root user",
+        "flags": "m"
+      },
+      {
+        "pattern": "^ENTRYPOINT\\s+\\[\\s*[\"']node[\"']\\s*\\]\\s*$",
+        "label": "exec-form node entrypoint",
+        "flags": "m"
+      },
+      {
+        "pattern": "^CMD\\s+\\[\\s*[\"']src/server\\.js[\"']\\s*\\]\\s*$",
+        "label": "replaceable default script",
+        "flags": "m"
+      },
+      {
+        "pattern": "^CMD\\s+node\\b",
+        "negate": true,
+        "label": "shell-form command removed",
+        "flags": "m"
+      }
+    ]
+  }
+}

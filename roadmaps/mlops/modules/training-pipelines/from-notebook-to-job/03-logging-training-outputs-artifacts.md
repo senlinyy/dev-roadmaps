@@ -1,24 +1,11 @@
 ---
 title: "Training Artifacts"
 description: "Log the model, metrics, resolved config, data manifest, schemas, reports, environment details, and review packet that a training run needs."
-overview: "Training artifacts are the files and metadata a job leaves behind so a team can inspect, compare, reproduce, and promote a model. This guide follows a content moderation model as it writes artifacts locally, logs them to MLflow and W&B, and uses the outputs during review and debugging."
+overview: "Training artifacts form an evidence system across model outputs, data identity, configuration, environment, evaluation, and review. A moderation model illustrates local durability, tracking-system lineage, review, and debugging."
 tags: ["MLOps", "core", "training"]
 order: 3
 id: "article-mlops-training-pipelines-logging-training-outputs-artifacts"
 ---
-
-## Table of Contents
-
-1. [Training Artifacts Are The Evidence A Run Leaves Behind](#training-artifacts-are-the-evidence-a-run-leaves-behind)
-2. [Follow One Moderation Model](#follow-one-moderation-model)
-3. [Decide Which Artifacts Every Run Must Emit](#decide-which-artifacts-every-run-must-emit)
-4. [Write Artifacts Locally First](#write-artifacts-locally-first)
-5. [Log Artifacts To MLflow](#log-artifacts-to-mlflow)
-6. [Use W&B Artifacts For Review And Lineage](#use-wb-artifacts-for-review-and-lineage)
-7. [Create A Review Packet](#create-a-review-packet)
-8. [Debug With Artifacts](#debug-with-artifacts)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## Training Artifacts Are The Evidence A Run Leaves Behind
 <!-- section-summary: Training artifacts are files and metadata that let a team inspect, compare, replay, and promote a model run. -->
@@ -45,8 +32,8 @@ The artifact set usually connects like this:
 ![Training artifact contract](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/artifact-contract.png)
 *The artifact contract turns a completed moderation training job into a checklist of files reviewers can actually open.*
 
-## Follow One Moderation Model
-<!-- section-summary: The running scenario follows a trust and safety team training an image moderation model that must leave review evidence. -->
+## Apply The Artifact Contract To Moderation
+<!-- section-summary: A supporting example follows a trust and safety team training an image moderation model that must leave review evidence. -->
 
 Imagine **SignalBend**, a social audio app where users can attach cover images to public rooms. The trust and safety team trains a model called `cover_image_policy_v5` to flag images that may violate nudity, violence, or hate-symbol policies. The model sends risky images to human review before they appear in high-traffic rooms.
 
@@ -120,12 +107,23 @@ dataset_manifest:
 
 This file gives the model review a data receipt. If the validation score drops next week, the team can compare class counts and label sources before blaming the model architecture.
 
+### The Manifest Is An Index, Not A Second Artifact Store
+
+A manifest should identify files, digests, sizes, media types, and the contract version used to interpret them. It can link the run to code, data, image, and parent-model identities. It should not copy every chart, metric row, or training log into one enormous JSON document. Large evidence remains in immutable objects; the manifest gives reviewers and automation one stable route to it.
+
+This separation matters when artifacts have different lifetimes and access rules. A model and evaluation report may be retained for years, while verbose batch logs expire after weeks. Misclassified examples may contain restricted content that only reviewers can open. The manifest can preserve their digest and governed location without making sensitive rows visible to every experiment-tracking user.
+
+Publication is complete only when every mandatory entry exists and its digest matches. Optional debug artifacts may be absent after a successful run, but the contract must say they are optional. Otherwise downstream automation cannot distinguish “not produced by design” from “upload silently failed.”
+
 ## Write Artifacts Locally First
 <!-- section-summary: Local artifact writing keeps evidence available even if the tracking server or network has a bad day. -->
 
 The training script should write artifacts to a local output directory before it uploads them to a tracking tool. This habit helps during outages. If the MLflow server or W&B API is unavailable near the end of training, the pod can still keep the files on the mounted artifact volume or upload them through a retry job.
 
-SignalBend can use a small helper:
+The writer should create the required directory tree, serialize every required artifact, and return a path map that upload adapters can reuse. Keeping this function free of MLflow or W&B calls makes local failure recovery and unit testing straightforward.
+
+:::expand[Implement a local artifact writer]{kind="example"}
+This fuller helper shows one implementation. The important pattern is that every serializer writes under the same run-scoped output root and the function returns stable paths. A production writer would add temporary files, digests, a manifest, and a commit marker before another system can consume the bundle.
 
 ```python
 from pathlib import Path
@@ -160,6 +158,7 @@ def write_training_artifacts(output_dir: Path, model, metrics: dict, reports: di
 
     return paths
 ```
+:::
 
 This helper writes one output family at a time. It creates directories before writing. It returns paths so the tracking code can upload the same files. It also gives unit tests something concrete to assert.
 
@@ -189,7 +188,10 @@ This record gives future debugging real material. A result from L40S on one driv
 
 MLflow gives the team a run page where parameters, metrics, artifacts, and the model live together. For SignalBend, MLflow is useful because the training job can log the model with an input example and signature, then attach the reports and manifests reviewers need.
 
-Here is the logging section:
+The MLflow adapter starts one run, attaches searchable identity and parameters, logs the human-readable reports, and records the PyTorch model with an input example and inferred signature. The signature gives later loading and serving code a testable input-output contract.
+
+:::expand[Attach the completed bundle to an MLflow run]{kind="example"}
+The complete adapter below maps the local path contract into current MLflow model and artifact APIs. Keeping it outside the training calculation means an upload retry can reuse the verified local bundle without training again.
 
 ```python
 import mlflow
@@ -232,6 +234,7 @@ def log_to_mlflow(run_id: str, config: dict, model, paths: dict, X_example, y_sc
             signature=signature,
         )
 ```
+:::
 
 The model logging call uses `name="model"` and includes a signature. That gives downstream systems a clearer contract for the model input and output. The report files stay as artifacts because human reviewers need to open them. The tags make the run searchable by owner, model, snapshot, and runtime image.
 
@@ -239,6 +242,9 @@ The model logging call uses `name="model"` and includes a signature. That gives 
 <!-- section-summary: W&B artifacts can version model and report files, link them to runs, and help teams review lineage. -->
 
 W&B fits teams that want a collaborative review space with rich charts, artifacts, reports, and lineage. SignalBend can log a model artifact and a review artifact. The model artifact carries deployable files. The review artifact carries reports and evidence.
+
+:::expand[Version model and review evidence with W&B Artifacts]{kind="example"}
+This adapter keeps deployable files and review evidence as two linked artifact types. That separation lets deployment automation request a model artifact while reviewers work with reports and examples under their own access and retention rules.
 
 ```python
 import wandb
@@ -275,13 +281,14 @@ def log_to_wandb(run_id: str, config: dict, paths: dict) -> None:
 
     run.finish()
 ```
+:::
 
 This pattern keeps the model and the review evidence linked to the same run. A reviewer can open the run, inspect charts, then inspect the artifacts. A platform engineer can trace which config and dataset produced the candidate. A future CI process can promote a specific artifact version only after review.
 
-## Create A Review Packet
-<!-- section-summary: A review packet gathers the run decision, metric thresholds, artifact links, and owner signoff into one readable file. -->
+## Turn Run Evidence Into A Candidate Decision
+<!-- section-summary: A candidate decision connects thresholds, artifact identities, limitations, owners, and the requested next state. -->
 
-A **review packet** is a compact file that says whether the run should move forward. It pulls together metrics, guardrails, artifact locations, and signoff fields. It saves the review meeting from hunting across dashboards.
+Artifacts preserve facts about the run, while candidate review interprets those facts. A **review packet** is one compact implementation of that decision boundary. It says whether the run should move forward and connects metrics, guardrails, immutable artifact locations, limitations, and signoff fields. The file saves the review meeting from hunting across dashboards, and its main job is to preserve why the evidence supports the requested next state.
 
 SignalBend can write this packet:
 
@@ -321,39 +328,9 @@ This file gives every reviewer the same anchor. The recommendation says what the
 
 Artifacts help most when something surprises the team. Suppose `cover-policy-2026-07-04-1700` has a strong macro F1, yet the Spanish-language segment shows a high false-positive rate. The team can open `segment_metrics.csv`, find the exact segment, inspect `error_examples.parquet`, and compare the data manifest with the previous run.
 
-A simple query over the segment report can start the investigation:
+A simple query over the segment report should filter for a minimum support count and the false-positive threshold used by review policy, then sort the failing slices by severity. For this run it returns Spanish uploads at 7.4 percent, Portuguese uploads at 6.8 percent, and Spanish screen captures at 6.4 percent. Those rates all exceed the 6 percent investigation threshold and have enough examples for review.
 
-```python
-import pandas as pd
-
-segments = pd.read_csv("reports/segment_metrics.csv")
-problem_segments = segments[
-    (segments["false_positive_rate"] > 0.06)
-    & (segments["support"] >= 500)
-].sort_values("false_positive_rate", ascending=False)
-
-print(problem_segments[["segment_name", "support", "false_positive_rate", "recall"]].head(10))
-```
-
-Example output:
-
-```console
-segment_name                 support  false_positive_rate  recall
-market=es,source=upload      1842     0.074                0.811
-market=pt,source=upload      913      0.068                0.804
-market=es,source=screen_cap  642      0.064                0.826
-```
-
-That output points the review team at concrete examples. The next check is the error artifact:
-
-```python
-errors = pd.read_parquet("reports/error_examples.parquet")
-errors[
-    (errors["market"] == "es")
-    & (errors["prediction"] == "policy_violation")
-    & (errors["label"] == "safe")
-].head(25).to_csv("review/spanish_false_positive_examples.csv", index=False)
-```
+The next step filters `error_examples.parquet` to safe images predicted as policy violations in the affected market and exports a small governed review sample. If reviewers find label errors, the next dataset manifest records the corrected label source and adjudication. If they find a recurring visual pattern, the next experiment states which feature, augmentation, or data slice is intended to address it. The artifact path connects the aggregate symptom to inspectable evidence without turning the main lesson into dataframe syntax.
 
 Now the team has a small review file for human inspection. If the examples reveal a label issue, the next training run should update the dataset manifest and note the label correction. If the examples reveal a feature problem, the next config can adjust the feature set.
 
@@ -362,7 +339,7 @@ Now the team has a small review file for human inspection. If the examples revea
 
 Training artifacts turn a completed job into inspectable evidence. SignalBend's moderation run writes local files first, logs them to MLflow, optionally versions them with W&B artifacts, and packages them into a review packet. The model file matters, but the model file alone gives weak evidence. The metrics, segment report, error examples, data manifest, schema, resolved config, runtime record, and review packet explain the model.
 
-This closes the "From Notebook to Job" submodule. You now have a script, a config, and a set of artifacts. The next step is pipeline design: connecting data prep, training, evaluation, and artifact publishing into a coordinated workflow.
+This closes the "From Notebook to Job" submodule with a script, configuration, and traceable artifacts. The next step is pipeline design: connecting data preparation, training, evaluation, and artifact publishing into a coordinated workflow.
 
 ## References
 

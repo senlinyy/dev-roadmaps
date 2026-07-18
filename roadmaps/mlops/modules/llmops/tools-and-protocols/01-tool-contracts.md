@@ -1,398 +1,236 @@
 ---
 title: "Tool Contracts"
-description: "Design LLM tool calls as production interfaces with schemas, permissions, idempotency, result envelopes, versioning, and validation tests."
-overview: "Learn how to turn an LLM tool from a fragile function call into a production contract, using a travel booking assistant that searches fares, reserves seats, and returns auditable results."
+description: "Design LLM tools as production boundaries with schemas, authorization, approval, idempotency, result semantics, versioning, and audit evidence."
+overview: "A tool contract defines how a model may propose an action and how trusted application code validates, authorizes, executes, records, and reports that action."
 tags: ["MLOps","LLMOps","advanced","tools"]
 order: 1
 id: "article-mlops-llmops-tool-contracts"
 ---
 
-## What a Tool Contract Is
+## A Tool Call Is a Proposal, Not Permission
 
-<!-- section-summary: A tool contract is the agreement between the model, your application, and the system that runs the action. It says which inputs are accepted, which permissions are required, how retries work, and what the tool returns. -->
+<!-- section-summary: A model can propose a structured action, while trusted application code decides whether and how that action runs. -->
 
-A **tool contract** is the production interface for an LLM tool. When an agent asks to call a tool, the contract tells your application the name of the action, the JSON shape of the arguments, the security scope needed to run it, the retry behavior, and the shape of the result. You can think of it as the API boundary that protects your real system from vague model output.
+An LLM tool exposes a capability such as searching documents, reading an account, running a query, creating a ticket, or issuing a refund. The model chooses a tool and supplies arguments, but its output is still untrusted input. A syntactically correct call does not prove that the user is allowed to perform the action, that the requested state exists, or that the action is safe to repeat.
 
-In simple demos, a tool might look like a Python function named `get_weather(city)`. In a production travel assistant, a tool can reserve a flight, hold a hotel room, charge a card, or cancel an itinerary. Those actions touch money, inventory, customer data, and partner APIs. The LLM can suggest the action, yet your application still owns validation, authorization, execution, logging, and recovery.
+A **tool contract** is the complete agreement at this boundary. It includes what the model sees—name, purpose, and argument schema—and what the runtime must enforce: identity, authorization, approval, business rules, retry semantics, result shape, version compatibility, and audit evidence.
 
-The important shift is this: the model writes a proposed call, and your runtime decides whether that call is valid. Current OpenAI function calling uses tool definitions with JSON Schema so the model can produce structured arguments, and Structured Outputs can enforce schema adherence when strict schemas are supported. That gives you a strong starting point, yet you still need your own business validation. A schema can say that `departure_date` is a string in date format. Your travel system must still check seat availability, fare rules, customer payment state, and whether the user has approved the final price.
+![A tool call moving from an untrusted model proposal through runtime governance, controlled execution, and a stable result](/content-assets/articles/article-mlops-llmops-tool-contracts/tool-call-controlled-effect.png)
 
-In this article, we will build a contract for **TripNest**, a travel booking assistant used by a support team. TripNest helps agents search trip options and place short booking holds for customers. The running tool is `create_booking_hold`. It can reserve a flight-and-hotel package for 15 minutes while the human agent confirms names, passports, loyalty numbers, and payment approval. That is a good teaching example because a booking hold has real side effects, a clear retry story, and strict permission needs.
+*A tool call crosses four distinct stages: the model proposes, trusted code governs, the server executes with durable controls, and the workflow receives a stable result.*
 
-## The Contract Surface in One Place
+This separation is the foundation of safe tool use. The model can help decide what should happen. The application remains responsible for whether it may happen and for preserving the rules of the real system.
 
-<!-- section-summary: A useful contract keeps the model-facing schema, server-side policy, result shape, and operational ownership together. Splitting those pieces across random files makes tool failures hard to debug. -->
+## The Contract Has Two Audiences
 
-Before writing the schema, map the pieces that a real team needs to own. The LLM sees only part of the contract. Your backend, security team, support operations team, and observability system need the rest.
+<!-- section-summary: The model needs a small, precise interface, while the runtime needs a wider operational and security contract. -->
 
-| Contract part | What it answers | TripNest example |
-| --- | --- | --- |
-| Tool name and purpose | Which action can the model request? | `create_booking_hold` reserves a package for 15 minutes. |
-| Input schema | Which arguments can the model send? | Traveler count, flight option ID, hotel option ID, date range, currency, customer approval flag. |
-| Business validation | Which valid JSON still needs rejection? | Hold price must match the quoted option, and travel dates must fit the selected fare. |
-| Auth scopes | Who can run it? | Support agents with `travel.booking_hold:create`. |
-| Idempotency | How do retries avoid duplicate holds? | A client-generated `idempotency_key` links repeated attempts to the same hold. |
-| Result envelope | How does the runtime report success, user-fixable errors, and system errors? | `status`, `data`, `error`, `trace_id`, and `retry_after_seconds`. |
-| Versioning | How do clients survive contract changes? | `tool_version: "2026-07-01"` and additive fields first. |
-| Audit ownership | Who investigates a bad call? | Travel platform owns execution logs; LLMOps owns tool selection traces. |
+The **model-facing contract** should be narrow. It describes when to use the tool and defines arguments with JSON Schema: types, required fields, enums, ranges, formats, and whether extra properties are forbidden. Clear field descriptions reduce ambiguity and help the model ask for missing information instead of inventing it.
 
-This map keeps the article grounded. We are designing more than a JSON blob. We are designing the path from a user's sentence to a safe business operation. If the customer says, "Hold the cheapest London to Tokyo option for two adults next Thursday," the model may pick a tool, fill arguments, and ask your runtime to execute it. The runtime then applies the contract.
+The **runtime contract** is larger. It defines:
 
-![TripNest create_booking_hold tool contract pipeline](/content-assets/articles/article-mlops-llmops-tool-contracts/tool-contract-pipeline.png)
+- which authenticated identities and scopes may invoke the tool;
+- which facts must come from trusted session or workflow state;
+- whether a person must approve the exact proposed action;
+- which business invariants must hold at execution time;
+- how duplicate requests and unknown outcomes are handled;
+- which result states the caller can receive;
+- what is logged, redacted, measured, and retained;
+- which versions are compatible and how rollback works.
 
-*TripNest keeps the model on the request side while the server validates the schema, runs business checks, creates the hold, and returns a traceable envelope.*
+The model should not be allowed to assert trusted facts in its arguments. Fields such as `user_id`, `is_admin`, `customer_approved`, or a spending limit should normally come from authenticated application context. Otherwise, the model may copy an instruction from untrusted content or simply infer a value that the server mistakenly treats as authority.
 
-## The Model-Facing JSON Schema
+## Discovery Determines Which Contracts Enter Context
 
-<!-- section-summary: The schema is the part of the contract the model sees directly. It should use narrow fields, clear descriptions, enums, required properties, and strict handling of extra arguments. -->
+<!-- section-summary: A tool catalogue stores operational truth, while a disclosure policy exposes only the eligible model-facing definitions for the current step. -->
 
-A **JSON Schema** tells the model and your validator what the arguments must look like. A beginner mistake is to expose a loose object such as `{ "query": "book something" }`. That gives the model too much room and gives your backend too little evidence. A stronger contract gives each business choice its own field.
+Production systems may own hundreds of tools, yet one model step usually needs only a few. Passing the entire catalogue increases token use, creates overlapping choices, and exposes capabilities unrelated to the task. The runtime should separate the **tool catalogue** from the **disclosed tool set**.
 
-Here is the TripNest tool definition in an OpenAI-style function tool shape. The exact SDK wrapper can vary, yet the contract ideas stay the same: name, description, schema, required fields, and strict validation.
+The catalogue is an application record. It stores owner, purpose, contract version, effect class, required identity and scopes, data classification, supported environments, timeout, idempotency and reconciliation support, approval policy, health, and deprecation status. Most of that metadata never needs to enter model context.
+
+The disclosure policy uses trusted workflow facts to choose eligible tools. A customer-support answer step may receive `search_policy` and `read_case`. A later refund-proposal state may add `propose_refund` when the authenticated user, tenant, case status, and product policy allow it. The model sees a concise name, description, and schema for each eligible tool. The runtime retains the wider policy evidence.
+
+```mermaid
+flowchart LR
+    A[Versioned tool catalogue] --> B[Environment and health filter]
+    C[User identity and scopes] --> D[Authorization filter]
+    E[Workflow state and task] --> F[Relevance and effect filter]
+    B --> D
+    D --> F
+    F --> G[Small disclosed tool set]
+    G --> H[Model proposes one call]
+    H --> I[Full runtime contract gates]
+```
+
+Tool search and deferred loading can help when the candidate set remains large. The model or host first searches compact tool metadata, then loads selected definitions. This is a context-management technique. The search result still passes the same eligibility and authorization filters; discovering a tool never grants permission to call it.
+
+Descriptions shape selection behaviour and therefore belong under version control and evaluation. A vague pair such as `lookup_record` and `get_record` encourages arbitrary choices. State the business operation, required preconditions, important limitations, and whether the tool reads or proposes an effect. Keep descriptions short enough to compare. Put detailed policy enforcement in trusted code rather than asking the model to interpret several pages of tool documentation.
+
+Evaluate disclosure separately from argument generation. For each workflow state, verify which tool identities should be present and absent. Then test whether the model selects correctly among the eligible definitions. A failure where a dangerous tool appeared too early belongs to disclosure policy; a failure where the model ignored the correct disclosed tool belongs to selection behaviour. Combining them under “wrong tool call” hides the owner.
+
+## Design Tools Around One Business Operation
+
+<!-- section-summary: A good tool performs one bounded operation with a clear success condition and ownership boundary. -->
+
+Tool design begins before the schema. Choose an operation that the application can validate and observe. `create_support_ticket` is usually clearer than `handle_customer_problem`; `get_invoice` is clearer than `manage_billing`. A broad tool forces the model to hide several business decisions inside free-form arguments and makes permissions difficult to express.
+
+A useful tool definition answers four questions:
+
+1. What single capability does it expose?
+2. When should and should not the model call it?
+3. What information must the model provide?
+4. What constitutes a successful, rejected, or uncertain outcome?
+
+Read-only tools and side-effecting tools deserve different treatment. A document search can often be retried safely. A payment, deployment, deletion, or message send can create damage when repeated. The contract must classify the effect because approval and recovery policy depend on it.
+
+## Schema Validation Is Only the First Gate
+
+<!-- section-summary: JSON Schema validates the shape of a proposal; server-side policy validates its meaning and authority. -->
+
+Consider a tool that places a temporary hold on an already quoted booking. The model-facing schema can be compact:
 
 ```json
 {
-  "type": "function",
   "name": "create_booking_hold",
-  "description": "Create a 15-minute hold for a quoted flight and hotel package after the customer approves the quoted price.",
+  "description": "Place a 15-minute hold on one option from an existing quote after the user approves it.",
   "strict": true,
   "parameters": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "tool_version": {
-        "type": "string",
-        "enum": ["2026-07-01"],
-        "description": "Contract version expected by the caller."
-      },
-      "customer_id": {
-        "type": "string",
-        "pattern": "^cus_[a-zA-Z0-9]{12,32}$",
-        "description": "TripNest customer identifier from the active support case."
-      },
-      "quote_id": {
-        "type": "string",
-        "pattern": "^quote_[a-zA-Z0-9]{12,32}$",
-        "description": "Quote identifier returned by the trip search tool."
-      },
-      "flight_option_id": {
-        "type": "string",
-        "pattern": "^fltopt_[a-zA-Z0-9]{12,32}$",
-        "description": "Selected flight option from the quote."
-      },
-      "hotel_option_id": {
-        "type": "string",
-        "pattern": "^hotelopt_[a-zA-Z0-9]{12,32}$",
-        "description": "Selected hotel option from the quote."
-      },
-      "traveler_count": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 6,
-        "description": "Number of travelers included in the hold."
-      },
-      "approved_total": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "amount": { "type": "number", "minimum": 0 },
-          "currency": { "type": "string", "enum": ["USD", "GBP", "EUR", "JPY"] }
-        },
-        "required": ["amount", "currency"]
-      },
-      "customer_approved": {
-        "type": "boolean",
-        "const": true,
-        "description": "True only after the customer approves the quoted total in the conversation."
-      },
-      "idempotency_key": {
-        "type": "string",
-        "pattern": "^hold_[0-9a-f]{32}$",
-        "description": "Stable key generated by the application for this hold attempt."
-      }
+      "quote_id": { "type": "string" },
+      "option_id": { "type": "string" },
+      "traveler_count": { "type": "integer", "minimum": 1, "maximum": 6 }
     },
-    "required": [
-      "tool_version",
-      "customer_id",
-      "quote_id",
-      "flight_option_id",
-      "hotel_option_id",
-      "traveler_count",
-      "approved_total",
-      "customer_approved",
-      "idempotency_key"
-    ]
+    "required": ["quote_id", "option_id", "traveler_count"]
   }
 }
 ```
 
-This schema teaches the model exactly what to supply. It also helps your runtime reject unclear calls before they reach the booking engine. `additionalProperties: false` blocks surprise fields. `enum` narrows currencies and versions. `const: true` encodes the approval rule into the shape of the call. The `pattern` fields keep IDs from accepting arbitrary user text.
+Strict structured output can ensure that these fields are present and correctly typed. It cannot prove that the quote belongs to the current user, that its price is unchanged, that the option is still available, that the caller has booking permission, or that approval covers this exact proposal. Those are **business invariants** and must be checked against authoritative data immediately before execution.
 
-Schema design also shapes the conversation. If the model lacks a `quote_id`, it should search trips first. If `customer_approved` is missing, it should ask the human agent to confirm the price with the customer. The contract gives the model a route through the workflow without letting it invent business state.
+The trusted runtime should also attach the active user, tenant, trace, policy version, credentials, and approval evidence. Secrets should never be exposed in model-visible arguments. The tool adapter receives them from a secret manager or workload identity after authorization succeeds.
 
-## Server-Side Validation and Idempotency
-
-<!-- section-summary: Schema validation catches malformed calls, while business validation catches risky calls that still match the schema. Idempotency keys make retries safe when a network call times out. -->
-
-Schema validation is the first gate. After the JSON matches the schema, server-side checks decide whether the action is allowed right now. In TripNest, the booking service loads the quote, verifies that the selected options still match the approved total, checks that the support case belongs to the customer, and confirms that the agent has the right scope.
-
-Idempotency matters because tool calls happen over networks. Imagine the model requests a booking hold, the booking partner creates the hold, and your server times out before the response reaches the agent. The agent runtime may retry. Without an idempotency key, the second call could create another hold and tie up more inventory. With an idempotency key, the booking service can return the original result.
-
-Here is a small TypeScript validation shape using `ajv`. It shows the split between schema validation and business validation.
-
-```ts
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
-
-const ajv = new Ajv({ allErrors: true });
-addFormats(ajv);
-
-const validateCreateBookingHold = ajv.compile(createBookingHoldSchema);
-
-export async function runCreateBookingHold(args, ctx) {
-  if (!validateCreateBookingHold(args)) {
-    return toolError({
-      code: "invalid_arguments",
-      message: "The booking hold request has fields that fail the contract.",
-      details: validateCreateBookingHold.errors,
-      traceId: ctx.traceId
-    });
-  }
-
-  await requireScope(ctx.auth, "travel.booking_hold:create");
-
-  const quote = await ctx.quotes.get(args.quote_id);
-  const priceMatches =
-    quote.total.amount === args.approved_total.amount &&
-    quote.total.currency === args.approved_total.currency;
-
-  if (!priceMatches) {
-    return toolError({
-      code: "price_changed",
-      message: "The quoted total changed before the hold was created.",
-      details: { latest_total: quote.total },
-      traceId: ctx.traceId
-    });
-  }
-
-  return ctx.bookingHolds.createOrReplay({
-    idempotencyKey: args.idempotency_key,
-    customerId: args.customer_id,
-    quoteId: args.quote_id,
-    flightOptionId: args.flight_option_id,
-    hotelOptionId: args.hotel_option_id,
-    travelerCount: args.traveler_count,
-    traceId: ctx.traceId
-  });
-}
+```mermaid
+flowchart TD
+    A[Structured arguments] --> B{Schema valid?}
+    B -->|no| X[Reject: invalid arguments]
+    B -->|yes| C{Caller has required scope?}
+    C -->|no| Y[Reject: forbidden]
+    C -->|yes| D{Approval matches exact action?}
+    D -->|no| Z[Pause for approval]
+    D -->|yes| E{Current business state still valid?}
+    E -->|no| W[Reject with corrective next step]
+    E -->|yes| F[Execute with server-held credentials]
 ```
 
-The important production pattern is `createOrReplay`. That function checks whether the idempotency key already produced a hold. If yes, it returns the stored hold. If the key exists with different arguments, it returns an idempotency conflict because the caller reused a key for a different action.
+Ordering matters. Cheap structural checks should happen before network calls. Authorization should happen before sensitive data is loaded or a side effect is attempted. Business validation should use current state, because a price, record status, or deployment target may have changed since the model saw it.
 
-Validation tests should live next to the contract. Treat them like API tests, because a broken tool schema can cause a broken agent release.
+## Approval Must Bind to the Exact Action
 
-```ts
-describe("create_booking_hold contract", () => {
-  it("accepts a complete approved hold request", () => {
-    const request = {
-      tool_version: "2026-07-01",
-      customer_id: "cus_abCDef123456",
-      quote_id: "quote_abc123DEF456",
-      flight_option_id: "fltopt_abc123DEF456",
-      hotel_option_id: "hotelopt_abc123DEF456",
-      traveler_count: 2,
-      approved_total: { amount: 2480.75, currency: "GBP" },
-      customer_approved: true,
-      idempotency_key: "hold_0123456789abcdef0123456789abcdef"
-    };
+<!-- section-summary: Human approval is meaningful only when it identifies the operation and values that will actually be executed. -->
 
-    expect(validateCreateBookingHold(request)).toBe(true);
-  });
+An approval such as "yes" is weak if the underlying proposal can change afterward. For high-impact tools, show the person a normalized summary: operation, target, important values, and expected effect. Store approval evidence against a stable fingerprint of that proposal. If the amount, target, or other protected field changes, the fingerprint changes and the runtime requires approval again.
 
-  it("rejects extra model-invented fields", () => {
-    const request = validHoldRequest({
-      special_discount_reason: "customer sounded loyal"
-    });
+Approval is also not the same as authorization. A user may approve a refund but lack permission to issue it. Conversely, an authorized operator may still need a second person to approve a production deletion. The contract should state both rules and identify which system supplies their evidence.
 
-    expect(validateCreateBookingHold(request)).toBe(false);
-  });
+Some tools do not need human approval. Read-only, low-risk operations may run automatically within narrow scopes. The goal is proportional control, not adding a confirmation dialog to every call.
 
-  it("rejects a hold without approval", () => {
-    const request = validHoldRequest({ customer_approved: false });
+## Idempotency Protects Side Effects
 
-    expect(validateCreateBookingHold(request)).toBe(false);
-  });
-});
-```
+<!-- section-summary: Idempotency lets repeated delivery of one intended operation return one outcome instead of creating duplicate effects. -->
 
-Notice how the tests cover model-specific risks. The model might invent an extra field. It might try to continue the flow before approval. It might use a stale quote. Tests give you a fast signal before an agent rollout reaches support staff.
+Distributed systems cannot assume exactly-once delivery. A tool may complete in the downstream service while its response is lost. The agent runtime sees a timeout and may retry. Without protection, one intended refund can create two refunds.
 
-![TripNest server-side validation and idempotency flow](/content-assets/articles/article-mlops-llmops-tool-contracts/server-validation-idempotency.png)
+An **idempotency key** identifies one intended operation. Trusted application code derives or assigns it; the model should not choose it. The service stores the key with a fingerprint of the normalized request and the current state:
 
-*The booking runtime checks structure first, then business rules, then the idempotency ledger so a retry can replay the same hold without reserving duplicate inventory.*
+- `started`: one worker owns execution;
+- `succeeded`: replay the stored safe result;
+- `failed_safe`: the service knows no effect occurred and policy may allow another attempt;
+- `indeterminate`: the downstream effect may have happened and must be reconciled.
 
-## Result Envelopes
+If the same key arrives with different arguments, return an idempotency conflict. If two workers receive the same request concurrently, only one should acquire execution; the other observes the existing record. When the downstream API supports idempotency, forward the same key across that boundary.
 
-<!-- section-summary: A result envelope gives the agent a stable way to understand success, user-fixable errors, system errors, and retry guidance. It also carries trace IDs for debugging. -->
+The difficult case is an **unknown outcome**. If a deployment API accepted a request and then the connection broke, automatically trying again may be unsafe. The runtime should query the downstream system by operation ID or idempotency key. If no reconciliation interface exists, stop automatic retries and route the case to a person or compensating workflow. Calling such an outcome "failed" would be a dangerous guess.
 
-The tool result needs as much design care as the input. A raw partner response can be large, inconsistent, and full of details the model should never see. A **result envelope** is a stable wrapper around every tool response. It tells the agent whether the action worked, which data can be shown to the user, which error can be fixed by asking another question, and which trace ID an engineer can use during an incident.
+![Exact approval, durable idempotency states, and reconciliation of an unknown tool outcome](/content-assets/articles/article-mlops-llmops-tool-contracts/safe-side-effects-durable-identity.png)
 
-Here is a result envelope for the booking hold.
+*Approval binds to the exact action, while the idempotency record tells the runtime whether to replay, retry, reconcile, or stop when delivery becomes uncertain.*
 
-```json
-{
-  "status": "success",
-  "tool_name": "create_booking_hold",
-  "tool_version": "2026-07-01",
-  "trace_id": "trc_7f0e8b1e2c914f2c9ad3b5a6d44e7801",
-  "idempotency_key": "hold_0123456789abcdef0123456789abcdef",
-  "data": {
-    "hold_id": "hold_live_8x3Kp19Q",
-    "expires_at": "2026-07-05T16:45:00Z",
-    "approved_total": { "amount": 2480.75, "currency": "GBP" },
-    "customer_message": "I placed a 15-minute hold for the selected flight and hotel package."
-  },
-  "error": null,
-  "retry_after_seconds": null
-}
-```
+Idempotency does not make every tool retryable. It gives the service enough state to decide whether replay, rejection, reconciliation, or a new attempt is correct.
 
-Here is the same envelope shape for a user-fixable error.
+## Return Meaning, Not Raw Provider Output
+
+<!-- section-summary: A result envelope gives the workflow stable states and safe next actions without exposing internal provider responses. -->
+
+Raw downstream responses are poor tool results. They change across providers, may contain sensitive data, and force the model to interpret infrastructure errors. A **result envelope** translates them into stable application semantics.
+
+A useful envelope distinguishes:
+
+- `success`: the requested operation completed;
+- `rejected`: the request was understood but violates a rule or current state;
+- `retryable_error`: no effect occurred and a bounded retry is allowed;
+- `indeterminate`: the effect may have occurred, so automatic retry is blocked;
+- `failed`: the operation did not complete and another route or human action is required.
+
+It should include a safe data payload, a machine-readable error code, a short corrective action, trace identity, tool version, and explicit retry guidance. For example:
 
 ```json
 {
   "status": "rejected",
-  "tool_name": "create_booking_hold",
-  "tool_version": "2026-07-01",
-  "trace_id": "trc_4728d3651f5c4a07ad6c2f4141f3a192",
-  "idempotency_key": "hold_0123456789abcdef0123456789abcdef",
+  "tool": "create_booking_hold",
+  "version": "2026-07-01",
+  "trace_id": "trc_01J...",
   "data": null,
   "error": {
     "code": "price_changed",
-    "message": "The selected package total changed before the hold was created.",
-    "user_action": "Ask the customer to approve the latest total before creating a hold.",
-    "latest_total": { "amount": 2522.10, "currency": "GBP" }
+    "message": "The quoted total changed.",
+    "next_action": "Show the new total and request approval again."
   },
-  "retry_after_seconds": null
+  "automatic_retry_allowed": false
 }
 ```
 
-The model can use `user_action` to continue the support conversation. It should never need to parse a partner API error such as `FARE_BUCKET_17_EXPIRED`. Your envelope translates partner details into the next safe step.
+The message guides the workflow without exposing a partner error code or stack trace. Detailed diagnostics belong in protected logs linked by the trace ID. The envelope is part of the public contract and needs compatibility tests just like the input schema.
 
-For system failures, keep the customer message calm and push details into logs.
+## Version the Whole Boundary
 
-```json
-{
-  "status": "failed",
-  "tool_name": "create_booking_hold",
-  "tool_version": "2026-07-01",
-  "trace_id": "trc_e4d78b71f4c24b57951e9b2c6f55819a",
-  "idempotency_key": "hold_0123456789abcdef0123456789abcdef",
-  "data": null,
-  "error": {
-    "code": "partner_timeout",
-    "message": "The booking partner timed out while creating the hold.",
-    "user_action": "Tell the agent that the hold status is unknown and route the case to the travel desk."
-  },
-  "retry_after_seconds": 30
-}
-```
+<!-- section-summary: A tool version represents input, policy, effect, and result semantics—not only a JSON schema file. -->
 
-The `trace_id` connects the model run, the tool call, the booking service request, partner API logs, and audit records. If your team uses OpenTelemetry, carry that trace context through the tool runtime and record GenAI/tool spans with consistent names and attributes. The exact attributes will evolve with the semantic conventions, so keep your instrumentation library current and wrap provider-specific fields in one telemetry module.
+A change can be breaking even when JSON still validates. Renaming a field is obviously incompatible, but changing the meaning of "cancel," adding a mandatory approval, or making an operation asynchronous also changes the contract. Version the model definition, runtime validation, result semantics, and relevant policy as one release unit.
 
-## Auth Scopes and Approval Rules
+Prefer additive optional fields when their absence has an unambiguous meaning. Use a new version when required inputs, permissions, effects, or result states change. During migration, the registry can expose both versions while telemetry shows which agents still call the old one. Define a deprecation window and a rollback path before removing it.
 
-<!-- section-summary: Tool contracts need security metadata because tool calls can read private data or change real systems. Scopes, approval gates, and audit fields keep that access reviewable. -->
+A tool registry should record owner, effect class, active versions, required scopes, approval policy, timeout, idempotency support, data classification, and support contact. This is operational metadata, not model context; the orchestrator can disclose only the portion the model needs.
 
-A model-facing schema can describe what the tool does, yet the runtime still needs security policy. TripNest uses scopes that line up with business operations. A support agent who can search trips might lack permission to create holds. A supervisor might create holds up to a certain amount. A payment tool would need a separate scope and a stronger approval gate.
+## Test the Boundary in Layers
 
-Here is a simple scope manifest that can live in the tool registry.
+<!-- section-summary: Contract tests cover syntax, policy, effects, recovery, and compatibility as separate responsibilities. -->
 
-```yaml
-tool: create_booking_hold
-version: "2026-07-01"
-owner: travel-platform
-runtime_service: tripnest-booking-tools
-required_scopes:
-  - travel.booking_hold:create
-approval:
-  required: true
-  source: active_support_case
-  evidence_fields:
-    - customer_approved
-    - approved_total
-    - quote_id
-limits:
-  max_travelers: 6
-  max_hold_minutes: 15
-  max_total_without_supervisor:
-    amount: 5000
-    currency: GBP
-audit:
-  log_arguments: redacted
-  log_result: envelope_only
-  pii_fields:
-    - customer_id
-```
+Schema tests should accept valid examples and reject missing, extra, mistyped, and out-of-range fields. Policy tests should verify identity, tenant isolation, scopes, approval binding, and current business rules. Effect tests should show that concurrent duplicates create one downstream action and that a reused key with changed arguments is rejected.
 
-This manifest helps reviewers answer concrete questions. Which team owns the tool? Which service runs it? Which scope unlocks it? Which fields count as approval evidence? Which fields need redaction? During a security review, the team can compare this manifest to the code path and the logs.
+Recovery tests are especially important. Simulate a downstream success followed by a lost response, then prove that reconciliation finds the existing effect rather than creating another one. Test each result state and confirm that raw secrets or personal data never enter the model-visible envelope. Compatibility tests run supported agent and tool versions together.
 
-For approval, avoid relying on the model's confidence. A safe runtime checks evidence. The UI can show the exact quoted total and require the human agent to press an approval button. The tool call then receives `customer_approved: true` from the application state, rather than from a model guess. The model can request the action, while the application supplies trusted evidence.
+In evaluation, measure more than whether the model chose the correct tool. Check whether it asked for missing information, avoided tools when no action was needed, selected arguments supported by the conversation, responded correctly to rejection, and stopped when the outcome was indeterminate.
 
-## Versioning and Change Management
+## What a Production Tool Contract Provides
 
-<!-- section-summary: Versioning lets you improve tool contracts without breaking active clients. Additive changes are easiest; renamed fields and changed meanings need a new version and a migration window. -->
+<!-- section-summary: A mature tool contract makes every transition from proposal to real-world effect explicit and reviewable. -->
 
-Tool contracts need versioning because agent prompts, schemas, validators, and dashboards move together. If you rename `approved_total` to `total`, an older agent may keep sending the old field. If you add a required `passport_country` field, an older UI may lack the data. A version lets both sides know which contract they are using.
+A production tool has one bounded purpose, a strict model-facing schema, trusted runtime context, least-privilege authorization, explicit approval rules, current-state validation, and an effect-aware retry policy. Side effects use durable idempotency and reconciliation. Results use a stable envelope. Versions, owners, traces, redaction, and tests are part of the same contract.
 
-Use a clear version string such as a date. Date versions are easy for humans to compare during incidents. TripNest uses `2026-07-01`. The booking service accepts that version and rejects unknown versions with a result envelope that tells the agent to refresh tool definitions.
+The central idea is that structured output solves only the first few metres of the boundary. The difficult engineering lies between valid JSON and a safe real-world effect. Keeping those layers visible helps beginners understand why a function definition is not the tool runtime, and helps production teams review exactly where authority and responsibility live.
 
-```json
-{
-  "status": "rejected",
-  "tool_name": "create_booking_hold",
-  "tool_version": "2026-06-01",
-  "trace_id": "trc_6cfdd62e12d64b03a50f5892fd4562d5",
-  "data": null,
-  "error": {
-    "code": "unsupported_tool_version",
-    "message": "The caller used an older booking hold contract.",
-    "user_action": "Reload the tool catalog and retry with version 2026-07-01."
-  },
-  "retry_after_seconds": null
-}
-```
+![Complete production tool contract with model-facing definitions, runtime controls, release evidence, and layered tests](/content-assets/articles/article-mlops-llmops-tool-contracts/production-tool-contract-summary.png)
 
-Prefer additive changes when possible. Adding an optional field such as `loyalty_program_id` gives clients time to adopt it. Changing the meaning of an existing field needs a new version because old traces, tests, and dashboards will otherwise lie to you. Keep a small compatibility matrix in the registry so release managers know which agent version can call which tool version.
-
-## Practical Checks, Common Mistakes, and Interview-Ready Understanding
-
-<!-- section-summary: A strong tool contract is testable, auditable, and boring during incidents. The best interview answer ties schemas to permissions, idempotency, envelopes, traces, and rollout discipline. -->
-
-Use this checklist before shipping an LLM tool that touches production systems:
-
-- **Schema:** The tool has a JSON Schema with required fields, descriptions, enums, ranges, and `additionalProperties: false`.
-- **Business validation:** The service checks real state after schema validation, including price, ownership, approval, inventory, and policy limits.
-- **Idempotency:** Every side-effecting call includes an idempotency key, and the backend can replay or reject conflicting retries.
-- **Result envelope:** Success, rejected calls, and system failures all use the same envelope shape with `status`, `data`, `error`, `trace_id`, and retry guidance.
-- **Auth scopes:** A manifest lists required scopes, owners, approval sources, limits, and redaction rules.
-- **Audit logs:** Logs connect user ID, support case ID, tool name, tool version, idempotency key, trace ID, and redacted arguments.
-- **Versioning:** The registry lists active versions, compatibility, deprecation dates, and migration notes.
-- **Tests:** Contract tests reject extra fields, missing approval, unsupported versions, stale prices, and reused idempotency keys with different arguments.
-
-Common mistakes usually show up as missing boundaries. Teams expose one giant `do_travel_task` tool and wonder why the agent sends messy requests. They put secrets in tool arguments instead of server-side credentials. They return raw partner errors and expect the model to decide which ones are safe to show. They skip idempotency and create duplicate side effects after a timeout. They log full customer data in traces and create a privacy problem while trying to debug the agent.
-
-In an interview, a strong answer sounds practical: "I would treat tool calling as an API contract. The model gets a strict JSON Schema, while the runtime enforces auth, business validation, idempotency, and approval. Every tool returns a stable result envelope with a trace ID. I would version the contract, test it in CI, and audit every side-effecting call." That answer shows that you understand both the LLM side and the production systems side.
-
-![TripNest tool contract release readiness checklist](/content-assets/articles/article-mlops-llmops-tool-contracts/release-readiness.png)
-
-*A release-ready tool contract has schema tests, scoped auth, approval evidence, envelope checks, trace logs, and a rollback path tied to the same contract version.*
+*The complete contract joins the small interface the model sees with the larger runtime, evidence, release, and testing responsibilities that make an effect safe.*
 
 ## References
 
-- [OpenAI API docs: Function calling](https://developers.openai.com/api/docs/guides/function-calling)
-- [OpenAI API docs: Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [OpenAI API docs: Using tools](https://developers.openai.com/api/docs/guides/tools)
-- [OpenAI Agents SDK: Tools](https://openai.github.io/openai-agents-python/tools/)
+- [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [OpenAI tools guide](https://developers.openai.com/api/docs/guides/tools)
+- [OpenAI Agents SDK tools](https://openai.github.io/openai-agents-python/tools/)
+- [JSON Schema documentation](https://json-schema.org/learn/getting-started-step-by-step)
+- [OWASP API Security Top 10](https://owasp.org/API-Security/)
 - [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
-- [OpenTelemetry blog: GenAI observability](https://opentelemetry.io/blog/2026/genai-observability/)

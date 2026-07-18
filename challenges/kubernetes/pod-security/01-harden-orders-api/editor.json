@@ -33,12 +33,19 @@
       { "path": ["spec", "template", "spec", "securityContext", "fsGroup"], "equals": 10001, "label": "writable volume group" },
       { "path": ["spec", "template", "spec", "containers", 0, "name"], "equals": "api", "label": "API container" },
       { "path": ["spec", "template", "spec", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/orders-api:2026.07.11", "label": "approved API image" },
+      { "path": ["spec", "template", "spec", "containers"], "maxItems": 1, "label": "single approved API container" },
+      { "path": ["spec", "template", "spec", "hostNetwork"], "exists": false, "label": "no host network sharing" },
+      { "path": ["spec", "template", "spec", "hostPID"], "exists": false, "label": "no host PID sharing" },
+      { "path": ["spec", "template", "spec", "hostIPC"], "exists": false, "label": "no host IPC sharing" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "privileged"], "equals": false, "label": "privileged mode disabled" },
       { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "allowPrivilegeEscalation"], "equals": false, "label": "privilege escalation blocked" },
       { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "readOnlyRootFilesystem"], "equals": true, "label": "read-only image filesystem" },
       { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "capabilities", "drop"], "includes": "ALL", "label": "all capabilities dropped" },
+      { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "capabilities", "add"], "exists": false, "label": "no capabilities added" },
       { "path": ["spec", "template", "spec", "containers", 0, "securityContext", "seccompProfile", "type"], "equals": "RuntimeDefault", "label": "runtime default seccomp" },
-      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "tmp", "mountPath": "/tmp" }, "label": "temporary directory mount" },
-      { "path": ["spec", "template", "spec", "volumes"], "containsObject": { "name": "tmp", "emptyDir": {} }, "label": "temporary writable volume" }
+      { "path": ["spec", "template", "spec", "containers", 0, "volumeMounts"], "containsObject": { "name": "tmp", "mountPath": "/tmp" }, "maxItems": 1, "label": "only the temporary directory mount" },
+      { "path": ["spec", "template", "spec", "volumes"], "containsObject": { "name": "tmp", "emptyDir": {} }, "maxItems": 1, "label": "only the temporary writable volume" },
+      { "path": ["spec", "template", "spec", "volumes", 0, "hostPath"], "exists": false, "label": "no hostPath volume" }
     ]
   }
 }

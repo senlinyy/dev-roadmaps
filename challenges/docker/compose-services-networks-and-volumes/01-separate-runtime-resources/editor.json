@@ -1,0 +1,92 @@
+{
+  "language": "yaml",
+  "filename": "compose.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "services:\n  web:\n    image: registry.example.com/notes-web:3.0.0\n  api:\n    image: registry.example.com/notes-api:3.0.0\n  db:\n    image: postgres:17-alpine\n\nnetworks:\n  public:\n  backend:\n\nvolumes:\n  postgres-data:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "services",
+          "web",
+          "networks"
+        ],
+        "equals": [
+          "public",
+          "backend"
+        ],
+        "label": "web network boundary"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "networks"
+        ],
+        "equals": [
+          "backend"
+        ],
+        "label": "API private network"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "networks"
+        ],
+        "equals": [
+          "backend"
+        ],
+        "label": "database private network"
+      },
+      {
+        "path": [
+          "services",
+          "web",
+          "ports"
+        ],
+        "equals": [
+          "8080:80"
+        ],
+        "label": "only web published"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "ports"
+        ],
+        "exists": false,
+        "label": "API not published"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "ports"
+        ],
+        "exists": false,
+        "label": "database not published"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "volumes"
+        ],
+        "includes": "./config/api.yaml:/etc/notes/api.yaml:ro",
+        "label": "read-only API configuration"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "volumes"
+        ],
+        "includes": "postgres-data:/var/lib/postgresql/data",
+        "label": "persistent database volume"
+      }
+    ]
+  }
+}

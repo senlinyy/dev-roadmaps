@@ -11,3 +11,5 @@ output "bucket_arn" {
   value       = aws_s3_bucket.this.arn
 }
 ```
+
+The child output exposes only the bucket ARN needed by callers, so root modules do not reach into the child module's internal resources.

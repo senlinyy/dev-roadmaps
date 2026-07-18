@@ -1,0 +1,1 @@
+A reusable workflow is triggered by `workflow_call`, while its caller uses the workflow reference directly at job level. The shared file owns runner selection and permissions, so the caller should not add `runs-on` or `steps` to that job.

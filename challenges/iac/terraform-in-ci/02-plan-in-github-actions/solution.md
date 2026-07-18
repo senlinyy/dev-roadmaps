@@ -29,3 +29,5 @@ jobs:
       - name: Plan
         run: terraform -chdir=infra/orders/prod plan -input=false
 ```
+
+The job stops at a speculative plan, so a pull request produces review evidence without gaining an apply path. Keeping every command on the same root module also prevents CI from validating a different directory than the one it plans.

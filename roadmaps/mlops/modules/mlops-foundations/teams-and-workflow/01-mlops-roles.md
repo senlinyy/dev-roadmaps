@@ -7,22 +7,11 @@ order: 1
 id: "article-mlops-mlops-foundations-mlops-roles"
 ---
 
-## Table of Contents
-
-1. [The Team Around One Model](#the-team-around-one-model)
-2. [Product And Domain Owners](#product-and-domain-owners)
-3. [Data Owners](#data-owners)
-4. [Data Scientists And ML Engineers](#data-scientists-and-ml-engineers)
-5. [Platform And Infrastructure Owners](#platform-and-infrastructure-owners)
-6. [Risk, Security, And Operations](#risk-security-and-operations)
-7. [Handoffs That Need Written Evidence](#handoffs-that-need-written-evidence)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
 
 ## The Team Around One Model
 <!-- section-summary: MLOps roles make production model work visible by naming who owns the product decision, data, training, release, infrastructure, monitoring, and incident response. -->
 
-The previous article walked through the MLOps lifecycle. A model starts with a product decision, moves through data, training, evaluation, registration, release, monitoring, and feedback. That loop sounds tidy on a diagram, but real production work has people at every step. If nobody owns a step, the system still runs for a while, then the first serious incident exposes the gap.
+The Architecture Basics articles mapped the MLOps lifecycle, the assets around a model, and the serving modes that deliver predictions. A model moves through data, training, evaluation, registration, release, monitoring, and feedback. Real production work has people at every step. If nobody owns a step, the system may run for a while, then the first serious incident exposes the gap.
 
 Let's use **CareBridge Health** and its patient readmission outreach model. Every morning, the care coordination team receives a list of recently discharged patients who may need follow-up. The model helps prioritize nurse calls, pharmacy checks, and appointment reminders. The model affects patients, clinical teams, operations, privacy, and resource planning, so several roles need to work together.
 
@@ -40,7 +29,7 @@ Here is the short map for the readmission outreach model.
 | Monitoring | What signals show service health and model health? | ML, platform, operations |
 | Incident response | Who can stop, roll back, or change the model? | On-call owner, release owner |
 
-This article follows those owners through one model. The useful part is the handoff map: who defines the business question, who trains, who reviews, who ships, who watches production, and who can approve a risky change.
+A supporting example follows those owners through one model. The useful part is the handoff map: who defines the business question, who trains, who reviews, who ships, who watches production, and who can approve a risky change.
 
 ![MLOps production model ownership map](/content-assets/articles/article-mlops-mlops-foundations-mlops-roles/role-ownership-map.png)
 
@@ -116,11 +105,11 @@ evaluation_report: s3://carebridge-ml-reports/readmission-outreach/v18.yml
 This record gives the next person enough information to reproduce the run, review the candidate, or debug a production issue. It also separates two important ideas: a candidate model can be interesting, and a production model needs evidence.
 
 ## Platform And Infrastructure Owners
-<!-- section-summary: Platform and infrastructure owners provide the shared systems for jobs, registries, CI/CD, serving, secrets, monitoring, and runtime reliability. -->
+<!-- section-summary: Platform and infrastructure owners provide the shared systems for jobs, registries, continuous integration and delivery, serving, secrets, monitoring, and runtime reliability. -->
 
 Once a model has a repeatable path, the team needs infrastructure. The **platform engineer** or **ML platform owner** provides the shared pieces that let models train, register, deploy, and run without each project building everything from scratch.
 
-For the readmission model, platform work may include a workflow runner for training and batch scoring jobs, object storage for datasets and artifacts, a model registry, CI/CD pipelines, a container registry, a managed batch compute environment, secrets management, logs, metrics, and alert routing. The model depends on these systems every day.
+For the readmission model, platform work may include a workflow runner for training and batch scoring jobs, object storage for datasets and artifacts, a model registry, a container registry, a managed batch compute environment, secrets management, logs, metrics, and alert routing. Platform engineers also maintain **continuous integration and continuous delivery (CI/CD)** pipelines. Continuous integration runs automated checks when code changes. Continuous delivery packages an approved change and prepares or performs a controlled release. The model depends on these systems every day.
 
 Platform owners help define standard paths. A team should know where model artifacts live, how a model version receives approval, how deployment picks a version, how rollbacks work, and where prediction logs go. This keeps each model team from inventing a private release process.
 

@@ -1,0 +1,56 @@
+{
+  "language": "yaml",
+  "completionProfile": "github-actions",
+  "activeFile": ".github/workflows/service-security.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/service-security.yml",
+      "initialValue": "name: Service Security\non:\n  push:\n\njobs:\n  security:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ./scripts/security-scan.sh \"${{ inputs.service-name }}\"\n"
+    },
+    {
+      "filename": ".github/workflows/ci.yml",
+      "initialValue": "name: Service CI\non:\n  pull_request:\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm test\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": ".github/workflows/service-security.yml",
+        "path": ["on", "workflow_call", "inputs", "service-name", "required"],
+        "equals": true,
+        "label": "shared workflow requires service-name"
+      },
+      {
+        "file": ".github/workflows/service-security.yml",
+        "path": ["on", "workflow_call", "inputs", "service-name", "type"],
+        "equals": "string",
+        "label": "service-name is a string input"
+      },
+      {
+        "file": ".github/workflows/service-security.yml",
+        "path": ["jobs", "security", "permissions", "contents"],
+        "equals": "read",
+        "label": "shared security job has read-only contents permission"
+      },
+      {
+        "file": ".github/workflows/service-security.yml",
+        "path": ["jobs", "security", "permissions", "security-events"],
+        "equals": "write",
+        "label": "shared security job can publish security events"
+      },
+      {
+        "file": ".github/workflows/ci.yml",
+        "path": ["jobs", "security", "uses"],
+        "equals": "acme/platform-workflows/.github/workflows/service-security.yml@v1",
+        "label": "caller invokes the approved reusable workflow version"
+      },
+      {
+        "file": ".github/workflows/ci.yml",
+        "path": ["jobs", "security", "with", "service-name"],
+        "equals": "checkout-api",
+        "label": "caller passes the checkout API service name"
+      }
+    ]
+  }
+}

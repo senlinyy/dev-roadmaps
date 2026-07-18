@@ -1,0 +1,24 @@
+{
+  "language": "hcl",
+  "filename": "main.tf",
+  "completionProfile": "terraform",
+  "initialValue": "module \"network\" {\n  source = \"terraform-aws-modules/vpc/aws\"\n}\n\nmodule \"observability\" {\n  source = \"git::https://github.com/devpolaris/terraform-observability.git?ref=main\"\n}\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "module\\s+\"network\"\\s*\\{[^}]*source\\s*=\\s*\"terraform-aws-modules/vpc/aws\"[^}]*version\\s*=\\s*\"~>\\s*5\\.0\"[^}]*\\}",
+        "label": "registry module version constraint"
+      },
+      {
+        "pattern": "module\\s+\"observability\"\\s*\\{[^}]*source\\s*=\\s*\"git::https://github\\.com/devpolaris/terraform-observability\\.git\\?ref=v2\\.4\\.1\"[^}]*\\}",
+        "label": "Git module pinned to release tag"
+      },
+      {
+        "pattern": "ref=main",
+        "negate": true,
+        "label": "moving Git branch removed"
+      }
+    ]
+  }
+}

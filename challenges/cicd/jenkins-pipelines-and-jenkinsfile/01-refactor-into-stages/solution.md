@@ -21,3 +21,5 @@ pipeline {
   }
 }
 ```
+
+Separating checkout, build, test, and package work into named stages makes failures and timing visible in Jenkins. The commands stay unchanged, but the pipeline now exposes clear operational boundaries for retries, review, and later policy gates.

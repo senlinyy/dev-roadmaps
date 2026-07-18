@@ -1,0 +1,79 @@
+{
+  "language": "yaml",
+  "activeFile": "values.yaml",
+  "completionProfile": "kubernetes",
+  "files": [
+    {
+      "filename": "values.yaml",
+      "initialValue": "replicaCount: 1\nimage:\n  repository: \"\"\n  tag: \"\"\n"
+    },
+    {
+      "filename": "values.schema.json",
+      "initialValue": "{\n  \"type\": \"object\",\n  \"properties\": {}\n}\n"
+    },
+    {
+      "filename": "templates/deployment.yaml",
+      "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Release.Name }}-orders\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n        - name: orders\n          image: registry.example.com/orders-api:latest\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "values.yaml",
+        "pattern": "^replicaCount:\\s*3\\s*$",
+        "label": "production replica count",
+        "flags": "m"
+      },
+      {
+        "file": "values.yaml",
+        "pattern": "^image:\\s*\\n\\s+repository:\\s*[\"']?registry\\.example\\.com/orders-api[\"']?\\s*\\n\\s+tag:\\s*[\"']?2\\.6\\.0[\"']?",
+        "label": "production image values",
+        "flags": "m"
+      },
+      {
+        "file": "values.yaml",
+        "pattern": "(postgres|database_url|password)",
+        "negate": true,
+        "label": "no database secret in values",
+        "flags": "i"
+      },
+      {
+        "file": "values.schema.json",
+        "pattern": "\"replicaCount\"\\s*:\\s*\\{[^}]*\"type\"\\s*:\\s*\"integer\"[^}]*\"minimum\"\\s*:\\s*1",
+        "label": "replica schema"
+      },
+      {
+        "file": "values.schema.json",
+        "pattern": "\"repository\"\\s*:\\s*\\{[^}]*\"type\"\\s*:\\s*\"string\"[^}]*\"minLength\"\\s*:\\s*1",
+        "label": "repository schema"
+      },
+      {
+        "file": "values.schema.json",
+        "pattern": "\"tag\"\\s*:\\s*\\{[^}]*\"type\"\\s*:\\s*\"string\"[^}]*\"minLength\"\\s*:\\s*1",
+        "label": "tag schema"
+      },
+      {
+        "file": "values.schema.json",
+        "pattern": "\"required\"\\s*:\\s*\\[\\s*\"replicaCount\"\\s*,\\s*\"image\"\\s*\\]",
+        "label": "top-level required values"
+      },
+      {
+        "file": "templates/deployment.yaml",
+        "pattern": "replicas:\\s*\\{\\{\\s*\\.Values\\.replicaCount\\s*\\}\\}",
+        "label": "templated replicas"
+      },
+      {
+        "file": "templates/deployment.yaml",
+        "pattern": "image:\\s*[\"']?\\{\\{\\s*\\.Values\\.image\\.repository\\s*\\}\\}:\\{\\{\\s*\\.Values\\.image\\.tag\\s*\\}\\}[\"']?",
+        "label": "templated image"
+      },
+      {
+        "file": "templates/deployment.yaml",
+        "pattern": "name:\\s*DATABASE_URL.*secretKeyRef:.*name:\\s*orders-runtime.*key:\\s*database-url",
+        "label": "database Secret reference",
+        "flags": "s"
+      }
+    ]
+  }
+}

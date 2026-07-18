@@ -18,9 +18,13 @@
         "label": "node-version input keeps default 22"
       },
       {
-        "path": ["runs", "steps", 0, "with", "node-version"],
-        "type": "string",
-        "contains": "inputs.node-version",
+        "path": ["runs", "steps"],
+        "containsObject": {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": "${{ inputs.node-version }}"
+          }
+        },
         "label": "setup-node consumes the node-version input"
       }
     ]

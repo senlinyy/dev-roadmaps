@@ -19,3 +19,5 @@
       delay: 3
       until: orders_health.status == 200
 ```
+
+The registered HTTP result gives the retry loop concrete host-local evidence, so the next serial batch starts only after the current host is healthy.

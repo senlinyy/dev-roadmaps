@@ -5,19 +5,20 @@
   "files": [
     {
       "filename": "main.tf",
+      "readOnly": true,
       "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 6.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
     },
     {
       "filename": "variables.tf",
-      "initialValue": "variable \"environment\" {\n  default = \"dev\"\n}\n\nlocals {\n  bucket_name = \"dp-preview-${var.environment}-artifacts\"\n  common_tags = {\n    service     = \"plan-preview\"\n    environment = var.environment\n    managed_by  = \"devpolaris\"\n  }\n}\n"
+      "initialValue": "variable \"environment\" {\n  default = \"dev\"\n}\n\nlocals {\n  bucket_name = \"\"\n  common_tags = {\n    service     = \"plan-preview\"\n    environment = var.environment\n    managed_by  = \"devpolaris\"\n  }\n}\n"
     },
     {
       "filename": "s3.tf",
-      "initialValue": "resource \"aws_s3_bucket\" \"preview\" {\n  bucket = local.bucket_name\n  tags   = local.common_tags\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"preview\" {\n  bucket                  = aws_s3_bucket.preview.bucket\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n"
+      "initialValue": "resource \"aws_s3_bucket\" \"preview\" {\n  bucket = local.bucket_name\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"preview\" {\n  bucket = \"\"\n}\n"
     },
     {
       "filename": "outputs.tf",
-      "initialValue": "output \"bucket_name\" {\n  value = aws_s3_bucket.preview.bucket\n}\n"
+      "initialValue": "output \"bucket_name\" {\n  value = \"\"\n}\n"
     }
   ],
   "grader": {
@@ -25,8 +26,8 @@
     "expected": [
       {
         "file": "variables.tf",
-        "pattern": "variable\\s+\"environment\"\\s*\\{[\\s\\S]*default\\s*=\\s*\"(dev|staging)\"",
-        "label": "environment variable stays present"
+        "pattern": "variable\\s+\"environment\"\\s*\\{[\\s\\S]*default\\s*=\\s*\"staging\"",
+        "label": "environment input targets staging"
       },
       {
         "file": "variables.tf",
@@ -42,6 +43,11 @@
         "file": "s3.tf",
         "pattern": "resource\\s+\"aws_s3_bucket_public_access_block\"\\s+\"preview\"\\s*\\{[\\s\\S]*bucket\\s*=\\s*aws_s3_bucket\\.preview\\.bucket[\\s\\S]*restrict_public_buckets\\s*=\\s*true",
         "label": "public access block references the bucket and restricts public buckets"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket_public_access_block\"\\s+\"preview\"\\s*\\{[\\s\\S]*block_public_acls\\s*=\\s*true[\\s\\S]*block_public_policy\\s*=\\s*true[\\s\\S]*ignore_public_acls\\s*=\\s*true[\\s\\S]*restrict_public_buckets\\s*=\\s*true",
+        "label": "all four S3 public access controls are enabled"
       },
       {
         "file": "outputs.tf",

@@ -1,23 +1,11 @@
 ---
 title: "ML Data Basics"
 description: "Explain the basic pieces of supervised ML data in one connected article."
-overview: "Supervised ML data is built from examples, features, labels, targets, timestamps, and entity keys. This article uses a hospital readmission model to show what each piece means and why production teams need clear definitions before training begins."
+overview: "Supervised ML data is a time-aware contract among examples, entities, features, targets, labels, and prediction outcomes. This article explains how those parts are defined, joined, validated, and kept aligned with the product decision."
 tags: ["MLOps", "core", "datasets"]
 order: 1
 id: "article-mlops-data-for-ml-systems-training-data-labels-features-targets"
 ---
-
-## Table of Contents
-
-1. [ML Data Basics Are The Contract Behind A Model](#ml-data-basics-are-the-contract-behind-a-model)
-2. [Follow One Hospital Readmission Dataset](#follow-one-hospital-readmission-dataset)
-3. [Examples, Entities, And Prediction Time](#examples-entities-and-prediction-time)
-4. [Features](#features)
-5. [Labels And Targets](#labels-and-targets)
-6. [A Dataset Schema The Team Can Review](#a-dataset-schema-the-team-can-review)
-7. [Checks Before Training](#checks-before-training)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## ML Data Basics Are The Contract Behind A Model
 <!-- section-summary: ML data basics are the reviewed definitions for examples, features, labels, targets, timestamps, and entity keys. -->
@@ -26,9 +14,27 @@ id: "article-mlops-data-for-ml-systems-training-data-labels-features-targets"
 
 You can think of this as the contract before training starts. If the contract says one row represents one hospital discharge, the model learns from discharged patients. If someone quietly changes the row to one lab result or one billing claim, the model learns a different problem while the notebook may still run successfully.
 
-The running scenario is **Riverbend Health**, a regional hospital network building a model that estimates the risk of a patient returning within 30 days after discharge. The model supports a care coordination team. A high-risk patient may receive a follow-up call, a medication review, or a home-care referral, so the dataset needs clear definitions before the team trusts any score.
+A supporting example is **Riverbend Health**, a regional hospital network building a model that estimates the risk of a patient returning within 30 days after discharge. The model supports a care coordination team. A high-risk patient may receive a follow-up call, a medication review, or a home-care referral, so the dataset needs clear definitions before the team trusts any score.
 
-## Follow One Hospital Readmission Dataset
+The contract has six parts. The **entity** identifies what receives a prediction. The **example** fixes one entity at one prediction moment. **Features** contain only information available by that moment. The **target** states the future event or quantity the model is intended to predict. The **label** is the observed or adjudicated value used during learning and evaluation. **Keys, timestamps, and provenance** explain how those parts were joined and whether the join was valid. A table can have correct types and still be wrong if any one of these meanings is ambiguous.
+
+The parts are coupled through time. Moving the prediction moment changes which features are legal. Changing the outcome window changes which labels count as positive. Changing the entity key changes the unit of independence and may leak information across splits. This is why production teams need a reviewed data contract before feature engineering or model selection begins.
+
+```mermaid
+flowchart LR
+    Entity["Entity"] --> Example["Example at prediction time"]
+    Features["Facts available by prediction time"] --> Example
+    Example --> Model["Model input and target during learning"]
+    Example --> Future["Outcome window after prediction"]
+    Future --> Label["Observed or adjudicated label"]
+    Label --> Target["Training target representation"]
+    Keys["Keys, timestamps, and provenance"] --- Example
+    Keys --- Label
+```
+
+The time boundary separates legal features from later outcome evidence. Keys connect the example to the correct entity and label. The target then represents the label in the form the training algorithm uses. A change to any one part changes the data contract the model learns from.
+
+## A Readmission Dataset As A Supporting Example
 <!-- section-summary: The readmission scenario gives every data piece a concrete owner, timestamp, and business purpose. -->
 
 Riverbend wants a model that runs shortly after discharge. At that moment, the hospital knows the patient age band, discharge department, length of stay, diagnosis group, recent admissions, lab summary fields, medication count, and whether a follow-up appointment was scheduled. The hospital will only learn the label after 30 days pass.
@@ -139,6 +145,10 @@ WITH discharge_examples AS (
     discharge_ts
   FROM warehouse.discharges
   WHERE discharge_status = 'completed'
+    AND discharge_ts <= TIMESTAMP_SUB(
+      TIMESTAMP '2026-07-01 00:00:00 UTC',
+      INTERVAL 37 DAY
+    )
 ),
 future_admissions AS (
   SELECT
@@ -161,7 +171,9 @@ LEFT JOIN future_admissions a
 GROUP BY d.discharge_id;
 ```
 
-The label query uses future data because the row belongs to historical training. That is acceptable for the target. The same future admission fields should stay out of the feature columns, because the model would lack that information at discharge time.
+The fixed timestamp is the **label as-of time** for this dataset release. The query waits for the 30-day outcome window plus a seven-day processing buffer before it assigns either label. Without that cutoff, a patient discharged yesterday could receive a false `0` simply because the full outcome window has not passed. Production pipelines should pass the as-of time as a versioned parameter rather than reading the current clock inside a historical rebuild.
+
+The label query uses future data because the row belongs to historical training. That is acceptable for the target after the outcome window matures. The same future admission fields should stay out of the feature columns, because the model would lack that information at discharge time.
 
 ## A Dataset Schema The Team Can Review
 <!-- section-summary: A schema gives the dataset a stable shape that data engineering, ML, and product reviewers can inspect. -->

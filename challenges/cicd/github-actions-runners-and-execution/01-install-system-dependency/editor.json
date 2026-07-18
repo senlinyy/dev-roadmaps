@@ -4,15 +4,30 @@
   "completionProfile": "github-actions",
   "initialValue": "name: CI\non: [push]\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.12'\n      - run: pip install -r requirements.txt\n      - run: python -m pytest",
   "grader": {
-    "strategy": "regex-all",
+    "strategy": "yaml-paths",
     "expected": [
       {
-        "pattern": "apt-get\\s+update[\\s\\S]*apt-get\\s+install[\\s\\S]*libpq-dev",
-        "label": "system dependency step updates apt and installs libpq-dev"
+        "path": ["jobs", "build", "steps", 2, "run"],
+        "type": "string",
+        "contains": "apt-get update",
+        "label": "system dependency step updates apt metadata"
       },
       {
-        "pattern": "libpq-dev[\\s\\S]*pip\\s+install\\s+-r\\s+requirements\\.txt",
-        "label": "libpq-dev install appears before pip install"
+        "path": ["jobs", "build", "steps", 2, "run"],
+        "type": "string",
+        "contains": "apt-get install",
+        "label": "system dependency step installs an apt package"
+      },
+      {
+        "path": ["jobs", "build", "steps", 2, "run"],
+        "type": "string",
+        "contains": "libpq-dev",
+        "label": "system dependency step installs libpq-dev"
+      },
+      {
+        "path": ["jobs", "build", "steps", 3, "run"],
+        "equals": "pip install -r requirements.txt",
+        "label": "Python dependencies install after libpq-dev"
       }
     ]
   }

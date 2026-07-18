@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "activeFile": "policy.yaml",
+  "completionProfile": "kubernetes",
+  "files": [
+    { "filename": "policy.yaml", "initialValue": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata:\n  name: require-app-owner-label\nspec:\n  failurePolicy: Fail\n" },
+    { "filename": "binding.yaml", "initialValue": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: require-app-owner-label-orders\nspec:\n  policyName: require-app-owner-label\n" }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "file": "policy.yaml", "path": ["spec", "failurePolicy"], "equals": "Fail", "label": "security failure policy" },
+      { "file": "policy.yaml", "path": ["spec", "matchConstraints", "resourceRules"], "equals": [{ "apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE", "UPDATE"], "resources": ["pods"] }], "label": "Pod create and update scope" },
+      { "file": "policy.yaml", "path": ["spec", "validations"], "equals": [{ "expression": "has(object.metadata.labels['app.kubernetes.io/part-of'])", "message": "Pods must include app.kubernetes.io/part-of" }], "label": "ownership label validation" },
+      { "file": "binding.yaml", "path": ["spec", "policyName"], "equals": "require-app-owner-label", "label": "bound policy" },
+      { "file": "binding.yaml", "path": ["spec", "validationActions"], "equals": ["Warn"], "label": "warning rollout action" },
+      { "file": "binding.yaml", "path": ["spec", "matchResources", "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"], "equals": "orders", "label": "orders namespace pilot" }
+    ]
+  }
+}

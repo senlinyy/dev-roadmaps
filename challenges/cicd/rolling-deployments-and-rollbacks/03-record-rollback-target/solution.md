@@ -8,3 +8,5 @@ rollback:
     - /version reports orders-api:41
     - /smoke/checkout passes
 ```
+
+The rollback target is an immutable, known-good production state rather than a relative label. Compatibility and verification fields protect against a rollback that restores old code but cannot safely handle current data.

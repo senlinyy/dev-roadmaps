@@ -1,350 +1,184 @@
 ---
 title: "MLflow and W&B"
-description: "Compare MLflow and Weights & Biases through practical experiment tracking, artifacts, reports, sweeps, collaboration, and registry handoff."
-overview: "MLflow and Weights & Biases help teams preserve experiment evidence. This tutorial follows a grocery demand forecasting model through tracked runs, artifacts, reports, sweeps, collaboration review, and the handoff from experiment work to a registry."
+description: "Compare experiment systems through run identity, reproducibility evidence, metrics, artifacts, collaboration, search, registry handoff, and operations."
+overview: "MLflow and Weights & Biases implement overlapping experiment-system responsibilities. This article compares them responsibility by responsibility instead of teaching two disconnected product tours."
 tags: ["MLOps", "core", "production", "registry"]
 order: 1
 id: "article-mlops-experiments-and-reproducibility-mlflow-and-wandb"
 ---
 
-## Table of Contents
+## Compare Experiment Systems By Responsibility
+<!-- section-summary: MLflow and W&B both preserve experiment evidence, so a useful comparison starts with run, artifact, collaboration, handoff, and operating responsibilities. -->
 
-1. [What MLflow And W&B Do](#what-mlflow-and-wb-do)
-2. [The Forecasting Team Needs A Run Trail](#the-forecasting-team-needs-a-run-trail)
-3. [Track The Same Training Job In MLflow](#track-the-same-training-job-in-mlflow)
-4. [Track The Same Training Job In W&B](#track-the-same-training-job-in-wb)
-5. [Artifacts, Reports, And Sweeps](#artifacts-reports-and-sweeps)
-6. [How Teams Usually Choose](#how-teams-usually-choose)
-7. [Registry Handoff](#registry-handoff)
-8. [Operational Checks](#operational-checks)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+**MLflow** and **Weights & Biases (W&B)** are platforms for recording and working with machine-learning experiments. Both can store runs, parameters, metrics, artifacts, dataset references, and models. Both can support comparison and lifecycle handoffs. A product-tour comparison quickly turns into a list of overlapping buttons.
 
-## What MLflow And W&B Do
-<!-- section-summary: MLflow and W&B record experiment evidence so a team can compare runs, preserve artifacts, explain choices, and hand a reviewed model to a registry. -->
+The stronger comparison starts with the work an experiment system must support:
 
-**MLflow** and **Weights & Biases**, usually shortened to **W&B**, are experiment systems. They record what happened during model development: the code version, input data version, parameters, metrics, charts, files, notes, and model artifact that came out of a training run. They help you answer a simple production question: which model did we train, why did we trust it, and where is the evidence?
+1. Give every execution a stable **run identity** and purpose.
+2. Connect the run to **data, code, configuration, and environment evidence**.
+3. Record **metrics, curves, slices, and resource use** with enough context for comparison.
+4. Version **artifacts** and preserve their lineage through runs.
+5. Support **collaboration, review, reports, and discovery**.
+6. Organize **searches, sweeps, trials, and parent-child runs**.
+7. Hand selected artifacts into a **registry and release process**.
+8. Meet the organisation’s needs for **hosting, identity, retention, security, scale, support, and cost**.
 
-They overlap because both tools track runs and artifacts. They differ in the way teams tend to use them. MLflow often sits close to platform engineering, model packaging, open-source tracking servers, Databricks workflows, and registry handoff. W&B often sits close to collaborative research, rich charts, reports, hyperparameter sweeps, dataset/model artifacts, and review conversations across data science teams.
-
-Imagine a grocery company called FreshCart. The company trains a demand forecasting model that predicts the next 14 days of sales for every store and product pair. A bad model over-orders berries in small stores, under-orders milk before holiday weekends, and leaves store managers explaining empty shelves. A good tracking setup gives the team evidence before the forecast reaches replenishment systems.
-
-## The Forecasting Team Needs A Run Trail
-<!-- section-summary: A run trail connects a training attempt to its data, parameters, metrics, artifacts, owner, and review decision. -->
-
-The FreshCart team trains many forecasting candidates. One run uses LightGBM with weather features. Another adds promotion calendars. A third changes the loss function so high-volume items carry more weight. The team needs a trail that keeps those choices attached to the result, because the final discussion should use evidence instead of notebook memory.
-
-An experiment run is one recorded training attempt. A practical run record should show the ingredients, the output, and the decision. If a director asks why `freshcart-demand-forecast:v42` reached the registry, the team should find the exact training table, feature code, metrics, plots, model file, and review notes without searching through old Slack threads.
-
-For FreshCart, a useful run trail might include:
-
-| Evidence | FreshCart example | Why the team needs it |
-|---|---|---|
-| Data version | `warehouse.ml.demand_training_2026_06_30` | Shows which historical sales and labels trained the model |
-| Code version | `git_sha: 7f4a9c2` | Lets the team rebuild the training job later |
-| Parameters | `max_depth=9`, `learning_rate=0.045` | Explains how this run differs from nearby runs |
-| Metrics | `weighted_mape=0.083`, `stockout_risk_delta=-0.021` | Supports model comparison with product impact |
-| Artifacts | `model.pkl`, `segment_metrics.csv`, `forecast_error_plot.png` | Gives reviewers files they can inspect and deploy |
-| Decision | `candidate_for_registry=true` | Records the handoff from experimentation to release review |
-
-That table is the job description for MLflow and W&B. A tracking tool gives each run a stable place where these facts live together. Without that place, the team has model files in object storage, metrics in notebooks, plots in screenshots, and decisions in chat history.
-
-![FreshCart run trail connecting data version, code SHA, parameters, metrics, artifacts, and review decision.](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/freshcart-run-trail.png)
-*FreshCart's run trail keeps the evidence reviewers need close to the candidate forecast model.*
-
-## Track The Same Training Job In MLflow
-<!-- section-summary: MLflow records parameters, metrics, tags, artifacts, models, and registry-ready metadata from a training run. -->
-
-MLflow organizes runs under experiments. A training script can log parameters, metrics, tags, artifacts, and a model in a few lines of Python. The tracking server stores lightweight metadata in a backend store such as PostgreSQL, while larger artifacts usually land in object storage such as S3, ADLS, GCS, or a managed Databricks location.
-
-Here is a simplified FreshCart training script that logs evidence to MLflow. The model training code is intentionally small here, because the important lesson is the tracking pattern around the training job.
-
-```python
-import mlflow
-import mlflow.sklearn
-from mlflow.models import infer_signature
-
-from freshcart.data import load_training_frame
-from freshcart.features import build_features
-from freshcart.models import train_forecaster
-from freshcart.reports import write_segment_report
-
-mlflow.set_experiment("freshcart-demand-forecasting")
-
-training_table = "warehouse.ml.demand_training_2026_06_30"
-features_version = "demand_features_v12"
-git_sha = "7f4a9c2"
-
-df = load_training_frame(training_table)
-X_train, X_valid, y_train, y_valid = build_features(df, version=features_version)
-model, metrics = train_forecaster(
-    X_train,
-    y_train,
-    X_valid,
-    y_valid,
-    max_depth=9,
-    learning_rate=0.045,
-)
-
-segment_report_path = write_segment_report(model, X_valid, y_valid)
-signature = infer_signature(X_valid.head(20), model.predict(X_valid.head(20)))
-
-with mlflow.start_run(run_name="lgbm-store-sku-v42"):
-    mlflow.log_params(
-        {
-            "algorithm": "lightgbm",
-            "training_table": training_table,
-            "features_version": features_version,
-            "forecast_horizon_days": 14,
-            "max_depth": 9,
-            "learning_rate": 0.045,
-        }
-    )
-    mlflow.log_metrics(
-        {
-            "weighted_mape": metrics.weighted_mape,
-            "holiday_week_mape": metrics.holiday_week_mape,
-            "stockout_risk_delta": metrics.stockout_risk_delta,
-        }
-    )
-    mlflow.set_tags(
-        {
-            "git_sha": git_sha,
-            "owner": "forecasting-platform",
-            "candidate_reason": "lower holiday-week error for dairy and produce",
-        }
-    )
-    mlflow.log_artifact(segment_report_path, artifact_path="evaluation")
-    model_info = mlflow.sklearn.log_model(
-        sk_model=model,
-        name="model",
-        input_example=X_valid.head(5),
-        signature=signature,
-    )
+```mermaid
+flowchart LR
+    Intent["Question and run identity"] --> Inputs["Data, code, config, environment"]
+    Inputs --> Execute["Training or evaluation run"]
+    Execute --> Measures["Metrics, slices, curves, and cost"]
+    Execute --> Artifacts["Models, reports, and predictions"]
+    Measures --> Review["Comparison and team decision"]
+    Artifacts --> Review
+    Review --> Registry["Curated candidate handoff"]
+    Registry --> Release["Deployment and operation"]
 ```
 
-The run now has enough evidence for review. Parameters explain what changed. Metrics show the result. Tags add search and ownership metadata. The segment report gives reviewers a file they can open. The logged model includes a signature, which is important when the next system needs to know the expected input and output shape.
+MLflow and W&B implement this chain with different product emphasis and operating models. The framework lets a team compare them against the same needs and also reveals whether an existing managed cloud platform already covers part of the work.
 
-MLflow fits well when the platform team wants a tracking API that connects cleanly to packaging and registry workflows. A team can start locally, then point the same training code at a shared tracking server. In a larger company, that server usually sits behind access control and uses durable artifact storage, so experiment history survives laptops and notebook sessions.
+## Run Identity Holds One Execution Together
+<!-- section-summary: A run links one training or evaluation attempt to its intent, inputs, measurements, outputs, owner, and orchestration state. -->
 
-## Track The Same Training Job In W&B
-<!-- section-summary: W&B records runs, charts, artifacts, tables, reports, and sweeps with a strong collaboration workflow around experiment review. -->
+A **run** represents one execution of training, evaluation, preprocessing, or another model-development task. The run ID should connect the tracking system with the orchestrator, logs, storage, and later registry version. A readable name helps people browse; the stable ID protects identity.
 
-W&B also records run evidence, and its strength shows up when many people need to compare experiments together. Teams use W&B runs for charts, config, metrics, artifacts, tables, notes, and reports. A forecasting team can compare every run in a dashboard, open a report that explains the preferred candidate, and review artifact lineage before a model moves forward.
-
-Here is the same FreshCart idea using W&B. The code logs config, metrics, a model artifact, and aliases that mark the model as a candidate for review.
-
-```python
-import wandb
-
-from freshcart.data import load_training_frame
-from freshcart.features import build_features
-from freshcart.models import train_forecaster
-from freshcart.reports import write_segment_report, write_error_table
-
-run = wandb.init(
-    project="freshcart-demand-forecasting",
-    job_type="train",
-    config={
-        "algorithm": "lightgbm",
-        "training_table": "warehouse.ml.demand_training_2026_06_30",
-        "features_version": "demand_features_v12",
-        "forecast_horizon_days": 14,
-        "max_depth": 9,
-        "learning_rate": 0.045,
-        "git_sha": "7f4a9c2",
-    },
-)
-
-df = load_training_frame(run.config["training_table"])
-X_train, X_valid, y_train, y_valid = build_features(
-    df,
-    version=run.config["features_version"],
-)
-model, metrics = train_forecaster(
-    X_train,
-    y_train,
-    X_valid,
-    y_valid,
-    max_depth=run.config["max_depth"],
-    learning_rate=run.config["learning_rate"],
-)
-
-segment_report_path = write_segment_report(model, X_valid, y_valid)
-error_table = write_error_table(model, X_valid, y_valid)
-
-wandb.log(
-    {
-        "weighted_mape": metrics.weighted_mape,
-        "holiday_week_mape": metrics.holiday_week_mape,
-        "stockout_risk_delta": metrics.stockout_risk_delta,
-        "error_by_store_type": wandb.Table(dataframe=error_table),
-    }
-)
-
-artifact = wandb.Artifact(
-    name="freshcart-demand-forecast",
-    type="model",
-    metadata={
-        "model_version_intent": "candidate",
-        "training_table": run.config["training_table"],
-        "features_version": run.config["features_version"],
-    },
-)
-artifact.add_file("models/model.pkl")
-artifact.add_file(segment_report_path, name="evaluation/segment_metrics.csv")
-run.log_artifact(artifact, aliases=["candidate", "sku-store-v42"])
-run.finish()
-```
-
-The W&B run gives the team a visual workspace around the experiment. The forecasting lead can sort runs by `weighted_mape`, inspect the table of forecast errors, open the artifact lineage, and add notes in a report. A product manager can read the report without running the notebook, which matters when model review includes business tradeoffs such as shelf availability and waste.
-
-W&B artifacts are useful because they version the inputs and outputs of runs. FreshCart can store a training dataset artifact, a validation slice artifact, and a model artifact. When someone opens the model artifact later, they can see which run produced it and which data artifact fed the run.
-
-## Artifacts, Reports, And Sweeps
-<!-- section-summary: Artifacts preserve files, reports explain decisions, and sweeps automate repeated experiment runs across parameter choices. -->
-
-Run tracking answers what happened during one training attempt. The next layer is comparison. FreshCart wants to know whether deeper trees help holiday promotions, whether weather features help produce, and whether the gains hold across small rural stores. This is where artifacts, reports, and sweeps turn scattered experiments into a review workflow.
-
-An **artifact** is a versioned file or group of files attached to a run. A model artifact might include `model.pkl`, `feature_order.json`, `requirements.txt`, and `evaluation/segment_metrics.csv`. A dataset artifact might include a training table export, a schema digest, or a pointer to a warehouse snapshot. The exact storage layout depends on the platform, yet the goal is stable: reviewers need to connect model files to the run evidence that produced them.
-
-A **report** is the human explanation around the evidence. A FreshCart W&B report might compare the best five runs, show forecast error by department, and explain why `sku-store-v42` helps dairy replenishment while keeping bakery waste inside the allowed range. MLflow teams often write similar review notes in a pull request, model card, registry description, or internal release ticket.
-
-A **sweep** is an automated set of experiment runs over a parameter search space. W&B has a first-class sweep workflow, while MLflow teams often run sweeps through orchestration tools such as Ray Tune, Optuna, Airflow, Databricks Workflows, or Kubernetes Jobs and log each run to MLflow. The useful habit is the same: each trial needs a tracked run with parameters, metrics, and artifacts.
+MLflow organizes runs inside experiments and supports parameters, metrics, tags, datasets, artifacts, and logged models. W&B organizes runs inside projects and supports configuration, summary and history metrics, tags, groups, jobs, artifacts, and workspace views. Both need a team-defined run contract because the tools cannot infer which evidence your release process requires.
 
 ```yaml
-method: bayes
-metric:
-  name: weighted_mape
-  goal: minimize
-parameters:
-  max_depth:
-    values: [6, 8, 10, 12]
-  learning_rate:
-    min: 0.02
-    max: 0.12
-  min_child_samples:
-    values: [20, 50, 100]
-  promotion_feature_window_days:
-    values: [7, 14, 28]
+run_contract:
+  purpose: test-seller-reliability-features
+  owner: marketplace-ranking
+  orchestrator_run_id: ranking-train-2026-07-17-0042
+  source_commit: 3a6c9f2
+  dataset_version: search-judgments-2026-07-10-r3
+  feature_set: ranking-features-v8
+  label_policy: purchase-within-24h-v4
+  container_digest: sha256:30af...
+  evaluation_protocol: marketplace-ranking-review-v6
 ```
 
-This sweep config teaches the tool what to vary and what to optimize. The forecasting team still reviews the results carefully, because the lowest overall error may hide weak performance in a region or product family. A mature workflow logs segment metrics and keeps the candidate decision separate from the search result.
+The wrapper around either client should reject a run that lacks required identities before expensive training starts. It should write the tracking run ID back into the orchestrator record. This two-way link lets an operator start from a failed pipeline or a surprising chart and reach the same evidence.
 
-![FreshCart artifacts, reports, and sweeps feeding one review packet.](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/freshcart-trials-to-review.png)
-*Artifacts preserve files, reports explain the tradeoff, and sweeps create the comparison set for FreshCart's review packet.*
+Run status also needs care. A process can crash before the client records completion. A retry can create a second run for the same logical attempt. The integration should carry an operation ID, mark interrupted runs honestly, and connect retries or resumes through parent and checkpoint lineage. Deleting failed runs removes useful operational evidence.
 
-## How Teams Usually Choose
-<!-- section-summary: Tool choice follows workflow needs around hosting, collaboration, artifact lineage, managed platforms, and registry integration. -->
+## Reproducibility Evidence Extends Beyond Parameters
+<!-- section-summary: Useful tracking records connect a run to immutable data, source, resolved behaviour, software, hardware, and replay policy. -->
 
-You can use either tool well, and many companies use more than one tracking surface. The choice should follow the team workflow. A small research team may care most about fast charts and collaborative reports. A platform team may care most about self-hosting, packaging conventions, and registry APIs. A cloud-centered team may use the registry built into SageMaker, Vertex AI, Azure ML, or Databricks while still tracking experiments in MLflow or W&B.
+Hyperparameters describe only part of a run. A production receipt also needs the data snapshot and label cutoff, source commit and dirty state, fully resolved configuration, feature definitions, dependency lock, container digest, hardware, random-stream policy, distributed topology, and checkpoint lineage.
 
-Here is a practical comparison for the FreshCart team:
+MLflow provides dataset tracking and can link dataset metadata to runs. Current MLflow 3 tracking also gives logged models their own model IDs and can associate metrics with specific models and datasets. W&B Artifacts can represent versioned run inputs and outputs, including datasets and models, and W&B lineage graphs connect artifacts through runs.
 
-| Workflow need | MLflow fit | W&B fit |
-|---|---|---|
-| Basic run tracking | Strong Python API, experiments, runs, params, metrics, tags, artifacts | Strong run dashboard, config, metrics, charts, notes, artifacts |
-| Artifact lineage | Tracks artifacts per run and supports model packaging | Strong artifact versioning and lineage across runs, datasets, and models |
-| Collaboration | Works well with platform conventions, notebooks, PRs, and registry review | Strong reports, dashboards, tables, and team review workflows |
-| Sweeps | Usually paired with an external tuner or orchestrator | First-class sweep workflow with charts and reports |
-| Registry handoff | Built-in Model Registry, aliases, tags, model versions | W&B Registry and artifact collections; can also hand off to MLflow or managed cloud registries |
-| Hosting and control | Open-source server and managed Databricks patterns are common | SaaS and enterprise patterns are common, with strong product collaboration features |
+Neither product automatically freezes a mutable table or object prefix. The integration should resolve a table snapshot, lakehouse version, lakeFS commit, DVC revision, or dataset manifest before logging it. Recording `warehouse.training.latest` preserves a name while the content continues to move.
 
-FreshCart might choose W&B for active forecasting research because charts, tables, reports, and sweeps help the team discuss model behavior. The same company might use MLflow or Databricks Unity Catalog for the final model registry because the serving platform already reads MLflow model URIs. Another company might use only MLflow, or only W&B, if that gives the cleanest path from training to release.
+The distinction between copied artifacts and reference artifacts matters. Copying data into a tracking-managed artifact can improve retention and identity while increasing storage and data-governance surface. Referencing an external governed snapshot keeps the authoritative bytes in the data platform while requiring that platform to retain and authorize them. Choose one ownership model and test replay after the original worker is gone.
 
-The important engineering rule is to avoid splitting the evidence in a way that breaks the story. If W&B stores the report and MLflow stores the registry version, the registry entry should link back to the W&B run and artifact. If MLflow stores the run and SageMaker stores the approved package, the SageMaker model package should keep the run ID, data version, and evaluation report URI.
+## Metrics Need Definitions And Context
+<!-- section-summary: Metric names and values support a decision only when the run also records datasets, slices, denominators, aggregation, uncertainty, and evaluation code. -->
 
-## Registry Handoff
-<!-- section-summary: A registry handoff turns the best reviewed run into a named model version with aliases, owners, and release evidence. -->
+Both systems can chart scalar metrics over steps and compare runs. W&B emphasizes interactive workspaces, panels, tables, reports, and collaborative visualization. MLflow provides run and model search, comparison views, metric histories, and dataset-aware model tracking. The user experience differs, while the evidence requirement stays the same.
 
-Experiment tracking creates many runs. A model registry creates a smaller set of controlled model versions. FreshCart may run 200 sweep trials, shortlist five candidates, and register one model version for shadow testing. That handoff is the point where experiment evidence enters the release path.
+A metric called `accuracy` is incomplete. The record should identify the evaluation dataset and version, label policy, metric implementation, threshold, aggregation, denominator, important slices, and uncertainty method. Training curves need step meaning because epoch, batch, token, and wall-clock progress are different axes.
 
-With MLflow, the handoff can register a logged model and attach aliases or tags. The exact URI depends on the MLflow version and platform, so teams should standardize this in a release script rather than copying notebook cells.
-
-```python
-import mlflow
-from mlflow import MlflowClient
-
-client = MlflowClient()
-
-registered = mlflow.register_model(
-    model_uri="models:/m-3f2d8a1c7b9849a9a21f0c5d7b2c1b60",
-    name="freshcart-demand-forecast",
-)
-
-client.set_model_version_tag(
-    name="freshcart-demand-forecast",
-    version=registered.version,
-    key="source_run",
-    value="lgbm-store-sku-v42",
-)
-client.set_model_version_tag(
-    name="freshcart-demand-forecast",
-    version=registered.version,
-    key="approval_packet",
-    value="s3://freshcart-ml-reviews/demand/v42/review.yml",
-)
-client.set_registered_model_alias(
-    name="freshcart-demand-forecast",
-    alias="candidate",
-    version=registered.version,
-)
+```mermaid
+flowchart TB
+    Value["Metric value"] --> Definition["Formula, threshold, and aggregation"]
+    Value --> Dataset["Evaluation dataset and label policy"]
+    Value --> Slice["Segment, cohort, and denominator"]
+    Value --> Model["Logged model or checkpoint ID"]
+    Value --> Runtime["Latency, memory, hardware, and cost context"]
+    Definition --> Decision["Comparable release evidence"]
+    Dataset --> Decision
+    Slice --> Decision
+    Model --> Decision
+    Runtime --> Decision
 ```
 
-With W&B, the handoff often links a logged artifact version to a registry collection, adds aliases, and uses automation or CI to notify the next release step. If another registry owns deployment, the W&B artifact should still carry the external registry version after handoff.
+This context prevents false leaderboards. Two runs should not compare directly when they used different holdouts or metric code. A tracking system can make the mismatch visible when the team logs the relevant identities. It cannot decide that a comparison is scientifically or operationally fair.
 
-```yaml
-registry_handoff:
-  tracked_in: wandb
-  project: freshcart-demand-forecasting
-  source_run: lgbm-store-sku-v42
-  model_artifact: freshcart-demand-forecast:v17
-  linked_collection: Models/FreshCart Demand Forecast
-  aliases:
-    - candidate
-  external_registry:
-    type: mlflow
-    registered_model: freshcart-demand-forecast
-    version: 42
+## Artifacts Carry The Evidence Files
+<!-- section-summary: Artifacts connect run inputs and outputs through immutable versions, digests, manifests, retention, and access policy. -->
+
+An **artifact** is a durable run input or output such as a model package, checkpoint, evaluation report, prediction table, feature-importance file, plot, or dataset manifest. The tracking record should identify the artifact version and digest, while an artifact store preserves the bytes.
+
+MLflow separates metadata in its backend store from large files in an artifact store such as object storage. Logged models have model metadata and artifacts, and the Model Registry can later curate selected versions. W&B Artifacts version inputs and outputs, attach aliases and metadata, and expose lineage through runs. W&B Registry curates artifact versions into organisation-level registries and collections with permissions and audit history.
+
+The tool should never be the only place where the team understands artifact completeness. A model release may need weights, tokenizer, label map, schema, preprocessing, runtime dependencies, and evaluation. A manifest should list those parts and their digests. The registry handoff then verifies the complete inference unit.
+
+Retention follows meaning. Current and rollback releases need complete artifacts. Failed candidates may remain long enough for investigation. Disposable trial checkpoints can expire earlier. If bytes expire, the metadata should stop claiming that replay or loading remains available.
+
+## Collaboration Changes The Review Workflow
+<!-- section-summary: Collaboration features help teams compare, discuss, and report evidence, while policy still defines authority and approval. -->
+
+W&B has strong collaborative workspace and report workflows for teams that spend substantial time exploring curves, media, tables, and shared analyses. Managed W&B deployments can also reduce the amount of tracking infrastructure a team operates. MLflow offers an open platform that many organisations self-host or receive through managed data and cloud platforms, with flexible APIs and a growing set of model, evaluation, and GenAI capabilities.
+
+These tendencies should guide a proof of concept rather than act as universal verdicts. A managed MLflow service can offer integrated collaboration and governance. A self-managed W&B deployment has a different operating boundary from multi-tenant cloud. Licensing, supported authentication, network placement, export, and administrative features can change the fit.
+
+Review authority stays outside chart comments. The tracker should link to the model review packet, issue, pull request, or policy decision. Notes explain the experiment and known limitations. A registry state or approval record states what the candidate may do next. This separation keeps an edited dashboard description from changing release authority.
+
+## Sweeps Organize Many Related Trials
+<!-- section-summary: Search and sweep systems create related runs under one study contract, while the team controls search space, budget, pruning, and final evaluation. -->
+
+Both platforms support or integrate with hyperparameter search. W&B Sweeps coordinates trials and visualizes results. MLflow commonly records trials launched by systems such as Optuna, Hyperopt, Ray Tune, or managed training services; parent-child runs can group related attempts.
+
+The tracker should preserve the **study contract**: objective, direction, search space, sampler, pruning rule, maximum trials, compute budget, dataset, baseline, and protected final test policy. Each trial remains a run with its own config, metrics, and artifact. The parent study links them without pretending they are independent product decisions.
+
+Search tools can overfit the validation set through repeated selection. The final candidate should run against protected evidence after the search stops. Tracking makes every trial visible, which supports honest accounting of how many choices influenced the selected model.
+
+## Registry Handoff Curates A Smaller Set
+<!-- section-summary: Experiment systems preserve the broad history of attempts, while registry workflows curate reviewed artifacts for release and rollback. -->
+
+Most runs should never enter a model registry. The handoff selects one logged model, verifies its artifact and signature, attaches evaluation and lineage, and gives it a stable candidate version. MLflow has a Model Registry with versions, tags, and aliases. Current MLflow guidance deprecates fixed Model Stages and uses aliases and tags for flexible lifecycle workflows.
+
+W&B Registry curates W&B Artifact versions into registries and collections. It supports access control, lifecycle management, lineage, audit history, tags, and downstream automation. The registry still needs an organisation-specific approval and deployment design.
+
+```mermaid
+flowchart LR
+    Runs["Many tracked runs and checkpoints"] --> Compare["Comparable evidence and review"]
+    Compare --> Select["Selected logged model or artifact version"]
+    Select --> Verify["Signature, manifest, lineage, and policy"]
+    Verify --> Registry["Curated registry version"]
+    Registry --> Deploy["Pinned release request"]
+    Compare --> Retain["Rejected and superseded run evidence"]
 ```
 
-The registry handoff should be boring and repeatable. The reviewer should see the model name, version, source run, artifact URI, metrics, segment report, owner, and intended next stage. That record keeps release decisions from relying on screenshots or memory.
+Deployment should pin a concrete registry or artifact version. Moving an alias can express current intent, while runtime and traffic systems own actual release state. This boundary applies to both products.
 
-![FreshCart tracked run and review packet moving into a registry candidate version.](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/freshcart-registry-handoff.png)
-*The registry candidate should still point back to the tracked run, review packet, data version, metrics, owner, and segment report.*
+## Portability Depends On Evidence Contracts
+<!-- section-summary: A tool migration succeeds when stable run, dataset, artifact, metric, and decision contracts survive outside the original dashboard. -->
 
-## Operational Checks
-<!-- section-summary: A tracking setup is healthy when reviewers can reproduce the evidence, compare runs, find artifacts, and follow the model into the registry. -->
+Teams sometimes describe experiment metadata as portable because both platforms expose APIs. API access is only the first layer. A useful migration must preserve run grouping, dataset identities, metric histories, artifact versions and digests, lineage edges, notes, owners, and links to registry or deployment records.
 
-Experiment tools help only when the team uses them consistently. FreshCart should treat a missing run record like a failed build. If a training job creates a candidate model without run metadata, the release should pause until the evidence is fixed.
+Define an internal evidence schema for the facts the organisation considers mandatory. The tracker adapter can map that schema into MLflow tags, datasets, logged models, and artifacts or into W&B run config, summaries, artifacts, and lineage. Product-specific features can remain valuable, while the release process reads the stable contract rather than scraping a dashboard.
 
-Use a short review checklist before a candidate reaches the registry:
+Export and restore should be part of platform testing. Select a parent study, several child runs, a dataset artifact, a model, and a review record. Export them, verify checksums, rebuild the important relationships in an isolated destination, and confirm that the team can still answer which candidate used which data and why it advanced. This exercise reveals fields or relationships trapped inside a report or proprietary query.
 
-| Check | Healthy evidence |
-|---|---|
-| Run identity | Experiment name, run ID, owner, code SHA, training job URL |
-| Data evidence | Training table or dataset artifact, schema digest, label cutoff date |
-| Metrics | Overall metrics plus segment metrics for store type, region, product family, and holiday weeks |
-| Artifacts | Model file, input signature, feature order, dependency file, evaluation report |
-| Collaboration | Report or review packet that explains the tradeoff and names reviewers |
-| Registry link | Candidate model version points back to the tracking run and artifact |
+Portability has a cost. A lowest-common-denominator adapter can hide useful capabilities and create maintenance work. Protect the evidence and workflows that support a plausible migration, audit, or recovery. Allow product-specific visualization and collaboration where they improve day-to-day work.
 
-The team should also test search and recovery. Can a new engineer find the run from only the registry version? Can the release owner download the artifact? Can the reviewer see which dataset trained it? Can the team compare the candidate against the current production version? These checks sound simple, and they catch the most painful tracking gaps before an incident.
+## Operations Can Decide The Tool
+<!-- section-summary: Hosting, authentication, storage, scale, backup, retention, export, support, and cost can outweigh differences in the tracking UI. -->
 
-## Putting It Together
-<!-- section-summary: MLflow and W&B both preserve experiment evidence, and the better choice is the one that keeps your team review and registry handoff clear. -->
+The selection decision should include who operates the service. A shared MLflow deployment needs a tracking server or managed service, a database-backed metadata store for team and registry use, artifact storage, authentication, authorization, upgrades, backups, telemetry, and capacity planning. W&B deployment options shift different amounts of that work to the vendor or to a self-managed environment.
 
-MLflow and W&B both help you keep experiment work visible and reviewable. MLflow often shines when tracking, packaging, model registry, and platform integration need one open workflow. W&B often shines when collaboration, dashboards, reports, sweeps, tables, and artifact lineage are central to the team's daily work.
+Evaluate identity integration, workload authentication, network and data residency, encryption, audit export, artifact permissions, retention, backup and restore, API limits, high-cardinality metric behaviour, concurrent runs, support, licensing, and data-export paths. Tracking data can reveal source code, data locations, model behaviour, business metrics, and sensitive examples, so the security review should classify it explicitly.
 
-For FreshCart, the real goal is a trustworthy run trail. The forecasting team should know which data trained the model, which parameters changed, which metrics moved, which artifact came out, which reviewer approved the candidate, and which registry version points back to the evidence. Once that trail is in place, the next article can focus on the registry itself: the controlled catalog where reviewed model versions live.
+Run a representative proof of concept. Submit concurrent training, resume a failed run, log a large artifact, compare slice metrics, trace a dataset into a model, promote one candidate, revoke one user, restore metadata and artifacts, and export evidence. Measure developer work and operator work separately.
+
+## Choose From The Operating Model
+<!-- section-summary: A sound choice matches the team’s experiment workflow, artifact lineage, review style, registry path, security boundary, and operating capacity. -->
+
+Choose MLflow when its open ecosystem, APIs, managed-platform integrations, model tracking and registry path, and preferred hosting model fit the organisation. Choose W&B when its run exploration, collaborative reports, artifact workflows, managed service, or team experience solves the more important constraints. Some organisations integrate both or pair either one with a cloud registry, though duplicated sources of truth need explicit boundaries.
+
+The framework keeps the decision grounded. Define the required run contract, reproduction evidence, metric context, artifact lineage, collaboration, study organization, registry handoff, and operational controls. Test both products against one real lifecycle. The selected system should help the team preserve and use evidence without turning the tool’s default fields into the experiment method.
 
 ## References
 
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) - Official MLflow guide for experiments, runs, metrics, parameters, and artifacts.
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official MLflow guide for registered models, versions, aliases, tags, and model metadata.
-- [MLflow Model Signatures](https://mlflow.org/docs/latest/ml/model/signatures/) - Official MLflow guide for input examples and signatures used during model logging and registration.
-- [Weights & Biases Models](https://docs.wandb.ai/models) - Official W&B overview for experiment tracking, sweeps, model management, lineage, and model CI/CD workflows.
-- [W&B Artifacts](https://docs.wandb.ai/models/artifacts) - Official W&B guide for versioning datasets, models, and other run inputs or outputs.
-- [W&B Reports](https://docs.wandb.ai/models/reports) - Official W&B guide for collaborative experiment reports.
-- [W&B Sweeps](https://docs.wandb.ai/models/sweeps) - Official W&B guide for hyperparameter search and sweep visualization.
-- [W&B Registry](https://docs.wandb.ai/models/registry) - Official W&B guide for registry collections, artifact versions, governance, and automation.
+- [MLflow Tracking](https://mlflow.org/docs/latest/tracking/)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/ml/dataset/)
+- [MLflow search runs](https://mlflow.org/docs/latest/ml/search/search-runs/)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [W&B experiment tracking](https://docs.wandb.ai/models/track/)
+- [W&B Artifacts overview](https://docs.wandb.ai/models/artifacts/)
+- [W&B artifact lineage graphs](https://docs.wandb.ai/models/artifacts/explore-and-traverse-an-artifact-graph)
+- [W&B Sweeps](https://docs.wandb.ai/models/sweeps/)
+- [W&B Registry overview](https://docs.wandb.ai/models/registry/)
+- [W&B deployment options](https://docs.wandb.ai/platform/hosting/)

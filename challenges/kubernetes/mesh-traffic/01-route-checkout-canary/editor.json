@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "activeFile": "checkout-destination-rule.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    { "filename": "checkout-destination-rule.yaml", "initialValue": "apiVersion: networking.istio.io/v1\nkind: DestinationRule\nmetadata:\n  name: checkout\n  namespace: store\nspec:\n  host: checkout.store.svc.cluster.local\n  subsets: []\n" },
+    { "filename": "checkout-virtual-service.yaml", "initialValue": "apiVersion: networking.istio.io/v1\nkind: VirtualService\nmetadata:\n  name: checkout\n  namespace: store\nspec:\n  hosts:\n    - checkout.store.svc.cluster.local\n  http: []\n" }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "file": "checkout-destination-rule.yaml", "path": ["spec", "host"], "equals": "checkout.store.svc.cluster.local", "label": "checkout destination host" },
+      { "file": "checkout-destination-rule.yaml", "path": ["spec", "subsets"], "containsObject": { "name": "v1", "labels": { "version": "v1" } }, "minItems": 2, "maxItems": 2, "label": "v1 subset" },
+      { "file": "checkout-destination-rule.yaml", "path": ["spec", "subsets"], "containsObject": { "name": "v2", "labels": { "version": "v2" } }, "label": "v2 subset" },
+      { "file": "checkout-virtual-service.yaml", "path": ["spec", "hosts"], "equals": ["checkout.store.svc.cluster.local"], "label": "stable checkout host" },
+      { "file": "checkout-virtual-service.yaml", "path": ["spec", "http"], "maxItems": 1, "label": "single canary route" },
+      { "file": "checkout-virtual-service.yaml", "path": ["spec", "http", 0, "route"], "containsObject": { "destination": { "host": "checkout.store.svc.cluster.local", "subset": "v1" }, "weight": 95 }, "minItems": 2, "maxItems": 2, "label": "stable route weight" },
+      { "file": "checkout-virtual-service.yaml", "path": ["spec", "http", 0, "route"], "containsObject": { "destination": { "host": "checkout.store.svc.cluster.local", "subset": "v2" }, "weight": 5 }, "label": "canary route weight" }
+    ]
+  }
+}

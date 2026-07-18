@@ -1,4 +1,12 @@
 ```yaml
+name: Security Scan
+on: [push]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Run Alpine Scanner
         uses: docker://alpine:3.20
         with:
@@ -6,4 +14,4 @@
           args: -c "echo 'Scanning...'"
 ```
 
-- The `docker://` prefix tells GitHub to pull the image and run the step inside it. The runner itself is still Ubuntu, but this specific step executes inside the Alpine container. This is useful when tools only compile or run on certain distros.
+The `docker://` prefix runs only this step inside the pinned Alpine image while the job remains on its Ubuntu runner. Keeping the entrypoint and arguments on the same step makes the execution boundary explicit in review.

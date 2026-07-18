@@ -5,10 +5,12 @@
   "files": [
     {
       "filename": "main.tf",
+      "readOnly": true,
       "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
     },
     {
       "filename": "locals.tf",
+      "readOnly": true,
       "initialValue": "locals {\n  invoice_bucket_name = \"dp-orders-invoices-prod\"\n  common_tags = {\n    service     = \"devpolaris-orders\"\n    environment = \"prod\"\n    owner       = \"platform\"\n  }\n}\n"
     },
     {

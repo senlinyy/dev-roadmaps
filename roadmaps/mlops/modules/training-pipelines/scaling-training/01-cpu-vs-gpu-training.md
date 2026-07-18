@@ -1,26 +1,11 @@
 ---
 title: "CPU vs GPU Training"
 description: "Choose CPU or GPU training by matching the model, data pipeline, budget, quota, reproducibility needs, and Kubernetes scheduling path."
-overview: "CPU and GPU training are production choices about hardware, data movement, budget, quota, and reproducibility. This guide follows a vision training job through CPU baselines, L4/L40S/H100/H200/B200 GPU choices, data loading bottlenecks, cost, quota, reproducibility, and Kubernetes GPU requests."
+overview: "CPU and GPU training are production choices about hardware, data movement, budget, quota, and reproducibility. A supporting example compares CPU baselines, L4/L40S and H100/H200 GPUs, current Blackwell-class systems, data-loading bottlenecks, cost, quota, and Kubernetes scheduling."
 tags: ["MLOps", "advanced", "compute"]
 order: 1
 id: "article-mlops-training-pipelines-cpu-vs-gpu-training"
 ---
-
-## Table of Contents
-
-1. [The Short Answer](#the-short-answer)
-2. [The Concepts We Will Connect](#the-concepts-we-will-connect)
-3. [When CPU Training Is the Right First Move](#when-cpu-training-is-the-right-first-move)
-4. [When GPU Training Pays Off](#when-gpu-training-pays-off)
-5. [Choosing the GPU Class](#choosing-the-gpu-class)
-6. [The Data Loading Bottleneck](#the-data-loading-bottleneck)
-7. [Scheduling GPUs on Kubernetes](#scheduling-gpus-on-kubernetes)
-8. [Cost, Quota, and Queue Time](#cost-quota-and-queue-time)
-9. [Reproducibility Across CPU and GPU Runs](#reproducibility-across-cpu-and-gpu-runs)
-10. [Practical Checks Before You Scale](#practical-checks-before-you-scale)
-11. [Putting It Together](#putting-it-together)
-12. [References](#references)
 
 ## The Short Answer
 <!-- section-summary: CPU training is best for smaller, branchy, data-heavy, or classical ML jobs; GPU training is best when tensor math dominates and the data pipeline can keep the accelerator busy. -->
@@ -31,12 +16,12 @@ id: "article-mlops-training-pipelines-cpu-vs-gpu-training"
 
 Here is the practical answer to the title: choose CPU when the job is small, cheap, branch-heavy, or blocked by data work; choose GPU when deep learning math dominates and the faster run time pays for the more expensive and scarcer hardware. The real production decision includes more than speed. You also check quota, queue time, data loading throughput, reproducibility, container versions, driver compatibility, and whether the team can debug failures on that hardware.
 
-We will follow a team called Harbor Lens. They inspect shipping container photos for damage before containers leave a port. The first model is a simple baseline over tabular inspection fields. The second model is a computer vision classifier over millions of images. That shift gives us a clean reason to compare CPUs, small GPUs, larger GPUs, Kubernetes requests, and reproducibility controls without turning this into a hardware shopping list.
+A supporting example follows a team called Harbor Lens. They inspect shipping container photos for damage before containers leave a port. The first model is a simple baseline over tabular inspection fields. The second model is a computer vision classifier over millions of images. That shift gives us a clean reason to compare CPUs, small GPUs, larger GPUs, Kubernetes requests, and reproducibility controls without turning this into a hardware shopping list.
 
 ## The Concepts We Will Connect
 <!-- section-summary: The hardware choice connects model shape, data movement, GPU class, Kubernetes scheduling, quota, cost, and reproducibility evidence. -->
 
-Before we pick hardware, let’s draw the path we are walking. A training pipeline has code, data, compute, artifacts, and operational evidence. The hardware choice touches every part of that path because a faster GPU can still waste money if it waits for JPEG decode, object storage reads, or a quota approval.
+Hardware selection is a bottleneck decision across model math, data movement, capacity, cost, and reproducibility. A training pipeline has code, data, compute, artifacts, and operational evidence. The hardware choice touches every part because a faster GPU can still waste money if it waits for JPEG decode, object storage reads, or a quota approval.
 
 Harbor Lens wants one daily training job. The platform team owns Kubernetes, node pools, quotas, and cost reports. The ML team owns the PyTorch model, data loader, metrics, and experiment record. The data team owns the image manifest and labels. All three groups need the same simple language for the decision.
 
@@ -44,7 +29,7 @@ Harbor Lens wants one daily training job. The platform team owns Kubernetes, nod
 |---|---|---|
 | **CPU training** | General-purpose training on server processors | Train a baseline classifier from tabular inspection fields |
 | **GPU training** | Accelerator training for tensor-heavy model math | Train a convolutional or vision transformer model on container photos |
-| **GPU class** | The specific accelerator family and memory size the job receives | Start on L4 or L40S, move large jobs to H100 or H200, reserve B200-class systems for very large pools |
+| **GPU class** | The specific accelerator family and memory size the job receives | Start on L4 or L40S, move larger jobs to H100 or H200, and treat B200/B300 or GB200/GB300-class systems as planned platform capacity |
 | **Data loading** | The work that prepares each batch before the model sees it | Read images, decode them, apply transforms, batch tensors, move them to GPU memory |
 | **Quota** | The enforced limit on how many scarce resources a team can use | The training namespace may receive four GPUs at a time |
 | **Reproducibility** | The evidence needed to replay or compare a run fairly | Record dataset manifest, image digest, PyTorch version, CUDA runtime, driver, GPU SKU, seeds, and deterministic settings |
@@ -52,7 +37,7 @@ Harbor Lens wants one daily training job. The platform team owns Kubernetes, nod
 ![CPU or GPU choice for Harbor Lens](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/cpu-or-gpu-harbor-lens.png)
 *Harbor Lens should treat CPU versus GPU as a fit decision: start with the smallest reliable run, then scale after profiling proves the bottleneck.*
 
-The spine is simple: start with the familiar problem of a training job that takes too long, define CPU and GPU training, match the model and data workflow to hardware, show the Kubernetes shape, then finish with checks that keep cost and evidence under control.
+The decision sequence is measurable. Establish a CPU baseline, profile where time is spent, choose the smallest accelerator that fits the model and batch, verify that the input pipeline keeps it busy, include quota and queue delay in the cost comparison, and record enough runtime evidence to compare the resulting model fairly.
 
 ## When CPU Training Is the Right First Move
 <!-- section-summary: CPU training gives a cheap and available baseline for classical models, small experiments, data-heavy jobs, and debugging runs. -->
@@ -76,12 +61,12 @@ A **GPU** is an accelerator built for large batches of similar math operations. 
 
 The important phrase is **after the tensors move to GPU memory**. The accelerator needs tensors on the device before training work can start. The job still has to list files, fetch bytes, decode images, apply transforms, collate a batch, pin host memory, and copy tensors to the device. If those steps run too slowly, the expensive GPU waits between batches and the bill grows without matching speed.
 
-GPU training also changes the debugging surface. A CPU out-of-memory error usually points to process memory. A GPU out-of-memory error may point to batch size, activation memory, optimizer state, model precision, fragmentation, or one worker accidentally holding tensors longer than expected. Multi-GPU training adds communication libraries such as NCCL, network topology, rank assignment, and checkpoint recovery.
+GPU training also changes the debugging surface. A CPU out-of-memory error usually points to process memory. A GPU out-of-memory error may point to batch size, activation memory, optimizer state, model precision, fragmentation, or one worker accidentally holding tensors longer than expected. Multi-GPU training adds communication libraries such as the NVIDIA Collective Communications Library (NCCL), network topology, rank assignment, and checkpoint recovery.
 
 So the first GPU question is practical: how much of the run time is model math? If the CPU baseline spends 80 percent of its time reading and transforming files, a GPU may expose the bottleneck rather than solve it. If the profiler shows long tensor operations and the input pipeline has headroom, a GPU can produce a shorter training loop and faster experiment cycles.
 
 ## Choosing the GPU Class
-<!-- section-summary: L4 and L40S fit smaller training and fine-tuning work, H100 and H200 fit larger deep learning jobs, and B200-class systems belong to large accelerator pools with serious quota and cost controls. -->
+<!-- section-summary: L4 and L40S fit smaller training and fine-tuning work, H100 and H200 fit larger deep learning jobs, and current Blackwell-class systems belong to planned accelerator platforms with serious quota, networking, and cost controls. -->
 
 Once Harbor Lens proves the photo model needs acceleration, the team still needs to pick the class of accelerator. A production platform usually has a few node pools rather than every possible GPU. The choice should match model size, batch size, memory pressure, expected run length, queue time, and budget.
 
@@ -89,7 +74,7 @@ Think about the GPU family as a ladder of commitment. An **L4** is a cost-sensit
 
 The next tier fits larger deep learning jobs. **H100** uses the Hopper architecture, Tensor Cores, and Transformer Engine support that targets large AI and HPC workloads. It is a common current choice for serious training and fine-tuning jobs where wall-clock time matters. **H200** keeps the Hopper family shape while adding much larger and faster HBM3e memory, which helps memory-hungry workloads such as large generative models and high-performance computing.
 
-At the largest end, **B200-class** systems such as NVIDIA DGX B200 belong in planned accelerator pools. These systems make sense when a platform team has large, sustained workloads, dedicated budget, careful queueing, high-speed networking, and owners who can keep utilization high. For a single beginner training job, they are usually a platform decision rather than the first experiment request.
+At the largest end, current **Blackwell-class systems** include HGX or DGX B200 and B300 servers as well as GB200 and GB300 NVL rack-scale systems. These are not interchangeable single-GPU upgrades. The GB systems combine Grace CPUs, Blackwell GPUs, NVLink fabrics, and rack-scale operating requirements, while HGX and DGX systems package different node-level topologies. They make sense when a platform team has large sustained workloads, high-speed networking and storage, dedicated power and cooling, a scheduler that can place topology-aware jobs, and owners who can keep expensive capacity busy. For one ordinary training job, this is a platform architecture decision rather than the first accelerator request.
 
 | GPU class | Good fit | Watch carefully |
 |---|---|---|
@@ -97,12 +82,12 @@ At the largest end, **B200-class** systems such as NVIDIA DGX B200 belong in pla
 | **L40S** | Stronger single-GPU training, fine-tuning, visual workloads, and mixed AI workloads | Node availability, power budget, image decode throughput, and cost per successful run |
 | **H100** | Larger deep learning, distributed training, generative AI fine-tuning, high-throughput experiments | Queue time, multi-GPU communication, checkpoint size, and quota approvals |
 | **H200** | Memory-heavy large models and workloads that gain from larger HBM3e memory | Availability, cost, checkpoint transfer time, and exact CUDA/container compatibility |
-| **B200-class systems** | Large accelerator pools, major foundation-model style training, heavy fine-tuning programs | Utilization, networking, storage bandwidth, team maturity, and executive-level budget controls |
+| **B200/B300 and GB200/GB300-class systems** | Large accelerator pools, foundation-model training, heavy post-training, and shared high-throughput programs | Exact topology, networking, storage bandwidth, power, scheduling, utilization, and program-level budget controls |
 
 ![GPU class ladder for Harbor Lens](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/gpu-class-ladder.png)
 *The GPU ladder is a commitment ladder too: each move up should come with queue, quota, and utilization evidence.*
 
-The practical lesson is restraint. Harbor Lens should probably start the vision model on L4 or L40S, profile the job, then promote only the runs that prove they need H100 or H200. The platform team should reserve B200-class capacity for workloads that already have strong evidence, committed owners, and a queue that can keep the systems productive.
+The practical lesson is restraint. Harbor Lens should probably start the vision model on L4 or L40S, profile the job, then promote only the runs that prove they need H100 or H200. The platform team should reserve Blackwell-class capacity for workloads that already have strong evidence, committed owners, compatible software, and a queue that can keep the selected topology productive.
 
 ## The Data Loading Bottleneck
 <!-- section-summary: GPU speed depends on the input pipeline because slow reads, transforms, and host-to-device copies leave the accelerator idle. -->
@@ -112,6 +97,8 @@ The first Harbor Lens GPU run finishes faster than CPU, yet the GPU dashboard sh
 **Data loading** is the part of training that turns stored examples into ready batches. For image training, it includes reading file paths from a manifest, downloading or streaming image bytes, decoding JPEG or PNG files, resizing and augmenting images, turning them into tensors, batching them, and moving them from CPU memory into GPU memory. Each stage can throttle the whole job.
 
 In PyTorch, `DataLoader` gives you practical knobs for this path. `num_workers` controls subprocesses that load data in parallel. `pin_memory=True` lets the loader place tensors in pinned host memory so transfers to CUDA-enabled GPUs can move faster. `persistent_workers=True` can avoid restarting workers every epoch. These settings still need measurement because too many workers can fight for CPU, memory, disk, or network bandwidth.
+
+:::expand[Configure a measured PyTorch input pipeline]{kind="example"}
 
 ```python
 import random
@@ -152,6 +139,8 @@ for images, labels in train_loader:
     optimizer.zero_grad(set_to_none=True)
 ```
 
+:::
+
 The important part is the connection between the loader and the device transfer. `pin_memory=True` helps the CPU-to-GPU copy path for tensor batches. `non_blocking=True` lets the transfer overlap more naturally with other work when the surrounding code and memory layout allow it. `worker_init_fn` and `generator` keep worker randomness under control, which matters for reproducible augmentation and shuffle behavior.
 
 Harbor Lens should measure the loader before asking for larger GPUs. A simple run log can record examples per second, average batch load time, average GPU step time, GPU utilization, CPU utilization, storage read throughput, and time spent waiting for the next batch. If the GPU waits often, fix data layout, caching, worker count, image size, transforms, or storage locality before moving from L40S to H100.
@@ -167,6 +156,8 @@ Harbor Lens runs training jobs on Kubernetes because the platform team already u
 A **device plugin** is the part that advertises special hardware to the kubelet. The kubelet is the node agent that talks to the Kubernetes control plane. After the NVIDIA device plugin registers GPUs, the scheduler can see an extended resource such as `nvidia.com/gpu`. Then a training pod can ask for a GPU through its resource section.
 
 Kubernetes has an important GPU rule. You can set GPU limits alone, or you can set GPU requests and limits together with the same value. A GPU request needs a matching limit. Many teams set both so reviewers can see the intended scheduling shape directly in the manifest.
+
+:::expand[Inspect the complete Kubernetes GPU Job]{kind="example"}
 
 ```yaml
 apiVersion: batch/v1
@@ -210,6 +201,8 @@ spec:
               memory: 64Gi
               nvidia.com/gpu: "1"
 ```
+
+:::
 
 This manifest says the job wants one NVIDIA GPU, eight CPUs, and 64 GiB of memory. The `nodeSelector` points the job at the L40S node pool, assuming the platform team labels nodes that way. The image uses a digest, which gives the run a stable container identity. The namespace, service account, labels, and run id give platform and ML teams enough handles to audit cost and debug failures.
 
@@ -294,10 +287,10 @@ The run record should capture more than seeds:
 
 That record lets the team answer a real incident question later. If a new H200 run beats the old L40S run by a small amount, the reviewer can see whether the data changed, the model changed, the precision changed, or only the hardware changed. The evidence keeps the comparison fair.
 
-## Practical Checks Before You Scale
-<!-- section-summary: A scale-up request should include profiling, utilization, data throughput, failure handling, checkpointing, and a rollback path. -->
+## Verify The Hardware Decision
+<!-- section-summary: Hardware selection is verified through bottleneck evidence, utilization, data throughput, failure recovery, cost, and a smaller fallback. -->
 
-Before Harbor Lens asks for more GPUs, the team should run a small set of checks. These checks are ordinary engineering work. They make the hardware request easier to approve because they show the team already understands the bottleneck.
+Before Harbor Lens asks for more GPUs, the team needs evidence that the hardware change addresses the measured bottleneck. Verification joins model throughput, accelerator utilization, input-pipeline speed, failure recovery, queue delay, and cost per acceptable model. A faster step time alone can still produce a worse operating choice when the job waits longer for capacity or fails without a usable checkpoint.
 
 Start with the live Kubernetes object and logs:
 
@@ -328,7 +321,7 @@ The final check is product value. A faster training job helps only if it improve
 
 CPU vs GPU training is a production choice about fit. CPUs are a strong home for baselines, classical ML, feature-heavy jobs, small experiments, and data debugging. GPUs are a strong home for tensor-heavy deep learning jobs once the data pipeline can keep the device busy.
 
-For Harbor Lens, the best path is progressive. Train the tabular baseline on CPU. Move the image model to L4 or L40S for early acceleration. Profile data loading before asking for larger hardware. Promote only proven runs to H100 or H200. Treat B200-class systems as planned platform capacity for large sustained workloads. Along the way, record quota, cost, utilization, image digest, driver, CUDA runtime, PyTorch version, dataset manifest, seeds, and deterministic settings.
+For Harbor Lens, the best path is progressive. Train the tabular baseline on CPU. Move the image model to L4 or L40S for early acceleration. Profile data loading before asking for larger hardware. Promote only proven runs to H100 or H200. Treat B200/B300 and GB200/GB300-class systems as planned platform capacity for large sustained workloads. Along the way, record quota, cost, utilization, image digest, driver, CUDA runtime, PyTorch version, dataset manifest, seeds, deterministic settings, and the exact accelerator topology.
 
 That is the real skill here. The strongest team resists reflexively asking for the biggest GPU. The strongest team can explain what the model needs, what the data path can feed, what Kubernetes will schedule, what the run costs, and what evidence proves the result.
 
@@ -339,6 +332,7 @@ That is the real skill here. The strongest team resists reflexively asking for t
 - [NVIDIA H100 GPU](https://www.nvidia.com/en-us/data-center/h100/)
 - [NVIDIA H200 GPU](https://www.nvidia.com/en-us/data-center/h200/)
 - [NVIDIA DGX B200](https://www.nvidia.com/en-us/data-center/dgx-b200/)
+- [NVIDIA Data Center Platform Line Card](https://docs.nvidia.com/data-center-gpu/line-card.pdf)
 - [NVIDIA GPU Operator documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html)
 - [Kubernetes: Schedule GPUs](https://kubernetes.io/docs/tasks/manage-gpus/scheduling-gpus/)
 - [Kubernetes: Device Plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)

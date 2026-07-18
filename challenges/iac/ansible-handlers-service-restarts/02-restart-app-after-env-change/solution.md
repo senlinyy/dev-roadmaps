@@ -11,6 +11,8 @@
   notify: Restart orders API
 ```
 
+The environment-file change queues one named handler, and the handler performs the service restart after the task phase completes.
+
 ### roles/orders_web/handlers/main.yml
 
 ```yaml

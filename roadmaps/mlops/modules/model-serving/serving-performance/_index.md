@@ -1,6 +1,6 @@
 ---
 title: "Serving Performance"
-description: "Scale inference systems while controlling latency, throughput, hardware, and cost."
-tags: ["advanced", "performance"]
+description: "Scale and optimize inference while controlling latency, throughput, hardware, cost, numerical behavior, and product accuracy."
+tags: ["advanced", "performance", "optimization"]
 order: 4
 ---

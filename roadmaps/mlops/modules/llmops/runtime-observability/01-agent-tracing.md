@@ -1,330 +1,231 @@
 ---
 title: "Agent Tracing"
-description: "Trace agent runs across model calls, tool calls, retrieval, guardrails, retries, costs, latency, cache use, and final outcomes."
-overview: "Learn how production teams trace an agent run from the user's request through model spans, tool spans, metadata, redaction, dashboards, and incident review."
+description: "Trace agent runs as causal histories across models, retrieval, tools, state, guardrails, handoffs, outcomes, latency, and cost."
+overview: "Agent tracing reconstructs why a run produced its outcome by connecting every important decision and operation through one trace and a hierarchy of timed spans."
 tags: ["MLOps","LLMOps","production","observability"]
 order: 1
 id: "article-mlops-llmops-agent-tracing"
 ---
 
-## What Agent Tracing Means
+## An Agent Failure Is Usually a Chain, Not One Call
 
-<!-- section-summary: Agent tracing records one complete agent run as a timeline of connected steps, so you can see which model, tool, prompt, guardrail, and retry shaped the final answer. -->
+<!-- section-summary: Agent tracing records the causal path of a run so teams can explain how context, decisions, tools, and failures produced an outcome. -->
 
-Agent tracing is the practice of recording the path of an agent run from the first user request to the final response. A **trace** is the whole run. A **span** is one timed step inside that run, such as classifying the request, calling a model, searching documents, invoking a claims API, checking a guardrail, or handing the case to a human queue. A **span event** is a small record attached to a span, such as a retry, a cache hit, a validation warning, or a tool response summary.
+When a normal API is slow, an engineer often asks which service or database consumed the time. An agent run is harder to explain. The system may retrieve documents, assemble context, call a model, invoke several tools, update state, retry, hand work to another agent, run a guardrail, and finally produce an answer. A poor outcome can originate at any transition.
 
-In a normal web service, tracing tells you which service called which database and where the latency went. In an LLM agent, tracing has to explain more than latency. You also need to know which prompt version ran, which model answered, which tools the model requested, what arguments went into those tools, which documents were retrieved, how many tokens were used, whether a guardrail fired, which retries happened, and why the final answer passed or failed review.
+**Agent tracing** records this path as a connected causal history. A **trace** represents the whole user-facing run. A **span** represents one timed operation within it, such as retrieval or a tool call. An **event** records a notable occurrence inside a span, such as a cache hit, retry, approval, or validation warning.
 
-We will use a claims assistant as the running example. Imagine an insurance company called Harbor Shield. Customers upload documents after a car accident, then ask questions like, "Can I schedule a repair before the adjuster finishes the estimate?" The assistant has access to a policy search tool, a claim status API, a repair-network API, and a human escalation queue. A bad answer can create real customer harm, so the team needs a way to inspect each run in detail without leaking private claim details into every dashboard.
+```mermaid
+flowchart TD
+    A[Agent run trace] --> B[Context assembly]
+    A --> C[Model decision]
+    C --> D[Tool call]
+    D --> E[Tool result]
+    E --> F[Model synthesis]
+    F --> G[Guardrail and validation]
+    G --> H[Final response or handoff]
+    B -. versions and evidence .-> I[Run outcome]
+    C -. decision .-> I
+    D -. effect .-> I
+    G -. acceptance .-> I
+    H --> I
+```
 
-Good tracing gives that team a production record. A support lead can open one trace and see the exact run. An engineer can compare slow runs against normal runs. A privacy reviewer can verify that raw license numbers and medical notes were redacted before export. An evaluator can turn a failed run into a replay case. That is the practical value of agent tracing: it changes a vague "the assistant gave a weird answer" report into a specific chain of evidence.
+The purpose is not to collect everything. It is to preserve enough evidence to answer: what did the system attempt, which versions and inputs shaped the decision, where did time and cost go, what side effects occurred, and why was the final outcome accepted or rejected?
 
-## The Trace Hierarchy
+## Traces, Metrics, Logs, and Evals Have Different Jobs
 
-<!-- section-summary: A useful trace has a parent run span, child spans for each agent step, and small events or logs for details that explain decisions without flooding the trace backend. -->
+<!-- section-summary: Observability works when traces explain individual runs, metrics reveal population changes, logs preserve sparse events, and evals judge quality. -->
 
-The easiest way to read an agent trace is from top to bottom. The parent span describes the user-facing task. Child spans describe work that happened under that task. A model span records the model request and response metadata. A tool span records the tool name, arguments, response shape, and status. A guardrail span records a safety or policy check. A handoff span records a transfer to another agent or a human workflow.
+Tracing is one part of an observability system:
 
-For the claims assistant, a healthy run might have this shape:
+- **Traces** reconstruct one run and the relationships between its steps.
+- **Metrics** summarize many runs, such as p95 latency, success rate, escalation rate, or cost per completed task.
+- **Logs** record detailed, discrete events such as a policy rejection or provider error.
+- **Evals** judge whether outputs and decisions meet task-specific quality requirements.
 
-| Level | Span name | What it answers |
-| --- | --- | --- |
-| Trace | `claims_assistant.run` | Which customer task happened, for which environment and app version? |
-| Child span | `intent.classify` | Did the system route the question as policy, claim status, repair scheduling, or escalation? |
-| Child span | `retrieve.policy_sections` | Which policy documents were searched and which snippets came back? |
-| Child span | `gen_ai.chat gpt-5.5` | Which model answered, with which prompt version and token usage? |
-| Child span | `tool.claim_status.lookup` | Which claim API call ran and what status code came back? |
-| Child span | `guardrail.pii_and_coverage_check` | Did the answer expose sensitive data or overstate coverage? |
-| Child span | `response.finalize` | Which final answer reached the customer and which review labels were attached? |
+A trace does not prove that an answer is correct. It shows which answer was produced and how. An evaluator or reviewer supplies the quality label. Metrics then reveal whether that label changed across models, prompt versions, tenants, or release cohorts. Logs may contain the protected diagnostic detail needed to investigate the underlying error.
 
-This hierarchy matters because agent runs mix deterministic code with model behavior. The claim status API may return exactly the same JSON every time. The model response can vary across prompt versions, model versions, retrieved context, and tool output order. A trace keeps these pieces connected, so you can inspect one part without losing the surrounding context.
+```mermaid
+flowchart LR
+    A[Metrics detect a population change] --> B[Representative trace IDs]
+    B --> C[Trace reveals the failing path]
+    C --> D[Protected logs provide diagnostics]
+    C --> E[Failed runs enter an eval set]
+    E --> F[Candidate fix]
+    F --> G[Offline evaluation and canary]
+    G --> A
+```
 
-OpenTelemetry uses traces and spans as the general language for distributed systems. OpenTelemetry also has Generative AI semantic conventions under the `gen_ai.*` namespace for model requests, token usage, tool calls, and agent spans. Those GenAI conventions are still marked with development status in the current repository, so many teams keep an internal mapping layer. The important habit is stable naming: pick span names and attributes that remain readable after you change tracing vendors.
+This division prevents two common mistakes: turning metrics into a high-cardinality event store, or dumping every prompt into logs and calling the system observable.
 
-![Harbor Shield claims assistant trace](/content-assets/articles/article-mlops-llmops-agent-tracing/harbor-shield-trace-hierarchy.png)
-*Harbor Shield treats one customer answer as a trace tree: each model call, retrieval step, tool call, guardrail, and final response keeps its own timed span.*
+## Build the Trace Around the Run Hierarchy
 
-## What To Capture On Every Run
+<!-- section-summary: A trace tree should follow the control flow and preserve parent-child relationships across asynchronous work and handoffs. -->
 
-<!-- section-summary: The trace should capture identity, version, timing, tool behavior, token usage, quality labels, and privacy-safe context so engineers can debug and monitor the run later. -->
+The root span represents the product task, not merely the first HTTP request. Its children represent meaningful stages: routing, context assembly, model generation, retrieval, tool execution, guardrails, validation, checkpointing, and handoff. A tool span can have children for the downstream API and database. A retry is a new attempt span linked to the same logical operation rather than overwriting the first failure.
 
-The trace should answer four questions for every production run: **what was attempted, which system version handled it, what happened step by step, and what evidence supports the outcome**. If you capture only raw prompts and completions, the trace may help during development, yet it will be weak during an incident. If you capture only metrics, you can see that failure rate increased, yet you cannot explain one bad run.
+Parent-child structure answers causal questions. If the final model call took eight seconds, its parent shows which route selected it, while sibling spans show whether retrieval or tools also contributed. If a tool changed production state, its span shows the approval and idempotency identity associated with that effect.
 
-Here is a practical event shape for the claims assistant. The values are synthetic, and the sensitive fields are either hashed, summarized, or replaced with stable internal identifiers:
+Asynchronous work needs deliberate context propagation. A trace ID and span context must cross queues, workers, tool servers, and agent-to-agent handoffs. A later process can create a child span when the work remains part of the same run, or a **span link** when it starts a separate trace that is causally related. Without propagation, a run appears as several unrelated fragments.
+
+Do not make every helper function a span. Trace operations that matter for latency, decisions, external dependencies, state transitions, cost, policy, or recovery. Excessive detail increases storage and makes the important path harder to read.
+
+## Instrument the Boundaries That Own Meaning
+
+<!-- section-summary: Framework instrumentation captures model activity, while application spans preserve the business decisions, state transitions, and effects needed to explain an outcome. -->
+
+Automatic instrumentation is useful because it records model requests, tool calls, and timing consistently. It cannot infer why `licensed_review` was required, whether a payment proposal matched an approval, or which customer outcome defines success. Those meanings live in application code and domain services.
+
+Build the trace in three layers. The **transport layer** records HTTP, queue, RPC, and database operations. The **agent-runtime layer** records model calls, retrieval, tools, guardrails, and handoffs. The **product layer** records workflow states, policy decisions, approvals, effects, and outcomes. Parent-child relationships connect the layers without forcing one library to understand all of them.
+
+```mermaid
+flowchart TB
+    A[Product task and outcome span] --> B[Workflow transition spans]
+    B --> C[Agent step and model spans]
+    B --> D[Approval and policy spans]
+    C --> E[Retrieval and tool spans]
+    E --> F[HTTP, queue, database, and provider spans]
+    D --> G[Authoritative audit record]
+    E --> H[Effect and idempotency record]
+    H -. correlation IDs .-> A
+    G -. decision ID .-> A
+```
+
+Use trace attributes to link authoritative records, while keeping the trace backend out of the role of system of record. An approval service should retain the signed decision and policy evidence. A payment service should retain the committed effect and idempotency key. The trace keeps their safe identifiers, status, and timing so an investigator can navigate to protected evidence with the right access.
+
+Instrumentation ownership follows the boundary. The runtime team can supply standard model and tool spans. A domain team adds transitions and outcome fields for its workflow. The observability team maintains naming, sampling, redaction, export, and completeness checks. Security and privacy owners define which payload classes may leave the application. This division prevents a central tracing library from collecting content it cannot classify correctly.
+
+Test propagation at every asynchronous boundary. Enqueue a known trace context, run it through a worker and tool service, then verify the resulting parent or link. Test cancellation and delayed work as well as the happy path. If a workflow forks into parallel research steps, their spans share the product-run ancestor; if one step launches a separately owned long-running process, a span link may express the causal relationship more accurately than an artificial parent that stays open for hours.
+
+Finally, record instrumentation health as its own signal. Export failures, dropped spans, propagation misses, redaction failures, and incomplete root spans should produce bounded metrics and alerts. A tracing pipeline can fail while the user workflow succeeds, leaving the team blind exactly when a later incident needs evidence.
+
+## Capture Four Layers of Evidence
+
+<!-- section-summary: Useful traces connect run identity, system versions, step behaviour, and the final product outcome. -->
+
+### Run identity and product context
+
+Record the workflow or agent name, environment, release cohort, route, anonymous or protected tenant segment, and a correlation identity that support staff can use. Avoid raw user identity in widely accessible telemetry. The root span should end with a small outcome taxonomy such as `answered`, `completed`, `rejected`, `human_handoff`, `cancelled`, or `failed`.
+
+### Versions and configuration
+
+Record model request and response identifiers when available, prompt or instruction version, tool contract versions, retrieval index or corpus version, policy version, and application deployment. Agent behaviour is produced by their combination. A trace with only the model name cannot distinguish a prompt regression from an index or tool change.
+
+### Step behaviour
+
+For model calls, capture latency, token usage, finish reason, cache usage, and tool-selection metadata. For retrieval, capture query version, filters, document identifiers or hashes, scores, and returned count. For tools, capture tool name, contract version, effect class, sanitized argument summary, approval state, idempotency identity, status, retry count, and duration. Guardrail and validation spans should record the rule or evaluator version and the decision.
+
+### Outcome and later evidence
+
+Connect the run to the product result: Was the ticket resolved? Did a person override the answer? Did a code patch pass tests? Was a generated query executed successfully? Some evidence arrives hours or days later. Store the trace ID or run ID with the domain event so later analytics can join outcome, cost, and release information.
+
+This final link turns tracing from debugging metadata into learning data. A model call that returned HTTP 200 can still belong to a failed customer outcome.
+
+## Use a Small, Stable Event Vocabulary
+
+<!-- section-summary: Stable names and bounded attributes keep traces comparable across frameworks and vendors. -->
+
+OpenTelemetry provides vendor-neutral traces and emerging generative-AI semantic conventions. Agent frameworks may add automatic model, tool, handoff, and guardrail spans. Use those integrations, then add product spans for operations the framework cannot understand.
+
+Keep an internal naming and mapping layer because provider and semantic-convention fields evolve. A sanitized tool span might be represented like this:
 
 ```json
 {
-  "trace_id": "trc_9f3e6d1a2c7b",
-  "span_id": "spn_4a91",
-  "parent_span_id": "spn_root",
   "name": "tool.claim_status.lookup",
-  "kind": "client",
-  "start_time": "2026-07-05T10:18:42.117Z",
-  "end_time": "2026-07-05T10:18:42.381Z",
+  "trace_id": "trc_01J...",
+  "parent_span_id": "spn_agent_step",
   "status": "ok",
   "attributes": {
-    "service.name": "claims-assistant-api",
+    "service.name": "claims-assistant",
     "deployment.environment.name": "prod",
-    "app.workflow": "auto_claim_question",
-    "app.prompt.name": "claims_answer_v4",
-    "app.prompt.version": "2026-07-03.2",
-    "app.agent.name": "harbor-claims-assistant",
-    "app.claim.type": "auto_collision",
-    "app.claim.region": "CA",
-    "app.user.hash": "usr_72ad8d",
+    "app.workflow": "claim_question",
+    "app.prompt.version": "claims-answer-v4",
     "tool.name": "claim_status_lookup",
-    "tool.schema.version": "1.7.0",
-    "tool.request.redacted": true,
-    "tool.response.status_code": 200,
-    "tool.response.summary": "claim open, estimate pending, rental coverage present",
-    "failure.class": "none"
-  },
-  "events": [
-    {
-      "name": "cache.lookup",
-      "time": "2026-07-05T10:18:42.121Z",
-      "attributes": {
-        "cache.key.hash": "cache_6b8d",
-        "cache.hit": false
-      }
-    }
-  ]
-}
-```
-
-Notice the split between fields used for filtering and fields used for debugging. The `app.prompt.version`, `app.agent.name`, `deployment.environment.name`, `tool.name`, `failure.class`, and region are safe dashboard dimensions if cardinality stays controlled. The detailed user question, raw policy text, claim notes, and tool response body need stronger controls. Many teams store raw payloads only in a restricted trace backend, or they store a short summary plus a link to an internal case system with audit access.
-
-For model spans, capture the model request and response metadata without assuming every provider uses the same names. OpenTelemetry GenAI conventions include fields such as `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, cache token fields, tool definitions, and input or output messages as opt-in data. In production, opt-in message capture deserves an explicit privacy decision because messages can carry customer data.
-
-![Harbor Shield trace capture boundary](/content-assets/articles/article-mlops-llmops-agent-tracing/harbor-shield-trace-boundary.png)
-*The trace export boundary keeps dashboard fields small and safe while raw claim details stay behind tighter access and audit controls.*
-
-## Instrumenting A Claims Assistant
-
-<!-- section-summary: Start with framework tracing where it exists, then add manual spans around the business steps that the framework cannot understand by itself. -->
-
-Modern agent frameworks often give you a good first trace. The OpenAI Agents SDK includes built-in tracing for model generations, tool calls, handoffs, guardrails, and custom events, and the current tracing docs say tracing is enabled by default unless you disable it through configuration. That gets you the agent skeleton quickly. You still add your own spans for product-specific work, such as reading claim state, applying policy rules, redacting data, or writing an escalation record.
-
-Here is a small Python example that shows both pieces. The agent framework records the model and tool flow. OpenTelemetry records the product spans and attributes that Harbor Shield needs for dashboards and incident review.
-
-```python
-from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-
-trace.set_tracer_provider(
-    TracerProvider(
-        resource=Resource.create(
-            {
-                "service.name": "claims-assistant-api",
-                "deployment.environment.name": "prod",
-                "service.version": "2026.07.05",
-            }
-        )
-    )
-)
-trace.get_tracer_provider().add_span_processor(
-    BatchSpanProcessor(ConsoleSpanExporter())
-)
-
-tracer = trace.get_tracer("harbor.claims_assistant")
-
-
-async def answer_claim_question(agent_runner, user_question, claim_context):
-    with tracer.start_as_current_span("claims_assistant.run") as run_span:
-        run_span.set_attribute("app.workflow", "auto_claim_question")
-        run_span.set_attribute("app.agent.name", "harbor-claims-assistant")
-        run_span.set_attribute("app.prompt.name", "claims_answer")
-        run_span.set_attribute("app.prompt.version", "2026-07-03.2")
-        run_span.set_attribute("app.claim.type", claim_context["claim_type"])
-        run_span.set_attribute("app.user.hash", claim_context["user_hash"])
-
-        with tracer.start_as_current_span("context.prepare") as context_span:
-            prepared_context = redact_claim_context(claim_context)
-            context_span.set_attribute("privacy.redaction.applied", True)
-            context_span.set_attribute("context.documents.count", len(prepared_context["documents"]))
-
-        result = await agent_runner.run(
-            input=user_question,
-            context=prepared_context,
-        )
-
-        run_span.set_attribute("gen_ai.usage.input_tokens", result.usage.input_tokens)
-        run_span.set_attribute("gen_ai.usage.output_tokens", result.usage.output_tokens)
-        run_span.set_attribute("app.answer.outcome", result.outcome)
-        return result.final_output
-```
-
-This example uses the OpenTelemetry Python SDK pattern of setting a tracer provider, attaching a span processor, then creating spans with `start_as_current_span`. In a real service, you would usually export with OTLP to a collector or observability backend instead of printing to console. The code also avoids placing raw claim notes into span attributes. Span attributes work well for small filterable values. Large text belongs in a carefully governed payload store, or in a redacted trace field with retention and access rules.
-
-The custom spans should use names your support and engineering teams understand. `context.prepare` is better than `helper_1`. `tool.claim_status.lookup` is better than `api_call`. In a high-volume system, clear span names help you group latency, error rate, and cost without opening a single trace.
-
-## Tool Calls, Prompt Versions, And Failure Classes
-
-<!-- section-summary: The most useful agent traces treat tools, prompts, and failures as first-class production metadata instead of loose text hidden inside the model transcript. -->
-
-Tool-call logs deserve special care because tools are where an agent touches real systems. A tool span should record the tool name, schema version, sanitized arguments, external dependency, status code, latency, retry count, and response summary. If a tool can make changes, such as booking a repair appointment, capture the idempotency key and approval state. If a tool reads sensitive data, capture the data category and redaction status.
-
-For the claims assistant, the tool metadata might look like this:
-
-```json
-{
-  "name": "tool.repair_network.find_shop",
-  "attributes": {
-    "tool.name": "repair_network_find_shop",
-    "tool.schema.version": "2.3.1",
-    "tool.side_effect": "read_only",
-    "tool.retry.count": 1,
-    "tool.timeout_ms": 1200,
-    "tool.response.status_code": 200,
-    "tool.response.items.count": 5,
-    "app.claim.region": "CA",
+    "tool.contract.version": "1.7",
+    "tool.effect": "read_only",
+    "tool.result": "success",
     "failure.class": "none"
   }
 }
 ```
 
-Prompt metadata is just as important. A trace should record the prompt name and version, the agent config version, the retrieval index version, the tool schema version, and the deploy version. If the assistant starts recommending out-of-network repair shops after a release, the team needs to separate prompt changes from retrieval changes and tool changes. A trace that only says "the model answered" gives you almost no release evidence.
+The example contains identifiers and bounded categories, not raw claim notes. Attributes used for filtering should have controlled **cardinality**, meaning a limited number of distinct values. Workflow, environment, tool name, and failure class are suitable. Raw user IDs, prompts, URLs with identifiers, and document text are not.
 
-Failure classes turn messy production behavior into countable data. The exact taxonomy depends on your app, but a beginner-friendly first version can use these labels:
+A stable failure taxonomy makes incidents countable. Start with categories such as `model_timeout`, `tool_timeout`, `tool_contract_error`, `retrieval_empty`, `validation_rejected`, `guardrail_blocked`, `human_handoff`, and `unclassified`. Assign the class close to the failing operation, while the root records the final run outcome. A tool timeout may be recovered by a fallback, so step failure and run outcome are different facts.
 
-| Failure class | Meaning in the claims assistant |
-| --- | --- |
-| `none` | The run completed and passed policy checks. |
-| `tool_timeout` | A dependency timed out or returned too slowly. |
-| `tool_contract_error` | A tool response missed a required field or used an unexpected shape. |
-| `retrieval_empty` | The policy search returned no useful documents. |
-| `grounding_mismatch` | The answer made a coverage statement unsupported by retrieved policy text. |
-| `guardrail_blocked` | A privacy, safety, or policy guardrail stopped the response. |
-| `human_escalated` | The system routed the case to a human because confidence or permissions were low. |
+## Protect Payloads Before Export
 
-Do this classification in code close to the failing step. A generic `error=true` field forces every later dashboard and incident review to repeat the classification work. A low-cardinality field like `failure.class` supports alerts, trend charts, and sampling rules.
+<!-- section-summary: Trace design must minimize sensitive data and separate broadly queryable metadata from restricted payload evidence. -->
 
-## Redaction And Data Boundaries
+Agent inputs can contain personal data, proprietary code, credentials, medical information, or retrieved documents. Observability platforms often have a wider audience and different retention policy than the product database. Assume raw content is sensitive.
 
-<!-- section-summary: Agent traces can contain highly sensitive prompts, tool arguments, and retrieved documents, so production tracing needs data minimization before export. -->
+Use three capture levels:
 
-Claims data can include names, addresses, license plate numbers, medical notes, phone numbers, payment details, and free-form adjuster comments. Agent tracing has to protect that data because traces often travel to observability systems used by many engineers. The safe habit is **data minimization**: capture enough evidence to debug and measure the system, and keep raw sensitive payloads behind tighter access.
+1. **Default metadata:** versions, bounded categories, counts, timings, usage, and status.
+2. **Sanitized summaries:** redacted arguments, document IDs, hashes, or short derived descriptions.
+3. **Restricted payloads:** raw prompts, model outputs, and tool bodies stored only when justified, encrypted, access-controlled, audited, and retained briefly.
 
-You can apply redaction in the application before data leaves the service:
+Redaction should happen in the application before export because the application understands the data. A collector can add a second defence by deleting or hashing prohibited attributes. Neither layer should depend only on a developer remembering not to log a field.
 
-```python
-import re
+Test redaction with synthetic sensitive values and inspect the exported telemetry. Also define sampling deliberately. Head sampling decides near the start of a trace and is inexpensive, but may discard rare failures. Tail sampling decides after spans arrive and can retain errors, high latency, guardrail blocks, or expensive runs. Sampling rules must preserve enough representative successful traffic for comparison.
 
-CLAIM_NUMBER = re.compile(r"\bCLM-[0-9]{8}\b")
-PHONE = re.compile(r"\b\+?1?[-. ]?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b")
+## Trace Completeness Is a Reliability Property
 
+<!-- section-summary: A trace must contain its required stages and terminal outcome before teams can rely on it during recovery or audit. -->
 
-def redact_text(value: str) -> str:
-    value = CLAIM_NUMBER.sub("[claim-number]", value)
-    value = PHONE.sub("[phone]", value)
-    return value
+A trace backend accepting spans gives no guarantee that the trace is complete. An exporter may drop attributes, a queue may lose context, or a tool request may have no matching result. Define a trace contract for each important workflow.
 
+At minimum, check that there is one root span, required version attributes are present, every requested tool call has a terminal or indeterminate result, handoffs keep a causal link, and the root ends with an outcome and failure class. Run these checks on staging eval traces and a sampled set of production traces.
 
-def trace_safe_tool_args(args: dict) -> dict:
-    return {
-        "claim_type": args.get("claim_type"),
-        "region": args.get("region"),
-        "customer_tier": args.get("customer_tier"),
-        "free_text_summary": redact_text(args.get("free_text_summary", ""))[:500],
-    }
+Missing evidence has different severity. A missing cache event may reduce cost analysis. A missing result for a side-effecting tool means the system cannot prove whether the action completed; the workflow may need reconciliation. Observability therefore participates in safe recovery rather than serving only dashboards.
+
+```mermaid
+flowchart TD
+    A[Completed run] --> B{One root and terminal outcome?}
+    B -->|no| X[Instrumentation failure]
+    B -->|yes| C{Required versions present?}
+    C -->|no| X
+    C -->|yes| D{Every tool request resolved?}
+    D -->|yes| E[Trace is investigation-ready]
+    D -->|no, read-only| F[Telemetry alert]
+    D -->|no, side effect| G[Reconciliation required]
 ```
 
-You can also use an OpenTelemetry Collector layer to remove or transform attributes before export. The OpenTelemetry sensitive-data guidance lists processors for attribute modification, filtering, redaction, and transform-based changes. A collector rule gives platform teams one more control point, especially when several services emit traces.
+## Investigate From Outcome Backward
 
-```yaml
-processors:
-  attributes/privacy:
-    actions:
-      - key: user.email
-        action: hash
-      - key: user.full_name
-        action: delete
-      - key: claim.raw_notes
-        action: delete
-  transform/privacy:
-    trace_statements:
-      - context: span
-        statements:
-          - set(attributes["app.user.hash"], SHA256(attributes["app.user.id"]))
-          - delete_key(attributes, "app.user.id")
+<!-- section-summary: Effective investigation starts with the user-visible outcome and follows the trace backward through validation, actions, decisions, and context. -->
 
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [attributes/privacy, transform/privacy, batch]
-      exporters: [otlp]
-```
+When a metric or support report identifies a problem, start with representative trace IDs. Confirm the final outcome and validator decision, then move backward:
 
-Redaction needs tests. Add fixture prompts with fake phone numbers, claim numbers, account IDs, and medical words. Send them through the trace exporter in a staging environment, then assert the exported span payload contains the replacements you expect. Privacy controls that only live in a checklist drift over time because new tools, fields, and prompts appear during normal product work.
+1. Did the final answer or action fail the product contract?
+2. Which guardrail, evaluator, or human label established that?
+3. Which tool results and retrieved evidence shaped the answer?
+4. Did the model select the correct action from the context it received?
+5. Was context missing, stale, contradictory, or wrongly prioritized?
+6. Which model, prompt, tool, index, policy, and application versions were active?
+7. Did a retry, timeout, cache, or handoff change the path?
 
-## From Traces To Dashboards
+This method distinguishes a model problem from a system problem. A hallucinated policy statement may actually originate from an outdated index. A duplicated action may be an idempotency defect. A slow run may spend most of its time waiting for approval rather than generating tokens.
 
-<!-- section-summary: Traces explain individual runs, while metrics and dashboard queries show patterns across many runs by prompt version, model, tool, failure class, and customer segment. -->
+Save confirmed failures with their trace identities and reviewer labels into an eval dataset. The next change can replay those cases before release. Dashboards reveal recurrence, traces explain mechanisms, and evals prevent the same class of failure from returning unnoticed.
 
-A trace backend helps you inspect one run. A dashboard helps you notice that a class of runs changed. The two should share labels. If traces use `app.prompt.version`, metrics should use the same label. If traces use `failure.class`, logs and metrics should use that label too. This is how a dashboard click can lead straight to a filtered trace search.
+## What Production Tracing Provides
 
-Many teams send metrics to Prometheus and build dashboards in Grafana. Prometheus supports `histogram_quantile()` for estimating latency percentiles from histogram data, and Grafana's Prometheus query editor lets teams write PromQL in dashboard panels. For the claims assistant, a first dashboard can include run volume, p95 run latency, tool latency by tool name, model token usage, cache hit rate, guardrail block rate, and failure classes by prompt version.
+<!-- section-summary: Mature agent tracing creates a privacy-aware, complete, and queryable causal record connected to real outcomes. -->
 
-Example PromQL panels:
+A production trace follows the entire task across API boundaries, queues, agents, and tools. It uses a readable span hierarchy, stable versions and failure classes, governed payload capture, and explicit terminal outcomes. Metrics and logs share the same bounded vocabulary. Completeness tests prove that important steps were not lost, and domain events connect the run to later product outcomes.
 
-```promql
-sum by (app_prompt_version) (
-  rate(agent_runs_total{workflow="auto_claim_question"}[5m])
-)
-```
-
-```promql
-histogram_quantile(
-  0.95,
-  sum by (le, tool_name) (
-    rate(agent_tool_latency_seconds_bucket{workflow="auto_claim_question"}[10m])
-  )
-)
-```
-
-```promql
-sum by (failure_class, app_prompt_version) (
-  rate(agent_run_failures_total{workflow="auto_claim_question"}[15m])
-)
-```
-
-Traces also feed evaluation work. When a run has `grounding_mismatch`, store the trace ID, prompt version, retrieved document IDs, final answer, and reviewer label in an eval dataset. The next prompt or retrieval change can replay that dataset before release. That loop is where tracing moves from passive observability into product improvement.
-
-![Harbor Shield traces feed dashboards and evals](/content-assets/articles/article-mlops-llmops-agent-tracing/harbor-shield-trace-dashboard-evals.png)
-*The same trace IDs that explain incidents also seed replay evals, so the next release can test failures that happened in production.*
-
-## Practical Checks And Interview-Ready Understanding
-
-Agent tracing gives you the evidence trail for one agent run. A strong answer in an interview should mention the trace/span hierarchy, model spans, tool spans, prompt and deploy metadata, token and cost attribution, latency, cache hits, failure classification, redaction, and the connection between traces, dashboards, and eval datasets.
-
-Use these checks before you call a production agent observable:
-
-- Every run has one trace ID that can travel through the API, worker, tool layer, and final response log.
-- Every model call records provider, requested model, response model when available, prompt name, prompt version, input tokens, output tokens, cache token fields when available, latency, and finish reason.
-- Every tool call records tool name, schema version, sanitized arguments, response summary, status, retry count, latency, timeout, and side-effect class.
-- Every run ends with a low-cardinality outcome and failure class such as `none`, `tool_timeout`, `retrieval_empty`, `grounding_mismatch`, or `human_escalated`.
-- Sensitive payloads receive application-level redaction before export, and collector-level rules remove risky attributes again.
-- Dashboards group by the same names used in traces, especially prompt version, model, workflow, tool name, environment, and failure class.
-- Incident reviews save trace IDs and turn repeated failures into replay or eval cases.
-
-Common mistakes are easy to spot. Teams log full prompts with personal data because it helps one developer debug faster. They use high-cardinality labels such as raw user ID in metrics and then overload the monitoring system. They forget prompt versions, which makes release comparison guesswork. They trace model calls while skipping tool calls, even though tools often explain the real failure. They collect huge traces with no failure taxonomy, then struggle to build useful dashboards.
-
-If you remember one thing, make it this: a production agent trace should tell the story of the run in a privacy-safe, queryable form. The trace should show the business task, the model and prompt versions, the tool decisions, the timing, the token and cost shape, the guardrail decisions, and the final outcome. That is enough for debugging, incident triage, cost review, and the next evaluation pass.
+The key idea is that tracing is not a transcript viewer. A transcript shows messages; a trace shows causality, timing, versions, decisions, effects, and recovery. That distinction is what makes tracing useful for incident response, cost analysis, governance, and the next evaluation cycle.
 
 ## References
 
 - [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/)
-- [OpenAI Agents SDK overview](https://developers.openai.com/api/docs/guides/agents)
-- [OpenTelemetry traces concepts](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenTelemetry trace concepts](https://opentelemetry.io/docs/concepts/signals/traces/)
 - [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
-- [OpenTelemetry GenAI spans](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md)
-- [OpenTelemetry GenAI agent and framework spans](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md)
-- [OpenTelemetry Python manual instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/)
+- [OpenTelemetry context propagation](https://opentelemetry.io/docs/concepts/context-propagation/)
 - [OpenTelemetry handling sensitive data](https://opentelemetry.io/docs/security/handling-sensitive-data/)
-- [Prometheus histogram practices](https://prometheus.io/docs/practices/histograms/)
-- [Grafana Prometheus query editor](https://grafana.com/docs/grafana/latest/datasources/prometheus/query-editor/)
+- [OpenTelemetry tail sampling processor](https://opentelemetry.io/docs/concepts/sampling/)
+- [Prometheus metric and label naming](https://prometheus.io/docs/practices/naming/)
 - [Langfuse observability overview](https://langfuse.com/docs/observability/overview)
 - [Phoenix tracing overview](https://arize.com/docs/phoenix/tracing/llm-traces)

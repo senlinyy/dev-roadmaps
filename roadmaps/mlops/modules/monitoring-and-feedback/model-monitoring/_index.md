@@ -1,6 +1,6 @@
 ---
 title: "Model Monitoring"
-description: "Watch the model itself, not only the server around it."
-tags: ["production", "drift"]
+description: "Watch prediction quality, drift, feature health, and training-serving parity around the deployed model."
+tags: ["production", "drift", "features", "parity"]
 order: 2
 ---

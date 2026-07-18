@@ -1,332 +1,192 @@
 ---
 title: "Reproducible Experiments"
-description: "Explain how teams make an ML experiment explainable and rerunnable by recording code, data, configuration, environment, seeds, metrics, and artifacts."
-overview: "A reproducible ML experiment records the ingredients behind one model result: code commit, dataset snapshot, configuration, container or package environment, random seed, metrics, notes, and artifacts. This article follows a recommendation ranking team as they build that record with MLflow."
+description: "Define the evidence and replay acceptance needed to explain, compare, and rerun an ML experiment."
+overview: "A reproducible experiment has a declared question, recoverable inputs, recorded execution conditions, durable outputs, and an acceptance rule for replay."
 tags: ["MLOps", "core", "tracking"]
 order: 1
 id: "article-mlops-experiments-and-reproducibility-reproducible-ml-experiments"
 ---
 
-## Table of Contents
+## Reproducibility Preserves the Reason Behind a Result
+<!-- section-summary: A reproducible experiment lets another person explain a result, reconstruct its material inputs, and replay it closely enough to test the same conclusion. -->
 
-1. [Reproducible Means You Can Explain And Rerun The Result](#reproducible-means-you-can-explain-and-rerun-the-result)
-2. [Follow One Recommendation Experiment](#follow-one-recommendation-experiment)
-3. [Record The Ingredients](#record-the-ingredients)
-4. [Freeze Code, Config, And Data](#freeze-code-config-and-data)
-5. [Control Environment And Randomness](#control-environment-and-randomness)
-6. [Log A Run With MLflow](#log-a-run-with-mlflow)
-7. [Review A Run Before You Trust It](#review-a-run-before-you-trust-it)
-8. [Failure Modes You Can Diagnose](#failure-modes-you-can-diagnose)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+An **ML experiment** is a planned attempt to answer a model question. A **reproducible experiment** leaves enough evidence for another person to understand what happened, reconstruct the material conditions, and run the same recipe again. The replay succeeds when it supports the same declared conclusion within an agreed tolerance.
 
-## Reproducible Means You Can Explain And Rerun The Result
-<!-- section-summary: A reproducible experiment ties one ML result to the exact ingredients that produced it. -->
+Consider an online shop testing whether image embeddings improve product ranking. One training run reports a higher `nDCG@10`, a ranking metric that rewards relevant products near the top of the first ten results. A screenshot of that score cannot tell the team which data, feature definition, code, configuration, environment, or metric implementation produced it. It also cannot show whether catalog coverage or a protected language segment got worse.
 
-An ML experiment is one planned attempt to train, evaluate, or compare a model. In a notebook, that attempt can feel informal: change a feature, run a cell, look at a score, then try the next idea. In a production team, a strong score can lead to a model review, a registry entry, a shadow test, or a customer-facing release, so the experiment needs a record that survives after the notebook session ends.
+Reproducibility supplies that missing chain. It lets the team compare candidates fairly, investigate unexpected differences, review an old production decision, and rebuild an important run after people or infrastructure change.
 
-A **reproducible ML experiment** is a run whose important ingredients are recorded well enough for another teammate to explain the result and rerun it close enough for review. The record ties code, dataset snapshot, configuration, environment, seed, metrics, notes, and artifacts to one run ID. You may still see tiny differences from hardware, parallel training, or library behavior, yet the team can inspect the same recipe instead of guessing what happened.
+```mermaid
+flowchart LR
+    Q["Declared question and decision rule"] --> I["Versioned inputs<br/>data, code, config, environment"]
+    I --> R["Run execution"]
+    R --> O["Durable outputs<br/>model, metrics, predictions, logs"]
+    O --> C["Comparison and conclusion"]
+    C --> P["Replay with the same material conditions"]
+    P --> A["Acceptance against declared tolerances"]
+    A --> C
+```
 
-This matters most when a run surprises people. A ranking model may improve `nDCG@10` by three points, or a vision model may suddenly miss a defect class it handled last week. Reproducibility gives the team a path back through the evidence: which data changed, which commit ran, which hyperparameters were used, which package versions were installed, and which artifact was proposed for release.
+This flow has two important properties. The question exists before the result, which limits hindsight and metric shopping. The acceptance rule exists before the replay, which prevents the team from changing its standard after seeing small differences.
 
-## Follow One Recommendation Experiment
-<!-- section-summary: The running scenario follows a retail recommendation team that needs evidence behind a promising ranking model. -->
+## Start With a Question That Can Survive Comparison
+<!-- section-summary: A stable hypothesis, baseline, controlled change, metrics, guardrails, and decision rule give all runs a shared purpose. -->
 
-Imagine the recommendation team at **Luma Retail**, an online store that shows a "Recommended for you" shelf on the home page. The current production model is `homepage-ranker:v11`, a LightGBM ranker trained on click, cart, purchase, and product metadata features. The team wants to test a new feature group from product image embeddings because merchandisers believe similar-looking products help shoppers browse seasonal collections.
+A useful experiment starts with one question. The ranking team might ask: **Does adding `product_image_embedding_v2` improve ranking quality while preserving catalog coverage and batch-scoring time?**
 
-The experiment owner is Priya, the ranking engineer on call for the weekly model review. The dataset is `recs_clickstream_rank_train_2026_06_30`, built from thirty days of logged home-page impressions, click labels, add-to-cart labels, and purchase labels. The primary metric is `nDCG@10` because the first ten recommendations carry most of the product value. Guardrail metrics include catalog coverage, duplicate-product rate, cold-start product exposure, training cost, and batch scoring latency.
+The question identifies a baseline, a controlled change, an outcome metric, and two product guardrails. It prevents the experiment from expanding after results arrive. If the engineer changes the embedding model, negative-sampling method, feature set, and validation data together, the team cannot explain which change created the observed difference.
 
-Here is the business problem in plain English: Priya needs to tell the team whether the new image embedding features improved recommendations, and she needs enough evidence for another engineer to rerun the candidate if the review asks for proof. A screenshot of a good chart is too thin for that review. A reproducible run record carries the evidence.
+Several runs can answer the same question. Learning rate, regularization, or seed may vary across runs. Each run has its own identity, while the experiment or question groups them. MLflow calls an execution a **run** and uses an **experiment** to group related runs. W&B uses similar run and project concepts. The product question still belongs in a durable note or experiment record rather than living only in someone's memory.
 
-## Record The Ingredients
-<!-- section-summary: A useful run record names the code, data, config, environment, seed, metrics, artifacts, owner, and reason for the run. -->
+The evaluation contract needs equal care. The team fixes the training and validation snapshots, metric version, segment definitions, latency measurement, and comparison baseline. A candidate is eligible only when it follows that contract. A high score on a newer validation snapshot answers a different question and should not enter the same ranking table without a clear label.
 
-The first habit is to treat every experiment run like a small evidence package. The package should answer a simple question: if this result matters two weeks from now, can the team find the exact inputs and outputs without asking the original author to remember them?
+## A Run Has Five Groups of Evidence
+<!-- section-summary: Reproducibility depends on the question, inputs, execution conditions, outputs, and acceptance rules that define one run. -->
 
-For Luma Retail, the run record can use this shape:
+### Question and decision
 
-| Ingredient | Example for the ranking run | Why reviewers care |
-|---|---|---|
-| Run ID | `recs-lgbm-2026-07-04-1430` | One handle for logs, metrics, artifacts, and discussion |
-| Owner | `priya@luma.example` | A person who can explain the hypothesis and result |
-| Code commit | `8f24c91` | The training logic, feature joins, and evaluation code |
-| Dataset snapshot | `recs_clickstream_rank_train_2026_06_30:v4` | The exact training and validation examples |
-| Config file | `configs/homepage_ranker_image_features.yaml` | Hyperparameters, feature groups, windows, thresholds |
-| Environment | `ghcr.io/luma/recs-train@sha256:6ab...` | Python, LightGBM, CUDA, OS libraries, and system packages |
-| Seed | `20260704` | The random starting point for splits, sampling, and model training |
-| Metrics | `valid/ndcg_at_10`, `valid/coverage`, `batch/p95_ms` | The evidence used to judge the candidate |
-| Artifacts | `model.txt`, `feature_schema.json`, `segment_metrics.csv` | Files needed for review, rerun, registry, or debugging |
-| Notes | "Add CLIP image embedding features to home-page ranker." | The human reason for the run |
+The run points to the experiment question, baseline, controlled change, primary metrics, guardrails, and decision rule. This tells a later reviewer why the run exists. A collection of parameters without this context records computation while losing the scientific and product purpose.
 
-![Luma Retail MLflow run evidence packet](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/luma-mlflow-run-evidence-packet.png)
-*A reproducible run gives Luma Retail one MLflow record that connects code, data, config, environment, metrics, artifacts, and review notes.*
+### Data and feature inputs
 
-A table like this may feel simple, and that is the point. Reproducibility improves when the team records ordinary facts consistently. The hard part is discipline across notebooks, scheduled training jobs, CI runs, and model review packets.
+The training and validation data need immutable identities. A dataset manifest can record source tables, versions or snapshots, time windows, filters, label logic, row counts, schema, and content checksums. Feature definitions need their own versions because a feature name can keep the same spelling while its query or time window changes.
 
-## Freeze Code, Config, And Data
-<!-- section-summary: Code, config, and data snapshots explain what logic ran and which examples trained the model. -->
+Data identity also includes the split. Rebuilding a random split from the same source data can move rows between training and validation. Entity and time boundaries matter for leakage. A replay should recover the exact split membership or a versioned rule with stable inputs that reconstructs it deterministically.
 
-Code identity starts with the Git commit. The commit should be clean enough for review, meaning the run record should show the commit hash and whether local uncommitted changes existed. A run from a dirty workspace can still teach something during exploration, yet it should carry a visible warning because the exact source may be hard to recover later.
+### Code, configuration, and environment
 
-Configuration deserves the same treatment as code. A ranking run usually has many choices: feature groups, date windows, model type, learning rate, tree depth, negative sampling ratio, early stopping rounds, and metric thresholds. If those choices live only inside ad hoc notebook variables, another teammate has to reconstruct the run by reading cells in order. A versioned YAML file gives the team a stable review object.
+The source commit identifies reviewed code, and the run should also record whether the working tree contained uncommitted changes. Configuration needs its resolved values after defaults, environment variables, and command-line overrides. Recording only the original YAML file can hide the values the process actually used.
+
+The environment includes package versions, operating system, container digest or lockfile, hardware class, drivers, and accelerator runtime where relevant. Moving tags such as `latest` are weak evidence because they can refer to different content later. Digests and immutable package locks give the replay a stable target.
+
+### Randomness and execution conditions
+
+Random seeds can control sampling, data order, initialization, and augmentation. They form one part of reproducibility. Framework algorithms, parallel execution, floating-point arithmetic, drivers, hardware, and library versions can still change a result.
+
+PyTorch's reproducibility guidance explicitly warns that complete reproducibility is unavailable across releases, platforms, and CPU or GPU execution. Deterministic algorithms can also reduce performance, and some operations may lack a deterministic implementation. A mature run record therefore captures seeds and runtime conditions, then judges replay through tolerances rather than promising identical bits everywhere.
+
+### Outputs and evidence
+
+The run stores the trained model, model signature, metrics, segment reports, validation predictions, logs, learning curves, environment evidence, and failure information. The predictions matter because an average metric can stay similar while individual examples or protected segments move sharply.
+
+Large artifacts belong in durable artifact storage. The experiment tracker records their stable locations, hashes, and relationships. Retention needs to match the lifetime of the product decision. Deleting an old dataset or image can make an important production model impossible to investigate even when the tracking metadata remains.
+
+## The Run Manifest Connects the Evidence
+<!-- section-summary: A machine-readable run manifest records immutable identities and references so tools and reviewers can verify the same conditions. -->
+
+An experiment tracker makes runs searchable and comparable. A compact manifest also gives the team a portable summary of the evidence that a replay must resolve.
 
 ```yaml
-experiment:
-  name: homepage-ranker-image-features
-  owner: priya@luma.example
-  hypothesis: "Image embedding features improve visual discovery without reducing catalog coverage."
-
+run_id: rank-image-2026-07-14-0042
+question_id: image-embedding-ablation-v3
+code:
+  commit: 8f24c91
+  dirty: false
 data:
-  train_snapshot: recs_clickstream_rank_train_2026_06_30:v4
-  validation_snapshot: recs_clickstream_rank_valid_2026_06_30:v4
-  source_uri: s3://luma-ml/datasets/recommendations/snapshot_date=2026-06-30/
-  snapshot_sha256: 72f2b6c9a8f1d31e9267b4a3b6a40e2f0c8d90e4a61df2a41d7f2a06bb7c0914
-
-model:
-  algorithm: lightgbm_lambdarank
-  learning_rate: 0.04
-  num_leaves: 63
-  max_depth: 8
-  num_boost_round: 700
-  early_stopping_rounds: 50
-
-features:
-  base_set: recs_homepage_features_v11
-  add_groups:
-    - product_image_clip_embedding_v2
-    - visual_similarity_bucket_v1
-
+  train: recs-rank-train-2026-06-30-r4
+  validation: recs-rank-valid-2026-06-30-r4
+  manifest_sha256: 4b116b6a2c83920d77ad4130a90e4ad1
+config:
+  resolved_uri: s3://luma-ml/runs/rank-image-0042/resolved.yaml
+  sha256: d073f85b4acfa6bf684cd88f342535e0
 runtime:
-  seed: 20260704
-  container_image: ghcr.io/luma/recs-train@sha256:6ab91c52
+  image: registry.luma/ranker@sha256:81a21267df1652a97bd86fd53089fe02
+  python: 3.12.9
+  accelerator: NVIDIA-L40S
+randomness:
+  seed: 1947
+  deterministic_algorithms: true
+outputs:
+  predictions: s3://luma-ml/runs/rank-image-0042/valid_predictions.parquet
+  segment_report: s3://luma-ml/runs/rank-image-0042/segments.json
 ```
 
-The data snapshot is the ingredient beginners often under-record. A path named `latest_train.parquet` gives weak evidence because the contents can change. A stronger snapshot has a date, a version, a manifest, and a checksum or table version. Teams usually store this in object storage, a lakehouse table version, DVC, lakeFS, MLflow dataset metadata, or a warehouse snapshot table.
+The `dirty` field catches a common gap: a recoverable commit can still differ from locally edited code. The resolved configuration hash captures the values that actually reached training. The container digest identifies the runtime content. The prediction and segment-report locations let reviewers inspect more than the headline metric.
 
-For this ranking job, Priya should keep the dataset manifest with the run:
+This manifest can be produced by the training pipeline and logged as an artifact in MLflow or W&B. MLflow Tracking records parameters, code versions, metrics, runs, logged models, dataset links, and output files. W&B Experiments records run configuration, metrics, system metrics, and artifacts. These products help store and navigate evidence; the team still chooses which evidence is required for its experiment and replay policy.
 
-```yaml
-dataset_manifest:
-  name: recs_clickstream_rank_train_2026_06_30
-  version: v4
-  rows: 184203911
-  impression_window_utc: "2026-06-01T00:00:00Z..2026-06-30T23:59:59Z"
-  label_delay_hours: 24
-  entity_keys:
-    - user_id_hash
-    - product_id
-    - request_id
-  files:
-    - s3://luma-ml/datasets/recommendations/snapshot_date=2026-06-30/part-000.parquet
-    - s3://luma-ml/datasets/recommendations/snapshot_date=2026-06-30/part-001.parquet
-  validation_checks:
-    duplicate_request_product_pairs: 0
-    missing_product_embedding_rate: 0.0031
-    label_positive_rate: 0.087
+## Replay Starts by Verifying Identity
+<!-- section-summary: A replay should verify its inputs and runtime against the recorded run before training consumes compute. -->
+
+A replay first resolves the recorded dataset manifest, configuration, code commit, and runtime image. It compares their identities and hashes with the original run. A mismatch stops the normal replay path because it would answer a different question.
+
+This early check saves time and prevents misleading results. Quietly substituting a current dataset for a deleted snapshot can produce a plausible score with no connection to the original comparison. Using an updated metric implementation can change the number even when model predictions match.
+
+When an exact ingredient is unavailable, the team can run a **migration replay**. The record explicitly names the changed data, library, hardware, or metric and explains why the old condition could not be recovered. The result helps assess portability or upgrade risk, while it stays distinct from an exact-condition replay.
+
+```mermaid
+flowchart TD
+    S["Load original run manifest"] --> V["Verify code, data, config, environment"]
+    V -->|"All required identities match"| R["Run replay"]
+    V -->|"Material mismatch"| B["Block exact replay"]
+    B --> M["Create labelled migration replay if useful"]
+    R --> C["Compare outputs and protected segments"]
+    C -->|"Inside policy"| A["Accept same conclusion"]
+    C -->|"Outside policy"| I["Investigate source of variation"]
 ```
 
-Now the run has a data receipt. If a later candidate changes because a feature pipeline backfilled image embeddings, the team can compare manifests instead of debating from memory.
+The verification process should produce a run record even when it stops. A failed replay with `dataset_manifest_mismatch` is valuable evidence because it reveals that the original conditions cannot currently be reconstructed.
 
-![Luma Retail freeze code config and data workflow](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/luma-freeze-code-config-data.png)
-*Priya can rebuild the candidate only when the Git commit, YAML config, dataset version, manifest checksum, training job, and MLflow run point to the same recipe.*
+## Replay Acceptance Protects the Product Conclusion
+<!-- section-summary: Replay policy defines which identities must match and which output differences the product can tolerate. -->
 
-## Control Environment And Randomness
-<!-- section-summary: The environment and seed explain the runtime conditions around a training result. -->
+The replay acceptance rule follows the decision's risk. An exploratory ablation can tolerate more variation because it cannot ship directly. A candidate for a high-impact system may require several seeds, independent review, a fixed hardware class, and tight segment bounds.
 
-The environment is the software and hardware context that ran the experiment. Python version, package versions, CUDA libraries, operating system packages, CPU or GPU type, and container image all affect real training work. A model can train successfully on one laptop and fail in CI because the LightGBM version, BLAS library, or GPU driver differs.
+The ranking team can define acceptance across several layers:
 
-Most industrial teams handle this with a container image for scheduled training and a lock file for local development. The run record should capture the image digest along with the friendly tag. A tag such as `latest` or `2026-07-04` can move. A digest points at one exact image.
+| Layer | Example rule | Why it matters |
+|---|---|---|
+| Inputs | Code, data, config, metric, and image identities match | The replay answers the same question |
+| Headline metric | `nDCG@10` changes by at most `0.001` | Overall ranking conclusion remains stable |
+| Guardrail | Catalog coverage changes by at most `0.005` | Improvement does not shrink useful inventory |
+| Segments | Every protected language segment stays inside its bound | Average performance cannot hide concentrated change |
+| Predictions | Fewer than 1% of frozen examples move by five or more ranks | Similar metrics still reflect similar behaviour |
+| Artifacts | Model, predictions, and reports pass integrity checks | Review evidence is complete and untampered |
 
-Randomness also needs a clear record. Sampling, train-validation splits, tree learners, neural networks, and distributed workers may use random number generators. A seed helps the team rerun the same path, although some frameworks and hardware kernels can still produce different low-level results. PyTorch's official reproducibility notes are careful about this: releases, platforms, and operations can affect exact repeatability.
+The team declares these bounds before the replay. A result that misses one protected segment fails even when the overall metric is close. The failure opens an investigation into data order, nondeterministic operations, environment drift, or an incomplete run record.
 
-For Python training code, seed setup can live near the top of the job:
+Exact equality can still be appropriate for deterministic preprocessing, dataset membership, configuration hashes, and artifact checksums. Statistical tolerances fit training metrics and predictions where controlled numerical variation exists. Reproducibility uses the right standard for each kind of evidence.
 
-```python
-import os
-import random
+## Comparison Needs More Than a Tracking Dashboard
+<!-- section-summary: Fair comparison requires eligible runs that share the declared data, metric, environment, and guardrail contract. -->
 
-import numpy as np
+An experiment dashboard can place many runs in one table. That view does not guarantee that the comparison is fair. One run may use a newer validation snapshot, another may omit a protected segment, and a third may use a changed metric implementation.
 
+The team should mark whether each run is **eligible for comparison**. Eligibility checks the experiment question, required input identities, output completeness, and evaluation contract. An ineligible run can remain useful for exploration, while its score should not decide the planned experiment.
 
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
+Reproducibility also supports ablation studies. An **ablation** removes or changes one component to measure its contribution. Stable data, metrics, and runtime help the team attribute the difference to that component. When several material ingredients change together, the result is still an experiment, though its causal explanation is weaker.
 
+Experiment trackers improve collaboration through searchable runs, plots, artifacts, notes, and APIs. A shared tracking server also separates metadata storage from large artifact storage. Teams need access control, retention, backup, and clear project organization so the evidence survives beyond one laptop.
 
-seed_everything(20260704)
-```
+## Common Reproducibility Failures
+<!-- section-summary: Reproducibility fails through missing data identity, unresolved configuration, mutable environments, incomplete outputs, and vague replay standards. -->
 
-If the model uses PyTorch, TensorFlow, Spark, or distributed GPU training, the job needs framework-specific settings as well. The important article idea stays simple: the seed belongs in the run record, and exact reruns require environment control plus framework-aware training settings.
+A **seed-only claim** records one integer and omits data order, environment, hardware, and deterministic settings. The remedy is a full run record and a tolerance-based replay policy.
 
-## Log A Run With MLflow
-<!-- section-summary: MLflow gives the team one place to store run parameters, metrics, tags, artifacts, and model files. -->
+A **mutable input** uses `latest`, an unversioned table, or a file that can be overwritten. Immutable snapshots, object versions, table versions, and hashes give later runs a stable target.
 
-MLflow Tracking is a common way to store experiment runs. A small local team can start with a local tracking directory. A production team usually points clients at an MLflow tracking server with a backend store for metadata and an artifact store such as S3, GCS, Azure Blob Storage, or a managed platform.
+A **hidden configuration** leaves command-line overrides, environment variables, or notebook state outside the record. The training entry point should log the resolved configuration and fail when required values have no declared source.
 
-The training command might look like this in CI or a scheduled job:
+A **metric-only record** stores the final score and loses predictions, segments, learning curves, and failures. Durable output artifacts let the team see whether the same average hides different behaviour.
 
-```bash
-export MLFLOW_TRACKING_URI=https://mlflow.luma.example
-export IMAGE_DIGEST=ghcr.io/luma/recs-train@sha256:6ab91c52
+A **missing retention policy** preserves tracking rows while deleting the referenced data, image, or model. Important candidates and production models need evidence retention aligned with incident, audit, and product requirements.
 
-python train_ranker.py \
-  --config configs/homepage_ranker_image_features.yaml \
-  --run-name recs-lgbm-2026-07-04-1430
-```
+A **moving acceptance rule** changes the tolerance after replay. Versioned policies and predeclared bounds keep the decision honest.
 
-Inside the training script, the run should log the facts reviewers need. The example below keeps the code compact, yet it shows the core habit: log parameters, metrics, tags, config files, environment files, evaluation files, and the model artifact under the same run.
+## How the Pieces Work Together
+<!-- section-summary: A reproducible experiment connects a stable question to versioned inputs, recorded execution conditions, durable outputs, and a declared replay policy. -->
 
-```python
-import json
-import os
-import subprocess
-from pathlib import Path
+Reproducibility gives an experiment a traceable lifecycle. The team states the question and product guardrails, records the exact data, code, configuration, environment, randomness controls, and hardware, then stores the model, metrics, predictions, segment reports, and logs under one run identity.
 
-import mlflow
-import mlflow.lightgbm
-from mlflow.models import infer_signature
-import yaml
+A replay verifies those identities before execution and compares the outputs against a declared policy. Small numerical differences can be acceptable when the original product conclusion and protected segments remain stable. Missing or changed ingredients create an explicit replay failure or a labelled migration replay.
 
-
-def git_commit() -> str:
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-
-
-config_path = Path("configs/homepage_ranker_image_features.yaml")
-config = yaml.safe_load(config_path.read_text())
-
-mlflow.set_experiment("homepage-recommendation-ranking")
-
-with mlflow.start_run(run_name=os.environ.get("RUN_NAME", "local-ranker-run")):
-    mlflow.set_tags(
-        {
-            "owner": config["experiment"]["owner"],
-            "code.commit": git_commit(),
-            "data.train_snapshot": config["data"]["train_snapshot"],
-            "data.validation_snapshot": config["data"]["validation_snapshot"],
-            "runtime.image": os.environ.get("IMAGE_DIGEST", "local-dev"),
-            "hypothesis": config["experiment"]["hypothesis"],
-        }
-    )
-
-    mlflow.log_params(
-        {
-            "algorithm": config["model"]["algorithm"],
-            "learning_rate": config["model"]["learning_rate"],
-            "num_leaves": config["model"]["num_leaves"],
-            "max_depth": config["model"]["max_depth"],
-            "seed": config["runtime"]["seed"],
-            "base_feature_set": config["features"]["base_set"],
-            "added_feature_groups": ",".join(config["features"]["add_groups"]),
-        }
-    )
-
-    model, metrics, X_valid = train_and_evaluate(config)
-
-    mlflow.log_metrics(
-        {
-            "valid_ndcg_at_10": metrics["valid_ndcg_at_10"],
-            "valid_map_at_10": metrics["valid_map_at_10"],
-            "catalog_coverage": metrics["catalog_coverage"],
-            "duplicate_product_rate": metrics["duplicate_product_rate"],
-            "batch_p95_ms": metrics["batch_p95_ms"],
-        }
-    )
-
-    mlflow.log_artifact(str(config_path), artifact_path="config")
-    mlflow.log_artifact("requirements.lock", artifact_path="environment")
-    mlflow.log_artifact("artifacts/dataset_manifest.yaml", artifact_path="data")
-    mlflow.log_artifact("artifacts/segment_metrics.csv", artifact_path="evaluation")
-    mlflow.log_artifact("artifacts/top_failures.parquet", artifact_path="evaluation")
-
-    input_example = X_valid.head(5)
-    signature = infer_signature(input_example, model.predict(input_example))
-    mlflow.lightgbm.log_model(
-        model,
-        name="model",
-        input_example=input_example,
-        signature=signature,
-    )
-    mlflow.log_text(json.dumps(metrics, indent=2), artifact_file="evaluation/metrics.json")
-```
-
-The code commit and dataset snapshot are logged as tags because reviewers often filter by them. Hyperparameters are logged as parameters because comparison tables use them side by side. Scores are logged as metrics because tracking tools plot and sort them. Files are logged as artifacts because the model review needs more than scalar values. In MLflow 3-style examples, model logging uses `name="model"` because the older `artifact_path` parameter is deprecated for model logging.
-
-The example assumes `train_and_evaluate` returns the validation feature frame as `X_valid`. That small detail matters in real registry and serving workflows: the input example and inferred signature tell the next system what shape the model expects, and Databricks documents model signatures as a required part of Unity Catalog model versions.
-
-## Review A Run Before You Trust It
-<!-- section-summary: Trust comes from checking the run record against the baseline, the dataset, the environment, and the artifacts. -->
-
-A reproducible run is useful only if the team checks it before making a decision. The review should be boring in a good way: the same evidence appears every time, and missing evidence blocks promotion until someone fills the gap.
-
-For Luma Retail, the weekly model review can use this checklist:
-
-| Check | What the reviewer expects |
-|---|---|
-| Code commit | Commit exists in Git, CI passed, dirty workspace tag is absent |
-| Dataset snapshot | Train and validation snapshots have fixed versions, manifests, and row counts |
-| Config | YAML file is attached, reviewed, and matches the run parameters |
-| Environment | Container image digest or lock file is attached |
-| Seed | Seed is logged and used by the training script |
-| Baseline | Current production model `homepage-ranker:v11` ran on the same validation snapshot |
-| Metrics | Primary metric, guardrails, and segment metrics are all present |
-| Artifacts | Model file, feature schema, evaluation report, and failure samples are attached |
-| Notes | Hypothesis, owner, and review outcome are written in the run |
-
-The baseline line is especially important. If Priya trains the new candidate on `valid_2026_06_30` and compares it with a baseline score from `valid_2026_05_31`, the comparison mixes model quality with data changes. A reproducible experiment records enough information to catch that mismatch quickly.
-
-A review packet can point back to the MLflow run:
-
-```yaml
-candidate_review:
-  run_id: 6e68c42cf62a4f7db93d3f5f4e65a9d1
-  mlflow_experiment: homepage-recommendation-ranking
-  candidate_model: s3://luma-mlflow-artifacts/6e68c42/model/
-  baseline_model: homepage-ranker:v11
-  shared_validation_snapshot: recs_clickstream_rank_valid_2026_06_30:v4
-  decision: hold_for_segment_review
-  reason:
-    - valid_ndcg_at_10 improved from 0.417 to 0.431
-    - catalog_coverage dropped from 0.74 to 0.69
-    - cold_start_product_exposure needs merchandising review
-```
-
-That decision record is part of reproducibility too. Future teammates need to know which run won the metric table and why the team held it back.
-
-## Failure Modes You Can Diagnose
-<!-- section-summary: Reproducibility helps the team investigate metric jumps, missing artifacts, data drift, and production incidents. -->
-
-Once the run record exists, several common experiment failures get easier to debug. A metric jump may trace back to a dataset snapshot with duplicate impression rows. A slow model may trace back to a new feature group that calls a heavier embedding lookup. A model artifact may fail serving validation because the feature schema attached to the run differs from the online feature contract.
-
-Here are practical examples:
-
-| Failure mode | Evidence that helps |
-|---|---|
-| Offline metric improved while online click rate later dropped | Baseline and candidate predictions, segment metrics, and top failure samples |
-| Teammate struggles to rerun the candidate | Git commit, config file, container digest, dataset manifest, and seed |
-| Model serving rejects requests | Logged `feature_schema.json` and example prediction payloads |
-| Evaluation shifts after a data backfill | Dataset snapshot version, row counts, label delay, and manifest checksum |
-| Review loses track of the trained model | MLflow run ID and model artifact URI |
-
-This is the reason MLOps teams care about experiment tracking before they care about fancy dashboards. A dashboard is helpful after the evidence exists. The core win is that a model result has a trail from idea to data to artifact.
-
-## Putting It Together
-<!-- section-summary: Reproducible experiments give every important result a durable trail from idea to artifact. -->
-
-A reproducible experiment is an ML run with a durable recipe. The recipe records code, data, config, environment, seed, metrics, artifacts, owner, and notes. The team can explain the result, compare it with a baseline, rerun it closely enough for review, and debug it when the result later matters.
-
-For Luma Retail, Priya's recommendation experiment is reproducible when the MLflow run links the image-feature hypothesis to the exact training snapshot, Git commit, YAML config, container digest, metrics, segment reports, and model artifact. That evidence gives the team a shared trail for the candidate review.
-
-![Luma Retail reproducible experiment review trail](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/luma-review-trail-summary.png)
-*The experiment trail connects the hypothesis, run evidence, baseline check, segment review, hold decision, and the next rerun.*
+The next articles add tracking instrumentation and run comparison. Those tools make the evidence easier to capture and explore. The experiment remains reproducible because the team knows which evidence matters and which differences would change the decision.
 
 ## References
 
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) - Official MLflow guide for experiments, runs, parameters, metrics, tags, artifacts, and comparisons.
-- [MLflow Tracking APIs](https://mlflow.org/docs/latest/ml/tracking/tracking-api/) - Official MLflow API guide for logging runs from training code.
-- [MLflow Dataset Tracking](https://mlflow.org/docs/latest/ml/dataset/) - Official MLflow guide for dataset lineage and dataset records in runs.
-- [MLflow Models](https://mlflow.org/docs/latest/ml/model/) - Official MLflow guide for packaging model artifacts.
-- [Databricks: Get started with MLflow 3 for models](https://docs.databricks.com/aws/en/mlflow/mlflow-3-install) - Official Databricks guide that explains MLflow 3 logged models and the `name` parameter for model logging.
-- [PyTorch Reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html) - Official PyTorch notes on seeds, deterministic behavior, and reproducibility limits.
-- [DVC: Versioning Data and Models](https://doc.dvc.org/example-scenarios/versioning-data-and-models) - Official DVC example for pairing data and model versions with code history.
+- [PyTorch Reproducibility Notes](https://docs.pytorch.org/docs/stable/notes/randomness.html)
+- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
+- [MLflow Dataset Tracking](https://mlflow.org/docs/latest/ml/dataset/)
+- [Weights & Biases Experiments](https://docs.wandb.ai/models/track/)
+- [scikit-learn common pitfalls](https://scikit-learn.org/stable/common_pitfalls.html)
+- [DVC data and model versioning](https://doc.dvc.org/example-scenarios/versioning-data-and-models)

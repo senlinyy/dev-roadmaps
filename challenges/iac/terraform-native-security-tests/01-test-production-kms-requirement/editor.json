@@ -1,0 +1,42 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "tests/log_bucket.tftest.hcl",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "readOnly": true,
+      "initialValue": "variable \"environment\" {\n  type = string\n}\n\nvariable \"service_name\" {\n  type = string\n}\n\nvariable \"kms_key_id\" {\n  type     = string\n  nullable = true\n\n  validation {\n    condition     = var.environment != \"prod\" || var.kms_key_id != null\n    error_message = \"Production log buckets require a customer-managed KMS key.\"\n  }\n}\n"
+    },
+    {
+      "filename": "tests/log_bucket.tftest.hcl",
+      "initialValue": "# Add the production security contract test here.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "tests/log_bucket.tftest.hcl",
+        "pattern": "run\\s+\"prod_requires_kms_key\"\\s*\\{[\\s\\S]*command\\s*=\\s*plan",
+        "label": "test run plans the production KMS contract"
+      },
+      {
+        "file": "tests/log_bucket.tftest.hcl",
+        "pattern": "variables\\s*\\{[\\s\\S]*environment\\s*=\\s*\"prod\"[\\s\\S]*service_name\\s*=\\s*\"billing\"[\\s\\S]*kms_key_id\\s*=\\s*null",
+        "label": "test supplies the documented production inputs"
+      },
+      {
+        "file": "tests/log_bucket.tftest.hcl",
+        "pattern": "expect_failures\\s*=\\s*\\[[\\s\\S]*var\\.kms_key_id[\\s\\S]*\\]",
+        "label": "test expects the KMS variable validation to fail"
+      },
+      {
+        "file": "tests/log_bucket.tftest.hcl",
+        "pattern": "command\\s*=\\s*apply",
+        "label": "test does not apply infrastructure",
+        "negate": true
+      }
+    ]
+  }
+}

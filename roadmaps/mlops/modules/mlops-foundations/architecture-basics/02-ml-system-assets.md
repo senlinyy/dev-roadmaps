@@ -7,17 +7,6 @@ order: 2
 id: "article-mlops-mlops-foundations-ml-system-assets"
 ---
 
-## Table of Contents
-
-1. [A Model File Is Only One Asset](#a-model-file-is-only-one-asset)
-2. [Code And Configuration](#code-and-configuration)
-3. [Data, Labels, And Features](#data-labels-and-features)
-4. [Model Artifacts And Runtime Dependencies](#model-artifacts-and-runtime-dependencies)
-5. [Metrics, Reports, And Approval Records](#metrics-reports-and-approval-records)
-6. [Logs, Predictions, And Feedback](#logs-predictions-and-feedback)
-7. [Asset Inventory Checklist](#asset-inventory-checklist)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
 
 ## A Model File Is Only One Asset
 <!-- section-summary: Production ML systems need traceability across many assets, including data, code, config, environment, model artifacts, reports, approvals, and monitoring evidence. -->
@@ -35,6 +24,44 @@ Here is a compact view.
 _The asset map shows why a production model is more than one model file: code, data, features, config, and runtime all shape behavior._
 
 The goal of asset management is practical: when model version `v18` ranks sponsored books too high compared with `v17`, the team can compare the assets that changed. Maybe the training data included a holiday sale week. Maybe a feature changed from `author_popularity_30d` to `author_popularity_7d`. Maybe the serving image loaded an older tokenizer. Asset traceability gives the team facts before the argument starts.
+
+The assets fit into four connected groups. **Source assets** describe what the team intended to build from: data, labels, code, feature definitions, and configuration. **Execution assets** describe how that intent ran: containers, dependencies, hardware records, logs, and checkpoints. **Decision assets** explain why the candidate was accepted or rejected: metrics, slice reports, limitations, approvals, and release plans. **Production assets** show what actually ran and what happened: deployment configuration, prediction records, monitoring signals, labels, incidents, and feedback.
+
+```mermaid
+flowchart LR
+    subgraph Source["Source assets"]
+        Data["Data and labels"]
+        Code["Code and feature definitions"]
+        Config["Resolved configuration"]
+    end
+    subgraph Execution["Execution assets"]
+        Env["Runtime and dependencies"]
+        Run["Run record and checkpoints"]
+        Model["Model package"]
+    end
+    subgraph Decision["Decision assets"]
+        Eval["Evaluation and limitations"]
+        Approval["Approval and rollout plan"]
+    end
+    subgraph Production["Production assets"]
+        Deploy["Deployment state"]
+        Evidence["Predictions, labels, incidents"]
+    end
+    Data --> Run
+    Code --> Run
+    Config --> Run
+    Env --> Run
+    Run --> Model
+    Model --> Eval
+    Eval --> Approval
+    Approval --> Deploy
+    Deploy --> Evidence
+    Evidence --> Data
+```
+
+The arrows form an **evidence graph**. Each edge should carry a stable identity rather than a filename that can move. A model version links to a run ID. The run links to a dataset snapshot, source commit, resolved configuration, and environment digest. An approval links to the evaluated model and report. A deployment links to the approved release unit. A prediction record reports the version that actually handled the request.
+
+This graph supports two directions of investigation. Forward lineage asks which models and deployments used a faulty dataset. Backward lineage asks which data, code, environment, and decision produced a harmful prediction. A flat inventory can list the objects, while the graph explains their relationships.
 
 ## Code And Configuration
 <!-- section-summary: Code and configuration define how data turns into a model, so they need version control, review, and links to each training run. -->
@@ -67,7 +94,7 @@ The next assets are **data**, **labels**, and **features**. Training data is the
 
 For the search-ranking model, one training example might include a search query, book ID, category, language, price band, stock status, author popularity, click position, add-to-cart outcome, purchase outcome, and moderation status. Each field needs a definition and a time boundary. The model should learn from signals available before the ranking decision, not from a purchase event that happened after the reader clicked a result.
 
-A dataset snapshot should have a stable name or URI. The team can choose a retention policy that fits cost and compliance while still identifying which examples trained an important model version and keeping enough lineage to investigate problems.
+A dataset snapshot should have a stable name or uniform resource identifier (URI). The team can choose a retention policy that fits cost and compliance while still identifying which examples trained an important model version and keeping enough lineage to investigate problems.
 
 ```yaml
 data:
@@ -182,7 +209,7 @@ Prediction logs need careful design because they can contain sensitive data. The
 
 Feedback assets include clicks, add-to-cart events, purchases, zero-result searches, customer support tags, catalog review notes, incident reports, and retraining notes. These assets help the next model version learn from production. They also help the team explain whether a release improved the product decision.
 
-## Asset Inventory Checklist
+## Build And Maintain The Asset Inventory
 <!-- section-summary: A simple inventory helps teams know which assets exist, where they live, who owns them, and how long they should be retained. -->
 
 An asset inventory does not need to be fancy. It can start as a table in a repository or a metadata record in a platform. The inventory should name each asset, owner, storage location, version strategy, and retention expectation.
@@ -201,6 +228,34 @@ An asset inventory does not need to be fancy. It can start as a table in a repos
 | Incident notes | post-incident review | On-call and product owners |
 
 The inventory should also include access controls. Model artifacts, data snapshots, and prediction logs can contain sensitive business or customer information. Ownership includes permission management, not only file naming.
+
+## Manage Identity, Retention, And Recovery Together
+<!-- section-summary: Asset policy keeps immutable identities, permissions, retention, and recovery aligned with the operational role of each asset. -->
+
+Each asset needs an identity rule. Source code usually uses a commit. Container images use a digest. Dataset releases use a snapshot, table version, or manifest digest. Model packages use registry versions and artifact digests. Configuration should store the fully resolved values used by the run, because defaults and environment variables can otherwise change the meaning of the same source file.
+
+Mutable names can help people discover current assets, but execution should resolve and pin the concrete identity. A training job may accept `approved-training-data` as an input alias, record that it resolved to snapshot `2026-07-12-r3`, and use the snapshot throughout the run. A deployment may resolve a registry alias once and pin the resulting model version in its release record.
+
+Retention should preserve complete operational units. Keeping weights while deleting the tokenizer, schema, or environment leaves a model that cannot serve. Keeping registry metadata while expiring the underlying object creates a candidate that cannot be loaded. Production and rollback releases need longer retention than disposable experiments, and sensitive prediction records may have stricter maximum retention.
+
+Recovery tests prove the graph. Start with a historical release record, resolve its model, runtime, schemas, and rules, verify their digests, load them in an isolated environment, and score fixed fixtures. Then trace backward to the training run and dataset manifest. This exercise catches broken permissions, expired objects, missing keys, and metadata that points to unavailable content.
+
+```mermaid
+sequenceDiagram
+    participant I as Incident responder
+    participant D as Deployment record
+    participant R as Model registry
+    participant S as Artifact stores
+    participant V as Verification job
+    I->>D: Request previous approved release
+    D-->>I: Model, runtime, schema, rules
+    I->>R: Resolve immutable model version
+    R-->>S: Locate complete release assets
+    S-->>V: Return objects and manifests
+    V-->>I: Digests and fixture outputs verified
+```
+
+An owner should be able to answer for each asset who may create it, who may read it, what validates it, how long it remains, and which other assets depend on it. These questions turn the inventory into an operating system for traceability rather than a list that goes stale.
 
 ## Putting It All Together
 <!-- section-summary: Asset traceability lets a team explain how a model version was created, approved, deployed, monitored, and improved. -->

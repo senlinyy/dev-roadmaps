@@ -9,7 +9,7 @@ Your security team maintains a vulnerability scanner that only runs on Alpine Li
 Your task:
 
 1. **Add a step** that runs inside a Docker container image instead of directly on the runner.
-2. **Use the `uses` key** with a Docker image reference for the container.
-3. **Configure the step** so it runs a basic command inside the container.
+2. **Run the approved `docker://alpine:3.20` image** rather than an unpinned image.
+3. **Use `/bin/sh` as entrypoint** with args `-c "echo 'Scanning...'"` so the review shows the exact command executed in the container.
 
-The grader checks that one of the steps references a Docker container image.
+The grader checks that one step in the scan job uses the approved image and command together.

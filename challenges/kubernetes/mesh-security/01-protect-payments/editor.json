@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "activeFile": "peer-authentication.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    { "filename": "peer-authentication.yaml", "initialValue": "apiVersion: security.istio.io/v1\nkind: PeerAuthentication\nmetadata:\n  name: store-strict-mtls\n  namespace: store\nspec:\n" },
+    { "filename": "payments-authorization-policy.yaml", "initialValue": "apiVersion: security.istio.io/v1\nkind: AuthorizationPolicy\nmetadata:\n  name: payments-allow-checkout\n  namespace: store\nspec:\n" }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "file": "peer-authentication.yaml", "path": ["spec", "mtls", "mode"], "equals": "STRICT", "label": "strict namespace mTLS" },
+      { "file": "payments-authorization-policy.yaml", "path": ["spec", "selector", "matchLabels", "app"], "equals": "payments", "label": "payments workload selector" },
+      { "file": "payments-authorization-policy.yaml", "path": ["spec", "action"], "equals": "ALLOW", "label": "allow-list policy action" },
+      { "file": "payments-authorization-policy.yaml", "path": ["spec", "rules"], "maxItems": 1, "label": "single authorization rule" },
+      { "file": "payments-authorization-policy.yaml", "path": ["spec", "rules", 0, "from"], "maxItems": 1, "label": "single approved source" },
+      { "file": "payments-authorization-policy.yaml", "path": ["spec", "rules", 0, "from", 0, "source", "principals"], "equals": ["cluster.local/ns/store/sa/checkout"], "label": "checkout workload principal" }
+    ]
+  }
+}

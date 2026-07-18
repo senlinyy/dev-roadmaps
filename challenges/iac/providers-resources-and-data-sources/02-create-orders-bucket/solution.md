@@ -15,6 +15,8 @@ provider "aws" {
 }
 ```
 
+The resource consumes the shared name and tags, keeping environment decisions in locals instead of duplicating them inside the bucket block.
+
 ### locals.tf
 
 ```hcl

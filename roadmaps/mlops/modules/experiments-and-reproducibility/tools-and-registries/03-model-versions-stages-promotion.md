@@ -1,350 +1,189 @@
 ---
-title: "Model Promotion"
-description: "Teach candidate, shadow, staging, canary, production, archived, and rollback flows with version aliases, approval gates, and release evidence."
-overview: "Model promotion moves a registered model version through controlled release states. This tutorial follows a support ticket routing model through candidate review, shadow and staging tests, canary traffic, production alias changes, archived versions, rollback targets, and concrete release gates."
-tags: ["MLOps", "production", "registry"]
+title: "Registry Versions, Aliases, and Candidate Handoff"
+description: "Use a model registry to give candidates immutable identities, attach run and evaluation evidence, manage aliases, and create a reviewed handoff for release systems."
+overview: "A model registry preserves candidate identity and evidence before production release design begins. A supporting example follows a ticket-routing model through registration, alias resolution, evidence review, rejection, and a pinned candidate handoff."
+tags: ["MLOps", "registry", "promotion"]
 order: 3
 id: "article-mlops-experiments-and-reproducibility-model-versions-stages-promotion"
+aliases: ["model-versions-stages-promotion"]
 ---
 
-## Table of Contents
+## A Registry Creates a Reviewed Candidate Handoff
+<!-- section-summary: A model registry preserves one candidate's identity and evidence so release systems receive an exact, reviewable input. -->
 
-1. [What Model Promotion Means](#what-model-promotion-means)
-2. [The Ticket Routing Scenario](#the-ticket-routing-scenario)
-3. [The Promotion Path](#the-promotion-path)
-4. [Candidate Review](#candidate-review)
-5. [Shadow And Staging](#shadow-and-staging)
-6. [Canary Release](#canary-release)
-7. [Production Alias And Archive](#production-alias-and-archive)
-8. [Rollback Practice](#rollback-practice)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+A training run produces files and metrics. A release system needs something more stable: one candidate that can be named, inspected, rejected, compared, and handed forward without changing underneath the reviewers. A **model registry** provides that boundary.
 
-## What Model Promotion Means
-<!-- section-summary: Model promotion moves one registered version through release states after evidence proves it is ready for the next step. -->
+The registry article owns five responsibilities:
 
-**Model promotion** is the controlled movement of a registered model version through release states such as candidate, shadow, staging, canary, production, archived, and rollback target. Each state says what the version may do. A candidate may only be reviewed. A shadow version may score live inputs without changing user-facing decisions. A canary version may affect a small slice of traffic. A production version serves the main path.
+1. **Candidate identity** gives the model artifact and its required inference assets an immutable version.
+2. **Lineage** connects that version to the run, data, code, configuration, and build environment that produced it.
+3. **Evidence links** attach evaluation results, signatures, limitations, and ownership to the same version.
+4. **Aliases and review states** help people find current candidates without replacing immutable history.
+5. **Candidate handoff** resolves every movable reference and sends one pinned, reviewed record to the release process.
 
-Promotion should be recorded in the registry or release system with evidence. A team should know which version moved, who approved it, which metrics passed, which alias changed, and which version can receive traffic again if rollback is needed. The promotion record is the release history for the model.
+The registry stops at that handoff. It does not define the complete production release manifest, move bytes across an environment trust boundary, allocate traffic, or prove what runtime handled a request. Those responsibilities belong to the later Model Versioning, Artifact Promotion, and Model Release Strategies articles.
 
-This article follows a support ticket routing model. The example uses concrete aliases, gates, metrics, and deployment checks so you can see how promotion works beyond a status label in a UI.
+This boundary matters because one mutable label cannot answer every lifecycle question. An alias called `candidate` can help reviewers find a version, but it cannot prove which serving image is compatible, whether production may read the artifact, or which model actually handled live predictions.
 
-## The Ticket Routing Scenario
-<!-- section-summary: A support ticket routing model needs careful promotion because wrong predictions send customers to the wrong queue and slow down urgent cases. -->
+```mermaid
+flowchart LR
+    Run["Training run and evidence"] --> Version["Immutable registry version"]
+    Version --> Review{"Risk-based review"}
+    Review -->|reject| Retain["Retain evidence and reason"]
+    Review -->|ready| Handoff["Pinned reviewed-candidate record"]
+    Handoff --> Release["Release system adds runtime, environment, and traffic decisions"]
+```
 
-BrightDesk sells help desk software to B2B companies. Its support product receives thousands of customer tickets every day. A ticket routing model reads the ticket subject, product area, customer tier, language, account region, and a short message preview. It predicts the best queue, such as `billing`, `security`, `api-integrations`, `enterprise-success`, or `bug-triage`.
+Candidate identity, lineage, aliases, evidence, and the reviewed handoff form this article's framework. The next module adds production authority and running state without redefining the candidate.
 
-The current production model is `support-ticket-router:23`. A new version, `support-ticket-router:24`, trained on `tickets_labeled_2026_06_28`, improves routing for API integration tickets and Spanish-language billing tickets. It also changes the way high-severity tickets are detected, so the release owner wants a cautious promotion path.
+## A Version Preserves The Candidate
+<!-- section-summary: A registry version keeps the candidate artifact and the assets required to evaluate it stable while evidence accumulates. -->
 
-The registry record for version `24` includes these fields:
+A **model version** is an immutable registry identity for one model candidate. The version should resolve to the same model bytes every time. It should also link to the training run, dataset snapshot, source commit, environment, input signature, evaluation report, and owner.
+
+The word “model” can hide an important evaluation detail. An estimator alone may be impossible to load or score consistently. A text classifier can require a tokenizer, label map, normalization rules, and input signature. A forecasting model can require preprocessing and post-processing assets. The registry candidate should therefore include or immutably reference everything needed to reproduce the behaviour that evaluation measured.
+
+Suppose a support team registers `ticket-router` version `18`. The review packet identifies these parts:
+
+| Candidate part | Stable registry evidence |
+| --- | --- |
+| Model | Registry name, version, artifact digest |
+| Data | dataset snapshot and label-policy version |
+| Code | source commit and training entry point |
+| Load contract | input signature, label map, required inference assets |
+| Environment | dependency lock or reproducible model environment |
+| Evaluation | report identity, slices, baseline, limitations |
+
+If the tokenizer or preprocessing changes after evaluation, the measured behaviour no longer belongs to the same candidate. The team should create a new candidate version and repeat the affected checks. Some registries store these pieces inside a packaged model. Others keep a candidate manifest in an artifact store and attach its digest to the registry version. Either design works when the references are immutable and verification can follow them.
+
+Registration should include a candidate load test. The test retrieves the version in a clean environment, verifies its digest and signature, sends a known fixture, and checks the output shape and label order. This is not a production capacity or compatibility test; it proves that the reviewed candidate is self-consistent enough for evaluation and release packaging. A registry row that points to a missing preprocessor has failed the handoff even though registration itself succeeded.
+
+## Aliases Are Movable Pointers
+<!-- section-summary: Aliases make current intent convenient to discover, while immutable versions protect evaluation, deployment, and incident evidence from races. -->
+
+An **alias** is a readable name that currently points to one model version. Names such as `candidate`, `champion`, or `rollback` can help reviewers and automation find relevant versions without memorising numbers. The pointer can later move from version `18` to version `19`.
+
+That movement creates a concurrency risk. Imagine a release job that evaluates `candidate` when it points to version `18`. Another job moves the alias to version `19` before deployment starts. If the release job resolves the alias a second time, it can deploy a model that never received the first job’s approval.
+
+The safe pattern has two steps. Resolve the alias once at the start of the handoff, then store and use the concrete version for every later check. The candidate record should carry `ticket-router:18`, the artifact and candidate-manifest digests, and the evidence identities. Release intake should receive those concrete values rather than resolving a moving alias again.
+
+```mermaid
+sequenceDiagram
+    participant R as Release job
+    participant G as Registry
+    participant D as Deployment controller
+    participant T as Runtime telemetry
+    R->>G: Resolve candidate alias
+    G-->>R: ticket-router version 18
+    R->>R: Verify approval for version 18
+    R->>D: Deploy pinned version 18
+    D->>T: Start canary release unit
+    T-->>R: Loaded version 18 and expected digests
+```
+
+Current MLflow Model Registry workflows use aliases and tags for this purpose. MLflow’s fixed Model Stages were deprecated starting in version 2.9. Aliases provide movable references, while tags can describe review status such as `pending`, `approved`, `rejected`, or `superseded`. Teams maintaining older stage-based workflows should plan a migration rather than extending stage names into new release logic.
+
+## Review States Describe Candidate Readiness
+<!-- section-summary: A registry review state records whether one candidate's evidence is ready for release review, rejected, or superseded. -->
+
+A **review state** describes what happened to the candidate's evidence before the production release is assembled. Terms such as `under_review`, `reviewed_candidate`, `rejected_for_safety_slice`, and `superseded_before_review` communicate more than a generic `Production` stage.
+
+`reviewed_candidate` is deliberately narrower than `approved_for_production`. It means that the model identity is stable, the expected evaluation evidence exists, and the candidate can enter the release process. The release process must still pin a runtime and contracts, validate the target environment, obtain any required release authority, and choose a traffic scope.
+
+Review depth should follow product risk. A low-risk internal recommendation may use automated gates and an accountable model owner. A model that affects safety, credit, employment, or access to essential services usually needs domain, risk, legal, or compliance review defined by the organisation’s governance process. The registry can store the status and links, while the policy defines who has authority.
+
+The candidate packet should answer four groups of questions:
+
+1. **Identity:** Which candidate artifact, data, code, load contract, and environment did reviewers inspect?
+2. **Quality:** Which baseline, metrics, slices, uncertainty, and failure examples support the decision?
+3. **Use:** Which intended use, population, exclusions, and known limitations did evaluation cover?
+4. **Handoff:** Which concrete version and digests must the release system consume without resolving aliases again?
+
+A compact machine-readable record can carry the handoff:
 
 ```yaml
-model_version:
-  name: support-ticket-router
-  version: 24
-  source_run: mlflow-run-20260702-2110
-  training_data: warehouse.support.tickets_labeled_2026_06_28
-  artifact_uri: s3://brightdesk-ml-artifacts/ticket-router/24/model/
-  current_aliases:
-    candidate: 24
-    production: 23
-  rollback_target: 23
-  owner: support-ml-platform
-  release_owner: support-routing-oncall
+candidate_review_id: review-2026-07-17-1842
+model: ticket-router
+version: "18"
+artifact_sha256: sha256:ee115a66...
+candidate_manifest_sha256: sha256:0d7493c1...
+status: reviewed_candidate
+intended_use: route non-safety-critical support tickets
+excluded_queues: [safety-critical]
+evaluation_report: eval-ticket-router-18
+known_limitations: [low evidence for newly launched locale]
 ```
 
-The important part is the contrast between `candidate: 24` and `production: 23`. Version `24` exists, and the team can review it. Version `23` still serves customers. Promotion moves aliases and traffic only after the gates pass.
+The release intake gate verifies this record against registry metadata before it builds a production release. A digest mismatch, missing slice report, or unresolved alias stops the handoff. Later release gates add runtime compatibility, environment policy, traffic, monitoring, and rollback evidence without silently rewriting what the candidate review concluded.
 
-## The Promotion Path
-<!-- section-summary: A practical promotion path defines each stage, the allowed traffic, the required evidence, and the owner who can approve movement. -->
+## Build A Pinned Candidate Handoff
+<!-- section-summary: The handoff resolves aliases once, verifies registry evidence, and gives release automation one immutable candidate record. -->
 
-Stage names vary across tools. Some teams use MLflow aliases such as `candidate`, `shadow`, and `production`. Some teams use SageMaker approval statuses and pipeline steps. Databricks teams using Unity Catalog often combine aliases, tags, permissions, lineage, and deployment jobs rather than relying on the older Workspace Model Registry stage workflow. Some teams store stages in GitOps config and use the registry only for model versions. The reliable pattern is to define what each stage allows.
+The handoff is a read boundary between experiment systems and release systems. It should not ask production automation to rediscover which run the team meant. The registry workflow resolves the selected alias once, reads the concrete version, verifies that required metadata and evidence links belong to that version, and emits a candidate record whose own digest can be checked later.
 
-For BrightDesk, the release path is:
+For `ticket-router:18`, the handoff process checks:
 
-| Stage | What version 24 can do | Required evidence |
-|---|---|---|
-| Candidate | Exist in the registry for review | Offline metrics, model card, artifact digest, rollback target |
-| Shadow | Score live tickets with no routing effect | Shadow agreement, latency, schema compatibility, high-severity safety checks |
-| Staging | Serve internal test traffic in a staging help desk workspace | End-to-end routing test, dependency check, queue mapping review |
-| Canary | Route a small slice of low-risk production tickets | Reassignment rate, first-response impact, override rate, on-call approval |
-| Production | Route the main production ticket stream | Canary pass, product approval, support operations approval |
-| Archived | Stay in history after replacement or rejection | Reason, final alias state, retention and rollback notes |
+| Check | Reason |
+| --- | --- |
+| Version and candidate-manifest digests resolve | The model under review has not moved or disappeared |
+| Training run, dataset, and source references exist | Release reviewers can trace where the candidate came from |
+| Input signature and load fixture pass | The release system receives a usable candidate rather than disconnected bytes |
+| Required evaluation report and slices exist | `reviewed_candidate` has concrete evidence behind it |
+| Intended use, exclusions, limitations, and owner are present | Later release decisions do not invent a broader claim |
 
-You can capture those gates in a promotion policy file. The policy is useful because humans can review it, and CI/CD can enforce it.
+The operation should be idempotent. Retrying handoff for the same review ID returns the same candidate record. It must never resolve `candidate` again and silently pick up version `19`. If an alias or review state changed after the process began, the workflow pauses and requires a fresh review or explicit reconciliation.
 
-```yaml
-model: support-ticket-router
-version: 24
-rollback_target: 23
-gates:
-  candidate:
-    require:
-      macro_f1: ">= 0.812"
-      escalation_miss_rate: "<= 0.035"
-      artifact_digest: present
-      model_card: present
-  shadow:
-    require:
-      live_schema_match_rate: ">= 0.999"
-      p95_latency_ms: "<= 80"
-      human_queue_agreement: ">= 0.830"
-      high_severity_override_misses: 0
-  canary:
-    traffic_percent: 5
-    require:
-      reassignment_rate: "<= 0.060"
-      first_response_time_delta: "<= 0.020"
-      customer_tier_regression: "none"
-      oncall_acknowledged: true
+```mermaid
+sequenceDiagram
+    participant H as Handoff job
+    participant G as Model registry
+    participant E as Evidence store
+    participant R as Release intake
+    H->>G: Resolve candidate alias once
+    G-->>H: ticket-router version 18 and digests
+    H->>E: Verify required report identities
+    E-->>H: Evidence belongs to version 18
+    H->>H: Sign pinned candidate record
+    H->>R: Submit reviewed candidate 18
 ```
 
-The numbers should come from the business risk and the current production baseline. BrightDesk accepts a small change in low-severity routing, while it has no tolerance for missed high-severity escalations. The promotion policy says that clearly before the release starts.
+The audit event records the concrete version, source alias at resolution time, candidate-review ID, evidence identities, actor or workload identity, time, and result. Failed and superseded handoffs remain in history because they explain why a candidate did not enter release planning.
 
-![BrightDesk promotion path for version 24 through candidate, shadow, staging, canary, production, archive, and rollback.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/brightdesk-promotion-path.png)
-*BrightDesk moves version 24 through each release state only after the matching evidence gate passes.*
+## Release Systems Add Production Meaning
+<!-- section-summary: After candidate handoff, other systems add the runtime, environment authority, traffic plan, live verification, and rollback release. -->
 
-## Candidate Review
-<!-- section-summary: Candidate review checks offline evidence before the version receives live inputs or traffic. -->
+The registry record is an input to release management, not a production declaration. The Model Versioning article combines the candidate with a serving-image digest, request and response contracts, feature contract, decision policy, and rollback target to create a complete release identity. Artifact Promotion decides whether to copy or reference the exact artifact across an environment trust boundary and verifies the destination. Model Release Strategies control blue-green, canary, or shadow traffic. Monitoring records which release actually served each decision.
 
-The candidate stage starts after training registers version `24`. At this point, the model should have a complete review packet. The release owner should avoid any traffic movement until offline evidence, artifact integrity, input/output shape, and rollback target are all visible.
+Keeping this boundary explicit prevents several common errors:
 
-The candidate review checks the model against the current production version:
+- A registry alias move cannot bypass a deployment review or alter running workers by itself.
+- A `reviewed_candidate` state cannot be mistaken for permission to send production traffic.
+- A release-specific image, threshold, feature contract, or fallback does not get written back as if training produced it.
+- Runtime telemetry remains the source of truth for what served users, while the registry remains the source of truth for which candidate and evidence entered the release process.
 
-```yaml
-candidate_review:
-  model: support-ticket-router
-  candidate_version: 24
-  baseline_version: 23
-  offline_metrics:
-    macro_f1:
-      candidate: 0.824
-      baseline: 0.811
-    escalation_miss_rate:
-      candidate: 0.031
-      baseline: 0.036
-    spanish_billing_f1:
-      candidate: 0.792
-      baseline: 0.748
-    api_integrations_f1:
-      candidate: 0.836
-      baseline: 0.801
-  required_artifacts:
-    - model.pkl
-    - tokenizer.json
-    - queue_label_map.yml
-    - requirements.lock
-    - evaluation/segment_metrics.csv
-    - evaluation/high_severity_examples.csv
-```
+The handoff is complete when release intake can verify the candidate without trusting a mutable name. What happens to that candidate next belongs to the production release framework.
 
-The release owner should read this packet like a production change. The model improved important segments, and the escalation miss rate moved in the right direction. The queue label map matters because a model can predict a valid class that the ticketing system has no route for. The dependency lock matters because staging and production must load the same tokenizer and model package.
+## Rejection And Supersession Preserve Learning
+<!-- section-summary: Rejected and superseded candidates keep enough evidence to explain experiment decisions and prevent repeated mistakes. -->
 
-Candidate approval can update a registry alias:
+A rejected version still contains useful evidence. Its failed slice, incompatible schema, or excessive latency can prevent the same mistake in a later experiment. The review record should state the reason and the evidence that failed. `Rejected` means a decision occurred; `superseded` can describe a candidate that another version replaced before review finished.
 
-```python
-from mlflow import MlflowClient
+Retention follows lifecycle meaning. Recently rejected candidates may need artifacts for investigation. Old exploratory versions may retain metadata while large disposable artifacts expire. Candidates referenced by a release or audit record need a dependency-aware retention decision. When bytes disappear, the registry must stop claiming that the version remains loadable or reproducible.
 
-client = MlflowClient()
-client.set_model_version_tag(
-    name="support-ticket-router",
-    version="24",
-    key="candidate_review",
-    value="approved_offline_2026-07-03",
-)
-client.set_registered_model_alias(
-    name="support-ticket-router",
-    alias="candidate",
-    version="24",
-)
-```
+Deletion therefore queries release references, audit requests, legal holds, and retention policy before removing an artifact. The production modules define rollback retention and environment revocation in detail; the registry's job is to preserve truthful candidate history and expose dependencies.
 
-This alias stays in review territory and keeps customer traffic on version `23`. It gives automation a stable way to fetch the reviewed candidate for the next gate.
+## The Complete Registry Handoff
+<!-- section-summary: A reliable registry workflow uses immutable versions for candidate identity, aliases for discovery, evidence-linked review states, and a pinned handoff. -->
 
-## Shadow And Staging
-<!-- section-summary: Shadow scoring tests the candidate on live inputs without changing decisions, while staging tests the full serving path before production traffic. -->
+Registry versions give training and evaluation a shared subject. Aliases make current intent convenient to find. Review states record what happened to the candidate evidence. The handoff resolves those movable references into one immutable record that release systems can verify.
 
-Shadow testing sends live ticket inputs to version `24` while version `23` still controls routing. The product keeps version `24` predictions hidden from agents and customers during shadow. The goal is to compare live behavior safely: schema compatibility, latency, queue agreement, confidence distribution, and high-severity handling.
-
-BrightDesk runs both versions on the same live tickets and stores a comparison table:
-
-```sql
-SELECT
-  DATE(event_time) AS day,
-  COUNT(*) AS tickets_seen,
-  AVG(candidate_latency_ms) AS avg_candidate_latency_ms,
-  APPROX_QUANTILES(candidate_latency_ms, 100)[OFFSET(95)] AS p95_candidate_latency_ms,
-  AVG(CASE WHEN candidate_queue = human_final_queue THEN 1 ELSE 0 END) AS human_queue_agreement,
-  SUM(CASE WHEN severity = 'high' AND candidate_queue != 'enterprise-success' THEN 1 ELSE 0 END) AS high_severity_override_misses
-FROM warehouse.support.ticket_router_shadow_events
-WHERE event_time >= TIMESTAMP '2026-07-03 00:00:00 UTC'
-  AND model_version = 24
-GROUP BY day
-ORDER BY day;
-```
-
-The query shows whether the candidate can handle real inputs. Offline test data can miss strange ticket formats, new product names, or customer-specific fields. Shadow data reveals those issues while version `23` still protects the live routing path.
-
-Staging tests the whole application path. BrightDesk deploys version `24` to an internal help desk workspace with synthetic tickets and sampled historical tickets. This catches configuration problems that pure model scoring may miss: missing environment variables, wrong queue IDs, broken authentication to the feature service, or a stale label map in the ticketing integration.
-
-```yaml
-staging_check:
-  model_uri: models:/support-ticket-router@candidate
-  workspace: brightdesk-support-staging
-  synthetic_ticket_set: s3://brightdesk-ml-tests/ticket-router/staging-smoke-2026-07.jsonl
-  expected:
-    queue_ids_resolve: true
-    p95_latency_ms: "<= 80"
-    unknown_language_fallback: triage-general
-    high_severity_route: enterprise-success
-```
-
-If both shadow and staging pass, the release owner can move the candidate toward canary. The registry can record this with an alias change or a tag that says version `24` passed shadow and staging gates.
-
-## Canary Release
-<!-- section-summary: Canary release sends a small controlled slice of production traffic to the candidate while monitors compare business and safety metrics. -->
-
-Canary is the first stage where version `24` affects real routing. BrightDesk starts with 5% of low-risk production tickets: free-tier accounts, normal severity, English-language tickets, and product areas with high historical agreement. The goal is to learn from real decisions while limiting customer impact.
-
-A deployment system can read the registry alias and split traffic. The details vary by serving stack. A Kubernetes and Argo Rollouts setup might express the canary like this:
-
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
-metadata:
-  name: ticket-router-api
-  namespace: ml-serving
-spec:
-  strategy:
-    canary:
-      steps:
-        - setWeight: 5
-        - pause:
-            duration: 2h
-        - analysis:
-            templates:
-              - templateName: ticket-router-canary-check
-            args:
-              - name: modelVersion
-                value: "24"
-              - name: rollbackTarget
-                value: "23"
-  template:
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/brightdesk/ticket-router-api:2026.07.03
-          env:
-            - name: MODEL_URI
-              value: "models:/support-ticket-router@canary"
-```
-
-The model URI points at the `canary` alias. The rollout starts at 5% and pauses while monitors run. If the analysis fails, the rollout stops and the team returns traffic to version `23`.
-
-The canary monitor should combine model metrics and product metrics:
-
-| Metric | Healthy canary signal |
-|---|---|
-| Reassignment rate | Agents reassign fewer than 6% of canary-routed tickets |
-| First response time | Canary cohort stays within 2% of baseline |
-| High-severity safety | Zero missed high-severity enterprise routes |
-| Queue imbalance | No team receives an unexpected ticket spike |
-| Prediction latency | P95 stays under 80 ms |
-| Override feedback | Support operations approves the observed mistakes |
-
-These checks keep the release grounded in the support workflow. Offline F1 helped the candidate enter release review. Canary success depends on agent behavior, ticket queues, and customer response time.
-
-![BrightDesk shadow, staging, and canary checks before production traffic.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/brightdesk-safe-checks.png)
-*Shadow compares live inputs safely, staging checks the full integration path, and canary limits the first customer-facing traffic.*
-
-## Production Alias And Archive
-<!-- section-summary: Production promotion changes the serving alias after canary passes, then archives old or rejected versions with enough history for audits and rollback. -->
-
-Production promotion should be a small recorded action because all the hard review already happened. The release owner changes the production alias from version `23` to version `24`, records the approval, and keeps version `23` as the rollback target until the monitoring window ends.
-
-```python
-from mlflow import MlflowClient
-
-client = MlflowClient()
-client.set_registered_model_alias(
-    name="support-ticket-router",
-    alias="production",
-    version="24",
-)
-client.set_model_version_tag(
-    name="support-ticket-router",
-    version="24",
-    key="production_approved_by",
-    value="support-routing-release-council",
-)
-client.set_model_version_tag(
-    name="support-ticket-router",
-    version="24",
-    key="rollback_target",
-    value="23",
-)
-```
-
-The serving service should read the alias instead of hardcoding version `24`. That lets the team move the production pointer during rollback without rebuilding every artifact. Some serving stacks reload model aliases automatically. Others need a deployment restart or config refresh. The runbook should say which behavior your platform uses.
-
-Older versions should move to archived state after the rollback window closes. Archive preserves history and marks the version as out of the normal release path. The version should stay available for audit and maybe emergency rollback, while new releases should ignore it by default.
-
-```yaml
-archive_record:
-  model: support-ticket-router
-  version: 22
-  archived_at: 2026-07-04T10:15:00Z
-  reason: replaced_by_versions_23_and_24
-  keep_until: 2027-07-04
-  final_status: superseded
-```
-
-Rejected versions also deserve archive records. A failed candidate can teach future releases. If version `25` later fails because Spanish billing tickets regress, the archive note should preserve the failed gate, evidence files, and owner decision.
-
-## Rollback Practice
-<!-- section-summary: Rollback returns traffic to a known good version, records the reason, and preserves evidence for incident review. -->
-
-Rollback is part of promotion design. BrightDesk already named version `23` as the rollback target before canary started. That means the release owner knows which model can take traffic again, where the artifact lives, and which serving config should be restored.
-
-A rollback runbook should be short and executable under pressure:
-
-```bash
-python scripts/set_model_alias.py \
-  --model support-ticket-router \
-  --alias production \
-  --version 23 \
-  --reason "rollback: canary reassignment rate above 6 percent"
-
-kubectl rollout restart deployment/ticket-router-api \
-  --namespace ml-serving
-
-python scripts/record_model_incident.py \
-  --model support-ticket-router \
-  --bad-version 24 \
-  --restored-version 23 \
-  --incident INC-2026-0704-ticket-router-canary
-```
-
-The first command moves the registry alias. The second command refreshes serving if the platform caches the loaded model. The third command records why the rollback happened, because a future reviewer needs to understand whether version `24` failed due to model behavior, integration behavior, or a monitoring bug.
-
-The incident packet should include the canary metrics, the exact time traffic moved, the alias history, the affected ticket cohorts, and the final customer impact. A good rollback record helps the team improve the next candidate instead of repeating the same release mistake.
-
-![BrightDesk rollback moving the production alias from version 24 back to version 23, restarting serving, and recording the incident.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/brightdesk-rollback.png)
-*Rollback should move the production alias, refresh serving if needed, and preserve the incident evidence for the next review.*
-
-## Putting It Together
-<!-- section-summary: Promotion connects registry aliases, release gates, deployment traffic, archive history, and rollback readiness into one controlled model lifecycle. -->
-
-Model promotion turns a registered version into a controlled release. Candidate review checks offline evidence. Shadow and staging test live inputs and integration behavior. Canary sends a small slice of production traffic through the candidate. Production promotion moves the main alias after the gates pass. Archive and rollback preserve history and give the team a way back.
-
-For BrightDesk, version `24` earns production traffic only after evidence supports each step. The registry stores aliases and release metadata, while deployment automation reads those aliases and monitors business metrics. That combination gives the support team a clear path from candidate to production without losing rollback safety.
+This separation gives a beginner a reliable way to inspect any registry. Ask which identity stays immutable, which pointer can move, what evidence belongs to the version, what `reviewed` actually promises, and whether the next system receives concrete versions and digests. Environment authority, traffic, runtime identity, and rollback begin after this handoff.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official MLflow guide for registered models, model versions, aliases, tags, and model metadata.
-- [MLflow Model Registry Workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Official MLflow workflow guide for registering models, managing versions, applying aliases, and using APIs.
-- [Databricks MLflow 3 deployment jobs](https://docs.databricks.com/aws/en/mlflow/deployment-job) - Official Databricks guide for deployment jobs that control model lifecycle movement in Unity Catalog workflows.
-- [Amazon SageMaker Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html) - Official SageMaker guide for model package groups, versions, metadata, approval status, lineage, model cards, and lifecycle stages.
-- [Update the Approval Status of a Model in SageMaker](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html) - Official SageMaker guide for approval status updates.
-- [Vertex AI Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction) - Official Google Cloud guide for model versions, evaluation, lifecycle management, and deployment from the registry.
-- [Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/) - Official Databricks guide for registered models, aliases, permissions, and lifecycle management.
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
+- [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
+- [AWS SageMaker AI Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
+- [Azure Machine Learning model management and deployment](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-management-and-deployment?view=azureml-api-2)
+- [Vertex AI Model Registry](https://cloud.google.com/vertex-ai/docs/model-registry/introduction)

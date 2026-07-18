@@ -10,8 +10,8 @@ Your job:
 
 1. **Author the Pod security context** so processes run as non-root UID and GID `10001` with filesystem group `10001`.
 2. **Keep container `api` and image `ghcr.io/devpolaris/orders-api:2026.07.11`**.
-3. **Author the container security context** with privilege escalation disabled and the root filesystem read-only.
-4. **Drop capability `ALL`** and use seccomp profile type `RuntimeDefault`.
+3. **Author the container security context** with privileged mode and privilege escalation disabled, and the root filesystem read-only.
+4. **Drop capability `ALL` without adding capabilities** and use seccomp profile type `RuntimeDefault`.
 5. **Author matching temporary-storage structures** that mount volume `tmp` at `/tmp` and back it with `emptyDir: {}`.
 
-The grader checks every exact security field, the approved image, and the matching writable volume contract.
+The grader checks every exact security field, rejects host namespace and hostPath access, and allows only the approved container and temporary volume.

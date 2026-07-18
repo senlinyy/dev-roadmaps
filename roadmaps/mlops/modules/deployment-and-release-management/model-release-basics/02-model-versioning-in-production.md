@@ -1,237 +1,180 @@
 ---
 title: "Model Versioning"
-description: "Teach how production systems identify, approve, route, compare, and roll back model versions with registries, aliases, manifests, and serving labels."
-overview: "Model versioning gives every releasable model a stable identity and a movable production pointer. This article follows a support ticket triage service through MLflow aliases, Databricks Unity Catalog model lifecycle ideas, SageMaker-style approval gates, release manifests, routing labels, and rollback."
+description: "Build a complete production release identity from a reviewed model candidate, runtime, contracts, decision policy, traffic role, live telemetry, and rollback target."
+overview: "Production model versioning begins after registry review. A supporting example turns one ticket-routing candidate into an immutable release manifest, compatible serving contract, observable traffic assignment, and restorable production release."
 tags: ["MLOps", "production", "release"]
 order: 2
 id: "article-mlops-deployment-and-release-management-model-versioning-in-production"
 ---
 
-## Table of Contents
+## Production Versioning Identifies The Complete Release
+<!-- section-summary: Production versioning combines a reviewed model candidate with every runtime and policy input needed to deploy, observe, and restore its behaviour. -->
 
-1. [Versioning Gives The Model A Production Name](#versioning-gives-the-model-a-production-name)
-2. [Follow One Ticket Triage Service](#follow-one-ticket-triage-service)
-3. [Separate Version, Alias, Image, And Config](#separate-version-alias-image-and-config)
-4. [Use Registry Approval Before Promotion](#use-registry-approval-before-promotion)
-5. [Route Requests With Version Labels](#route-requests-with-version-labels)
-6. [Compare Versions With Release Evidence](#compare-versions-with-release-evidence)
-7. [Rollback By Moving The Pointer](#rollback-by-moving-the-pointer)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
+The registry hands release management an immutable model candidate with lineage and evaluation evidence. Production still needs to decide what executable system will use that candidate. **Production model versioning** combines the candidate with its serving runtime, contracts, feature and decision policy, traffic role, approval, and rollback target under one immutable release identity.
 
-## Versioning Gives The Model A Production Name
-<!-- section-summary: Model versioning gives each releasable model an immutable identity and gives production a controlled pointer to the approved version. -->
+A model version and a production release version are related but not interchangeable. The same model version can appear in two releases when a serving-code fix changes the image. A threshold change can create another release without retraining the model. Conversely, two model versions cannot safely share a release ID merely because an alias moved.
 
-**Model versioning** is the practice of giving every releasable model a stable identity, then using controlled pointers to decide which version serves each environment or traffic group. A version says, "this exact model artifact came from this exact training evidence." A production pointer says, "this is the approved version callers should use right now."
+The production framework has six parts:
 
-The title answer is direct: model versioning helps production systems identify which model produced a prediction, route traffic to the intended model, compare candidates against a baseline, and roll back quickly when a release hurts users. Without versioning, a team may know that "the support model changed last week," yet they may struggle to prove which artifact, data snapshot, code commit, and serving image handled a customer ticket.
+1. **Reviewed candidate input** pins the exact registry version and candidate evidence received at handoff.
+2. **Release manifest** pins model, image, schemas, features, policy, evidence, and rollback as one unit.
+3. **Compatibility contract** defines which callers, stored predictions, and feature producers can safely cross the release.
+4. **Desired traffic state** records which environment, population, and route should use the release.
+5. **Observed runtime identity** records which release actually handled requests or batch partitions.
+6. **Restorable release** preserves a previously verified complete tuple rather than only old weights.
 
-Versioning is more than a number in a file name. Real systems usually track a registered model version, a registry alias such as `champion`, a container image digest, a serving config, a feature schema, and release notes. These pieces work together so a model release can be reviewed, promoted, observed, and reversed.
+```mermaid
+flowchart LR
+    H["Reviewed registry candidate"] --> R["Immutable release manifest"]
+    I["Serving image, contracts, features, policy"] --> R
+    E["Release evidence and authority"] --> R
+    R --> P["Deployment desired state"]
+    P --> O["Runtime and prediction identity"]
+    B["Verified rollback release"] --> R
+```
 
-## Follow One Ticket Triage Service
-<!-- section-summary: The running scenario follows a support ticket model where version identity protects customer service routing. -->
+The immutable release path supports investigation and rollback. Deployment state expresses intent, while runtime and prediction telemetry prove what users received. Mixing the registry candidate, release manifest, and observed runtime into one movable label creates silent changes, so each layer needs its own identity and owner.
 
-Imagine **PineDesk**, a helpdesk platform used by small software companies. Customers send tickets about billing, outages, login problems, and product questions. A model called `ticket-triage` predicts the ticket category and urgency so the helpdesk can route the message to the right queue.
+## Define the Complete Release Identity
+<!-- section-summary: A production release pins model bytes together with the runtime, input contract, feature definitions, policy, and evidence that affect decisions. -->
 
-The current production version is `ticket-triage:v17`. It handles 80,000 tickets per day and feeds two callers:
+A **model version** usually means one immutable registry entry or artifact digest. That identity is necessary and still incomplete for production. Two services can load the same weights and produce different results because they use different tokenizers, feature defaults, numerical libraries, thresholds, or post-processing rules.
 
-| Caller | What it sends | What it needs back |
+The production unit should include:
+
+| Identity | What it pins | Example failure without it |
 |---|---|---|
-| Inbox API | ticket subject, body, account tier, language | category, urgency, confidence |
-| Workforce planner | hourly ticket batch | category counts and urgent-ticket forecast |
+| Model version and digest | Weights and bundled preprocessing assets | A mutable object is overwritten after approval |
+| Serving image digest | Inference code and dependencies | A library update changes preprocessing |
+| Input and output schema | Types, required fields, and response meaning | A caller sends a renamed feature |
+| Feature version | Online and offline transformations | Training and serving calculate different values |
+| Decision policy | Thresholds, caps, fallbacks, and routing | A threshold changes workload without a new model |
+| Evidence identity | Evaluation protocol and approval | A report for one artifact is attached to another |
 
-The NLP team trained `ticket-triage:v18` after adding a new multilingual embedding feature. Offline metrics improved for Spanish and Portuguese tickets. The risk is practical: if the model sends urgent outage reports to the billing queue, customers wait too long and support managers lose trust in automation.
-
-PineDesk needs versioning so every prediction log can answer four questions: which model version ran, which alias or environment selected it, which serving image loaded it, and which feature schema shaped the request.
-
-## Separate Version, Alias, Image, And Config
-<!-- section-summary: A reliable release record separates immutable model identity from movable aliases and runtime packaging. -->
-
-Beginners often use one word, "version," for several different things. Production release work gets much clearer when you separate them.
-
-| Name | PineDesk example | Changes how often | Purpose |
-|---|---|---|---|
-| Registered model version | `ticket-triage` version `18` | Never for that artifact | Identifies the trained model artifact and run evidence |
-| Registry alias | `champion` points to version `17`, then `18` | Moves during promotion or rollback | Gives serving code a stable lookup name |
-| Container image digest | `ghcr.io/pinedesk/triage-api@sha256:4c19...` | Changes when serving code changes | Identifies runtime code and dependencies |
-| Feature schema version | `ticket_features_v6` | Changes when request fields change | Protects model input compatibility |
-| Release manifest | `release-2026-07-04-v18.yaml` | One per release | Ties artifact, alias, image, schema, and owners together |
-
-MLflow Model Registry supports registered models, model versions, and aliases. Databricks now treats Unity Catalog models as the modern governed model lifecycle surface, including permissions, lineage, audit, aliases, and deployment workflows. Managed cloud registries such as SageMaker Model Registry also track model package versions and approval status. The tool names vary, yet the useful pattern stays the same: immutable version for evidence, movable pointer for serving.
-
-A PineDesk release manifest can look like this:
+This group of identities forms a **release manifest**. The manifest receives its own immutable ID because these parts can change at different times. A serving-code fix can create a new release while keeping the model version. A newly calibrated threshold can require another review without retraining the weights.
 
 ```yaml
-release:
-  service: ticket-triage-api
-  model:
-    registry: mlflow
-    name: ticket-triage
-    version: 18
-    alias_after_approval: champion
-    source_run_id: 7ff412be7b104d9aa2ad0fdc21e8a01c
-  runtime:
-    image: ghcr.io/pinedesk/triage-api@sha256:4c19b2...
-    entrypoint: app.main:app
-    feature_schema: ticket_features_v6
-  environments:
-    dev: models:/ticket-triage/18
-    staging: models:/ticket-triage/18
-    production: models:/ticket-triage@champion
-  reviewers:
-    ml_owner: nora@pinedesk.example
-    support_owner: marcus@pinedesk.example
-    platform_owner: release-platform@pinedesk.example
+release_id: ticket-triage-prod-2026-07-17.1
+model:
+  registry_name: prod.support.ticket_triage
+  version: "18"
+  sha256: 91d8...
+runtime:
+  image: ghcr.io/pinedesk/triage-api@sha256:4c19...
+contracts:
+  request: ticket-features/v6
+  response: triage-decision/v3
+policy:
+  version: triage-policy/12
+evidence:
+  evaluation: eval-8742
+  approval: approval-1188
+rollback_to: ticket-triage-prod-2026-06-28.2
 ```
 
-The production line uses the alias because serving code should not need a new image every time the approved model changes. Staging uses the explicit version because review should point at the exact candidate. Prediction logs should record both the alias requested and the resolved version, so an incident review can prove what happened.
+The short manifest exposes the important relationship without embedding every report. Durable links point to larger evidence. Digests protect the boundary against mutable tags and overwritten files.
 
-![PineDesk version identity stack](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/version-identity-stack.png)
-*Production versioning separates the immutable model version, movable alias, runtime image digest, and feature schema, then records them together in prediction logs.*
+## Accept The Reviewed Candidate Without Reinterpreting It
+<!-- section-summary: Release intake verifies the pinned registry handoff, then adds release-specific runtime and operational evidence without rewriting candidate history. -->
 
-## Use Registry Approval Before Promotion
-<!-- section-summary: Approval gates make the version move from candidate to production only after evidence and owners agree. -->
+The registry candidate arrives with model digests, lineage links, evaluation reports, intended use, exclusions, limitations, and an accountable owner. Release intake verifies that handoff rather than reconstructing it from a mutable alias or a folder of reports. If the candidate digest or required evidence no longer matches, the release does not proceed.
 
-A **registry approval** is the point where a team says a model version is allowed to move toward a real environment. This is especially important in ML because a trained artifact may have strong metrics and still carry product, fairness, latency, or compatibility risk. Approval connects the model evidence to people who own the release decision.
+Production evidence then attaches to the release manifest. Compatibility tests, latency and capacity results, target-environment checks, monitoring readiness, approval scope, and rollback proof describe the executable release, not the bare model version. This distinction explains why one reviewed candidate can generate several release attempts and why a serving-image change needs a new release ID even when the weights remain fixed.
 
-For PineDesk, version `18` should carry a review packet before any production alias moves:
+The release record keeps durable links back to the registry candidate. It never copies candidate lineage into editable production tags and treats the copy as a new truth. Incident responders can move from a live prediction to the release manifest, then from the manifest to the exact candidate and its original evidence.
 
-| Evidence | Example |
-|---|---|
-| Offline metrics | macro F1, urgent-ticket recall, language segment performance |
-| Compatibility | `ticket_features_v6` accepts current Inbox API fields |
-| Safety checks | urgent outage tickets stay above approved recall threshold |
-| Runtime checks | p95 under 80 ms at 150 requests per second |
-| Drift plan | prediction distribution monitored by category and language |
-| Rollback owner | support operations approves route back to version `17` |
+## Resolve Aliases Once At The Release Boundary
+<!-- section-summary: A release may use an alias to discover a candidate, but it pins the concrete version before building desired production state. -->
 
-SageMaker Model Registry has model package approval statuses such as approved and rejected, and deployment workflows can require an approved package before endpoint update. MLflow and Databricks teams often express the same control with model aliases, permissions, review comments, jobs, and deployment automation. The exact button or API changes by platform, so the article habit is to make the approval visible in the release manifest and registry history.
+Registry aliases such as `candidate` or `champion` are movable discovery aids. Their design belongs to the registry workflow. Production versioning has one rule for them: resolve once, verify the reviewed candidate record, and store the concrete version and digest in the release manifest.
 
-Here is the kind of review command a platform job might run after approval:
+If every worker resolves `champion` whenever it restarts, an alias move can gradually change traffic outside the rollout controller. Production therefore keeps three states visible:
 
-```bash
-python release/promote_model.py \
-  --registered-model ticket-triage \
-  --from-version 18 \
-  --alias champion \
-  --review-packet s3://pinedesk-ml-reviews/ticket-triage/v18/review.yaml
+The safer pattern keeps three states visible:
+
+- The **registry alias** communicates intent and helps locate a version.
+- The **deployment record** pins the exact release that an environment should run.
+- The **runtime report** states what each serving process loaded.
+
+```mermaid
+flowchart TD
+    A["Alias champion -> model v18"] --> L["Release controller resolves version"]
+    L --> D["Desired release pins v18 plus image, schema, policy"]
+    D --> W["Workers load pinned release"]
+    W --> T["Prediction events report release identity"]
+    T --> V{"Observed identity matches desired state?"}
+    V -- "Yes" --> X["Expand traffic"]
+    V -- "No" --> S["Stop and reconcile"]
 ```
 
-The command is intentionally small. The job behind it should check reviewer identity, read the review packet, update the registry alias, and write an audit event. A production release should leave evidence beyond a chat message.
+This design catches stale workers, partial rollouts, and cache problems. An alias can point to version 18 while some pods still serve version 17. The release manifest and telemetry reveal the actual production state; the alias does not.
 
-![PineDesk approval gate for v18](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/approval-gate-v18.png)
-*The approval gate turns a candidate model into a reviewed production pointer only after metrics, runtime checks, owners, and audit evidence line up.*
+## Compare Complete Releases, Not Bare Versions
+<!-- section-summary: Production comparison attributes traffic and outcomes to complete releases so model, runtime, contract, and policy changes remain distinguishable. -->
 
-## Route Requests With Version Labels
-<!-- section-summary: Serving systems should label requests and metrics with the resolved model version so routing decisions can be audited. -->
+Version numbers describe registration order, not quality. The Model Evaluation module defines how a candidate and baseline should be compared before release. Production versioning adds another requirement: comparison events identify the complete baseline and candidate releases, because differences may come from the model, runtime, feature contract, threshold, or route.
 
-After approval, the serving system needs to route real requests. PineDesk can resolve the model alias during startup, load the artifact, and expose the resolved version as a metric label and response field. That version label is the thread that connects a customer ticket to the model evidence.
+For a support-ticket triage service, useful evidence may include macro F1, urgent-ticket recall, language segments, human-queue volume, latency, timeout rate, and fallback use. A candidate can improve classification while generating more urgent alerts than the support team can handle. The product workflow belongs in the comparison.
 
-The response can carry version information:
+Prediction events need a shared request ID plus release, model, feature, policy, and route identities. Once labels mature, the evaluation job can join outcomes to the exact release that produced each decision. If events record only an alias or model version, a later alias move or policy change can make historical data ambiguous.
 
-```json
-{
-  "ticket_id": "tkt_941882",
-  "category": "incident",
-  "urgency": "high",
-  "confidence": 0.91,
-  "model_name": "ticket-triage",
-  "model_version": "18",
-  "model_alias": "champion",
-  "feature_schema": "ticket_features_v6"
-}
-```
+Changes should receive human-readable release notes. A useful note explains changed training data, features, algorithm, calibration, threshold, dependency, or policy; expected impact; known limitations; and migration requirements. The diff helps reviewers understand why metrics moved and which failure modes deserve attention.
 
-Logs should carry the same fields:
+## Join Asset Versions Under One Release ID
+<!-- section-summary: Registries, container stores, data systems, and source control keep their own identities, while the release manifest joins the exact production tuple. -->
 
-```json
-{
-  "event": "prediction",
-  "ticket_id": "tkt_941882",
-  "model_name": "ticket-triage",
-  "model_version": "18",
-  "model_alias": "champion",
-  "feature_schema": "ticket_features_v6",
-  "latency_ms": 42,
-  "language": "es",
-  "predicted_category": "incident",
-  "predicted_urgency": "high"
-}
-```
+No single tool versions every MLOps asset well. Git identifies source and configuration. Dataset systems or immutable warehouse snapshots identify training data. Object stores retain large artifacts. Container registries identify runtime images. Model registries connect models to runs, metadata, tags, and aliases. A release manifest joins them.
 
-With these fields, the team can compare `v18` against `v17` during canary, filter dashboards by language, and search the warehouse for tickets affected by a bad release. Without these labels, the team may only know that the service was running during the incident window.
+Teams can use sequential registry numbers, content-derived digests, timestamps, or semantic release names for individual assets. Sequential numbers are readable inside one registered model. Digests verify bytes. Timestamps help operations order events. Semantic names communicate compatibility but require disciplined rules. The release ID should not pretend these schemes are interchangeable; it records their exact values together.
 
-## Compare Versions With Release Evidence
-<!-- section-summary: Version comparison should include product metrics, service metrics, segments, compatibility, and delayed labels. -->
+The key requirements are immutability, uniqueness inside the relevant namespace, durable links, and a way to compare. A version should never depend only on a local path or mutable storage key. The Artifact Promotion article takes responsibility for preserving those identities across environment trust boundaries and deciding whether the target copies bytes or references a shared immutable object.
 
-PineDesk should compare model versions before and during release. Offline comparison uses the validation set. Staging comparison uses replayed traffic. Canary comparison uses live requests from a small traffic slice. Later label comparison uses human support outcomes after agents finish tickets.
+## Version Contracts and Migrations Deliberately
+<!-- section-summary: Compatibility versions tell callers and operators which inputs, outputs, features, and stored results can safely cross a release boundary. -->
 
-A useful comparison table might look like this:
+Model identity alone does not tell a caller whether it can use a release. **Contract versioning** records changes to request fields, response fields, feature meaning, and decision semantics. Adding an optional response field may preserve compatibility. Renaming a required input, changing units from minutes to seconds, or redefining a confidence score can break callers even when the service still returns HTTP 200.
 
-| Metric | v17 baseline | v18 candidate | Decision |
-|---|---:|---:|---|
-| Macro F1 | 0.842 | 0.861 | Candidate improves |
-| Urgent-ticket recall | 0.934 | 0.936 | Candidate stays inside guardrail |
-| Spanish macro F1 | 0.781 | 0.833 | Candidate improves target segment |
-| Portuguese macro F1 | 0.764 | 0.819 | Candidate improves target segment |
-| Billing-to-incident confusion | 2.8 percent | 2.6 percent | Candidate stays stable |
-| p95 latency | 54 ms | 68 ms | Candidate inside 80 ms budget |
+A contract change needs a migration plan. The service can accept old and new request shapes during a transition, calculate both feature versions, or expose a new API route. Producers and consumers agree on an end date for the old shape. Telemetry reports which contract each caller uses so the team knows whether removal is safe.
 
-During canary, the comparison query should use version labels:
+Stored predictions also carry versioned meaning. A warehouse table with `prediction=0.8` is ambiguous without the model, policy, schema, and score interpretation. Prediction records should preserve enough identity to reconstruct the decision later. If a new version changes class labels or calibration, downstream dashboards and feedback jobs may need their own migration.
 
-```sql
-SELECT
-  model_version,
-  language,
-  COUNT(*) AS predictions,
-  AVG(CASE WHEN predicted_urgency = 'high' THEN 1 ELSE 0 END) AS high_rate,
-  APPROX_QUANTILES(latency_ms, 100)[OFFSET(95)] AS p95_latency_ms
-FROM support_prediction_logs
-WHERE prediction_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
-  AND model_name = 'ticket-triage'
-GROUP BY model_version, language
-ORDER BY language, model_version;
-```
+Feature versions deserve special attention because online and offline systems must agree. A feature named `customer_value_30d` can change its source, late-data rule, currency, or aggregation window without changing its column name. A versioned feature contract records those semantics and lets a release reject incompatible values before serving.
 
-This query will not prove final accuracy because support outcomes arrive later. It still helps during rollout because a sudden category-rate change, language-specific latency jump, or missing feature spike can stop a bad release early.
+Compatibility decisions should appear in the release evidence. The team tests old callers against the new service, validates new callers against the retained rollback release when needed, and checks mixed-version periods during canary. This prevents a technically correct rollback from breaking a caller that already migrated to a new schema.
 
-![PineDesk version comparison during canary](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/version-comparison-canary.png)
-*Version labels let PineDesk compare accuracy, language segments, and latency for v17 and v18 during canary, while keeping the rollback pointer clear.*
+## Detect Versioning Failures in Production
+<!-- section-summary: Reconciliation and audit checks find mutable artifacts, mixed releases, incomplete telemetry, and references that no longer resolve. -->
 
-## Rollback By Moving The Pointer
-<!-- section-summary: A rollback should move traffic or aliases back to the known-good model while preserving evidence from the failed version. -->
+Versioning controls need routine verification. A reconciliation job compares deployment desired state with service metadata and recent prediction events. Every ready replica should report the approved release. The job also checks that the model digest exists, the serving image is retained, evidence links resolve, and the rollback target remains loadable.
 
-Rollback works best when the team can move a pointer instead of rebuilding the whole system. For PineDesk, the known-good version is `ticket-triage:v17`. If `v18` starts routing urgent outage tickets incorrectly, the incident commander should move the `champion` alias back to `17` and make the serving layer reload or reroute.
+Mixed releases can be legitimate during canary, so the check uses expected traffic roles and percentages. If version 18 should receive ten percent of city traffic, the report compares observed assignments with that policy. Traffic outside the approved population or a stale version on an unrelated route triggers an alert.
 
-The rollback record should state the old pointer and the new pointer:
+Identity coverage is itself a metric. Teams can require every prediction event to include `release_id`, `model_version`, `model_digest`, and `traffic_role`. Missing identity should fail a release gate because later quality analysis cannot attribute outcomes reliably. The event pipeline should also record timeouts and fallbacks; logging only successful predictions makes a failing version appear healthier.
 
-```yaml
-rollback:
-  reason: "Spanish urgent outage tickets under-routed during v18 canary"
-  model_name: ticket-triage
-  alias: champion
-  previous_version: 18
-  restored_version: 17
-  started_at_utc: "2026-07-04T19:12:00Z"
-  owners:
-    incident_commander: priya@pinedesk.example
-    support_ops: marcus@pinedesk.example
-```
+Common failure patterns include overwriting an object behind an existing version, rebuilding a model during environment promotion, using the `latest` image tag, moving an alias without a deployment record, and deleting a rollback asset while a manifest still references it. Scheduled integrity checks can hash retained artifacts, verify signatures or provenance, and follow every live reference to its target.
 
-The failed version should stay in the registry. Deleting it removes evidence. Keep the artifact, metrics, logs, and review packet so the team can reproduce the failure, patch the issue, and decide whether `v19` should retry the release.
+An audit trail records who created a version, attached evidence, moved an alias, approved a scope, changed deployment state, and invoked rollback. These events should use authenticated identities and immutable timestamps. The history explains both the model lifecycle and the authority that changed production.
 
-## Putting It Together
-<!-- section-summary: Versioning connects model evidence to serving routes, observability labels, approvals, and rollback. -->
+## Roll Back the Complete Release
+<!-- section-summary: Rollback restores a retained model, runtime, schema, feature contract, and policy that already passed production checks. -->
 
-Model versioning gives production a safe way to name and move models. PineDesk needs immutable versions for evidence, aliases for controlled serving, image digests for runtime identity, schema versions for compatibility, and logs that record what served each ticket.
+Rollback should target a known complete release rather than “the previous model file.” A candidate may require a new image or feature schema that the prior model cannot use. Restoring only weights can create an incompatible mixture.
 
-When versioning is strong, a release question has a concrete answer. Which model served this request? Which evidence approved it? Which alias selected it? Which labels compare it to the baseline? Which pointer returns production to the previous model? Those answers are the foundation for every release strategy that comes next.
+The rollback process changes desired state to the retained release, reduces or removes candidate traffic, and verifies that service metadata and prediction events report the target. A registry alias move can support the workflow, while the deployment controller still has to reconcile running processes.
+
+Retention policy should preserve rollback releases, their artifacts, images, schemas, configuration, and evidence for a period that covers likely detection delay. Some model failures appear only after labels mature days or weeks later. Storage lifecycle rules must understand those references before deleting assets.
+
+## Versioning Preserves Meaning Across the Lifecycle
+<!-- section-summary: Stable identities and explicit relationships let teams move from training evidence to live decisions and back to a safe release. -->
+
+Production model versioning creates a durable chain from data and code to a model, from the model to a complete release, and from the release to live decisions. Immutable identities preserve history. Lineage explains origin. Evidence and approval explain allowed use. Aliases provide readable pointers. Deployment records and telemetry expose real production state.
+
+This structure gives teams reliable comparison, controlled rollout, incident attribution, and rollback without treating a mutable file name as the source of truth.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [MLflow Model Registry aliases](https://mlflow.org/docs/latest/ml/model-registry/tutorial)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [MLflow Model Registry tutorials](https://mlflow.org/docs/latest/ml/model-registry/tutorial)
 - [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [Amazon SageMaker Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
-- [Amazon SageMaker Model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
-- [Vertex AI Model Registry](https://cloud.google.com/vertex-ai/docs/model-registry/introduction)
+- [W&B Registry overview](https://docs.wandb.ai/models/registry)
+- [SLSA provenance](https://slsa.dev/spec/v1.2/provenance)

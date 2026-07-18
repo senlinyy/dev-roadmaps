@@ -1,0 +1,86 @@
+{
+  "language": "dockerfile",
+  "activeFile": "Dockerfile",
+  "files": [
+    {
+      "filename": "Dockerfile",
+      "initialValue": "FROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm install\nCMD [\"npm\", \"start\"]\n"
+    },
+    {
+      "filename": ".dockerignore",
+      "initialValue": "node_modules\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "Dockerfile",
+        "pattern": "^FROM\\s+node:22-alpine\\s*$",
+        "label": "Node.js 22 Alpine base image",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^COPY\\s+package\\*\\.json\\s+\\./\\s*$",
+        "label": "package manifests copied before source",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^RUN\\s+npm\\s+ci\\s+--omit=dev\\s*$",
+        "label": "locked production dependency installation",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^COPY\\s+src/?\\s+\\./src/?\\s*$",
+        "label": "application source copied narrowly",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^USER\\s+node\\s*$",
+        "label": "non-root runtime user",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^CMD\\s+\\[\\s*[\"']npm[\"']\\s*,\\s*[\"']start[\"']\\s*\\]\\s*$",
+        "label": "exec-form npm start command",
+        "flags": "m"
+      },
+      {
+        "file": "Dockerfile",
+        "pattern": "^COPY\\s+\\.\\s+\\.\\s*$",
+        "negate": true,
+        "label": "broad repository copy removed",
+        "flags": "m"
+      },
+      {
+        "file": ".dockerignore",
+        "pattern": "^node_modules/?\\s*$",
+        "label": "node_modules excluded from build context",
+        "flags": "m"
+      },
+      {
+        "file": ".dockerignore",
+        "pattern": "^\\.git/?\\s*$",
+        "label": "\\.git excluded from build context",
+        "flags": "m"
+      },
+      {
+        "file": ".dockerignore",
+        "pattern": "^\\.env/?\\s*$",
+        "label": "\\.env excluded from build context",
+        "flags": "m"
+      },
+      {
+        "file": ".dockerignore",
+        "pattern": "^coverage/?\\s*$",
+        "label": "coverage excluded from build context",
+        "flags": "m"
+      }
+    ]
+  }
+}

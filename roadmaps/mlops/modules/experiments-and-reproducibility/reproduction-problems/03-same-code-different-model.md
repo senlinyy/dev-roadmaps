@@ -1,36 +1,54 @@
 ---
 title: "Same Code, New Model"
-description: "Explain why the same source commit can train a different model and how teams judge whether the difference is acceptable."
-overview: "The same training code can yield a new model when the data snapshot, dependency lock, preprocessing behavior, random seed, GPU runtime, hardware, or evaluation set changes. This guide follows a recommendation ranking team as it compares two same-code runs and decides whether the difference matters."
+description: "Diagnose two divergent runs by diffing their receipts, isolating changed inputs, and testing whether the difference changes the release decision."
+overview: "Two runs can share a source commit and diverge through data, config, preprocessing, dependencies, randomness, hardware, checkpoints, or evaluation. This article develops a causal diff tree and controlled replay method."
 tags: ["MLOps", "production", "debugging"]
 order: 3
 id: "article-mlops-experiments-and-reproducibility-same-code-different-model"
 ---
 
-## Table of Contents
-
-1. [Why Same Code Can Train a New Model](#why-same-code-can-train-a-new-model)
-2. [The Recommendation Ranking Case](#the-recommendation-ranking-case)
-3. [Data and Snapshot Differences](#data-and-snapshot-differences)
-4. [Dependencies and Preprocessing Differences](#dependencies-and-preprocessing-differences)
-5. [Hardware, GPU, and Runtime Differences](#hardware-gpu-and-runtime-differences)
-6. [Decide Whether the Difference Matters](#decide-whether-the-difference-matters)
-7. [Debugging Packet for Same-Code Diffs](#debugging-packet-for-same-code-diffs)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
-
 ## Why Same Code Can Train a New Model
 <!-- section-summary: The source commit can match while data, config, environment, randomness, hardware, and evaluation details still change the trained model. -->
 
-**Same code can train a new model** because source code is one ingredient in a training run. The model also depends on the data snapshot, feature definitions, config values, dependency lock, container image, random seed, data order, CUDA and GPU runtime, hardware, and evaluation set. If one of those inputs moves, the final weights, tree splits, coefficients, or calibration values can move too.
+**Same code can train a new model** because source code is one ingredient in a training run. The controls article already defined the full receipt. This article starts after a difference appears and uses that receipt to isolate which changed input explains the important output movement.
 
 That answer matters because teams often treat an unchanged Git commit as proof that a model should match exactly. In production MLOps, the source commit gives you one anchor. You still need to compare the rest of the run packet before deciding whether the new model is expected, acceptable, risky, or broken.
 
-This article follows **StreamNest**, a streaming media company with a recommendation ranking model named `home-feed-ranker`. The model chooses which shows, clips, and sports highlights appear on the home page. The ranking team trains two runs from the same code commit, and the second run produces a different model with slightly higher overall NDCG and worse performance for new-release documentaries.
+Diagnose the difference through a causal tree. Start with data and label snapshots. Then compare code commit, dirty state, configuration, and feature flags. Compare preprocessing, package locks, container and native libraries. Compare randomness, data order, distributed partitioning, and checkpoint or optimizer state. Compare hardware, drivers, kernels, and distributed settings. Finally, compare evaluation data and metric implementation before deciding whether the model difference is material.
+
+| Causal layer | What can change under the same commit | Evidence to compare |
+|---|---|---|
+| **Data and labels** | Rows, time window, corrections, entity mix, label maturity | Snapshot IDs, manifests, data and label reports |
+| **Resolved behaviour** | Config overrides, feature flags, dirty files, checkpoint resume | Resolved config, dirty-state record, checkpoint and optimizer IDs |
+| **Preprocessing and dependencies** | Category ordering, defaults, compiled libraries, container contents | Feature-array hashes, package lock, image digest |
+| **Randomness and order** | Worker seeds, shuffling, augmentation, distributed partitions | Seed policy, sampler state, worker count, batch order |
+| **Hardware and runtime** | GPU kernels, drivers, precision, reductions, thread scheduling | GPU SKU, driver, CUDA, libraries, distributed settings |
+| **Evaluation** | Holdout rows, metric code, thresholds, aggregation | Evaluation manifest, metric package version, segment report |
+
+Work down this tree and change one layer at a time. A blind rerun changes several layers again and produces another unexplained model. A controlled replay holds the other layers fixed so the team can connect an input difference to an output difference.
+
+```mermaid
+flowchart TB
+    Difference["Two runs differ"] --> Data{"Data, labels, split, or order?"}
+    Data -->|same| Behaviour{"Resolved config, state, or flags?"}
+    Behaviour -->|same| Software{"Preprocessing, package, image, or native library?"}
+    Software -->|same| Random["Random streams and distributed ordering"]
+    Random --> Hardware["Hardware, driver, precision, and kernels"]
+    Hardware --> Evaluation["Evaluation data and metric implementation"]
+    Data --> Test["Controlled replay of first differing layer"]
+    Behaviour --> Test
+    Software --> Test
+    Evaluation --> Decision["Material product or release difference?"]
+    Test --> Decision
+```
+
+The first differing layer supplies the next test. This keeps several plausible causes from moving together and gives the final incident record a causal finding instead of a list of differences.
+
+**StreamNest**, a streaming media company with a recommendation ranker, supplies concrete run evidence for that framework. Two runs share a source commit, while the candidate has slightly higher overall NDCG and worse documentary performance.
 
 The investigation is not only "why are the files different?" The useful production question is, "Does this difference matter for users, and do we have enough evidence to ship, replay, or stop?"
 
-## The Recommendation Ranking Case
+## Apply The Causal Tree To Recommendation Ranking
 <!-- section-summary: A specific same-code incident gives every comparison a concrete model, dataset, run, metric, artifact, and owner. -->
 
 StreamNest trains `home-feed-ranker` from impression logs, watch-time labels, catalog metadata, and user-session features. The training job uses PyTorch for the ranking model and scikit-learn preprocessing for a few tabular features such as country, device family, and subscription plan. MLflow stores runs and artifacts, and lakeFS stores immutable data snapshots over the feature lake.
@@ -117,6 +135,33 @@ The data comparison should also check feature distribution and label quality:
 | Entity leakage checks | Ensures future interactions did not enter training features |
 
 If the data diff explains the model movement, the next step is a product decision. A new model can be different for a valid reason. The team still needs to decide whether the change helps the home feed overall while staying fair to important segments.
+
+## Resolved Config, Randomness, And Hidden State
+<!-- section-summary: The same config path or seed value can hide different overrides, sampler order, checkpoints, optimizer state, and early-stopping history. -->
+
+A matching config filename does not prove matching behaviour. Environment variables, command-line overrides, feature flags, secret-backed settings, and defaults can change the resolved values that reach training. The run should save the resolved config after every override and compare its content hash.
+
+Randomness also has several layers. A top-level seed can initialize the model while data-loader workers, augmentations, distributed samplers, and hyperparameter libraries use separate random number generators. Changing worker count or world size can change example order even when the visible seed stays `1931`.
+
+Checkpoint resume adds hidden state. A checkpoint may include weights, optimizer moments, learning-rate scheduler position, automatic mixed-precision scaler state, epoch, and sampler state. Resuming weights without the other state changes the training path. Early stopping also depends on prior validation history and patience counters.
+
+```yaml
+resolved_behaviour_diff:
+  old:
+    config_sha256: 41dd8c0a
+    dataloader_workers: 8
+    world_size: 4
+    resume_checkpoint: null
+    feature_flag_snapshot: home-feed-2026-06-10
+  new:
+    config_sha256: 9a63e7f2
+    dataloader_workers: 12
+    world_size: 4
+    resume_checkpoint: ranker-epoch-6-step-18400
+    feature_flag_snapshot: home-feed-2026-06-17
+```
+
+This diff gives the replay plan concrete tests. Run the candidate data with the old resolved config. Start both runs from the same initial checkpoint or from fresh initialization. Keep worker count and world size fixed. If the predictions move only after resume, inspect optimizer, scheduler, scaler, sampler, and early-stopping state before blaming the source code.
 
 ## Dependencies and Preprocessing Differences
 <!-- section-summary: Package and preprocessing changes can alter feature arrays, category ordering, metric calculations, and model artifacts under the same code commit. -->
@@ -249,10 +294,10 @@ python tools/compare_rank_deltas.py \
 
 This comparison shows whether the new model changed rankings for the same candidate set. If documentary items move down for the same users and the data snapshot also reduced documentary share, the team has a focused investigation path. They can rebalance training, adjust sample weights, repair labels, or hold the candidate while the data team checks the snapshot.
 
-## Debugging Packet for Same-Code Diffs
-<!-- section-summary: A same-code debugging packet records side-by-side ingredients, replay matrix results, metric tolerances, and the final decision. -->
+## Record The Causal Finding And Decision
+<!-- section-summary: The investigation record connects changed inputs, controlled replays, material output movement, and the release decision. -->
 
-A same-code debugging packet should be readable by someone outside the training team. It should say what changed, how the team tested it, what metrics moved, and what decision followed. The packet can live as a Markdown report attached to the MLflow run and linked from the model registry review.
+The investigation should end with a causal claim and a decision. Comparison output supports that record. The record should be readable by someone outside the training team. It says what changed, how the team isolated the change, which outputs moved beyond tolerance, what uncertainty remains, and why the candidate shipped, stopped, or needs another replay. It can live as a Markdown report attached to the MLflow run and linked from the model registry review.
 
 Here is a compact version:
 

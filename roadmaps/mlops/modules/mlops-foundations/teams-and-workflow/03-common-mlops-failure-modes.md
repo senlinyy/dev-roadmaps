@@ -7,18 +7,6 @@ order: 3
 id: "article-mlops-mlops-foundations-common-mlops-failure-modes"
 ---
 
-## Table of Contents
-
-1. [Why Failure Modes Matter Early](#why-failure-modes-matter-early)
-2. [Broken Or Misleading Data](#broken-or-misleading-data)
-3. [Models Nobody Can Reproduce](#models-nobody-can-reproduce)
-4. [Evaluation That Misses The Real Risk](#evaluation-that-misses-the-real-risk)
-5. [Packaging And Serving Drift](#packaging-and-serving-drift)
-6. [Risky Releases And Weak Rollback](#risky-releases-and-weak-rollback)
-7. [Silent Model Degradation](#silent-model-degradation)
-8. [Unclear Ownership During Incidents](#unclear-ownership-during-incidents)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
 
 ## Why Failure Modes Matter Early
 <!-- section-summary: MLOps failure modes show why production ML needs data checks, reproducibility, evaluation, packaging, rollout control, monitoring, and clear ownership. -->
@@ -30,6 +18,22 @@ A **failure mode** is a common way a system can fail. In MLOps, failure modes of
 Let's use **QuickShip**, a same-day delivery company with an ETA model inside its customer app. The model predicts when a courier will arrive and when a package will reach the customer. A bad model can promise impossible delivery windows, overload support, mislead drivers, and hide warehouse bottlenecks. It can also create incident pain if nobody can explain why a model version shipped.
 
 The main MLOps failure modes usually fall into a few groups: data problems, reproducibility problems, evaluation problems, packaging problems, release problems, monitoring problems, and ownership problems. Each group connects to a later module in the roadmap.
+
+```mermaid
+flowchart LR
+    Data["Data and label failures"] --> Run["Training and reproduction failures"]
+    Run --> Eval["Evaluation and decision failures"]
+    Eval --> Package["Packaging and contract failures"]
+    Package --> Release["Release and rollback failures"]
+    Release --> Operate["Monitoring and feedback failures"]
+    Operate --> Data
+    Owner["Ownership and incident coordination"] --- Data
+    Owner --- Eval
+    Owner --- Release
+    Owner --- Operate
+```
+
+Failures can travel around the loop. Broken units in a source table can produce a reproducible yet weak model. A sound candidate can fail through an incompatible serving package. A controlled release can still remain harmful when monitoring never joins predictions to later outcomes. Ownership crosses the whole loop because every technical control needs someone who can decide and act.
 
 ![MLOps failure mode families](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/failure-mode-map.png)
 
@@ -217,9 +221,9 @@ These failure modes are the reason the roadmap has so many modules. Each module 
 *The response loop summarizes how owners move from alert to triage, rollback, investigation, fixes, and learning.*
 
 ## What's Next
-<!-- section-summary: The next article moves from workflow and failure modes into the architecture that supports production ML work. -->
+<!-- section-summary: The next module starts the data path with examples, labels, features, targets, safe splits, leakage, and annotation quality. -->
 
-Next we move into architecture basics. We will map the minimum set of systems a production ML workflow usually needs: data sources, training jobs, artifact storage, model registry, serving path, monitoring, and feedback.
+This finishes MLOps Foundations. The next module moves into Data for ML Systems. It explains training examples, labels, features, targets, safe train-validation-test splits, leakage, data validation, annotation quality, repeatable datasets, lineage, and feature management.
 
 ## References
 

@@ -4,27 +4,30 @@
   "completionProfile": "github-actions",
   "initialValue": "name: Deploy to Production\non:\n  push:\n    branches: [main]\n\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - uses: actions/checkout@v4\n      # Configure OIDC-based AWS authentication here\n      - run: aws s3 sync ./build s3://my-production-bucket",
   "grader": {
-    "strategy": "regex-all",
+    "strategy": "yaml-paths",
     "expected": [
       {
-        "pattern": "permissions:\\s*(?:\\n\\s+[\\w-]+:\\s+\\w+)*\\n\\s+id-token:\\s*write",
+        "path": ["jobs", "deploy", "permissions", "id-token"],
+        "type": "string",
+        "equals": "write",
         "label": "deploy job grants id-token: write"
       },
       {
-        "pattern": "permissions:\\s*(?:\\n\\s+[\\w-]+:\\s+\\w+)*\\n\\s+contents:\\s*read",
+        "path": ["jobs", "deploy", "permissions", "contents"],
+        "type": "string",
+        "equals": "read",
         "label": "deploy job keeps contents read-only"
       },
       {
-        "pattern": "uses:\\s*aws-actions/configure-aws-credentials@v4",
-        "label": "workflow uses aws-actions/configure-aws-credentials@v4"
-      },
-      {
-        "pattern": "role-to-assume:\\s*arn:aws:iam::123456789012:role/github-deploy-role",
-        "label": "AWS action assumes the expected IAM role"
-      },
-      {
-        "pattern": "aws-region:\\s*us-east-1",
-        "label": "AWS action sets aws-region"
+        "path": ["jobs", "deploy", "steps"],
+        "containsObject": {
+          "uses": "aws-actions/configure-aws-credentials@v4",
+          "with": {
+            "role-to-assume": "arn:aws:iam::123456789012:role/github-deploy-role",
+            "aws-region": "us-east-1"
+          }
+        },
+        "label": "deploy job exchanges OIDC for the approved AWS role"
       }
     ]
   }

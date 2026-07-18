@@ -9,6 +9,8 @@
   notify: Reload nginx
 ```
 
+The template task notifies the handler only when the rendered configuration changes, so nginx is not reloaded on an unchanged run.
+
 ### roles/orders_web/handlers/main.yml
 
 ```yaml

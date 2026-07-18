@@ -1,0 +1,46 @@
+{
+  "language": "yaml",
+  "filename": "roles/orders_web/tasks/validate.yml",
+  "completionProfile": "ansible-playbook",
+  "initialValue": "- name: Validate orders API configuration\n  ansible.builtin.command: /usr/local/bin/orders-api --check-config /etc/orders-api/config.yml\n\n- name: Restart orders API after valid configuration\n  ansible.builtin.systemd_service:\n    name: devpolaris-orders-api\n    state: restarted\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [0, "ansible.builtin.command"],
+        "equals": "/usr/local/bin/orders-api --check-config /etc/orders-api/config.yml",
+        "label": "validation task keeps the documented command"
+      },
+      {
+        "path": [0, "register"],
+        "equals": "orders_config_check",
+        "label": "validation result is registered"
+      },
+      {
+        "path": [0, "changed_when"],
+        "equals": false,
+        "label": "read-only validation does not report a change"
+      },
+      {
+        "path": [0, "failed_when"],
+        "equals": false,
+        "label": "validation return code remains available for the gate"
+      },
+      {
+        "path": [1, "ansible.builtin.systemd_service", "name"],
+        "equals": "devpolaris-orders-api",
+        "label": "restart still targets the orders API service"
+      },
+      {
+        "path": [1, "ansible.builtin.systemd_service", "state"],
+        "equals": "restarted",
+        "label": "service task performs a restart"
+      },
+      {
+        "path": [1, "when"],
+        "equals": "orders_config_check.rc == 0",
+        "label": "restart depends on successful host-local validation"
+      }
+    ]
+  }
+}

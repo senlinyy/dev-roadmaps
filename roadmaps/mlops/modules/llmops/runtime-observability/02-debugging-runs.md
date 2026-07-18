@@ -1,408 +1,273 @@
 ---
 title: "Debugging Runs"
-description: "Debug stuck or failed agent runs with trace replay, context inspection, tool response review, version comparison, and incident-ready checklists."
-overview: "Learn a practical workflow for debugging an LLM agent run, using a procurement agent that gets stuck while checking purchase approvals."
+description: "Debug failed or suspicious agent runs by moving from user symptom to trace divergence, state and contract evidence, controlled replay, and regression protection."
+overview: "Agent debugging is causal reconstruction across model, context, tool, orchestration, state, policy, and environment layers. This article provides a repeatable investigation framework and uses small evidence fragments to show each step."
 tags: ["MLOps","LLMOps","production","observability"]
 order: 2
 id: "article-mlops-llmops-debugging-runs"
 ---
 
-## What Debugging A Run Means
+Debugging an LLM or agent run means explaining how one request moved through the system and identifying the earliest point where actual behaviour diverged from expected behaviour. The final answer is often only the visible symptom. The cause may be missing context, a changed tool response, an incorrect state transition, an unsafe retry, an unavailable dependency, a prompt regression, or a product rule the system never encoded.
 
-<!-- section-summary: Debugging a run means following one agent execution step by step, then proving which input, tool result, prompt version, retry, or guardrail changed the outcome. -->
+The discipline is **causal reconstruction**. Start with what the user observed. Find the run. Rebuild its timeline. Locate the first divergence. Compare the evidence with a healthy run. Reproduce the failure under controlled conditions. Fix the owning layer, then preserve the case as regression coverage.
 
-Debugging an LLM agent run means reconstructing the run with enough evidence to explain what happened and what should change next. You are usually answering one of these questions: why did the agent stop, why did it loop, why did it call the wrong tool, why did it ignore a tool response, why did it escalate, why did it spend too much money, or why did two similar requests produce different outcomes.
+## Use A Six-Stage Debugging Framework
+<!-- section-summary: A run investigation moves from symptom to identity, timeline, divergence, controlled proof, and permanent learning. -->
 
-This article uses a procurement agent as the running scenario. A company called LumaWorks uses an internal assistant to help managers buy software, office equipment, and contractor services. The agent reads a purchase request, checks budget policy, looks up vendor approval status, asks for missing information, and routes high-risk purchases to procurement operations. A manager submits: "Renew the design team's analytics add-on for 45 seats. Current vendor is DataVista. Charge it to cost center ENG-DESIGN."
-
-The agent gets stuck. The user sees a spinning state for several minutes, then a vague message: "I need more information before I can continue." Support opens the trace. The trace shows repeated calls to `vendor_policy.lookup`, repeated prompt turns that ask for the same cost center, and one tool response that says the vendor approval expired yesterday. The key debugging question is no longer "why is the agent bad?" The question is precise: did the agent fail because the policy tool returned a new status, because the prompt missed a rule for expired vendors, because the context hid the renewal amount, or because retry logic looped on the same missing field?
-
-That is the difference between ordinary log reading and run debugging. You are not only reading errors. You are following the causal chain: input, context, retrieval, tool results, model messages, guardrails, retries, state updates, and final outcome. The trace from the previous article gives the map. In this article, you will use that map to investigate a real failure.
-
-## Start With The Symptom And The Trace ID
-
-<!-- section-summary: A good run-debug workflow starts by freezing the reported symptom, finding the trace ID, and writing down what the user expected before you inspect internals. -->
-
-The first habit is to capture the user-facing symptom before you dive into spans. In the LumaWorks case, the symptom is "the procurement agent kept asking for information that the user already gave." Write that down in plain language. Then capture the trace ID, user timestamp, environment, app version, prompt version, and the user-visible final message.
-
-Here is a simple incident note format:
-
-```yaml
-incident_id: inc-proc-2026-07-05-014
-reported_by: support-queue
-trace_id: trc_proc_7d4b913f
-environment: prod
-workflow: procurement_request
-symptom: "Agent repeatedly asked for cost center and never routed expired vendor renewal."
-expected_behavior: "Agent should detect expired vendor approval and route the renewal to procurement ops."
-user_input_summary: "Renew DataVista analytics add-on, 45 seats, cost center ENG-DESIGN."
-first_seen_at: "2026-07-05T09:42:10Z"
-severity: sev2
-customer_impact: "Managers cannot complete some renewal requests without support help."
+```mermaid
+flowchart LR
+    S["1. Define the symptom"] --> I["2. Identify the exact run"]
+    I --> T["3. Reconstruct the timeline"]
+    T --> D["4. Locate the first divergence"]
+    D --> P["5. Prove the cause with comparison and replay"]
+    P --> L["6. Repair and add lasting evidence"]
 ```
 
-This note prevents a common mistake: engineers jump straight into model output and forget what the user needed. The expected behavior gives you a target. The trace ID gives you the evidence path. The environment and version fields help you compare with nearby runs.
+Each stage prevents a common debugging failure.
 
-In a trace backend, search by trace ID first. If the user or support report lacks a trace ID, search by time window, workflow, hashed user ID, request ID, or support ticket ID. Production agents should return or store a trace correlation ID with every user-facing run. That ID saves time during incidents because support can attach it to the ticket before engineering joins.
+1. **Define the symptom.** Keep the investigation tied to the user or operator impact.
+2. **Identify the run.** Avoid mixing evidence from different retries, releases, tenants, or environments.
+3. **Reconstruct the timeline.** Read actions and state transitions in execution order.
+4. **Locate the first divergence.** Find the earliest wrong input, decision, transition, or effect.
+5. **Prove the cause.** Use a nearby successful run, version comparison, and controlled replay.
+6. **Create lasting evidence.** Add a contract test, eval case, metric, alert, runbook note, or trace field.
 
-## Read The Trace As A Timeline
+This framework works for a one-call assistant, a tool-using agent, and a durable multi-step workflow. The amount of evidence changes; the order of reasoning does not.
 
-<!-- section-summary: The first trace pass should identify the parent run, the slow spans, the repeated spans, the failed spans, and the span where the agent state changed in the wrong direction. -->
+## Stage One: Define The User-Visible Symptom
+<!-- section-summary: A precise symptom and expected outcome give the investigation a falsifiable target before internal evidence creates bias. -->
 
-Open the trace and read it from the parent span downward. Avoid starting with the longest model transcript. First, look for the structure:
+Write one sentence for actual behaviour and one for expected behaviour. “The agent is bad” is too broad. “The procurement agent asked for a cost centre that was already present, repeated the vendor lookup twice, and failed to route an expired vendor for review” is actionable.
 
-| Question | What to inspect |
+Capture impact separately. Did one user receive a poor draft? Did a high-risk action execute? Are all requests on one release stuck? Severity depends on the effect, not the complexity of the trace.
+
+The initial note should contain the minimum coordinates:
+
+| Field | Why it matters |
 | --- | --- |
-| Did the run start with the right workflow? | Parent span name, route span, intent classifier span |
-| Which step took most time? | Span duration, retries, timeout events |
-| Which step repeated? | Repeated child spans with the same tool name or prompt turn |
-| Which step failed? | Span status, exception event, `failure.class`, tool status code |
-| Which state changed? | Context update events, memory write events, planner output |
-| Which version handled the run? | Prompt version, agent config version, tool schema version, retrieval index version |
+| User-visible symptom | Keeps debugging connected to product behaviour |
+| Expected outcome | Defines what success would have looked like |
+| Timestamp and environment | Narrows the search and dependency state |
+| Workflow and entry point | Confirms the correct execution path |
+| Trace or run ID | Connects evidence across systems |
+| Release and prompt version | Locates the deployed behaviour |
+| Impact and current containment | Guides urgency and safe next action |
 
-For the stuck procurement run, the timeline might look like this:
+Do not copy sensitive user content into a broad incident channel. Use a protected evidence link or an approved summary. The investigation needs enough detail to reproduce the failure without expanding data exposure.
+
+## Stage Two: Establish Run Identity
+<!-- section-summary: Stable run, trace, release, and operation identities prevent retries and related calls from being mistaken for one execution. -->
+
+An application request, an agent run, a trace, and an external operation can have different identities. Record their relationships.
+
+- A **request ID** identifies the call at the product boundary.
+- A **run ID** identifies one logical agent or workflow execution.
+- A **trace ID** connects spans across instrumented services.
+- A **tool-call ID** connects a model request with its result.
+- An **operation or idempotency key** identifies a side effect in the authoritative service.
+
+One user click may create several HTTP requests. One durable run may continue after a process restart. One tool operation may be retried across traces. Without these distinctions, an engineer can mistake a successful retry for proof that the first attempt committed, or count the same logical action several times.
+
+Every production run should record the workflow, environment, application release, model and prompt identifiers, tool-schema versions, retrieval-index version, and tenant-safe correlation fields on its root trace or run record. If support cannot find a run from a ticket, improve correlation before the next incident.
+
+## Stage Three: Read The Trace As A State Timeline
+<!-- section-summary: A useful trace shows ordered decisions, tool effects, state transitions, retries, and guardrails instead of only nested model calls. -->
+
+A **trace** is an end-to-end record of one operation. A **span** is a timed operation inside that trace, such as context assembly, retrieval, a model call, a tool call, validation, or a state checkpoint.
+
+Read the root span first. Confirm the workflow and release. Then scan child spans for failure, high duration, repetition, fan-out, and missing expected steps. Only after the shape is clear should you inspect model and tool payloads.
+
+```mermaid
+sequenceDiagram
+    participant App as Product request
+    participant Ctx as Context builder
+    participant Model as Model
+    participant Tool as Tool service
+    participant State as Run state
+    participant Guard as Controls
+    App->>Ctx: Authenticated task
+    Ctx->>Model: Facts, policy, state, tools
+    Model->>Tool: Proposed tool call
+    Tool-->>State: Result and effect identity
+    State->>Model: Updated state and tool result
+    Model->>Guard: Proposed final output or next action
+    Guard-->>App: Accepted result or bounded stop
+```
+
+The expected sequence acts as a reference. In a failing run, ask:
+
+- Was the correct context assembled before the model call?
+- Did every accepted tool call produce one matched result?
+- Did the authoritative result update run state?
+- Did the next model turn receive that updated state?
+- Did a retry repeat a read or a side effect?
+- Did an approval, budget, or loop guard fire at the intended transition?
+- Did the run terminate with an honest account of committed work?
+
+A compact trace summary is usually more useful at first than a full transcript:
 
 ```json
 {
-  "trace_id": "trc_proc_7d4b913f",
-  "name": "procurement_agent.run",
+  "run_id": "run_proc_7d4b913f",
+  "release": "proc-agent-18",
+  "prompt_version": "2026-07-04.5",
+  "tool_schema": {"vendor_policy": "3.2.0"},
   "duration_ms": 184230,
-  "attributes": {
-    "app.workflow": "procurement_request",
-    "app.prompt.version": "2026-07-04.5",
-    "app.agent.config_version": "proc-agent-18",
-    "app.user.hash": "usr_8bd0",
-    "app.request.type": "software_renewal",
-    "failure.class": "agent_loop"
-  },
-  "children": [
-    {"name": "intent.classify", "duration_ms": 91, "status": "ok"},
-    {"name": "context.extract_purchase_fields", "duration_ms": 42, "status": "ok"},
-    {"name": "tool.vendor_policy.lookup", "duration_ms": 340, "status": "ok"},
-    {"name": "gen_ai.chat gpt-5.5", "duration_ms": 2160, "status": "ok"},
-    {"name": "tool.vendor_policy.lookup", "duration_ms": 355, "status": "ok"},
-    {"name": "gen_ai.chat gpt-5.5", "duration_ms": 2198, "status": "ok"},
-    {"name": "guardrail.loop_detector", "duration_ms": 8, "status": "error"}
-  ]
+  "model_turns": 6,
+  "tool_calls": {"vendor_policy.lookup": 2},
+  "terminal_state": "stopped_by_loop_guard",
+  "first_warning": "unmapped_vendor_status"
 }
 ```
 
-The repeated `vendor_policy.lookup` span is the first clue. The `guardrail.loop_detector` error is the stop signal. The parent failure class says `agent_loop`, which is useful, yet it is only the label. You still need to learn why the loop happened.
+This summary points to the likely area without exposing raw purchase data. The investigator can open restricted span payloads only when needed.
 
-A timeline pass should leave you with two or three hypotheses. In this case: the extracted fields dropped the cost center, the vendor policy response used a status value the prompt did not handle, or the loop detector fired too late after repeated model turns. Each hypothesis maps to a span you can inspect.
+## Stage Four: Locate The First Divergence
+<!-- section-summary: The earliest incorrect fact, contract interpretation, state transition, effect, or control decision usually identifies the owning layer. -->
 
-![LumaWorks stuck procurement run](/content-assets/articles/article-mlops-llmops-debugging-runs/lumaworks-stuck-run-timeline.png)
-*The first pass follows the symptom to the trace ID, then finds repeated tool spans and the first clue that changed the run.*
+Later failures often cascade from an earlier divergence. A model repeats a question because state dropped a field. A loop guard fires because an unknown tool enum prevented the run from advancing. A final answer lacks a citation because retrieval never returned the source. Fixing the final text would hide the mechanism.
 
-## Inspect Context Before Inspecting The Answer
+Use seven fault domains:
 
-<!-- section-summary: Context inspection tells you whether the model received the right facts, the right state, and the right tool results before you judge the final response. -->
-
-The model can only respond to the context it receives. When a run fails, inspect the context packet before you judge the answer. For the procurement agent, the context packet should include the request type, vendor, seat count, renewal amount if known, cost center, requester role, budget owner, policy snippets, vendor approval state, and any missing fields.
-
-A context summary event can make this review fast:
-
-```json
-{
-  "name": "context.purchase_fields.extracted",
-  "attributes": {
-    "purchase.request_type": "software_renewal",
-    "purchase.vendor_name": "DataVista",
-    "purchase.seat_count": 45,
-    "purchase.cost_center": "ENG-DESIGN",
-    "purchase.amount_usd": null,
-    "purchase.amount_source": "missing_from_request",
-    "requester.role": "engineering_manager",
-    "policy.required_fields": "amount_usd,budget_owner,vendor_status",
-    "context.missing_fields": "amount_usd,budget_owner"
-  }
-}
-```
-
-This event shows the cost center was extracted correctly. The agent should have stopped asking for it. The missing fields are amount and budget owner. Now inspect the vendor policy response:
-
-```json
-{
-  "name": "tool.vendor_policy.lookup",
-  "attributes": {
-    "tool.name": "vendor_policy_lookup",
-    "tool.schema.version": "3.2.0",
-    "vendor.name.normalized": "datavista",
-    "vendor.approval_status": "expired_pending_reapproval",
-    "vendor.approval_expires_at": "2026-07-04",
-    "tool.response.status_code": 200,
-    "tool.response.summary": "vendor approval expired, procurement ops review required",
-    "failure.class": "none"
-  }
-}
-```
-
-The tool response is clear to a human. The agent still asked for the cost center. That points toward prompt logic or state update logic. The model may have ignored the tool response because the prompt only listed `approved`, `blocked`, and `unknown` as vendor states. Or the orchestration layer may have stored the tool result under a key the next model call never received.
-
-This is why debugging agents requires context inspection. The final answer is the last symptom. The context packet and tool response show the materials that shaped that symptom.
-
-![LumaWorks compare context, tool, and state](/content-assets/articles/article-mlops-llmops-debugging-runs/lumaworks-context-tool-state.png)
-*LumaWorks compares the context packet, tool response, and stored state before blaming the model answer.*
-
-## Compare Prompt, Tool, And State Versions
-
-<!-- section-summary: Version comparison helps you separate a model behavior issue from a deploy issue, a tool contract change, or a missing state update. -->
-
-A production trace should record prompt version, agent config version, tool schema version, retrieval index version, and service version. When a run fails after a release, version fields help you find the changed surface quickly.
-
-For the procurement failure, compare a successful renewal from the previous day:
-
-| Field | Successful run | Stuck run |
+| Fault domain | Question | Typical evidence |
 | --- | --- | --- |
-| Prompt version | `2026-07-02.1` | `2026-07-04.5` |
-| Agent config | `proc-agent-17` | `proc-agent-18` |
-| Vendor tool schema | `3.1.0` | `3.2.0` |
-| Vendor status | `approved` | `expired_pending_reapproval` |
-| Loop detector threshold | `4 repeated asks` | `6 repeated asks` |
-| Final outcome | `submitted_to_budget_owner` | `agent_loop` |
+| Input and identity | Did the run start with the correct task, caller, and tenant? | request record, auth decision |
+| Context and retrieval | Did the model receive relevant, current, permitted facts? | context manifest, retrieval ranks and sources |
+| Model and instructions | Did the model interpret available evidence incorrectly? | prompt version, model items, repeated trials |
+| Tool contract | Did arguments or results violate an expected schema or meaning? | schema version, validation event, result code |
+| Orchestration and state | Did the run choose, persist, resume, or terminate incorrectly? | transition log, checkpoint, retry record |
+| Controls and policy | Did authorization, approval, budget, or guard behaviour match policy? | policy decision, bound proposal hash |
+| Environment and dependency | Did latency, outage, quota, or deployment state alter the path? | logs, metrics, dependency status |
 
-This comparison suggests two likely changes: the vendor tool introduced a new status value, and the prompt or state policy did not route that value. The loop detector threshold also allowed too many repeated turns. The fix may need one prompt change, one contract test, and one guardrail threshold update.
+Start with context and state before blaming the model. The model can only act on the view it receives. Inspect a context manifest that lists sources, versions, token allocation, and trust labels. Compare extracted fields with authoritative input. Check that tool results appear in the next model input or state projection.
 
-You can store a compact version snapshot on the parent span:
+Then inspect contracts. An HTTP 200 response can still be semantically new. If a tool changes `approval_status` from three known values to a fourth, the run may fail even though transport and schema validation pass. Contract compatibility includes field meaning and enum evolution, not only JSON shape.
 
-```json
-{
-  "app.release.sha": "f6a41c2",
-  "app.prompt.name": "procurement_triage",
-  "app.prompt.version": "2026-07-04.5",
-  "app.agent.config_version": "proc-agent-18",
-  "retrieval.index.version": "proc-policy-2026-07-01",
-  "tool.vendor_policy.schema_version": "3.2.0",
-  "tool.purchase_request.schema_version": "2.8.4"
-}
-```
+For side effects, compare requested, acknowledged, and committed state. A timeout means “the caller did not receive a conclusive response.” Query the authoritative system using the operation key. Avoid inferring commit status from the agent transcript.
 
-This metadata costs very little and pays off during incidents. You can filter all failed runs from one prompt version. You can compare tool schema changes against failure classes. You can find whether the issue only affects one retrieval index or one region.
+## Use A Healthy Run As A Control
+<!-- section-summary: A nearby successful run reduces speculation by revealing which inputs, versions, transitions, and dependency conditions differ. -->
 
-## Replay The Run With Controls
+Find a successful run with the same workflow, similar input class, environment, and time window. Compare one dimension at a time:
 
-<!-- section-summary: Replay lets you rerun the same case against controlled prompt, context, tool, and model settings so you can confirm the cause before shipping a fix. -->
+| Dimension | Compare |
+| --- | --- |
+| Input class | intent, locale, permissions, risk level |
+| Context | selected sources, missing fields, retrieval results |
+| Versions | application, model, prompt, tool schema, index, policy |
+| Control flow | model turns, tool sequence, transitions, approvals |
+| Environment | region, dependency latency, quotas, feature flags |
+| Outcome | final state, committed effects, user response |
 
-Replay means running the same or equivalent input through a controlled environment. The replay goal is proof. You want to know whether a change fixes the stuck behavior, and you want to keep the evidence for regression testing.
+The control run does not prove causality by itself. It narrows the difference set. If successful runs used tool schema 3.1 and failing runs use 3.2 with a new enum, that is a strong hypothesis. Replay can then test it.
 
-Create a replay packet from the trace. It should include the user input summary, sanitized context, tool responses, prompt version, agent config version, model settings, and expected outcome. Avoid raw customer data in the packet unless your eval storage has the right privacy controls.
+Avoid changing several variables at once. A replay that changes the prompt, model, tool fixture, and retrieval index may pass without revealing which change mattered.
+
+## Stage Five: Prove The Cause With Controlled Replay
+<!-- section-summary: A replay packet freezes relevant input, context, tool results, versions, and expected transitions so one hypothesis can be tested safely. -->
+
+**Replay** runs a sanitized equivalent of the case against controlled dependencies. The goal is mechanism proof, not a visual demonstration.
+
+A useful replay packet contains:
 
 ```yaml
-case_id: proc-renewal-expired-vendor-001
-source_trace_id: trc_proc_7d4b913f
-workflow: procurement_request
-input:
-  user_message: "Renew the design team's analytics add-on for 45 seats. Current vendor is DataVista. Charge it to cost center ENG-DESIGN."
+case_id: procurement-expired-vendor-001
+source_run: run_proc_7d4b913f
+input_class: software_renewal
 context:
-  requester_role: engineering_manager
   cost_center: ENG-DESIGN
   seat_count: 45
   amount_usd: null
 tool_fixtures:
-  vendor_policy_lookup:
+  vendor_policy.lookup:
     approval_status: expired_pending_reapproval
-    response_summary: "vendor approval expired, procurement ops review required"
 expected:
-  outcome: route_to_procurement_ops
-  required_message_contains:
-    - "vendor approval needs review"
-    - "procurement operations"
+  state: route_to_procurement_ops
+  forbidden_actions:
+    - ask_for_cost_center
+  max_model_turns: 2
 ```
 
-Then write a small replay harness. This example shows the shape rather than a full framework:
+Fixtures preserve the original dependency result. Calling a live vendor service during replay could return a repaired status and erase the failure condition. Keep a separate integration test for the live contract.
 
-```python
-import json
-from pathlib import Path
+Run the packet against the released system configuration first. It should reproduce the divergence. If it does not, the packet is incomplete or nondeterminism needs repeated trials. Then change one suspected cause, such as adding the new enum to the state transition policy. The candidate should take the expected path across repeated runs.
 
+Some assertions are deterministic: no unauthorized tool, schema-valid output, exact state transition, bounded turns, one idempotency key. Language quality may need rubric-based or human evaluation. Keep these grader types separate so a fluent answer cannot compensate for an unsafe transition.
 
-async def replay_case(agent_runner, case_path: str, prompt_version: str):
-    case = json.loads(Path(case_path).read_text())
+Replay has limits. Time-dependent data, provider changes, nondeterministic sampling, concurrency, and external side effects can prevent exact reproduction. Record those uncertainties. The goal is sufficient control to test a causal claim, not bit-for-bit equivalence in every system.
 
-    tool_fixtures = case["tool_fixtures"]
-    runner = agent_runner.with_fixtures(tool_fixtures)
+## Correlate One-Run Evidence With Fleet Signals
+<!-- section-summary: Traces explain an individual path, while logs and metrics reveal whether the same failure class affects a release, segment, tool version, or dependency. -->
 
-    result = await runner.run(
-        input=case["input"]["user_message"],
-        context=case["context"],
-        prompt_version=prompt_version,
-    )
+One trace explains one run. Structured logs expose detailed events. Metrics reveal frequency and distribution. Join them with safe, bounded labels such as workflow, release, prompt version, tool name, tool-schema version, outcome, and failure class.
 
-    expected = case["expected"]
-    assert result.outcome == expected["outcome"]
-    for phrase in expected["required_message_contains"]:
-        assert phrase.lower() in result.final_output.lower()
+Avoid user IDs, raw prompts, order IDs, and high-cardinality run IDs as metric labels. Keep those in controlled trace or log systems. Metrics should support aggregation.
 
-    return {
-        "case_id": case["case_id"],
-        "prompt_version": prompt_version,
-        "outcome": result.outcome,
-        "trace_id": result.trace_id,
-    }
-```
-
-Replay is strongest when you control tool responses. If the replay calls live vendor systems, a changed vendor record can hide the original cause. Use fixtures for the failing tool output first. Then run a separate integration test against the real tool to verify the live contract.
-
-![LumaWorks replay turns a bug into a test](/content-assets/articles/article-mlops-llmops-debugging-runs/lumaworks-replay-to-test.png)
-*A replay packet freezes the evidence, uses tool fixtures, and turns the prompt fix into a CI regression case.*
-
-Run the case against the failing prompt and the proposed prompt:
-
-```bash
-python -m procurement_agent.replay \
-  --case cases/proc-renewal-expired-vendor-001.json \
-  --prompt-version 2026-07-04.5
-
-python -m procurement_agent.replay \
-  --case cases/proc-renewal-expired-vendor-001.json \
-  --prompt-version 2026-07-05.1
-```
-
-The first command should reproduce the failure. The second command should pass. If both pass, your fixture did not capture the original problem. If both fail, the issue may live in orchestration code, state updates, or tool schema handling instead of prompt text.
-
-## Use Logs And Metrics With The Trace
-
-<!-- section-summary: Trace spans show the run path, while correlated logs and metrics show repeated patterns, payload validation failures, latency spikes, and deployment-wide impact. -->
-
-OpenTelemetry logs can carry trace and span IDs, which lets you jump from a trace span to the log lines emitted during that span. For stuck agents, correlated logs often explain state transitions better than the model transcript. You might see a validation warning like `unknown vendor status`, a loop detector event, or a state write that overwrote a field.
-
-Example structured log:
-
-```json
-{
-  "timestamp": "2026-07-05T09:42:34.220Z",
-  "level": "warning",
-  "service.name": "procurement-agent-api",
-  "trace_id": "trc_proc_7d4b913f",
-  "span_id": "spn_vendor_policy_02",
-  "event.name": "tool_contract.unmapped_enum",
-  "tool.name": "vendor_policy_lookup",
-  "field": "approval_status",
-  "value": "expired_pending_reapproval",
-  "known_values": ["approved", "blocked", "unknown"],
-  "failure.class": "tool_contract_error"
-}
-```
-
-This log would confirm a contract mismatch. Now dashboard the impact:
+For example, a Prometheus counter can show whether tool-contract failures increased after a schema release:
 
 ```promql
-sum by (field, value) (
-  rate(agent_tool_contract_errors_total{workflow="procurement_request"}[15m])
-)
-```
-
-```promql
-sum by (failure_class, app_prompt_version) (
+sum by (tool_schema_version, failure_class) (
   rate(agent_run_failures_total{workflow="procurement_request"}[15m])
 )
 ```
 
-```promql
-histogram_quantile(
-  0.95,
-  sum by (le, app_prompt_version) (
-    rate(agent_run_duration_seconds_bucket{workflow="procurement_request"}[10m])
-  )
-)
-```
+If the failing trace is isolated, handle it as a defect or evaluation gap. If the rate rises across requests on one schema or prompt version, treat it as an incident and contain the release. Also check the denominator: ten failures among twenty runs and ten failures among a million runs have different meanings.
 
-Metrics help you decide severity. If only one trace failed, you can treat it as a product bug. If failures spike for every renewal with a vendor status of `expired_pending_reapproval`, you have an incident. Grafana can show the spike by prompt version, release SHA, tool schema version, and failure class if your traces and metrics share those labels.
+Sampling policy matters. Keep complete traces for errors and selected high-risk outcomes where privacy policy allows it. Sample ordinary successful runs enough to provide comparison controls. Record sampling decisions so absence of traces is not mistaken for absence of events.
 
-## The Run-Debug Checklist
+## Stage Six: Fix The Owning Layer
+<!-- section-summary: The repair should target the earliest proven divergence and include rollout, verification, and recovery evidence. -->
 
-<!-- section-summary: A checklist keeps the investigation grounded, repeatable, and easy to hand off between support, engineering, product, and operations. -->
+Map the cause to its owner:
 
-Use this checklist when a production agent run fails, loops, or gives a suspicious answer:
+- missing or stale knowledge → context or retrieval owner;
+- prompt interpretation gap → model behaviour owner;
+- incompatible enum or field → tool producer and consumer owners;
+- lost result or wrong transition → orchestrator or state owner;
+- repeated effect → tool and workflow idempotency owners;
+- excessive turns → product policy and runtime owner;
+- dependency saturation → service or platform owner.
 
-```yaml
-run_debug_checklist:
-  identify:
-    - Capture trace_id, user timestamp, environment, release SHA, prompt version.
-    - Write the user-visible symptom and expected behavior in one sentence.
-    - Confirm the run came from the expected workflow and agent.
-  timeline:
-    - Find failed, slow, and repeated spans.
-    - Check model call count, tool call count, retries, and guardrail events.
-    - Mark the first span where state moved away from expected behavior.
-  context:
-    - Inspect extracted fields, retrieval results, memory reads, and tool outputs.
-    - Verify the model received the facts that the user already supplied.
-    - Check whether raw sensitive data was redacted before export.
-  versions:
-    - Compare prompt, agent config, tool schema, retrieval index, and release SHA.
-    - Compare against a similar successful trace from the same day.
-    - Check whether a new enum, status code, or tool response shape appeared.
-  replay:
-    - Build a sanitized replay case from the trace.
-    - Reproduce the failure against the old version.
-    - Verify the proposed fix against the same replay packet.
-  follow_up:
-    - Add or update contract tests for the tool response.
-    - Add the replay case to evals.
-    - Add a dashboard or alert if the failure class can repeat.
-```
+The fix packet should name the symptom, first divergence, evidence, changed component, replay case, rollout scope, monitoring signal, and rollback trigger. A prompt change may need a prompt-version release. A tool-contract repair may need producer compatibility and consumer handling. A state-machine repair may need migration logic for interrupted runs.
 
-This checklist also defines the handoff between teams. Support owns the symptom and trace ID. Engineering owns the timeline, context, versions, and replay. Product or operations owns the expected behavior when policy is ambiguous. Security or privacy reviews the data captured in traces and replay packets.
+Verify at three levels:
 
-## Turn Findings Into Fixes
+1. **Case level:** the replay passes and the released configuration reproduces the earlier failure.
+2. **System level:** contract, state, authorization, and side-effect tests pass.
+3. **Fleet level:** failure rate, latency, turn count, cost, and product outcome recover after rollout.
 
-<!-- section-summary: A good debugging session ends with a narrow fix, a replay case, a metric or alert, and a written explanation that future responders can use. -->
+Rollback should restore the complete behaviour bundle when necessary: application code, prompt, model route, tool configuration, retrieval index, and state policy. Record which in-flight runs can resume safely and which need cancellation or migration.
 
-For the stuck procurement agent, the likely fix set is small:
+## Turn The Incident Into Better Observability
+<!-- section-summary: A resolved run should leave behind an eval case, stronger contract, clearer state event, safer metric, or improved support correlation. -->
 
-- Add `expired_pending_reapproval` to the vendor status contract and route it to procurement operations.
-- Update the prompt instructions for expired vendor approvals.
-- Lower the repeated-question guardrail threshold for already-extracted fields.
-- Add a replay case for expired vendor renewal.
-- Add a metric panel for unmapped tool enum values by tool schema version.
+The strongest debugging outcome is a system that will explain the same failure faster next time. Add only evidence that changes a decision.
 
-The fix should include a rollout plan. First run replay cases locally and in CI. Then deploy to staging and compare traces for the failing case. Then release to a small production cohort if your platform supports it. Watch `agent_loop`, `tool_contract_error`, run duration, and support tickets for procurement renewals.
+- Add the replay packet to regression evals.
+- Add a compatibility test for the new tool enum.
+- Emit an explicit event when the orchestrator sees an unmapped result.
+- Record prompt, tool, index, and policy versions on the root span.
+- Alert on the failure rate with a meaningful denominator.
+- Improve support-to-trace correlation.
+- Redact or remove payload fields that the investigation did not need.
 
-The incident write-up should include concrete evidence:
+Avoid solving observability gaps by logging everything. More raw content raises privacy and cost while making investigation slower. Prefer structured summaries, stable identities, source references, state transitions, and controlled deep links to restricted payloads.
 
-```yaml
-root_cause: "Vendor policy tool introduced approval_status=expired_pending_reapproval. Agent prompt and contract mapping treated the value as unknown, then asked for fields already present in context."
-fixed_by:
-  - "Mapped expired_pending_reapproval to route_to_procurement_ops."
-  - "Added prompt rule for expired vendor renewals."
-  - "Added replay case proc-renewal-expired-vendor-001."
-verified_with:
-  - "Old prompt reproduced agent_loop."
-  - "New prompt routed to procurement ops in replay."
-  - "Production failure_class=agent_loop returned to baseline after release."
-follow_up:
-  - "Alert on unmapped enum values from procurement tools."
-  - "Review loop detector threshold for other procurement workflows."
-```
+## The Durable Debugging Method
+<!-- section-summary: Agent debugging is a repeatable evidence discipline that assigns the earliest proven divergence to the correct system layer. -->
 
-This write-up is short enough for an incident review and specific enough for future debugging. It names the tool, status value, prompt behavior, replay case, and monitoring check.
+Define the user symptom. Identify the exact run. Read the trace as an ordered state timeline. Locate the earliest divergence across input, context, model, tool, orchestration, control, and environment layers. Compare with a healthy run. Freeze the important evidence in a replay packet. Change one variable, prove the repair, monitor the fleet, and preserve the case.
 
-## Practical Checks And Interview-Ready Understanding
-
-Debugging a run is evidence work. You start with the trace ID and user symptom, read the trace timeline, inspect context and tool outputs, compare versions, replay the failing case, and turn the finding into a fix plus an eval case. A strong interview answer should mention traces, spans, correlated logs, tool contracts, prompt versions, replay fixtures, failure classes, privacy-safe payloads, and dashboards.
-
-Watch for these mistakes:
-
-- Debugging only the final answer while skipping context, retrieved documents, and tool outputs.
-- Treating a model issue as the first explanation before checking tool contracts and state updates.
-- Replaying against live tools and losing the original failing condition.
-- Keeping replay cases in a private notebook instead of adding them to shared evals.
-- Logging raw purchase details or employee names into a broad observability system.
-- Shipping a prompt fix without a dashboard check for repeated failures.
-
-The practical goal is simple: every serious failure should leave the system easier to debug next time. Add the missing label, contract test, replay case, redaction test, or dashboard panel while the incident is still fresh. That habit turns one stuck procurement run into a stronger production agent.
+This method keeps an investigation from collapsing into transcript reading or prompt guessing. It also teaches the larger lesson of LLM operations: model behaviour is one part of a stateful software system, so its failures need software-quality evidence across the whole path.
 
 ## References
 
 - [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/)
-- [OpenAI Agents SDK integrations and observability](https://developers.openai.com/api/docs/guides/agents)
-- [OpenTelemetry traces concepts](https://opentelemetry.io/docs/concepts/signals/traces/)
-- [OpenTelemetry logs specification](https://opentelemetry.io/docs/specs/otel/logs/)
-- [OpenTelemetry GenAI agent and framework spans](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md)
-- [OpenTelemetry Python manual instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/)
-- [LangSmith OpenAI Agents SDK tracing](https://docs.langchain.com/langsmith/trace-with-openai-agents-sdk)
-- [Phoenix tracing overview](https://arize.com/docs/phoenix/tracing/llm-traces)
-- [Langfuse observability overview](https://langfuse.com/docs/observability/overview)
-- [Prometheus query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/)
-- [Grafana Prometheus query editor](https://grafana.com/docs/grafana/latest/datasources/prometheus/query-editor/)
+- [OpenAI Agents SDK running agents](https://openai.github.io/openai-agents-python/running_agents/)
+- [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenTelemetry logs](https://opentelemetry.io/docs/specs/otel/logs/)
+- [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
+- [Prometheus querying basics](https://prometheus.io/docs/prometheus/latest/querying/basics/)
+- [LangSmith observability concepts](https://docs.langchain.com/langsmith/observability-concepts)
+- [Phoenix tracing](https://arize.com/docs/phoenix/tracing/llm-traces)
+- [Langfuse observability](https://langfuse.com/docs/observability/overview)

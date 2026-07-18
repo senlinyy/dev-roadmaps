@@ -1,23 +1,12 @@
 ---
 title: "Notebook to Production"
 description: "Follow one model through review, packaging, validation, release, and monitoring."
-overview: "A notebook can prove that a model idea has value, but production needs a repeatable path. This article follows one factory defect model from exploratory notebook into training code, packaged artifact, evaluation report, deployment, monitoring, and feedback."
+overview: "A notebook can prove that a model idea has value, but production needs a repeatable path. A supporting example follows one factory defect model from exploratory notebook into training code, packaged artifact, evaluation report, deployment, monitoring, and feedback."
 tags: ["MLOps", "core", "teams"]
 order: 2
 id: "article-mlops-mlops-foundations-notebook-to-production-workflow"
 ---
 
-## Table of Contents
-
-1. [The Notebook Is The First Draft](#the-notebook-is-the-first-draft)
-2. [Freeze The Product Question](#freeze-the-product-question)
-3. [Move Training Into Reviewed Code](#move-training-into-reviewed-code)
-4. [Package The Model And Runtime Together](#package-the-model-and-runtime-together)
-5. [Validate Before Release](#validate-before-release)
-6. [Deploy With A Controlled Path](#deploy-with-a-controlled-path)
-7. [Monitor The Model After Release](#monitor-the-model-after-release)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
 
 ## The Notebook Is The First Draft
 <!-- section-summary: A notebook is useful for exploration, but production needs the model idea to move into repeatable code, versioned data, tracked artifacts, and monitored runtime. -->

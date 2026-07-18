@@ -25,3 +25,5 @@ final_state:
   verified_by: Maya
   verified_at: 2026-04-30T21:15:00Z
 ```
+
+The record ties the production state to a defined observation window and concrete service signals. That evidence makes the release auditable and gives the next operator a baseline for comparison.

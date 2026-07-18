@@ -20,3 +20,5 @@ jobs:
     steps:
       - run: ./scripts/deploy-ecs.sh orders-api-prod "${{ needs.build.outputs.image_digest }}"
 ```
+
+The build job exposes one immutable digest, and both deployment jobs consume that output. Production waits for build and staging, so it promotes the tested artifact instead of rebuilding from mutable source and tool state.

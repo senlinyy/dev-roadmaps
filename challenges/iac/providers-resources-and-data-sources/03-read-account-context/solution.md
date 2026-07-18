@@ -15,6 +15,8 @@ provider "aws" {
 }
 ```
 
+Data sources read the active AWS account and region, removing placeholder identity values that can silently point review output at the wrong context.
+
 ### s3.tf
 
 ```hcl

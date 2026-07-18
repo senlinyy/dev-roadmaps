@@ -1,0 +1,65 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/ansible-orders-production.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: ansible-orders-production\n\non:\n  pull_request:\n    paths:\n      - \"ansible/**\"\n\npermissions:\n  contents: read\n\njobs: {}\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["permissions", "contents"],
+        "equals": "read",
+        "label": "workflow token has read-only contents permission"
+      },
+      {
+        "path": ["jobs", "preview", "steps"],
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "preview job contains checkout and preview steps"
+      },
+      {
+        "path": ["jobs", "preview", "steps", 0, "uses"],
+        "equals": "actions/checkout@v6",
+        "label": "preview checks out the reviewed repository"
+      },
+      {
+        "path": ["jobs", "preview", "steps", 1, "run"],
+        "equals": "ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --check --diff",
+        "label": "preview uses the production canary with check and diff modes"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "needs"],
+        "equals": "preview",
+        "label": "canary deployment waits for preview"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "environment"],
+        "equals": "production",
+        "label": "canary deployment uses the protected production environment"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "concurrency"],
+        "equals": "orders-production",
+        "label": "production orders deployments cannot overlap"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "steps"],
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "canary job contains checkout and one bounded apply step"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "steps", 0, "uses"],
+        "equals": "actions/checkout@v6",
+        "label": "canary job checks out the reviewed repository"
+      },
+      {
+        "path": ["jobs", "deploy-canary", "steps", 1, "run"],
+        "equals": "ansible-playbook -i inventories/prod orders.yml --limit orders-web-01",
+        "label": "protected job applies only to the canary host"
+      }
+    ]
+  }
+}

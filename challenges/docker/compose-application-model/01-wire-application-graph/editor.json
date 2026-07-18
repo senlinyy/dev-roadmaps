@@ -1,0 +1,75 @@
+{
+  "language": "yaml",
+  "filename": "compose.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "services:\n  api:\n    image: registry.example.com/catalog-api:2.1.0\n  db:\n    image: postgres:17-alpine\n\nnetworks:\n  backend:\n\nvolumes:\n  postgres-data:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "services",
+          "api",
+          "networks"
+        ],
+        "includes": "backend",
+        "label": "API on backend network"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "networks"
+        ],
+        "includes": "backend",
+        "label": "database on backend network"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "environment",
+          "DB_HOST"
+        ],
+        "equals": "db",
+        "label": "database service discovery name"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "depends_on",
+          "db",
+          "condition"
+        ],
+        "equals": "service_healthy",
+        "label": "health-aware database dependency"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "volumes"
+        ],
+        "includes": "postgres-data:/var/lib/postgresql/data",
+        "label": "named database volume"
+      },
+      {
+        "path": [
+          "volumes",
+          "postgres-data"
+        ],
+        "type": "object",
+        "label": "named volume declaration"
+      },
+      {
+        "path": [
+          "networks",
+          "backend"
+        ],
+        "type": "object",
+        "label": "private network declaration"
+      }
+    ]
+  }
+}

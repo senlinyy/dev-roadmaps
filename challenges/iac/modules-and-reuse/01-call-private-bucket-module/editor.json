@@ -13,32 +13,32 @@
     "expected": [
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*source\\s*=\\s*\"\\.\\./\\.\\./modules/private-bucket\"[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*source\\s*=\\s*\"\\.\\./\\.\\./modules/private-bucket\"[^}]*}",
         "label": "invoice_bucket module uses the local private bucket source"
       },
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*bucket_name\\s*=\\s*\"dp-orders-invoices-prod\"[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*bucket_name\\s*=\\s*\"dp-orders-invoices-prod\"[^}]*}",
         "label": "invoice_bucket passes the production invoice bucket name"
       },
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*service\\s*=\\s*\"orders-api\"[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*service\\s*=\\s*\"orders-api\"[^}]*}",
         "label": "invoice_bucket passes the service name"
       },
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*environment\\s*=\\s*\"prod\"[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*environment\\s*=\\s*\"prod\"[^}]*}",
         "label": "invoice_bucket passes the production environment"
       },
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*owner\\s*=\\s*\"platform\"[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*owner\\s*=\\s*\"platform\"[^}]*}",
         "label": "invoice_bucket passes the platform owner"
       },
       {
         "file": "main.tf",
-        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*versioning_enabled\\s*=\\s*true[\\s\\S]*}",
+        "pattern": "^\\s*module\\s+\"invoice_bucket\"\\s*\\{[^}]*versioning_enabled\\s*=\\s*true[^}]*}",
         "label": "invoice_bucket enables versioning"
       }
     ]

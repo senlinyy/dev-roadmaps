@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "activeFile": "charts/orders-api/values.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    { "filename": "charts/orders-api/Chart.yaml", "readOnly": true, "initialValue": "apiVersion: v2\nname: orders-api\ndescription: Helm chart for the Orders API\ntype: application\nversion: 0.1.0\nappVersion: \"2026.06.16.1\"\n" },
+    { "filename": "charts/orders-api/values.yaml", "initialValue": "replicaCount:\nimage:\n  repository:\n  tag:\n" },
+    { "filename": "charts/orders-api/templates/deployment.yaml", "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name:\nspec:\n  replicas:\n  template:\n    spec:\n      containers:\n        - name: orders-api\n          image:\n" }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      { "file": "charts/orders-api/Chart.yaml", "pattern": "^apiVersion:\\s*v2$[\\s\\S]*^name:\\s*orders-api$[\\s\\S]*^version:\\s*0\\.1\\.0$[\\s\\S]*^appVersion:\\s*[\\\"]?2026\\.06\\.16\\.1[\\\"]?$", "label": "approved chart metadata" },
+      { "file": "charts/orders-api/values.yaml", "pattern": "^replicaCount:\\s*1$", "label": "default replica count" },
+      { "file": "charts/orders-api/values.yaml", "pattern": "^image:\\s*$[\\s\\S]*^\\s{2}repository:\\s*ghcr\\.io/devpolaris/orders-api$[\\s\\S]*^\\s{2}tag:\\s*[\\\"]?2026\\.06\\.16-dev[\\\"]?$", "label": "default image values" },
+      { "file": "charts/orders-api/templates/deployment.yaml", "pattern": "^\\s{2}name:\\s*\\{\\{\\s*\\.Release\\.Name\\s*\\}\\}-orders-api$", "label": "release-scoped Deployment name" },
+      { "file": "charts/orders-api/templates/deployment.yaml", "pattern": "^\\s{2}replicas:\\s*\\{\\{\\s*\\.Values\\.replicaCount\\s*\\}\\}$", "label": "replica value binding" },
+      { "file": "charts/orders-api/templates/deployment.yaml", "pattern": "^\\s{10}image:\\s*[\\\"]?\\{\\{\\s*\\.Values\\.image\\.repository\\s*\\}\\}:\\{\\{\\s*\\.Values\\.image\\.tag\\s*\\}\\}[\\\"]?$", "label": "image value binding" }
+    ]
+  }
+}

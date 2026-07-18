@@ -1,37 +1,40 @@
 ---
-title: "Online vs Offline"
+title: "Online vs Offline Features"
 description: "Explain feature timing, freshness, and consistency for different serving styles."
-overview: "Offline features support training and batch work, while online features support low-latency serving. This article explains freshness, consistency, backfills, point-in-time joins, online reads, comparison tests, and incident runbooks."
+overview: "The previous article defined the feature lifecycle. This article owns the two-path problem: historical retrieval for training, low-latency reads for serving, point-in-time correctness, materialization, parity checks, and skew response."
 tags: ["MLOps", "production", "features"]
 order: 2
 id: "article-mlops-data-for-ml-systems-online-vs-offline-features"
 ---
-
-## Table of Contents
-
-1. [Two Paths For The Same Feature](#two-paths-for-the-same-feature)
-2. [The Feature Timing Map](#the-feature-timing-map)
-3. [Offline Features](#offline-features)
-4. [Online Features](#online-features)
-5. [Point-In-Time Training Data](#point-in-time-training-data)
-6. [Serving With The Same Feature Names](#serving-with-the-same-feature-names)
-7. [Consistency Checks And Monitoring](#consistency-checks-and-monitoring)
-8. [Incident Runbook](#incident-runbook)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## Two Paths For The Same Feature
 <!-- section-summary: Online and offline features answer the same model question at different times, so the team needs one meaning and two delivery paths. -->
 
 **Offline features** are feature values built from historical data for training, evaluation, backfills, batch scoring, and audits. **Online features** are feature values available during a live prediction request, usually from a low-latency store, cache, stream processor, or request payload. The short answer is this: offline features help you learn from the past, and online features help your model make a decision right now.
 
-Use a food delivery ETA model as the running example. The product is called BentoNow. A customer opens the app, chooses a restaurant, and asks for an estimated delivery time before placing the order. The model needs the restaurant's recent prep speed, nearby courier availability, current distance, order volume, and maybe weather. The same ideas show up in fraud scoring, marketplace ranking, ad ranking, rideshare dispatch, and support routing. The exact columns change, while the timing problem stays the same.
+Five concerns organize the two-path design. **Feature meaning** defines the entity, calculation, and valid time. **Historical correctness** reconstructs what was knowable for every old prediction moment. **Serving freshness** delivers a current value within the latency budget. **Materialization** moves computed values between systems without changing their meaning. **Parity and recovery** detect divergence and choose a safe fallback. Storage products and feature-store frameworks implement parts of this design; they do not replace it.
+
+The concerns pull in different directions. Offline computation favors large scans and exact historical joins. Online serving favors precomputation, bounded payloads, and fast reads. Reusing a feature name does not guarantee parity if event-time logic, defaults, or update cadence differ. The team therefore needs one semantic contract and explicit delivery policies for both paths.
+
+```mermaid
+flowchart LR
+    Definition["Shared feature definition and time semantics"] --> Offline["Offline historical computation"]
+    Definition --> Materialize["Streaming or batch materialization"]
+    Offline --> Training["Point-in-time training and evaluation"]
+    Materialize --> Online["Low-latency online store or service"]
+    Online --> Serving["Live prediction"]
+    Training --> Compare["Parity samples"]
+    Serving --> Compare
+    Compare --> Response["Repair, fallback, or version change"]
+```
+
+One definition feeds two delivery paths. Offline retrieval reconstructs past values, while materialization prepares recent values for serving. Parity checks compare matching entities and timestamps across the paths. A mismatch triggers an owned response before it quietly changes model behaviour.
+
+A food delivery ETA model makes the timing problem concrete. The product is called BentoNow. A customer opens the app, chooses a restaurant, and asks for an estimated delivery time before placing the order. The model needs the restaurant's recent prep speed, nearby courier availability, current distance, order volume, and maybe weather. The same ideas show up in fraud scoring, marketplace ranking, ad ranking, rideshare dispatch, and support routing. The exact columns change, while the timing problem stays the same.
 
 During training, you have a warehouse table with millions of old orders. For each old order, you need the restaurant prep feature as it was known before that order was created. You also need the courier supply feature as it was known at that time. That is the offline path. During live serving, the API has one current order candidate and needs the latest feature values in a few milliseconds. That is the online path.
 
 The important lesson is that online and offline describe **where and when the model receives feature values**. They do not describe two separate meanings. If `restaurant_avg_prep_minutes_30m` means one thing in training and a slightly different thing during serving, the model learns from one reality and serves in another. That gap is called **training-serving skew**, and it can make a good offline model behave strangely in production.
-
-This article follows one spine: a live ETA problem needs features, the features have different timing needs, offline training needs historical correctness, online serving needs fresh low-latency reads, and production teams compare the two paths with tests, logs, and runbooks.
 
 ![Online and offline delivery paths sharing one feature contract and the same feature names](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/online-offline-delivery-paths.png)
 
@@ -230,7 +233,7 @@ The same idea applies without Feast. A warehouse-only team can still write point
 ## Serving With The Same Feature Names
 <!-- section-summary: Shared feature names, schemas, owners, and freshness rules help the model see the same meaning in training and serving. -->
 
-The next production problem is naming. If training data uses `restaurant_avg_prep_minutes_30m` and serving code sends `avg_prep`, people have to remember that those columns are intended to match. That memory will fail during a refactor, a model upgrade, or an incident. Shared names and schemas remove guesswork.
+The next production problem is naming. If training data uses `restaurant_avg_prep_minutes_30m` and serving code sends `avg_prep`, people have to remember that those columns are intended to match. That memory will fail during a refactor, a model upgrade, or an incident. Shared names and schemas remove guesswork. A feature's **TTL**, or time to live, states how long a stored value remains valid enough to serve before it should expire or trigger a fallback.
 
 A simple feature definition can live in a feature repository. This example uses Feast-style objects and a local file source for readability. In production, the source might point to BigQuery, Snowflake, Redshift, Spark, or another supported store. The important part for the learner is the structure: entity, timestamped source, schema, TTL, and feature service.
 

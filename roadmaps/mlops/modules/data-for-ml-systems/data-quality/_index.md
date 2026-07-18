@@ -1,6 +1,6 @@
 ---
 title: "Data Quality"
-description: "Teach the checks that protect models from broken, missing, shifted, or mislabeled data."
+description: "Define validation contracts and the structural, completeness, validity, join, timeliness, label, and distribution checks that protect ML data."
 tags: ["core", "validation"]
 order: 2
 ---

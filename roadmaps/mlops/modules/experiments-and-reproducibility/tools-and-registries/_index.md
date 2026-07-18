@@ -1,6 +1,6 @@
 ---
 title: "Tools and Registries"
-description: "Introduce experiment tooling and the handoff point from experiment to production candidate."
+description: "Use experiment tooling to preserve run evidence and candidate identity, ending at the reviewed registry handoff; release manifests, environment promotion, traffic, and rollback belong to Deployment and Release Management."
 tags: ["production", "registry"]
-order: 2
+order: 3
 ---

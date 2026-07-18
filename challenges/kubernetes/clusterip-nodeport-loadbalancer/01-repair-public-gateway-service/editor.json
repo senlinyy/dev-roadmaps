@@ -10,9 +10,14 @@
       { "path": ["kind"], "equals": "Service", "label": "Service kind" },
       { "path": ["metadata", "name"], "equals": "public-gateway", "label": "gateway Service name" },
       { "path": ["metadata", "namespace"], "equals": "platform", "label": "platform namespace" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "platform-edge", "label": "approved ownership label" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/managed-by"], "equals": "platform-team", "label": "approved manager label" },
+      { "path": ["metadata", "annotations", "devpolaris.io/owner"], "equals": "edge-team", "label": "approved owner annotation" },
+      { "path": ["spec", "externalTrafficPolicy"], "equals": "Cluster", "label": "approved traffic policy" },
       { "path": ["spec", "type"], "equals": "LoadBalancer", "label": "infrastructure entry type" },
       { "path": ["spec", "selector", "app.kubernetes.io/name"], "equals": "public-gateway", "label": "gateway Pod selector" },
       { "path": ["spec", "ports"], "containsObject": { "name": "https", "protocol": "TCP", "port": 443, "targetPort": "https" }, "label": "HTTPS Service contract" },
+      { "path": ["spec", "ports"], "minItems": 1, "maxItems": 1, "label": "single HTTPS listener" },
       { "path": ["spec", "ports", 0, "nodePort"], "exists": false, "label": "no fixed node port" }
     ]
   }

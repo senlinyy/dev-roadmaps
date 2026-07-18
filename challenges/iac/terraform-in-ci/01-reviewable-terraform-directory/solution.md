@@ -15,6 +15,8 @@ provider "aws" {
 }
 ```
 
+Version constraints make provider selection reviewable, and removing static keys lets CI supply short-lived credentials through its trusted identity boundary.
+
 ### infra/orders/prod/s3.tf
 
 ```hcl

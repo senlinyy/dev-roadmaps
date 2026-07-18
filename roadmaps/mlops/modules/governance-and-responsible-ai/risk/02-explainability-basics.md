@@ -1,115 +1,72 @@
 ---
 title: "Explainability"
-description: "Introduce practical explanations for model behavior, including global drivers, local prediction reasons, SHAP, permutation importance, reports, and review evidence."
-overview: "Explainability helps a team understand and communicate why a model behaves the way it does. This article follows a loan pre-approval model through global drivers, local prediction reasons, SHAP values, permutation importance, explanation reports, reason-code review, and limits that reviewers should understand before release."
+description: "Choose explanations from the audience, decision, scope, method family, and validity requirements of the model use."
+overview: "Explainability provides evidence about model behaviour. This article develops a framework based on audience and question, then covers global and local scope, intrinsic and post-hoc methods, validity tests, reason codes, and operations."
 tags: ["MLOps", "advanced", "risk"]
 order: 2
 id: "article-mlops-governance-and-responsible-ai-explainability-basics"
 ---
 
-## Table of Contents
+## Explainability Starts With A Question
+<!-- section-summary: An explanation is useful only when it answers a defined question for a person who can act on it. -->
 
-1. [Explainability Answers Why A Model Behaves That Way](#explainability-answers-why-a-model-behaves-that-way)
-2. [Follow One Loan Pre-Approval Model](#follow-one-loan-pre-approval-model)
-3. [Global And Local Explanations](#global-and-local-explanations)
-4. [Permutation Importance For Global Checks](#permutation-importance-for-global-checks)
-5. [SHAP For Local Prediction Reasons](#shap-for-local-prediction-reasons)
-6. [Turn Explanations Into A Review Report](#turn-explanations-into-a-review-report)
-7. [Reason Codes And Human Review](#reason-codes-and-human-review)
-8. [Practical Checks And Common Mistakes](#practical-checks-and-common-mistakes)
-9. [Interview-Ready Understanding](#interview-ready-understanding)
-10. [References](#references)
+**Explainability** is the work of producing understandable evidence about how a model behaves or why it produced a result. The word covers many different questions, so selecting a technique before naming the question often produces an attractive chart that nobody can use.
 
-## Explainability Answers Why A Model Behaves That Way
-<!-- section-summary: Explainability gives people evidence about which inputs drive a model overall and which inputs influenced one specific prediction. -->
+Four audiences commonly need different explanations:
 
-**Explainability** is the work of making model behavior understandable enough for the people who build, review, operate, or are affected by the system. In practical MLOps, it usually answers two questions. Which features drive the model overall? Which features influenced this one prediction?
+- A **developer** asks which patterns the model learned and where it may be wrong.
+- A **validator or risk reviewer** asks whether the model relies on acceptable, stable, and documented factors.
+- An **operator** asks why production behaviour changed and which layer to investigate.
+- An **affected person or case reviewer** asks for the principal reasons behind one decision and what correction or appeal path exists.
 
-Those questions matter because production models rarely live alone. A model may affect an approval workflow, a care queue, a hiring screen, a fraud queue, or a support routing decision. The team needs evidence that reviewers can inspect before release and operators can use during incidents. A high validation score is useful, yet it leaves important questions open. The score says the model predicted well on a test set. Explainability helps the team see which patterns the model used to get there.
+These questions lead to different scopes, methods, evidence, and language. A global feature-importance plot may help a model developer and still fail to provide a specific reason for one person's outcome. A local attribution may describe one prediction and still fail to prove that changing the feature would change the real-world outcome.
 
-Explainability also improves debugging. If a loan model relies heavily on a field that changed last week, the team can catch the issue before approval rates move strangely. If a local explanation says a pre-approval was reduced by a stale income field, support can route the case to data correction. The explanation is evidence, and evidence helps the team act with less guessing.
+The explainability framework therefore follows this order: audience and decision, explanation scope, method family, method selection, validity testing, communication, and operational use.
 
-## Follow One Loan Pre-Approval Model
-<!-- section-summary: The running scenario follows a loan pre-approval model where explanations need to support review, debugging, and customer-facing decision reasons. -->
+## Scope Separates Global Behaviour From One Prediction
+<!-- section-summary: Global explanations summarize behaviour across data, while local explanations describe a particular prediction or case. -->
 
-Imagine **Rivergate Credit Union**. Its website offers a soft pre-approval flow for personal loans. A member enters basic financial information, and the model returns one of three outcomes: likely pre-approved, needs manual review, or unlikely pre-approved. The decision still flows through the credit union's policy and review process before any final offer.
+A **global explanation** describes patterns across many examples. It can identify influential features, important interactions, common decision regions, and segments where behaviour differs. Teams use it during model development, release review, and drift investigation.
 
-The model is called `personal_loan_preapproval`. It uses application fields, credit bureau summaries, account history, income bands, debt-to-income ratio, recent delinquencies, requested amount, employment length band, and product eligibility rules. Some inputs are highly sensitive from a business and customer-trust point of view. The team needs to know which features drive the model, whether those drivers make sense, and whether local explanations can support internal review and compliant customer communication.
+A **local explanation** describes one prediction. It may show feature contributions, a similar training example, a counterfactual change, a decision path, or a policy reason. Teams use it for case review, user communication, and incident analysis.
 
-The explainability work connects these artifacts:
+The scopes support each other without being interchangeable. A feature can rank highly globally but matter little for one case. A local factor can dominate one prediction while having small average importance. Review should therefore connect population-level behaviour with representative and high-risk local examples.
 
-| Artifact | Rivergate example | Main question |
-|---|---|---|
-| Feature list | `debt_to_income_ratio`, `recent_delinquency_count`, `income_band` | Which inputs can the model use? |
-| Global explanation | Permutation importance and SHAP summary | Which inputs matter across many applications? |
-| Local explanation | Top feature contributions for one application | Why did this one score move up or down? |
-| Review report | HTML/PDF report attached to release packet | Can risk and product reviewers inspect behavior? |
-| Reason code map | Reviewed mapping from model factors to customer reasons | Can explanations be converted into approved language? |
-| Monitoring check | Explanation drift over time | Did model behavior change after release? |
+Scope also includes the data slice. An explanation for the complete validation set may hide different drivers for regions, channels, language groups, or product types. The report should name the model version, preprocessing version, dataset, time window, segments, and explanation configuration.
 
-The rest of the article walks through those artifacts in the order a real release review would use them.
+## Method Families Answer Different Kinds Of Why
+<!-- section-summary: Intrinsic, attribution, example-based, and counterfactual explanations expose different aspects of model behaviour. -->
 
-## Global And Local Explanations
-<!-- section-summary: Global explanations summarize behavior across a dataset, while local explanations describe one prediction. Both views are needed for a high-impact model. -->
+An **intrinsically interpretable model** exposes its structure directly. A short decision tree, sparse linear model, monotonic scorecard, or generalized additive model can allow reviewers to inspect the relationship between inputs and output. This can be preferable when stakes are high and a simpler model meets the quality requirement.
 
-A **global explanation** describes model behavior across many examples. It helps the team answer questions like, "Which features matter most across the validation set?" and "Are the strongest drivers aligned with credit policy and domain expectations?" For Rivergate, global explanations should show that debt burden, recent repayment behavior, verified income band, and requested amount are important. If a browser type or application time zone appears near the top, reviewers should pause and investigate.
+**Feature-attribution methods** estimate how inputs contributed to model behaviour. Permutation importance measures how performance changes when a feature is shuffled across a dataset. SHAP methods estimate contributions relative to a baseline under stated assumptions. These methods are useful, while explainability is broader than feature attribution.
 
-A **local explanation** describes one prediction. It helps the team answer questions like, "For this application, which factors pushed the score toward manual review?" Local explanations support case review, support workflows, and internal audit. In credit workflows, legal and compliance partners may also need explanation evidence for adverse action notices or similar customer-facing communication. The CFPB has stated that creditors using complex algorithms must still provide specific principal reasons for adverse actions, so generic messages deserve extra review.
+**Example-based explanations** show similar or influential examples, prototypes, or criticisms. They can help a reviewer see which historical patterns support a prediction. Privacy, representativeness, and training-data errors require careful handling.
 
-The two views work together. A global report can say `recent_delinquency_count` is one of the strongest drivers. A local explanation can say one applicant's score moved down mainly because of two recent delinquencies and high debt-to-income ratio. Global tells the team what the model tends to use. Local tells the team what happened for a specific row.
+**Counterfactual explanations** describe a nearby input that would produce a different model result. They can support recourse discussions when the suggested change is actionable, lawful, and causally sensible. A mathematical counterfactual may recommend an impossible or inappropriate change, so feasibility and domain review matter.
 
-![Rivergate global and local explanations](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/rivergate-global-local-explanations.png)
+**Rule and path explanations** show decision-tree paths, extracted rules, policy evaluations, or workflow transitions. They are especially useful when the final product decision combines a model score with deterministic policy.
 
-*Rivergate uses global explanations to review behavior across many applications and local explanations to inspect one pre-approval case.*
+No family provides a complete account of “why.” A production explanation often combines several: global attribution for release review, local attribution for case inspection, policy reasons for communication, and counterfactual analysis for recourse research.
 
-Rivergate records the expected explanation set in the release packet:
+## Choose A Method From The Model, Data, And Decision
+<!-- section-summary: Method selection follows the explanation question, model family, feature relationships, audience, and consequence of being wrong. -->
 
-```yaml
-explainability_packet:
-  model_id: personal_loan_preapproval
-  model_version: "2026-07-03-candidate"
-  validation_slice: loans_preapproval_validation_2026_q2
-  required_artifacts:
-    - permutation_importance_table
-    - shap_summary_plot
-    - local_explanation_samples
-    - reason_code_mapping
-    - explanation_limitations
-  reviewer_groups:
-    - credit-risk
-    - compliance
-    - ml-platform
-    - product
-```
+Begin with the action the explanation should support. A developer debugging leakage may need global importance and feature-time analysis. A risk reviewer may need monotonic relationships, segment comparisons, and stability. A case reviewer may need principal factors, data-quality flags, and policy results. A customer-facing reason may need legally reviewed language grounded in the actual decision process.
 
-This small file helps automation and reviewers. A release gate can check that all artifacts exist, and the review meeting can focus on what the explanations show.
+Then consider the model and data. Tree-specific methods can be efficient for tree ensembles. Model-agnostic methods can compare many model families but may require more computation or stronger approximations. Correlated features complicate attribution because importance can be shared or reassigned among related inputs. High-dimensional embeddings may not map naturally to human concepts.
 
-## Permutation Importance For Global Checks
-<!-- section-summary: Permutation importance estimates how much model performance drops when one feature is shuffled on a validation set. -->
+The consequence of a misleading explanation sets the assurance bar. A low-risk recommendation-debugging view can tolerate exploration. An explanation used in lending, employment, healthcare, or access decisions needs stronger validation, governance, and domain or legal review.
 
-**Permutation importance** is a model inspection method that checks how much a fitted model depends on each feature. The idea is direct. First, measure model performance on a validation set. Then shuffle one feature column, run predictions again, and measure how much the score drops. A larger drop means the model relied more on that feature for performance on that dataset.
+Method selection should also ask whether the model itself is too complex for the use. If a simpler interpretable model performs adequately and the explanation requirement is central, changing the model family may provide more reliable understanding than layering post-hoc methods on an opaque model.
 
-This method is useful because it can work with many model types. It also forces you to look at a holdout or validation set, which is where explanations should live for release review. Feature importance from inside a model can be quick, yet it can overstate some kinds of features. The scikit-learn inspection guide explains permutation importance as a model inspection technique and documents the `permutation_importance` API.
+## Global Attribution Reveals Model Dependence
+<!-- section-summary: Global attribution methods can expose influential features and suspicious reliance when applied to reviewed data. -->
 
-Rivergate runs permutation importance on a validation slice:
+Permutation importance measures a fitted model on a validation set, shuffles one feature, and measures the performance drop. A larger drop suggests that the model depends more on that feature for that metric and data distribution.
 
 ```python
-import pandas as pd
 from sklearn.inspection import permutation_importance
-from sklearn.metrics import roc_auc_score
-
-feature_names = [
-    "debt_to_income_ratio",
-    "income_band_encoded",
-    "requested_amount",
-    "credit_history_months",
-    "recent_delinquency_count",
-    "open_credit_lines",
-    "employment_length_band_encoded",
-    "checking_balance_band_encoded",
-]
-
-baseline_auc = roc_auc_score(y_valid, model.predict_proba(X_valid)[:, 1])
 
 result = permutation_importance(
     model,
@@ -120,220 +77,157 @@ result = permutation_importance(
     random_state=42,
     n_jobs=-1,
 )
-
-importance = (
-    pd.DataFrame(
-        {
-            "feature": feature_names,
-            "mean_auc_drop": result.importances_mean,
-            "std_auc_drop": result.importances_std,
-        }
-    )
-    .sort_values("mean_auc_drop", ascending=False)
-)
-
-print("baseline_auc", round(baseline_auc, 4))
-print(importance.head(8))
 ```
 
-The output might look like this:
+This is useful for discovering an unexpected browser field, post-decision variable, unstable source, or feature whose importance conflicts with product policy. It should run on reviewed holdout data rather than only on training rows.
 
-| Feature | Mean AUC drop | Review note |
-|---|---:|---|
-| `debt_to_income_ratio` | 0.041 | Expected policy driver |
-| `recent_delinquency_count` | 0.028 | Expected repayment behavior driver |
-| `requested_amount` | 0.019 | Expected affordability driver |
-| `income_band_encoded` | 0.015 | Needs reason-code mapping review |
-| `credit_history_months` | 0.009 | Expected credit-file maturity driver |
-| `checking_balance_band_encoded` | 0.006 | Review for data freshness and customer communication |
+Permutation importance has important limits. Correlated features can share or mask importance. Shuffling may create unrealistic combinations. A feature with low global importance may matter strongly for one segment. The chosen metric determines what “important” means. Reports should include uncertainty across repeats and relevant segments rather than one ranked list.
 
-The review note column is important. The explanation table should lead to decisions. Expected drivers can pass. Unexpected drivers need investigation. Sensitive or hard-to-explain drivers may need policy review, feature removal, monotonic constraints, documentation, or manual review routing.
+Partial dependence or accumulated local effects can add information about the direction and shape of a feature relationship. They still describe model behaviour under assumptions and should not be presented as causal effects.
 
-Permutation importance has limits. Correlated features can share importance in confusing ways. Shuffling one encoded feature can break relationships created during preprocessing. A low importance value can still matter for a small segment. Those limits should appear in the report so reviewers avoid treating the table as absolute truth.
+## Local Attribution Describes One Prediction
+<!-- section-summary: Local attribution estimates which feature values moved a prediction relative to a defined baseline. -->
 
-## SHAP For Local Prediction Reasons
-<!-- section-summary: SHAP values explain a prediction by estimating how each feature contributed relative to a baseline prediction. -->
-
-**SHAP** is a popular explanation library built around Shapley values. In everyday terms, a SHAP explanation starts with a baseline prediction and estimates how each feature value moved the prediction for one row. For a loan pre-approval case, that gives reviewers a ranked list of factors that raised or lowered the model score.
-
-SHAP has different explainers for different model types. The current primary interface is `shap.Explainer`, which chooses an appropriate explainer when it can. Rivergate uses a tree-based model, so SHAP can produce efficient explanations after the feature preprocessing step.
+SHAP is a widely used family of feature-attribution methods based on Shapley values. A local SHAP explanation compares a prediction with a baseline and allocates the difference among features according to the explainer's assumptions.
 
 ```python
-import pandas as pd
 import shap
 
 background = shap.sample(X_train_processed, 500, random_state=42)
-explainer = shap.Explainer(model, background, feature_names=feature_names)
-
-sample = X_valid_processed.iloc[[17]]
-shap_values = explainer(sample)
-
-local_reasons = (
-    pd.DataFrame(
-        {
-            "feature": feature_names,
-            "feature_value": sample.iloc[0].to_list(),
-            "shap_value": shap_values.values[0],
-        }
-    )
-    .assign(abs_value=lambda df: df["shap_value"].abs())
-    .sort_values("abs_value", ascending=False)
-    .head(6)
+explainer = shap.Explainer(
+    model.predict_proba,
+    background,
+    feature_names=feature_names,
 )
-
-print(local_reasons[["feature", "feature_value", "shap_value"]])
+values = explainer(X_valid_processed.iloc[[17]])
+# For a binary classifier, values.values[0, :, 1] explains class 1.
 ```
 
-A local explanation for one application might read like this:
+The result can show that debt-to-income ratio moved a pre-approval score down while longer credit history moved it up. This supports internal case review when the feature values, preprocessing, baseline, and model version are recorded.
 
-| Feature | Value | Direction | Internal explanation |
-|---|---:|---|---|
-| `debt_to_income_ratio` | 0.47 | lowers score | Debt obligations are high for stated income band |
-| `recent_delinquency_count` | 2 | lowers score | Recent repayment events increase risk |
-| `requested_amount` | 18000 | lowers score | Requested amount is high relative to account profile |
-| `credit_history_months` | 96 | raises score | Longer history supports stronger confidence |
-| `checking_balance_band_encoded` | 3 | raises score | Account balance band supports affordability |
+The contribution is an explanation of model output, not proof of real-world causation. Changing one feature may be impossible, may change correlated features, or may not cause the outcome to change outside the model. Background-data choice can alter SHAP values. Different explainers have different assumptions and computational properties.
 
-![Rivergate local explanation to reason code flow](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/rivergate-local-reason-code-flow.png)
+Local explanations should therefore include the method, baseline or background data, transformed and human-readable feature names, model and preprocessing versions, and any data-quality flags. Raw values and sensitive attributes require access controls.
 
-*The local explanation flow keeps raw SHAP factors separate from reviewed reason codes and the manual review queue.*
+## Counterfactual And Example-Based Explanations Need Feasibility
+<!-- section-summary: Counterfactuals and examples can make explanations concrete, while domain constraints determine whether they are meaningful. -->
 
-This table is useful for internal review because it links the model score to concrete feature values. It still needs translation before a customer sees anything. The customer-facing language should come from an approved reason-code map instead of raw feature names or SHAP values. A feature like `checking_balance_band_encoded` might map to "available deposit account balance was below the reviewed threshold" only after compliance approves that language for the product and jurisdiction.
+A counterfactual might say that a lower requested amount would move an application into manual review. This can be useful if the feature is actionable and the product genuinely supports the alternative. It is misleading if it recommends changing age, hiding debt, or modifying one field while dependent fields remain impossible.
 
-Local explanations need guardrails. They can help review a prediction, yet they are approximations of model behavior. They can also expose sensitive inputs if the team writes raw values into reports. Rivergate stores local samples with redacted identifiers and reviewed feature names.
+Counterfactual generation needs immutable-feature constraints, ranges, causal or business relationships, action cost, and policy rules. Several diverse feasible counterfactuals are often more honest than one apparently precise instruction.
 
-## Turn Explanations Into A Review Report
-<!-- section-summary: An explanation report packages global drivers, local samples, subgroup checks, limitations, and review decisions so a release can be audited later. -->
+Example-based methods need similar caution. A “similar approved application” may expose personal data or rely on a distance measure that ignores important meaning. Use governed prototypes or anonymized examples, document the similarity function, and test whether examples remain representative across segments.
 
-An **explanation report** is the release artifact that connects explanation methods to the model decision. It should tell reviewers what data slice was used, which model version was explained, which features were strongest, which local samples were reviewed, which limitations apply, and which actions were taken.
+These methods work best when they answer a concrete reviewer or user question. They should not be added merely to make an explanation dashboard look comprehensive.
 
-Rivergate's report uses this structure:
+## Validity Tests Determine Whether An Explanation Deserves Trust
+<!-- section-summary: Fidelity, stability, sensitivity, plausibility, and uncertainty tests reveal whether an explanation supports its intended use. -->
 
-| Report section | What it contains | Release decision it supports |
-|---|---|---|
-| Model and data | Model version, validation slice, feature list, preprocessing version | Confirms the report explains the candidate release |
-| Global drivers | Permutation table and SHAP summary | Confirms top features align with policy expectations |
-| Local samples | Approved, manual review, and declined-like examples | Shows how one prediction can be interpreted |
-| Segment review | Explanation patterns by income band, age band where allowed, channel, product | Checks behavior across important groups |
-| Reason-code map | Internal factors mapped to approved reason language | Supports review and customer communication |
-| Limitations | Correlation, approximation, missing data, feature encoding caveats | Prevents overclaiming |
-| Actions | Feature removals, thresholds, manual review routing, accepted risks | Records what changed before approval |
+**Fidelity** asks whether the explanation accurately reflects the model behaviour it claims to summarize. A surrogate explanation should reproduce the model sufficiently well in the region being explained. Low fidelity means the explanation describes the surrogate more than the original model.
 
-The report can include a small evidence block inside the release packet:
+**Stability** asks whether small reasonable changes in data, background sample, seed, or model version cause large explanation changes. Instability may reflect a fragile model, correlated inputs, or a sensitive method. Reviewers need to know when principal reasons are not robust.
+
+**Sensitivity** asks whether changing an important input changes the explanation appropriately and whether irrelevant changes leave it mostly stable. **Plausibility** asks whether the explanation follows domain constraints. **Uncertainty** reports variation across samples, repeats, or plausible methods rather than presenting one ranking as exact truth.
+
+Explanation tests should include segments and nearby cases. Two nearly identical applications receiving different principal reasons deserve investigation. A global driver that reverses direction across important groups may need a more specific model, additional constraints, or clearer limitation.
+
+A stability test can repeat the explanation with several reviewed background samples and measure whether the principal factors keep changing:
+
+```python
+import numpy as np
+import shap
+
+backgrounds = [
+    X_train_processed.sample(500, random_state=seed)
+    for seed in [11, 29, 47, 83, 101]
+]
+case = X_valid_processed.loc[["application-18422"]]
+
+rankings = []
+for background in backgrounds:
+    explanation = shap.Explainer(
+        model.predict_proba,
+        background,
+        feature_names=feature_names,
+    )(case)
+    class_one_contributions = explanation.values[0, :, 1]
+    order = np.argsort(np.abs(class_one_contributions))[::-1]
+    rankings.append([feature_names[index] for index in order[:3]])
+
+principal_reason_agreement = sum(
+    ranking[0] == rankings[0][0] for ranking in rankings
+) / len(rankings)
+assert principal_reason_agreement >= 0.8, rankings
+```
+
+The backgrounds represent plausible choices of reference data rather than five arbitrary production populations. The test asks a narrow question: whether the top internal reason for one case remains stable under those choices. It should also run across a reviewed sample of cases and important segments.
+
+If the rankings alternate between `debt_to_income` and `requested_amount` because those inputs are strongly related, the interface should avoid claiming one uniquely determined reason. The team can group the related factors, use an intrinsically interpretable decision component, route the case to a reviewer, or prevent this method from supporting customer communication. Re-running the test after a model, preprocessing, or background-data change verifies whether the approved explanation behaviour still holds.
+
+Explanations also need leakage and proxy review. A highly influential post-outcome field signals leakage. A seemingly harmless feature may proxy a sensitive attribute. Attribution cannot settle the fairness question. It can direct deeper evaluation.
+
+## Reason Codes Translate Evidence Into Governed Language
+<!-- section-summary: Reason codes connect internal model and policy evidence to reviewed explanations without exposing raw feature names. -->
+
+A **reason code** is a governed explanation category used by reviewers or customer-facing systems. It maps internal evidence to language approved for the product and jurisdiction. Raw feature names or SHAP rankings should not automatically appear in notices.
+
+The mapping should identify the internal factor, eligible decision paths, customer wording, limitations, owner, and version. The final reasons should come from the actual model-plus-policy decision. If a deterministic eligibility rule produced the outcome, a model attribution alone would explain the wrong component.
+
+For US credit decisions, current Regulation B and its official interpretation require specific principal reasons for adverse action and explain that listed reasons must describe factors actually used. CFPB Circular 2022-03 previously discussed this issue for complex algorithms, and the Bureau withdrew that circular on May 12, 2025. Teams should use the current regulation and qualified legal review rather than teaching the withdrawn circular as current guidance or treating a generic explainability library as compliance.
+
+A reason-code mapping must therefore connect the final decision path to approved language:
 
 ```yaml
-explainability_evidence:
-  model_id: personal_loan_preapproval
-  model_version: "2026-07-03-candidate"
-  validation_dataset: rivergate_preapproval_validation_2026_q2
-  generated_at: "2026-07-04T09:30:00Z"
-  global_methods:
-    - permutation_importance
-    - shap_summary
-  local_samples_reviewed: 48
-  top_global_drivers:
-    - debt_to_income_ratio
-    - recent_delinquency_count
-    - requested_amount
-    - income_band_encoded
-  removed_features:
-    - application_submit_hour
-  open_limitations:
-    - correlated affordability features share attribution
-    - income band explanations require approved customer language
-  reviewer_decision: approved_for_staging
+reason_mapping_version: credit-reasons-v8
+reasons:
+  debt_service_burden:
+    source: model_feature_group
+    internal_features: [debt_to_income, monthly_debt, verified_income]
+    eligible_decisions: [manual_review, adverse_action]
+    customer_language: Existing monthly debt is high relative to verified income.
+  requested_amount_policy:
+    source: deterministic_policy
+    policy_rule: requested_amount_above_verified_limit
+    eligible_decisions: [adverse_action]
+    customer_language: The requested amount exceeds the verified lending limit.
 ```
 
-The `removed_features` line shows why explanations are operational release evidence. In Rivergate's review, `application_submit_hour` carried channel and work-schedule patterns that lacked an approved justification for pre-approval. The feature left the model before staging.
+When the deterministic rule causes the action, `requested_amount_policy` should outrank a nearby model attribution because it describes the component that actually decided the case. A release test feeds one case through model, policy, and reason mapper, then verifies that every emitted reason refers to a factor or rule used by that decision. An unmapped factor, unstable internal reason, stale mapping version, or data-quality flag sends the case to qualified review.
 
-![Rivergate explanation report](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/rivergate-explanation-report.png)
+Human review handles missing or stale data, unstable explanations, unsupported reason mappings, and cases whose consequence requires judgement. The reviewer should see model version, policy version, input-quality flags, internal explanation, reason candidates, and the available correction or appeal path.
 
-*The explanation report ties validation data, global drivers, local samples, limitations, reason codes, and removed features to the release decision.*
+## Explanation Is A Versioned Release Artifact
+<!-- section-summary: Release evidence records the model, data, methods, samples, validity results, limitations, and reviewer decisions. -->
 
-## Reason Codes And Human Review
-<!-- section-summary: Reason codes turn model factors into reviewed language, while human review handles cases where the explanation or input quality needs judgment. -->
+An explanation report should identify the candidate model and preprocessing, evaluation data, method configuration, global results, representative local cases, segment analysis, validity tests, known limitations, reason-code coverage, and actions taken.
 
-A **reason code** is an approved explanation category that can be shown to a reviewer or customer-facing system. In credit workflows, reason codes need careful legal and compliance review. The engineering task is to provide accurate, traceable evidence that maps model factors to those reviewed categories.
+The report creates value when it changes a release decision. An unexpected post-decision feature may be removed. An unstable local explanation may route cases to human review. A segment-specific driver may trigger deeper fairness analysis. A method limitation may prevent customer-facing use while allowing internal debugging.
 
-Rivergate keeps the mapping separate from model code:
+The artifact stays linked to the released version. A new model, preprocessing pipeline, feature set, background dataset, or reason mapping can change explanations and needs renewed evidence. Keeping only a notebook screenshot loses these dependencies.
 
-```yaml
-reason_code_map:
-  debt_to_income_ratio:
-    internal_label: high debt-to-income ratio
-    customer_reason: Debt obligations are high compared with verified income.
-    allowed_for_customer_notice: true
-  recent_delinquency_count:
-    internal_label: recent repayment events
-    customer_reason: Recent repayment history affected the pre-approval result.
-    allowed_for_customer_notice: true
-  requested_amount:
-    internal_label: requested loan amount
-    customer_reason: Requested loan amount is high compared with the current profile.
-    allowed_for_customer_notice: true
-  checking_balance_band_encoded:
-    internal_label: deposit account balance band
-    customer_reason: Deposit account information requires manual review.
-    allowed_for_customer_notice: false
-```
+## Production Monitoring Watches Behaviour And Explanation Drift
+<!-- section-summary: Explanation monitoring can reveal changing model reliance while outcome and data monitoring establish the wider incident context. -->
 
-This mapping protects the team from dumping raw feature names into a notice. It also gives reviewers a way to reject weak language. A reason such as "model score too low" is poor evidence because it tells the person nothing about the main factors. A reviewed reason should point to the principal factors the model used, in language the organization has approved.
+Teams can monitor top-driver distributions, contribution magnitudes, reason-code frequency, missing explanation rate, and stability on a recurring sample. A sudden rise in one reason may signal traffic change, feature issues, policy change, or model drift.
 
-Human review is the safety valve for cases where explanations need judgment. Rivergate routes an application to manual review when the top local factors include stale data, conflicting income evidence, missing bureau fields, or a feature that lacks approved reason language. The review queue stores the model version, local explanation, reason-code candidates, and data-quality flags.
+Explanation drift is diagnostic evidence. It does not prove concept drift or harm. Operators compare it with feature health, model version, policy changes, prediction quality, and product outcomes. This prevents a changed SHAP distribution from triggering automatic retraining without understanding the cause.
 
-```json
-{
-  "case_id": "manual-review-20260704-0041",
-  "model_id": "personal_loan_preapproval",
-  "model_version": "2026-07-03-candidate",
-  "prediction_bucket": "needs_manual_review",
-  "top_internal_factors": [
-    "debt_to_income_ratio",
-    "checking_balance_band_encoded",
-    "requested_amount"
-  ],
-  "data_quality_flags": ["income_document_pending"],
-  "reason_code_candidates": ["DTI_HIGH", "REQUESTED_AMOUNT_HIGH"],
-  "review_owner": "credit-operations"
-}
-```
+During an incident, local explanations can help locate the model path for affected cases. They should sit beside raw input quality, feature versions, policy results, and outcome evidence. Explainability supports diagnosis; it does not replace observability or evaluation.
 
-This record gives the human reviewer context without asking them to reverse-engineer the model. It also gives the audit trail a durable explanation of why the case entered manual review.
+## Useful Explanations Connect Question, Method, And Action
+<!-- section-summary: Explainability succeeds when validated evidence answers a named question and leads to a responsible decision. -->
 
-## Practical Checks And Common Mistakes
-<!-- section-summary: Explanation checks should verify artifact quality, feature reasonableness, local sample coverage, reason-code mapping, and monitoring before release. -->
+Global and local scope, intrinsic and post-hoc methods, attribution, examples, counterfactuals, validity tests, reason codes, and monitoring are parts of one framework. The audience and decision select the relevant parts.
 
-Before Rivergate releases the model, the team runs explanation checks that can block staging or production.
-
-| Check | Release-blocking condition |
-|---|---|
-| Artifact completeness | Permutation table, SHAP report, local samples, and limitations section are missing |
-| Feature reasonableness | Top driver lacks a documented product or policy reason |
-| Data leakage clue | Explanation highlights a field created after the decision time |
-| Reason-code coverage | A top local driver lacks approved reason language or routing rule |
-| Sensitive proxy review | A driver strongly tracks a protected or sensitive attribute without review |
-| Sample coverage | Local examples skip manual-review and low-score cases |
-| Monitoring plan | No plan exists to watch explanation drift or top-driver changes |
-
-Common mistakes appear quickly once you know what to watch for. Teams attach a SHAP plot with no explanation of data slice or model version. They use training data for explanations instead of validation data. They report global feature importance and skip local examples. They turn raw feature names into customer language. They hide the limitations section because it feels uncomfortable. They let explanations live in a notebook instead of a release artifact.
-
-The better habit is simple and repeatable. Build explanations on the reviewed validation slice, package them with the release packet, map local factors to approved reason codes, and monitor whether explanation patterns change after deployment.
-
-## Interview-Ready Understanding
-<!-- section-summary: A strong answer explains global versus local explanations, names practical methods, and ties explanation artifacts to release review and operations. -->
-
-If someone asks you about explainability in MLOps, start with the two questions. Global explanations show which inputs drive behavior across a dataset. Local explanations show which inputs influenced one prediction. Both views need method names, data slices, version IDs, limitations, and review decisions.
-
-For Rivergate, permutation importance checks global model dependence on validation data. SHAP helps explain individual pre-approval cases. The explanation report packages top drivers, local samples, reason-code mappings, limitations, and actions. Reviewers use that report to approve, reject, or change the release. Operators use the same evidence when a case is disputed or when model behavior changes after deployment.
-
-That is the practical point. Explainability is useful when it creates reviewable evidence and operational action instead of only creating a pretty chart.
+The best explanation is not the most sophisticated plot. It is the smallest validated body of evidence that answers the real question, communicates its limits, and gives the developer, reviewer, operator, or affected person an appropriate next action.
 
 ## References
 
 - [SHAP documentation: shap.Explainer](https://shap.readthedocs.io/en/latest/generated/shap.Explainer.html)
 - [scikit-learn: Permutation feature importance](https://scikit-learn.org/stable/modules/permutation_importance.html)
-- [scikit-learn API: permutation_importance](https://scikit-learn.org/stable/modules/generated/sklearn.inspection.permutation_importance.html)
-- [scikit-learn: ROC AUC score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html)
-- [CFPB Circular 2022-03: Adverse action notification requirements in connection with credit decisions based on complex algorithms](https://www.consumerfinance.gov/compliance/circulars/circular-2022-03-adverse-action-notification-requirements-in-connection-with-credit-decisions-based-on-complex-algorithms/)
-- [TensorFlow Model Card Toolkit guide](https://www.tensorflow.org/responsible_ai/model_card_toolkit/guide)
+- [scikit-learn: Partial dependence and ICE](https://scikit-learn.org/stable/modules/partial_dependence.html)
+- [CFPB Regulation B § 1002.9 and official interpretation](https://www.consumerfinance.gov/rules-policy/regulations/1002/9/)
+- [CFPB Regulation B Appendix C sample notification forms](https://www.consumerfinance.gov/rules-policy/regulations/1002/c/)
+- [CFPB withdrawn guidance list](https://www.consumerfinance.gov/compliance/guidance/withdrawn-guidance/)
+- [TensorFlow Model Card Toolkit](https://www.tensorflow.org/responsible_ai/model_card_toolkit/guide)
 - [Google Research: Model Cards for Model Reporting](https://research.google/pubs/model-cards-for-model-reporting/)

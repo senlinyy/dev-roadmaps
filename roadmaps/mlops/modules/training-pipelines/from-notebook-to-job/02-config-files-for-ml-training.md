@@ -1,24 +1,11 @@
 ---
 title: "Training Config Files"
 description: "Use versioned training config files to control data snapshots, features, model settings, runtime resources, thresholds, and tracking metadata."
-overview: "A training config file records the choices that should vary between runs while the training script keeps the reviewed behavior. This tutorial follows a returns-risk model as a team designs YAML config, validates it, overrides it safely in CI, and records the resolved config with each run."
+overview: "A training config system separates reviewed code from run choices through a typed hierarchy, controlled override precedence, validation, and a recorded resolved configuration. A returns-risk model illustrates the framework."
 tags: ["MLOps", "core", "training"]
 order: 2
 id: "article-mlops-training-pipelines-config-files-for-ml-training"
 ---
-
-## Table of Contents
-
-1. [A Config File Controls A Run Without Rewriting The Script](#a-config-file-controls-a-run-without-rewriting-the-script)
-2. [Follow One Returns-Risk Model](#follow-one-returns-risk-model)
-3. [Separate Stable Code From Run Choices](#separate-stable-code-from-run-choices)
-4. [Design The Config Hierarchy](#design-the-config-hierarchy)
-5. [Validate The Config Before Training](#validate-the-config-before-training)
-6. [Override Values Safely](#override-values-safely)
-7. [Record The Resolved Config](#record-the-resolved-config)
-8. [Operational Checks](#operational-checks)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## A Config File Controls A Run Without Rewriting The Script
 <!-- section-summary: A training config file stores the run choices that change often while source code stores the reviewed training behavior. -->
@@ -44,8 +31,8 @@ The core pieces connect like this:
 ![Code and config split for a training run](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/code-vs-config.png)
 *The Python code carries the reviewed behavior, while the config names the data, features, thresholds, and runtime for this BrightCart run.*
 
-## Follow One Returns-Risk Model
-<!-- section-summary: The running scenario follows an ecommerce team that needs clear configs for a returns-risk training job. -->
+## Apply The Config Framework To Returns Risk
+<!-- section-summary: A supporting example follows an ecommerce team that needs clear configs for a returns-risk training job. -->
 
 Imagine **BrightCart**, an ecommerce marketplace that wants to predict which orders have a high chance of return. The operations team uses the model to prioritize fit guidance, quality checks, and merchant coaching. A bad model can unfairly flag honest customers or miss product categories with real sizing issues, so the training run needs a clear record.
 
@@ -93,6 +80,8 @@ This split helps reviews. A data scientist can propose a config-only change for 
 A clear config reads from top to bottom like the run itself. Start with human metadata, then data, features, model, runtime, tracking, and review gates. This order helps a reviewer understand the run before reading any code.
 
 Here is BrightCart's candidate config:
+
+:::expand[Inspect the complete candidate training config]{kind="example"}
 
 ```yaml
 schema_version: 1
@@ -153,6 +142,8 @@ review:
   max_training_cost_usd: 35
 ```
 
+:::
+
 This file tells a strong story. The data section names the snapshot and entity key. The feature section shows which columns the model can use. The runtime section records a CPU-only job, which fits a tree model. The review section carries business guardrails, so the training job can fail early if a candidate creates too much customer harm risk.
 
 ![Training config hierarchy](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/config-hierarchy.png)
@@ -166,6 +157,8 @@ The config should avoid vague names such as `latest`, `final`, or `best`. A conf
 Validation should happen before the training script reads a large table or requests expensive compute. Validation checks the shape of the config and the meaning of important values. A missing label column, unsupported algorithm, or empty feature list should stop the run quickly.
 
 BrightCart can start with a small Python validator:
+
+:::expand[Implement the config validator]{kind="pattern"}
 
 ```python
 from pathlib import Path
@@ -200,6 +193,8 @@ def load_config(path: str) -> dict:
 
     return config
 ```
+
+:::
 
 This validator keeps the errors close to the source. It checks required sections, schema version, algorithm names, feature lists, and one resource rule. A larger team may use a typed config library or JSON Schema, yet the first habit stays the same: parse and validate before training.
 
@@ -321,6 +316,8 @@ Config files need operations habits because small values can cause expensive or 
 
 A simple CI check can validate every config in the repository:
 
+:::expand[Run config validation in pull requests]{kind="example"}
+
 ```yaml
 name: validate-training-configs
 
@@ -334,7 +331,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -346,6 +343,8 @@ jobs:
             python -m returns_risk.validate_config --config "$config"
           done
 ```
+
+:::
 
 The same validator can run inside the training script. CI catches config errors during review, and the training job catches any config that enters through a manual run or scheduler.
 

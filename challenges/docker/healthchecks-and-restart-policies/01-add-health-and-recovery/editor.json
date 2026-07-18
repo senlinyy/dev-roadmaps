@@ -1,0 +1,83 @@
+{
+  "language": "yaml",
+  "filename": "compose.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "services:\n  api:\n    image: registry.example.com/payments-api:4.2.0\n  db:\n    image: postgres:17-alpine\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "services",
+          "db",
+          "healthcheck",
+          "test"
+        ],
+        "equals": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "label": "database health command"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "healthcheck",
+          "interval"
+        ],
+        "equals": "5s",
+        "label": "health interval"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "healthcheck",
+          "timeout"
+        ],
+        "equals": "3s",
+        "label": "health timeout"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "healthcheck",
+          "retries"
+        ],
+        "equals": 5,
+        "label": "health retry budget"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "depends_on",
+          "db",
+          "condition"
+        ],
+        "equals": "service_healthy",
+        "label": "healthy database startup dependency"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "restart"
+        ],
+        "equals": "unless-stopped",
+        "label": "API restart policy"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "restart"
+        ],
+        "equals": "unless-stopped",
+        "label": "database restart policy"
+      }
+    ]
+  }
+}

@@ -31,3 +31,5 @@ jobs:
       - run: ./scripts/smoke-orders-api.sh
       - run: ./scripts/watch-canary.sh
 ```
+
+Required inputs make the release and rollback targets explicit at dispatch time. Production environment protection, least-privilege OIDC permissions, and non-canceling concurrency keep the automated path reviewable and prevent two releases from changing traffic together.

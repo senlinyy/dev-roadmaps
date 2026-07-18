@@ -16,6 +16,8 @@ resource "aws_s3_bucket" "orders_invoices" {
 }
 ```
 
+The import block maps the existing bucket identifier to one Terraform address without creating a second managed object.
+
 ### imports.tf
 
 ```hcl

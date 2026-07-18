@@ -22,6 +22,7 @@ spec:
         - name: api
           image: ghcr.io/devpolaris/orders-api:2026.07.11
           securityContext:
+            privileged: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:

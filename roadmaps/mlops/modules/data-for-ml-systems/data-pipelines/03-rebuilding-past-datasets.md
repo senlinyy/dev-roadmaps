@@ -1,24 +1,12 @@
 ---
 title: "Rebuild Past Datasets"
 description: "Recreate old ML training datasets with source snapshots, pipeline commits, point-in-time joins, validation reports, and rollback evidence."
-overview: "Rebuilding a past dataset means recreating the rows, labels, features, and validation evidence that trained an older model. This tutorial follows a delivery ETA team using lakeFS, DVC, Delta Lake, Apache Iceberg, SQL, and runbooks to replay a dataset after a late-data incident."
+overview: "Rebuilding a past dataset means recreating the rows, labels, features, and validation evidence that trained an older model. A supporting example follows a delivery ETA team using lakeFS, DVC, Delta Lake, Apache Iceberg, SQL, and runbooks to replay a dataset after a late-data incident."
 tags: ["MLOps", "production", "pipelines"]
 order: 3
 id: "article-mlops-data-for-ml-systems-rebuilding-past-datasets"
 ---
 
-## Table of Contents
-
-1. [Why Rebuilds Exist](#why-rebuilds-exist)
-2. [The Evidence Packet](#the-evidence-packet)
-3. [Schemas That Support Rebuilds](#schemas-that-support-rebuilds)
-4. [Version The Sources](#version-the-sources)
-5. [Replay The Pipeline](#replay-the-pipeline)
-6. [Point-In-Time Joins](#point-in-time-joins)
-7. [Validation And Comparison](#validation-and-comparison)
-8. [Incident Runbook](#incident-runbook)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## Why Rebuilds Exist
 <!-- section-summary: Rebuilding a past dataset gives a team the exact evidence needed to debug an older model, compare a fix, or answer an audit question. -->
@@ -29,9 +17,24 @@ Picture a company called RouteLoop Logistics. RouteLoop predicts delivery ETA fo
 
 The incident starts with a simple question: what data trained `eta-v42`? The answer cannot rely on a Slack message or a notebook name. The team needs the source table snapshots, the pipeline commit, the label delay rule, the feature definitions, the validation report, and the output dataset identity. Without those pieces, the team can still investigate, yet it cannot prove whether the old model learned from broken weather data or whether the live service drifted after release.
 
-This article follows that incident from evidence to replay. The main idea is plain: **a dataset rebuild is a production operation, so every training dataset needs a receipt**. The receipt records which source data existed, which code transformed it, which time window it covered, which checks passed, and where the output landed.
+A supporting example follows that incident from evidence to replay. The main idea is plain: **a dataset rebuild is a production operation, so every training dataset needs a receipt**. The receipt records which source data existed, which code transformed it, which time window it covered, which checks passed, and where the output landed.
 
-## The Evidence Packet
+```mermaid
+flowchart LR
+    Model["Historical model or run"] --> Receipt["Dataset receipt"]
+    Receipt --> Sources["Immutable source snapshots"]
+    Receipt --> Code["Pipeline code and resolved parameters"]
+    Sources --> Replay["Isolated replay"]
+    Code --> Replay
+    Replay --> Candidate["Rebuilt dataset identity"]
+    Candidate --> Compare{"Rows, schema, labels, and checks agree?"}
+    Compare -->|yes| Proven["Reproduction evidence"]
+    Compare -->|no| Investigate["First differing source or rule"]
+```
+
+The receipt provides the connection between the historical decision and the replay inputs. The comparison checks the dataset itself and its validation evidence. A mismatch stays useful because it points investigators toward the first source snapshot, transformation, or policy that differs.
+
+## Connect Evidence To The Decision
 <!-- section-summary: A rebuild evidence packet connects the model version to source versions, code, parameters, validation, ownership, and approved replay commands. -->
 
 The first piece is the **evidence packet**. An evidence packet is a small metadata record created during the original dataset build. It travels with the training run and later gives incident responders a starting point. The packet can live in a model registry, experiment tracker, data catalog, or a version-controlled artifact folder. The storage location matters less than the habit: the packet must be created while the run is fresh.

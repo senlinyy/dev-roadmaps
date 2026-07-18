@@ -12,6 +12,8 @@ resource "aws_s3_bucket" "orders_invoices" {
 }
 ```
 
+The outputs expose stable caller-facing attributes with descriptions, without leaking unrelated resource internals.
+
 ### outputs.tf
 
 ```hcl

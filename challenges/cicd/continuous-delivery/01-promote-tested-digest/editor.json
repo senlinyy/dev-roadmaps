@@ -1,0 +1,91 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/release.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Release\non:\n  workflow_dispatch:\n\njobs:\n  deploy-staging:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: docker build -t registry.example.com/booking-api:staging .\n      - run: ./deploy.sh staging registry.example.com/booking-api:staging\n\n  deploy-production:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: docker build -t registry.example.com/booking-api:production .\n      - run: ./deploy.sh production registry.example.com/booking-api:production\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "on",
+          "workflow_dispatch",
+          "inputs",
+          "image_digest",
+          "required"
+        ],
+        "equals": true,
+        "label": "required image digest input"
+      },
+      {
+        "path": [
+          "on",
+          "workflow_dispatch",
+          "inputs",
+          "image_digest",
+          "type"
+        ],
+        "equals": "string",
+        "label": "digest input type"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-staging",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "./deploy.sh staging registry.example.com/booking-api@${{ inputs.image_digest }}"
+        },
+        "label": "staging immutable deployment"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-production",
+          "needs"
+        ],
+        "equals": "deploy-staging",
+        "label": "production waits for staging"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-production",
+          "environment"
+        ],
+        "equals": "production",
+        "label": "protected production environment"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-production",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "./deploy.sh production registry.example.com/booking-api@${{ inputs.image_digest }}"
+        },
+        "label": "production promotes identical digest"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-staging",
+          "steps"
+        ],
+        "maxItems": 1,
+        "label": "staging performs deployment only"
+      },
+      {
+        "path": [
+          "jobs",
+          "deploy-production",
+          "steps"
+        ],
+        "maxItems": 1,
+        "label": "production performs deployment only"
+      }
+    ]
+  }
+}

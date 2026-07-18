@@ -11,6 +11,8 @@
     validate: "nginx -t -c %s"
 ```
 
+The template module renders variable-driven content and validates the temporary file before replacing the live nginx configuration.
+
 ### roles/orders_web/templates/nginx.conf.j2
 
 ```yaml

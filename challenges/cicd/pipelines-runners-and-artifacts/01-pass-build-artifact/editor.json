@@ -1,0 +1,51 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/preview.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Preview Package\non:\n  pull_request:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm run build\n      - run: tar -czf checkout-api.tar.gz dist package.json package-lock.json\n\n  deploy-preview:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci && npm run build\n      - run: ./scripts/deploy-preview.sh checkout-api.tar.gz\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "build", "steps"],
+        "containsObject": {
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "checkout-api-package",
+            "path": "checkout-api.tar.gz"
+          }
+        },
+        "label": "build uploads the checkout API package"
+      },
+      {
+        "path": ["jobs", "deploy-preview", "needs"],
+        "equals": "build",
+        "label": "preview deployment waits for build"
+      },
+      {
+        "path": ["jobs", "deploy-preview", "steps"],
+        "containsObject": {
+          "uses": "actions/download-artifact@v4",
+          "with": {
+            "name": "checkout-api-package"
+          }
+        },
+        "label": "preview deployment downloads the build artifact"
+      },
+      {
+        "path": ["jobs", "deploy-preview", "steps"],
+        "containsObject": {
+          "run": "./scripts/deploy-preview.sh checkout-api.tar.gz"
+        },
+        "label": "preview deployment uses the downloaded archive"
+      },
+      {
+        "path": ["jobs", "deploy-preview", "steps"],
+        "excludesObject": {
+          "run": "npm ci && npm run build"
+        },
+        "label": "preview deployment does not rebuild the package"
+      }
+    ]
+  }
+}

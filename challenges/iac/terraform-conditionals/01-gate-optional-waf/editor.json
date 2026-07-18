@@ -1,0 +1,35 @@
+{
+  "language": "hcl",
+  "activeFile": "variables.tf",
+  "completionProfile": "terraform-aws",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"enable_waf\" {\n}\n\nvariable \"waf_acl_arn\" {\n}\n"
+    },
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_lb\" \"app\" {\n  name = \"orders-app\"\n}\n\n# Add the optional WAF association here.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"enable_waf\"\\s*\\{[^}]*type\\s*=\\s*bool[^}]*default\\s*=\\s*false[^}]*\\}",
+        "label": "boolean WAF toggle defaults off"
+      },
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"waf_acl_arn\"\\s*\\{[^}]*type\\s*=\\s*string[^}]*default\\s*=\\s*null[^}]*\\}",
+        "label": "nullable WAF ARN"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "resource\\s+\"aws_wafv2_web_acl_association\"\\s+\"app\"\\s*\\{[^}]*count\\s*=\\s*var\\.enable_waf\\s*\\?\\s*1\\s*:\\s*0[^}]*resource_arn\\s*=\\s*aws_lb\\.app\\.arn[^}]*web_acl_arn\\s*=\\s*var\\.waf_acl_arn[^}]*\\}",
+        "label": "optional WAF association"
+      }
+    ]
+  }
+}

@@ -12,3 +12,5 @@
         state: present
       when: ansible_facts.os_family == "Debian"
 ```
+
+The fact condition keeps the Debian package module off incompatible hosts while preserving one play for a mixed inventory.

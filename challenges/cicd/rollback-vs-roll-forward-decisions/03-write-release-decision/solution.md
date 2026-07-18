@@ -12,3 +12,5 @@ decision:
       reason: not needed because the stable task set was already healthy
   owner: Maya
 ```
+
+The decision record connects the recovery action to observed configuration and health evidence. It also explains why a code patch would have added risk without addressing the first known cause.

@@ -25,24 +25,26 @@
         "label": "canary runs under the production environment"
       },
       {
-        "path": ["jobs", "canary", "steps", 0, "run"],
-        "type": "string",
-        "equals": "./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\"",
-        "label": "first step creates the canary deployment"
+        "path": ["jobs", "canary", "steps"],
+        "containsObject": {
+          "run": "./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\""
+        },
+        "label": "canary job creates the deployment"
       },
       {
-        "path": ["jobs", "canary", "steps", 1, "run"],
-        "type": "string",
-        "equals": "./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5",
-        "label": "second step watches the canary"
+        "path": ["jobs", "canary", "steps"],
+        "containsObject": {
+          "run": "./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5"
+        },
+        "label": "canary job watches the canary"
       },
       {
-        "path": ["jobs", "canary", "steps", 2, "run"],
-        "type": "string",
-        "equals": "./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\"",
-        "label": "third step checks CodeDeploy success"
+        "path": ["jobs", "canary", "steps"],
+        "containsObject": {
+          "run": "./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\""
+        },
+        "label": "canary job checks CodeDeploy success"
       }
     ]
   }
 }
-

@@ -10,3 +10,5 @@
     mode: "0640"
   no_log: true
 ```
+
+The restricted file mode limits host access, while `no_log` prevents secret-bearing task arguments and results from entering automation logs.

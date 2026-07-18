@@ -1,7 +1,7 @@
 ---
 title: "Monitoring and Feedback"
-description: "Observe model services, detect model behavior changes, collect feedback, and build retraining loops."
+description: "Follow the production control loop from service health through feature and prediction quality to labels, human review, and controlled retraining."
 tags: ["monitoring", "drift", "feedback"]
 icon: "Map"
-order: 8
+order: 10
 ---

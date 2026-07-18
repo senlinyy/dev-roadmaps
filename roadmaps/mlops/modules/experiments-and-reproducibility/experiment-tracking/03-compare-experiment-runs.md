@@ -1,24 +1,11 @@
 ---
 title: "Comparing Experiment Runs"
 description: "Show how teams compare tracked runs against a baseline using metrics, segments, artifacts, runtime checks, and release risk."
-overview: "Comparing experiment runs means choosing a model candidate with evidence across more than the top score. This article follows a computer vision defect detection team as they compare MLflow and W&B runs against a baseline, inspect guardrails, check artifacts, and write a release recommendation."
+overview: "Comparing experiment runs is a layered decision about comparability, product value, guardrails, uncertainty, operational readiness, and release evidence. A defect-detection example applies that framework to tracked runs."
 tags: ["MLOps", "core", "tracking"]
 order: 3
 id: "article-mlops-experiments-and-reproducibility-compare-experiment-runs"
 ---
-
-## Table of Contents
-
-1. [Comparison Is A Model Decision With Evidence](#comparison-is-a-model-decision-with-evidence)
-2. [Follow One Defect Detection Review](#follow-one-defect-detection-review)
-3. [Start With A Shared Baseline](#start-with-a-shared-baseline)
-4. [Build A Comparison Table](#build-a-comparison-table)
-5. [Inspect Segments And Failure Examples](#inspect-segments-and-failure-examples)
-6. [Check Artifacts And Runtime Readiness](#check-artifacts-and-runtime-readiness)
-7. [Choose A Candidate And Record The Decision](#choose-a-candidate-and-record-the-decision)
-8. [Failure Modes In Run Comparison](#failure-modes-in-run-comparison)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## Comparison Is A Model Decision With Evidence
 <!-- section-summary: Comparing runs means judging candidates against a baseline, guardrails, segments, artifacts, and release constraints. -->
@@ -31,8 +18,34 @@ This article builds directly on the previous two. Reproducibility gives you the 
 
 If you are the person reviewing the run table, start with the product decision instead of the biggest number. Ask whether the candidate improves the product, respects the guardrails, has the files needed for release, and leaves a rollback path the operations team can trust.
 
-## Follow One Defect Detection Review
-<!-- section-summary: The running scenario follows a computer vision team choosing a surface defect detector for a factory line. -->
+Use the same decision layers for every candidate review:
+
+| Decision layer | Question | Stop condition |
+|---|---|---|
+| **Comparability** | Did baseline and candidate use the same eligible data, metric code, and protocol? | The comparison mixes incompatible evidence |
+| **Product value** | Does the primary metric represent the decision the product needs? | The gain has no useful product interpretation |
+| **Guardrails and segments** | Which users, classes, regions, or failure types lost quality? | A protected or high-cost slice crosses its limit |
+| **Uncertainty and robustness** | Is the difference larger than run variance and stable under useful perturbations? | The claimed gain disappears across seeds or stress tests |
+| **Operational readiness** | Can the artifact load, meet latency and memory limits, and use the production schema? | The candidate cannot run safely in the target path |
+| **Release evidence** | Are lineage, owner, approval, rollback target, and limitations complete? | Operations cannot identify or recover the release |
+
+A candidate reaches the final decision only after earlier layers pass. This order prevents teams from spending time debating a small metric gain when the runs used different data or the artifact cannot load in the serving runtime.
+
+```mermaid
+flowchart LR
+    Runs["Baseline and candidate run records"] --> Comparable{"Comparable evidence?"}
+    Comparable -->|no| Repair["Align data, metric, threshold, and protocol"]
+    Comparable -->|yes| Value["Product metric and guardrails"]
+    Value --> Robust["Segments, uncertainty, and stress tests"]
+    Robust --> Runtime["Artifact and runtime readiness"]
+    Runtime --> Decision{"Advance, reject, or experiment again"}
+    Decision --> Packet["Recorded evidence, limits, owner, and rollback target"]
+```
+
+The order saves review effort and protects the conclusion. A candidate with incompatible evidence returns to comparison setup. A candidate that violates an important slice stops before packaging. A candidate that passes offline quality can still stop when the artifact fails the target runtime.
+
+## Apply The Decision Framework To Defect Detection
+<!-- section-summary: A supporting example follows a computer vision team choosing a surface defect detector for a factory line. -->
 
 Imagine **BrightForge Electronics**, a manufacturer that inspects tablet screens before packaging. Cameras above each line capture images of screens, and a computer vision model flags scratches, dust blobs, pressure marks, and edge chips. The current production model is `surface-defect-detector:v21`, a YOLO-style detector served through a GPU-backed inspection service.
 
@@ -261,6 +274,8 @@ The practical lesson is that comparison is an engineering workflow with a comple
 Comparing experiment runs means using tracked evidence to choose a model candidate responsibly. Start with the current production baseline, evaluate every candidate on the same dataset and metric definitions, build a table with primary metrics and guardrails, inspect segments and failure examples, check runtime readiness, and write the decision.
 
 For BrightForge Electronics, `run-1208` wins because it reduces Line C glare false positives, keeps latency inside the inspection budget, preserves defect recall, and has the artifacts needed for a shadow test. The team can explain the choice because the comparison links the selected run back to its baseline, dataset, code, config, metrics, artifacts, risks, and rollback path.
+
+The next submodule makes this comparison discipline explicit before the runs start. It defines hypotheses, protected test data, search spaces, hyperparameter budgets, pruning rules, and uncertainty checks so a large tuning study still answers a fair question.
 
 ![BrightForge run comparison decision path](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/brightforge-decision-path.png)
 *The final decision path keeps baseline evidence, guardrails, artifacts, runtime checks, shadow testing, and rollback in one review story.*

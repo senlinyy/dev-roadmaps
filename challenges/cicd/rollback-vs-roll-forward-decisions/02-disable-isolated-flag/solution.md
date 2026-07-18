@@ -9,3 +9,5 @@ production:
     updated_by: maya
     reason: canary discount errors returned to baseline after disabling v2
 ```
+
+Disabling only the faulty behavior restores the known path without replacing a healthy artifact. The audit fields preserve who made the change, which release it affected, and the evidence behind it.

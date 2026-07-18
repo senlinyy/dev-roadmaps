@@ -1,6 +1,6 @@
 ---
 title: "Harness Engineering"
-description: "Design the software layer around the model that controls execution, tools, state, hooks, sandboxing, and feedback."
+description: "Build the system around an agent in three layers: the complete harness framework, durable orchestration, and the controlled working environment."
 tags: ["advanced", "harness"]
-order: 3
+order: 2
 ---

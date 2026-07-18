@@ -15,6 +15,8 @@ provider "aws" {
 }
 ```
 
+One input now drives both resource naming and tags, preventing those two representations of the environment from drifting apart.
+
 ### variables.tf
 
 ```hcl

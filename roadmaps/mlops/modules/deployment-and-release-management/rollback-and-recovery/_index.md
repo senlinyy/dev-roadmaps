@@ -1,6 +1,6 @@
 ---
 title: "Rollback and Recovery"
-description: "Prepare for model releases that need fast mitigation or investigation."
+description: "Start with the incident lifecycle, contain harmful predictions, and use layer-specific rollback with verified recovery."
 tags: ["production", "incidents"]
 order: 3
 ---

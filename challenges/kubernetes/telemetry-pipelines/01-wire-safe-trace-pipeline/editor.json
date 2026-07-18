@@ -1,0 +1,124 @@
+{
+  "language": "yaml",
+  "filename": "collector-config.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "receivers:\n  otlp:\n\nprocessors:\n  memory_limiter:\n  batch:\n\nexporters:\n  otlp/tempo:\n\nservice:\n  pipelines:\n    traces:\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "receivers",
+          "otlp",
+          "protocols",
+          "grpc",
+          "endpoint"
+        ],
+        "equals": "0.0.0.0:4317",
+        "label": "OTLP gRPC receiver"
+      },
+      {
+        "path": [
+          "receivers",
+          "otlp",
+          "protocols",
+          "http",
+          "endpoint"
+        ],
+        "equals": "0.0.0.0:4318",
+        "label": "OTLP HTTP receiver"
+      },
+      {
+        "path": [
+          "processors",
+          "memory_limiter",
+          "check_interval"
+        ],
+        "equals": "5s",
+        "label": "memory check interval"
+      },
+      {
+        "path": [
+          "processors",
+          "memory_limiter",
+          "limit_percentage"
+        ],
+        "equals": 80,
+        "label": "memory limit percentage"
+      },
+      {
+        "path": [
+          "processors",
+          "memory_limiter",
+          "spike_limit_percentage"
+        ],
+        "equals": 25,
+        "label": "memory spike limit"
+      },
+      {
+        "path": [
+          "processors",
+          "batch",
+          "timeout"
+        ],
+        "equals": "5s",
+        "label": "batch timeout"
+      },
+      {
+        "path": [
+          "processors",
+          "batch",
+          "send_batch_size"
+        ],
+        "equals": 8192,
+        "label": "batch size"
+      },
+      {
+        "path": [
+          "exporters",
+          "otlp/tempo",
+          "endpoint"
+        ],
+        "equals": "tempo.observability.svc.cluster.local:4317",
+        "label": "Tempo exporter endpoint"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "receivers"
+        ],
+        "equals": [
+          "otlp"
+        ],
+        "label": "trace receivers"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "processors"
+        ],
+        "equals": [
+          "memory_limiter",
+          "batch"
+        ],
+        "label": "ordered trace processors"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "exporters"
+        ],
+        "equals": [
+          "otlp/tempo"
+        ],
+        "label": "trace exporters"
+      }
+    ]
+  }
+}

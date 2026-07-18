@@ -21,6 +21,8 @@ provider "aws" {
 }
 ```
 
+The backend gives production state a shared isolated object path and relies on external authentication instead of persisting credentials in HCL.
+
 ### s3.tf
 
 ```hcl

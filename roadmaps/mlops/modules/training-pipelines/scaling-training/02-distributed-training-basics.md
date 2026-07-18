@@ -1,459 +1,212 @@
 ---
 title: "Distributed Training"
-description: "Learn how distributed data parallel training splits batches across workers, uses ranks and world size, launches PyTorch DDP with torchrun, and survives real cluster failures."
-overview: "Distributed training lets one training run use multiple GPU workers together. This guide follows a computer vision team moving from one GPU to PyTorch DistributedDataParallel on Kubernetes, with ranks, world size, checkpoints, failure handling, and NCCL/CUDA evidence."
+description: "Understand distributed training through parallelism strategy, worker topology, collective communication, data semantics, checkpointing, failure recovery, and cluster scheduling."
+overview: "Distributed training turns several processes and accelerators into one coordinated optimization run; its correctness depends on how model state, data, communication, and recovery are divided."
 tags: ["MLOps", "advanced", "compute"]
 order: 2
 id: "article-mlops-training-pipelines-distributed-training-basics"
 ---
 
-## Table of Contents
+## Distribution Changes the Training System
 
-1. [Why One GPU Stops Being Enough](#why-one-gpu-stops-being-enough)
-2. [The Core Idea: Data Parallel Training](#the-core-idea-data-parallel-training)
-3. [Workers, Ranks, and World Size](#workers-ranks-and-world-size)
-4. [Turning a PyTorch Script into DDP](#turning-a-pytorch-script-into-ddp)
-5. [Launching with torchrun](#launching-with-torchrun)
-6. [Running the Job on Kubernetes](#running-the-job-on-kubernetes)
-7. [Checkpoints and Failure Handling](#checkpoints-and-failure-handling)
-8. [NCCL and CUDA Evidence](#nccl-and-cuda-evidence)
-9. [Where Ray and Spark Fit](#where-ray-and-spark-fit)
-10. [Putting It Together](#putting-it-together)
-11. [References](#references)
+<!-- section-summary: Distributed training coordinates several workers to optimize one model when one device is too slow or cannot hold the training state. -->
 
-## Why One GPU Stops Being Enough
-<!-- section-summary: Distributed training lets one model training run use several workers together when one GPU takes too long for the business window. -->
+A single-device training job has one process, one model state, one stream of batches, and one failure boundary. **Distributed training** spreads the work across several processes or devices while trying to preserve the meaning of one optimization run. It is useful for two different reasons:
 
-Distributed training means **one training job runs across multiple worker processes** so the team can train a model with more compute than one process can provide. In this article, we focus on the most common beginner path: **distributed data parallel training** with PyTorch. Each worker has a copy of the model, each worker sees a different slice of the batch, and the workers synchronize gradients so they keep learning as one shared training run.
+- **throughput scaling:** the model fits on one device, but one worker cannot process enough examples within the training window;
+- **memory scaling:** the model, optimizer state, gradients, or activations do not fit on one device.
 
-Imagine a company called TrailCam Health. The product team helps wildlife clinics classify camera-trap images so vets can review injured animals faster. The first model was trained on one GPU with 400,000 labeled images. Now the dataset has grown to 18 million images, the model is larger, and the weekly retraining window is six hours. One GPU takes almost two days. The team has a Kubernetes GPU pool with four H100 nodes available overnight, so the training pipeline needs to use those GPUs together.
+These needs lead to different parallelism strategies. Adding workers before identifying the constraint can increase cost without reducing completion time, or can silently change learning behaviour through a larger global batch.
 
-This is the moment where distributed training enters the roadmap. The practical goal is clear: finish inside the window, record enough evidence to debug failures, and produce a checkpoint the evaluation pipeline can trust. You still need clean data, a training script, a validation split, experiment tracking, and artifact storage. Distributed training adds the coordination layer that lets several workers act like one training job.
-
-Here is the map for the article:
-
-| Concept | Plain meaning | Why TrailCam needs it |
-|---|---|---|
-| **Data parallel training** | Several workers train the same model on different data batches | The image dataset is too large for the weekly single-GPU window |
-| **Worker** | One training process doing part of the job | Each GPU usually gets one worker process |
-| **Rank** | The number that identifies a worker | Logs, checkpoints, and networking need a stable worker identity |
-| **World size** | Total number of workers in the job | Four nodes with one GPU each means a world size of 4 |
-| **torchrun** | PyTorch's launcher for distributed worker processes | It sets the environment variables DDP uses |
-| **DistributedDataParallel** | PyTorch wrapper that synchronizes gradients across model replicas | Each worker trains locally, then the replicas stay aligned |
-| **Checkpoint** | Saved training state that can resume the run | A node eviction should cost minutes rather than a full training day |
-| **NCCL/CUDA evidence** | GPU communication and runtime facts from the job | Slow or stuck training needs driver, CUDA, NCCL, and topology evidence |
-
-![TrailCam data parallel training](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/trailcam-data-parallel-training.png)
-*Data parallel training keeps a full model replica on each worker while the dataset shards and gradient synchronization make the workers act like one run.*
-
-The rest of the article follows that table in order. We start with the simple training pattern, then add worker identity, then add real commands and cluster checks.
-
-## The Core Idea: Data Parallel Training
-<!-- section-summary: Data parallel training keeps the model logic mostly the same while splitting batches across workers and synchronizing gradients. -->
-
-**Data parallel training** is the easiest distributed training pattern to understand because the model stays whole on every worker. Worker 0 has a full copy of the model. Worker 1 has a full copy of the model. The same is true for workers 2 and 3. During each training step, every worker reads a different mini-batch, runs forward and backward passes locally, and then participates in a communication step that combines gradients across workers.
-
-For TrailCam, that means worker 0 might process deer and fox images from shard A, worker 1 might process bird images from shard B, worker 2 might process night images from shard C, and worker 3 might process clinic-uploaded edge cases from shard D. The exact labels are secondary to DDP. The important part is that each worker receives a different slice of the training data for the same step. If every worker reads the same examples, the team pays for four GPUs while getting one GPU's learning signal repeated four times.
-
-The gradient synchronization is the key behavior. A gradient is the model's update signal after it sees a batch. In DistributedDataParallel, PyTorch synchronizes those gradients across model replicas, usually through a backend such as NCCL for GPU training. After the optimizer step, each replica has matching updated weights, so the run still behaves like one training job rather than four separate experiments.
-
-This pattern changes how you think about batch size. If each worker processes 64 images and the world size is 4, the **global batch size** is 256 images per step. That larger batch can change learning behavior, so production teams usually record:
-
-- Per-worker batch size: `64`
-- World size: `4`
-- Global batch size: `256`
-- Learning rate schedule: `cosine_decay_warmup_2k`
-- Gradient accumulation steps: `1`
-- Random seed and data manifest version
-
-Those fields belong in the run metadata because they explain the training result. A validation score needs world size and global batch size beside it, or the review packet is missing part of the story.
-
-## Workers, Ranks, and World Size
-<!-- section-summary: Ranks and world size give every worker a shared language for identity, logging, device choice, and coordination. -->
-
-A **worker** is one training process. In GPU DDP, the common beginner setup uses one worker process per GPU. A worker loads the training code, chooses its local GPU, builds the model, reads its slice of data, computes gradients, and joins the synchronization step.
-
-A **rank** is the worker's identity number inside the whole job. Rank 0 is usually the coordinator for user-facing logs, checkpoint pointers, and final metric reports. Rank 1, rank 2, and the other ranks do the same training work, yet they avoid duplicate side effects. If all four ranks upload the same `best.pt` file at the same time, the run can corrupt its own evidence. The common rule is simple: every rank trains, rank 0 publishes shared artifacts unless you use a distributed checkpoint format.
-
-**World size** is the total number of workers. If TrailCam runs four workers, the world size is 4. If each of two nodes has eight GPUs and every GPU gets one worker, the world size is 16. The world size matters because it controls data partitioning, gradient communication, effective batch size, and the amount of work the cluster must schedule at the same time.
-
-There are two rank names you will see constantly:
-
-| Name | Example | Meaning |
-|---|---:|---|
-| `RANK` | `7` | Global worker number across the full job |
-| `LOCAL_RANK` | `3` | Worker number inside the current node |
-| `WORLD_SIZE` | `16` | Total workers in the full job |
-| `LOCAL_WORLD_SIZE` | `8` | Workers on the current node |
-| `MASTER_ADDR` | `trailcam-ddp-0.trailcam-ddp` | Address used for process group setup |
-| `MASTER_PORT` | `29400` | Port used for process group setup |
-
-TrailCam uses these names in logs. A useful training log line includes `rank`, `local_rank`, `world_size`, `node_name`, `gpu_name`, `cuda_version`, and the dataset shard. That sounds boring until a job hangs for 40 minutes and the team needs to know whether rank 2 failed before the data loader, rank 0 rejected rendezvous traffic, or NCCL selected the wrong network interface.
-
-## Turning a PyTorch Script into DDP
-<!-- section-summary: A DDP script initializes the process group, pins each worker to a GPU, shards the DataLoader, and limits shared side effects to rank 0. -->
-
-The single-GPU version of the TrailCam training script already has a model, optimizer, loss function, and DataLoader. DDP keeps most of that code. The important changes happen around setup, data loading, model wrapping, and saving.
-
-PyTorch's `DistributedDataParallel` wraps a module and synchronizes gradients across the process group. PyTorch's docs call out an important detail: DDP synchronizes gradients, and the user remains responsible for splitting input data across workers, often with `DistributedSampler`. That is why the DataLoader section matters as much as the model wrapper.
-
-Here is a compact version of `train_ddp.py`:
-
-```python
-import os
-from pathlib import Path
-
-import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-
-from trailcam.data import TrailCamImageDataset
-from trailcam.model import TrailCamClassifier
-
-
-def setup_distributed():
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend="nccl")
-    return local_rank, dist.get_rank(), dist.get_world_size()
-
-
-def save_checkpoint(path, model, optimizer, epoch, step, metrics):
-    state = {
-        "model": model.module.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "epoch": epoch,
-        "step": step,
-        "metrics": metrics,
-    }
-    torch.save(state, path)
-
-
-def main():
-    local_rank, rank, world_size = setup_distributed()
-    device = torch.device(f"cuda:{local_rank}")
-
-    dataset = TrailCamImageDataset(
-        manifest_uri=os.environ["TRAIN_MANIFEST_URI"],
-        image_root=os.environ["TRAIN_IMAGE_ROOT"],
-    )
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=True,
-        drop_last=False,
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=64,
-        sampler=sampler,
-        num_workers=8,
-        pin_memory=True,
-    )
-
-    model = TrailCamClassifier(num_classes=42).to(device)
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    for epoch in range(20):
-        sampler.set_epoch(epoch)
-        model.train()
-        for step, batch in enumerate(loader):
-            images = batch["image"].to(device, non_blocking=True)
-            labels = batch["label"].to(device, non_blocking=True)
-
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(images)
-            loss = loss_fn(logits, labels)
-            loss.backward()
-            optimizer.step()
-
-            if rank == 0 and step % 200 == 0:
-                print(
-                    {
-                        "epoch": epoch,
-                        "step": step,
-                        "world_size": world_size,
-                        "loss": float(loss.detach().cpu()),
-                    },
-                    flush=True,
-                )
-
-        if rank == 0:
-            checkpoint_dir = Path(os.environ["CHECKPOINT_DIR"])
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            save_checkpoint(
-                checkpoint_dir / "last.pt",
-                model,
-                optimizer,
-                epoch,
-                step,
-                {"world_size": world_size},
-            )
-
-    dist.destroy_process_group()
-
-
-if __name__ == "__main__":
-    main()
+```mermaid
+flowchart LR
+    A[Training objective and model] --> B{What limits one device?}
+    B -->|examples per second| C[Data parallelism]
+    B -->|model state memory| D[Sharded data parallelism]
+    B -->|individual layer size| E[Tensor parallelism]
+    B -->|model depth and activations| F[Pipeline parallelism]
+    C --> G[Worker topology and communication]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[Distributed checkpoint and recovery]
 ```
 
-The setup code reads `LOCAL_RANK` from the environment and binds the process to one GPU. `dist.init_process_group(backend="nccl")` lets PyTorch read rendezvous details from environment variables that the launcher provides. The sampler receives `num_replicas=world_size` and `rank=rank`, so every worker gets its own slice of the dataset. `sampler.set_epoch(epoch)` changes the shuffle order consistently across epochs.
+The framework of this article is therefore strategy, topology, communication, data semantics, optimization semantics, checkpointing, and operations. PyTorch DistributedDataParallel is a concrete example of the most common first strategy, not the definition of distributed training itself.
 
-The checkpoint function saves from rank 0 because this example uses classic DDP with full model replicas. Bigger training approaches such as FSDP can shard model state, and PyTorch's Distributed Checkpoint API exists for those sharded cases. For this beginner article, rank 0 checkpointing keeps the first DDP move understandable.
+## Choose the Parallelism Strategy From the Constraint
 
-## Launching with torchrun
-<!-- section-summary: torchrun starts the worker processes and supplies the rank, world size, and rendezvous environment used by DDP. -->
+<!-- section-summary: Data, sharded, tensor, and pipeline parallelism divide different parts of the training state and create different communication patterns. -->
 
-**torchrun** is PyTorch's command-line launcher for distributed training. It starts multiple worker processes on each training node and provides the environment variables that `init_process_group` reads. For GPU DDP, PyTorch recommends NCCL as the backend because it is designed for high-performance GPU communication.
+**Data parallelism** keeps a full model replica on each worker. Workers process different batches and synchronize gradients. It fits when the model and optimizer fit on each device and data throughput is the main constraint.
 
-The smallest local smoke test uses one node with four GPUs:
+**Sharded data parallelism** divides parameters, gradients, and optimizer state across workers, gathering pieces when computation needs them. PyTorch Fully Sharded Data Parallel (FSDP) is one implementation. It reduces per-device state memory in exchange for more frequent communication and more complex checkpoints.
 
-```bash
-TRAIN_MANIFEST_URI=s3://trailcam-ml/manifests/train-2026-07-05.json \
-TRAIN_IMAGE_ROOT=s3://trailcam-ml/images/ \
-CHECKPOINT_DIR=/mnt/checkpoints/trailcam-ddp-smoke \
-torchrun \
-  --standalone \
-  --nnodes=1 \
-  --nproc-per-node=4 \
-  train_ddp.py
+**Tensor parallelism** splits operations within large layers across devices. It helps when a layer is too large or expensive for one device, but requires high-bandwidth, low-latency communication and topology-aware placement.
+
+**Pipeline parallelism** assigns consecutive groups of layers to stages and sends micro-batches through them. It reduces per-device model and activation load but introduces stage balancing, scheduling, and idle **pipeline bubbles**.
+
+Large training systems combine strategies across dimensions. Hybrid designs can scale further, but they multiply configuration, communication, checkpoint, and failure complexity. Start with the simplest strategy that solves the measured constraint.
+
+## Data Parallelism: One Model, Different Batches
+
+<!-- section-summary: Data-parallel workers compute local gradients on different data, then combine them so every replica applies the same update. -->
+
+In synchronous data parallelism, each worker begins a step with matching model parameters. Each reads a different mini-batch, performs the forward and backward pass, and computes local gradients. A collective communication operation combines those gradients—commonly an **all-reduce**, which reduces values across workers and returns the result to all of them. Each worker then applies the same optimizer update.
+
+```mermaid
+sequenceDiagram
+    participant W0 as Worker 0
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+    W0->>W0: forward and backward on batch A
+    W1->>W1: forward and backward on batch B
+    W2->>W2: forward and backward on batch C
+    W0->>W1: gradient all-reduce
+    W1->>W2: gradient all-reduce
+    W2->>W0: gradient all-reduce
+    W0->>W0: identical optimizer step
+    W1->>W1: identical optimizer step
+    W2->>W2: identical optimizer step
 ```
 
-The important flags are:
+PyTorch DistributedDataParallel (DDP) wraps a model and synchronizes gradients during backward computation. It typically overlaps communication with computation by reducing each gradient bucket as soon as it is ready. The speedup depends on model compute, gradient volume, network bandwidth and latency, bucket behaviour, and whether workers remain balanced.
 
-- `--standalone` creates a local rendezvous for a single-node test.
-- `--nnodes=1` tells PyTorch there is one node in this run.
-- `--nproc-per-node=4` starts four worker processes on the node.
-- The script receives `LOCAL_RANK`, `RANK`, `WORLD_SIZE`, `MASTER_ADDR`, and `MASTER_PORT` through the environment.
+A slow worker is a **straggler** because synchronous workers wait at collective operations. Stragglers can come from uneven inputs, storage delays, hardware faults, background contention, or different preprocessing cost. Median step time can look healthy while tail step time limits the whole job.
 
-The multi-node shape adds a rendezvous endpoint and a node rank:
+## Ranks Describe the Worker Topology
 
-```bash
-torchrun \
-  --nnodes=4 \
-  --nproc-per-node=1 \
-  --node-rank="${NODE_RANK}" \
-  --rdzv-id="trailcam-weekly-2026-07-05" \
-  --rdzv-backend=c10d \
-  --rdzv-endpoint="trailcam-ddp-0.trailcam-ddp:29400" \
-  train_ddp.py
-```
+<!-- section-summary: Global rank, local rank, world size, and process groups identify who participates in each collective operation. -->
 
-Each node runs the same command with a different `NODE_RANK`. The rendezvous endpoint gives the workers a shared place to meet. In Kubernetes, that endpoint is often a stable DNS name for the pod with index 0 in an Indexed Job, or it is provided by a training operator that sets up the workers for you.
+Each process receives a **global rank**, a unique number in the job. **World size** is the number of participating processes. **Local rank** identifies a process on one node and commonly maps it to a local GPU. A **process group** names the workers participating in a set of collectives.
 
-## Running the Job on Kubernetes
-<!-- section-summary: Kubernetes Jobs give the training run a batch lifecycle, while Indexed Jobs can give each worker a stable index for node rank assignment. -->
+A launcher such as `torchrun`, a Kubernetes training operator, or a managed training service creates processes and supplies rendezvous information. **Rendezvous** is the step where workers discover each other and agree on membership before forming the communication group.
 
-Kubernetes is useful for this example because training has a clear batch shape. The job starts, reserves GPUs, runs the training script, writes checkpoints, exits, and leaves logs plus status behind. A long-running web service has a different lifecycle. A training run fits the Job controller well because success and failure are first-class states.
-
-Kubernetes Jobs support parallel completions, and **Indexed Jobs** give each pod an index from `0` to `completions - 1`. The index is available to the container as `JOB_COMPLETION_INDEX`. TrailCam can use that value as `NODE_RANK` when each pod owns one GPU.
-
-This teaching manifest shows the core DDP mapping. Real teams usually add node selectors, tolerations, secrets, object-storage credentials, priority classes, quotas, log shipping, and sometimes a training operator. The same mapping still shows up inside those larger systems.
+The training code should not hard-code ranks or node addresses. It reads them from the launcher environment, initializes the process group, binds the process to the correct device, and destroys the group cleanly. Launch configuration should be stored with the run:
 
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: trailcam-ddp
-spec:
-  clusterIP: None
-  selector:
-    batch.kubernetes.io/job-name: trailcam-ddp
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: trailcam-ddp
-spec:
-  completions: 4
-  parallelism: 4
-  completionMode: Indexed
-  backoffLimit: 2
-  ttlSecondsAfterFinished: 86400
-  template:
-    spec:
-      subdomain: trailcam-ddp
-      restartPolicy: Never
-      containers:
-        - name: trainer
-          image: registry.example.com/ml/trailcam-trainer:2026-07-05
-          imagePullPolicy: IfNotPresent
-          resources:
-            limits:
-              nvidia.com/gpu: 1
-          env:
-            - name: TRAIN_MANIFEST_URI
-              value: s3://trailcam-ml/manifests/train-2026-07-05.json
-            - name: TRAIN_IMAGE_ROOT
-              value: s3://trailcam-ml/images/
-            - name: CHECKPOINT_DIR
-              value: /checkpoints/trailcam-weekly-2026-07-05
-          command:
-            - bash
-            - -lc
-            - |
-              torchrun \
-                --nnodes=4 \
-                --nproc-per-node=1 \
-                --node-rank="${JOB_COMPLETION_INDEX}" \
-                --rdzv-id="trailcam-weekly-2026-07-05" \
-                --rdzv-backend=c10d \
-                --rdzv-endpoint="trailcam-ddp-0.trailcam-ddp:29400" \
-                train_ddp.py
-          volumeMounts:
-            - name: checkpoints
-              mountPath: /checkpoints
-      volumes:
-        - name: checkpoints
-          persistentVolumeClaim:
-            claimName: trailcam-training-checkpoints
+distributed:
+  strategy: ddp
+  nodes: 4
+  processes_per_node: 8
+  world_size: 32
+  backend: nccl
+  rendezvous: c10d
+training:
+  per_worker_batch: 16
+  gradient_accumulation_steps: 2
+  global_batch: 1024
 ```
 
-The important Kubernetes choices are practical. `completionMode: Indexed` gives every pod a stable index. `parallelism: 4` asks Kubernetes to run all four workers together. `restartPolicy: Never` gives failed pods a clear terminal state that the Job controller can count. `backoffLimit: 2` allows a small number of pod retries before the Job fails. `ttlSecondsAfterFinished` lets the cluster clean up finished Job objects after operators have had time to inspect them.
+The global batch follows `per-worker batch × world size × accumulation steps`. If this value changes, the optimization problem changes even when the dataset and model code do not.
 
-A production review packet for this job should capture the image digest, GPU node pool, GPU SKU, driver version, CUDA runtime, NCCL version, dataset manifest URI, checkpoint URI, world size, per-worker batch size, and the exact `torchrun` command. Without that packet, the team can still train a model, yet incident review and replay work will have holes.
+## Preserve Data Semantics Across Workers
 
-![torchrun on Kubernetes indexed jobs](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/torchrun-on-kubernetes.png)
-*An Indexed Job gives each worker a stable pod index, which the launch command can use as `NODE_RANK` for a multi-node DDP run.*
+<!-- section-summary: Workers need disjoint, deterministic data partitions and coordinated epoch behaviour. -->
 
-## Checkpoints and Failure Handling
-<!-- section-summary: Checkpoints turn distributed training failures into resumable events with clear ownership and evidence. -->
+Every data-parallel worker should receive a different subset for a step. A distributed sampler or sharded input pipeline partitions the dataset by rank and world size. If every worker reads the same records, the cluster repeats the same signal while pretending to increase effective batch size.
 
-Distributed jobs fail in more ways than single-process jobs. A pod can get evicted. A node can lose a GPU. One worker can hit a bad file. The rendezvous endpoint can fail. NCCL can hang during initialization because workers disagree about network reachability. The response plan needs to assume those failures will happen.
+Shuffling must remain coordinated. Workers usually share an epoch-dependent seed, then derive rank-specific partitions. Call the sampler’s epoch update at the start of each epoch so order changes consistently. Record dataset manifest, sampler version, seed policy, world size, dropped or padded samples, and steps completed.
 
-A **checkpoint** is saved training state. For TrailCam's DDP example, a checkpoint needs the model state, optimizer state, epoch, step, scheduler state if one exists, run config, dataset manifest ID, and validation metric history. A checkpoint that only stores model weights is useful for inference, yet it lacks enough state to fully resume training because the optimizer and scheduler state are missing.
+World-size changes can affect which examples appear together, the number of steps, padding, and augmentation randomness. Exact replay after scaling may require the original topology and sampler state. If exact replay is not guaranteed, define acceptable metric tolerance rather than claiming bit-for-bit reproducibility.
 
-The simple DDP policy is:
+Input imbalance can create stragglers. Variable-length sequences, expensive augmentations, corrupt files, or uneven shards make some workers slower. Use length-aware batching or balanced shards carefully, and measure data wait separately from compute and collective time.
 
-- Rank 0 writes `last.pt` after every epoch and after every 2,000 steps.
-- Rank 0 writes `best.pt` only after validation improves.
-- The job writes to a durable path such as object storage or a mounted persistent volume.
-- The job writes a small `latest.json` pointer after the checkpoint upload succeeds.
-- The resume command reads `latest.json`, downloads the checkpoint, and starts from the recorded epoch and step.
+## Scaling Changes Optimization Semantics
 
-Example `latest.json`:
+<!-- section-summary: A larger world size usually changes global batch size, step count, and possibly the learning-rate schedule. -->
 
-```json
-{
-  "run_id": "trailcam-weekly-2026-07-05",
-  "checkpoint_uri": "s3://trailcam-ml/checkpoints/trailcam-weekly-2026-07-05/last.pt",
-  "epoch": 7,
-  "step": 184000,
-  "world_size": 4,
-  "global_batch_size": 256,
-  "manifest_uri": "s3://trailcam-ml/manifests/train-2026-07-05.json",
-  "image_digest": "sha256:0c6d4f0f5d8c...",
-  "validation_macro_f1": 0.891
-}
+Suppose one GPU uses a batch of 32. Eight workers with the same per-worker batch produce a global batch of 256. The optimizer now sees fewer updates per epoch and a lower-variance gradient estimate. That can change convergence and generalization.
+
+Possible responses include adjusting the learning rate, warm-up, schedule, gradient accumulation, or per-worker batch. None is universally correct. Compare training and validation curves under a controlled experiment. Record effective global batch, optimizer, learning-rate schedule, accumulation, loss scaling, and precision with every result.
+
+Distributed numeric reduction also changes operation order. Floating-point addition is not associative, so small differences can appear even with fixed seeds. Mixed precision and hardware kernels add more variation. Reproducibility should specify tolerances and outcome gates appropriate to the task.
+
+## Communication Determines Scaling Efficiency
+
+<!-- section-summary: Distributed speedup depends on useful compute relative to synchronization, data movement, and waiting. -->
+
+Ideal linear scaling is rare. If one worker processes 100 samples per second, eight workers will usually deliver fewer than 800 because communication and coordination consume time. **Scaling efficiency** compares observed throughput with the ideal multiplier.
+
+Measure step time as data loading, forward compute, backward compute, collective communication, optimizer, and checkpoint work. GPU traces and communication profiling can reveal whether collectives overlap compute or force long stalls. For NVIDIA GPU clusters, NCCL is the common collective backend; its performance depends on driver, CUDA, NCCL version, interconnect, network fabric, topology, and interface selection.
+
+Use topology-aware placement. Workers that communicate heavily may need the same high-bandwidth network domain. Network policies, firewalls, incorrect interfaces, DNS, or mismatched libraries can cause hangs that look like training-code failures. Keep NCCL debug output for diagnosis, but do not leave extremely verbose settings enabled by default in high-volume runs.
+
+The central collective in synchronous data parallelism is usually **all-reduce**. Each worker starts with its local gradients; the collective combines them and returns the same reduced result to every worker. No single worker is conceptually “the trainer” after that point. If one rank contributes a different tensor shape, skips the collective, or fails, the others cannot complete the same logical step.
+
+Implementations commonly group gradients into buckets so communication can begin while backpropagation is still computing earlier layers. This **overlap** can hide part of the network cost. Buckets that are too small create overhead; buckets that are too large delay communication until late in the step. The useful measurement is a step timeline showing data wait, forward compute, backward compute, exposed collective time, and idle waiting—not GPU utilization alone.
+
+```mermaid
+sequenceDiagram
+    participant R0 as Rank 0
+    participant R1 as Rank 1
+    participant R2 as Rank 2
+    R0->>R0: Compute local gradients
+    R1->>R1: Compute local gradients
+    R2->>R2: Compute local gradients
+    R0->>R1: Reduce gradient bucket
+    R1->>R2: Reduce gradient bucket
+    R2->>R0: Distribute reduced result
+    Note over R0,R2: Every rank receives the same gradients
+    R0->>R0: Apply optimizer step
+    R1->>R1: Apply optimizer step
+    R2->>R2: Apply optimizer step
 ```
 
-The failure runbook should name owners. The platform owner checks Kubernetes events, pod states, GPU scheduling, and node health. The training owner checks the last successful checkpoint, validation trend, loss spike, and dataset errors. The incident owner decides whether to resume, reduce world size, switch to a smaller batch, or cancel the release training run.
+The runtime may use a ring, tree, or hardware-aware algorithm; the simplified sequence shows the dependency. A straggler affects everyone because the collective cannot preserve one optimizer step if ranks advance independently.
 
-A good first response uses evidence rather than guesses:
+Scale only while completion time and cost improve enough to justify more devices. The best worker count is an economic and scheduling decision, not the largest allocation available.
 
-```bash
-kubectl get job trailcam-ddp -o wide
-kubectl get pods -l batch.kubernetes.io/job-name=trailcam-ddp -o wide
-kubectl describe pod trailcam-ddp-2
-kubectl logs job/trailcam-ddp --all-containers=true --tail=200
+## Checkpoint the Whole Distributed State
+
+<!-- section-summary: Recovery needs model, optimizer, scheduler, scaler, sampler, and progress state in a format compatible with the parallelism strategy. -->
+
+A weights-only checkpoint can support inference but may not resume training faithfully. A resumable checkpoint often includes model state, optimizer state, learning-rate scheduler, mixed-precision scaler, epoch and step, sampler or data cursor, random-number generator states, and run configuration.
+
+With DDP, every worker holds the full model, so one designated rank can often write a consolidated checkpoint while all workers coordinate around it. Sharded strategies may write one shard per rank plus metadata or use a distributed checkpoint API that can reshard during load.
+
+```mermaid
+flowchart TD
+    A[All workers reach checkpoint boundary] --> B[Capture local and shared training state]
+    B --> C[Write shards or designated full state]
+    C --> D[Durable object storage]
+    D --> E[Publish manifest only after all parts succeed]
+    E --> F[Resume validates artifact, topology, data cursor, and config]
 ```
 
-If one pod failed with an out-of-memory error, the team can reduce per-worker batch size and resume from the last checkpoint. If all pods are waiting for GPUs, the platform owner checks quota and node labels. If ranks started and then hung, the team moves to NCCL and network evidence.
+Write to temporary locations and publish a completion manifest only after all required parts are durable. Otherwise, a job may discover a half-written checkpoint and fail again during recovery. Test restore on a separate run and compare the next steps with a continuous baseline.
 
-## NCCL and CUDA Evidence
-<!-- section-summary: NCCL and CUDA checks prove which GPU runtime, driver, device, and communication path the training job actually used. -->
+## Treat Failure as a Group Event
 
-**CUDA** is NVIDIA's GPU computing platform used by PyTorch builds that run on NVIDIA GPUs. **NCCL** is NVIDIA's communication library for multi-GPU and multi-node collectives, including the gradient synchronization DDP needs. When a distributed GPU job is slow or stuck, the team needs runtime evidence from inside the same container image and node pool that ran the job.
+<!-- section-summary: Synchronous jobs usually cannot make progress when one worker disappears, so the runtime needs coordinated restart and idempotent recovery. -->
 
-TrailCam's job should print a startup record from every rank:
+In synchronous training, a lost worker can leave others blocked in a collective. The launcher or operator needs to detect failure, terminate or re-form the group, and restart from a known checkpoint. **Elastic** training can support membership changes under specific constraints, but it does not make arbitrary training state automatically correct after topology changes.
 
-```python
-import os
-import socket
-import torch
+There are two different recovery promises. **Fault-tolerant restart** brings the same topology back from a durable checkpoint. **Elastic membership** permits the world size to change. The second promise is harder because sampler position, global batch size, scheduler progress, and optimizer interpretation can all move. A runtime that can technically reform a process group has not automatically preserved the experiment.
 
+For most first production systems, restart the complete worker group from the last committed checkpoint with the same world size. Use changing membership only when the training algorithm and scheduler explicitly support it, and record membership epochs as part of the run. Duplicate data after restart or a changed global batch can otherwise produce a completed artifact whose lineage looks normal but whose optimization path is no longer the reviewed one.
 
-def print_runtime_evidence():
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    print(
-        {
-            "host": socket.gethostname(),
-            "rank": os.environ["RANK"],
-            "local_rank": os.environ["LOCAL_RANK"],
-            "world_size": os.environ["WORLD_SIZE"],
-            "torch": torch.__version__,
-            "cuda_runtime": torch.version.cuda,
-            "nccl": torch.cuda.nccl.version(),
-            "gpu": torch.cuda.get_device_name(local_rank),
-            "device_count": torch.cuda.device_count(),
-        },
-        flush=True,
-    )
-```
+Retries should use the same run identity with a new attempt number. Metrics, artifacts, and checkpoints need idempotent naming so a retry does not masquerade as an independent experiment. Bound retries and surface persistent infrastructure failures rather than consuming a GPU queue indefinitely.
 
-The platform team should also capture node-level output:
+Multi-worker jobs also need coordinated scheduling. Starting some workers while the rest wait can hold expensive GPUs without making progress. Gang scheduling or queue systems such as Kueue can admit the required resources together. Quotas and priorities should protect production and interactive workloads from one oversized training request.
 
-```bash
-nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv
-python -m torch.utils.collect_env
-```
+## What a Production Distributed Run Records
 
-For a stuck communication issue, a short diagnostic rerun can enable NCCL logs:
+<!-- section-summary: A mature distributed run preserves strategy, topology, optimization, software, hardware, data, and recovery evidence. -->
 
-```bash
-NCCL_DEBUG=INFO \
-NCCL_DEBUG_SUBSYS=INIT,ENV,COLL \
-torchrun \
-  --nnodes=4 \
-  --nproc-per-node=1 \
-  --node-rank="${NODE_RANK}" \
-  --rdzv-id="trailcam-debug-2026-07-05" \
-  --rdzv-backend=c10d \
-  --rdzv-endpoint="trailcam-ddp-0.trailcam-ddp:29400" \
-  train_ddp.py
-```
+A production run records parallelism strategy, ranks and world size, global batch calculation, sampler and dataset manifest, optimizer and schedule, precision, checkpoint format, and restore test. It also records image digest, framework, driver, CUDA and collective-library versions, hardware and network topology, worker events, step-time breakdown, scaling efficiency, cost, and failure attempts.
 
-Those variables belong in a debug run, then they should be removed from the normal job. NVIDIA's NCCL documentation warns that debugging variables can affect performance or reliability if teams leave them in production scripts. The evidence to keep is the log bundle, the exact env vars, and the conclusion.
-
-Useful signs in the logs include all ranks reaching `init_process_group`, all ranks reporting the same `WORLD_SIZE`, each worker selecting a unique GPU, NCCL reporting the expected network interface, and rank 0 reaching the first training step. If rank 3 has no runtime evidence log, the issue is probably before DDP. If all ranks log startup and then hang in synchronization, the issue is probably communication, a rank-specific exception, or a data loader stall.
-
-![Distributed checkpoint and runtime evidence](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/checkpoint-runtime-evidence.png)
-*Checkpoint pointers, failed-rank commands, and CUDA/NCCL startup records give the team a practical trail for resume and incident review.*
-
-## Where Ray and Spark Fit
-<!-- section-summary: Ray and Spark can surround distributed training, while the DDP basics still explain what happens inside the training workers. -->
-
-Ray and Spark enter real MLOps stacks around this workflow, so it helps to place them while keeping the article focused. **Spark** often prepares large training datasets before the GPU job starts. TrailCam might use Spark to join image metadata, clinic labels, and quality flags into a manifest. Once the manifest exists, the PyTorch DDP job reads it and trains the model.
-
-**Ray Train** can launch and manage distributed PyTorch workers through a higher-level Python API. Teams choose it when they want Python-native scaling, integration with Ray Data or Ray Tune, or a simpler way to run training across a Ray cluster. Underneath that convenience, the same basics still matter: worker count, GPU assignment, data sharding, checkpointing, and metrics from each worker.
-
-For a first distributed training article, plain `torchrun` is the clearest teaching tool because it exposes the names that other platforms eventually manage for you. After you understand `RANK`, `WORLD_SIZE`, process groups, DDP, and checkpoint ownership, Ray Train, Kubeflow training operators, managed cloud training jobs, and scheduler-specific launchers are much easier to review.
-
-## Putting It Together
-<!-- section-summary: Distributed training works well when the team treats code, launch settings, checkpoints, and cluster evidence as one connected training system. -->
-
-TrailCam's weekly retraining job started as one slow GPU run. Distributed training turned it into one coordinated job across four workers. Data parallel training kept a model replica on each worker, DDP synchronized gradients, and `DistributedSampler` kept the workers from reading the same examples. Ranks gave every worker a stable identity, and world size explained the global batch size.
-
-The practical workflow is now clear. First, make the single-GPU script deterministic enough for replay and split the data with a manifest. Next, add DDP setup, local GPU assignment, `DistributedSampler`, rank-aware logging, and rank-aware checkpointing. Then launch a single-node smoke test with `torchrun`. After that, move to Kubernetes with a clear worker count, GPU request, rendezvous endpoint, durable checkpoint path, and failure policy. Finally, capture CUDA, NCCL, GPU, image, and dataset evidence every time the job runs.
-
-The big lesson is that distributed training is an operations topic as much as a modeling topic. The code change is small compared with the evidence discipline around it. A team that records ranks, world size, batch sizes, checkpoint pointers, driver versions, CUDA runtime, NCCL version, dataset manifest, and Kubernetes events can debug the second and third runs from evidence rather than guesswork.
+Start with a single-worker baseline. Validate a small multi-worker smoke run, then scale through measured worker counts while watching convergence, throughput, communication, and cost. Distributed training is successful when several workers produce one trustworthy and recoverable optimization run—not merely when all GPUs show activity.
 
 ## References
 
-- [PyTorch torchrun (Elastic Launch)](https://docs.pytorch.org/docs/stable/elastic/run.html)
-- [PyTorch DistributedDataParallel API](https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html)
-- [PyTorch distributed communication package](https://docs.pytorch.org/docs/stable/distributed.html)
-- [PyTorch Distributed Checkpoint API](https://docs.pytorch.org/docs/stable/distributed.checkpoint.html)
-- [PyTorch Distributed Checkpoint recipe](https://docs.pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html)
+- [PyTorch distributed overview](https://docs.pytorch.org/tutorials/beginner/dist_overview.html)
+- [PyTorch DistributedDataParallel](https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html)
+- [PyTorch torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html)
+- [PyTorch Fully Sharded Data Parallel](https://docs.pytorch.org/docs/stable/fsdp.html)
+- [PyTorch distributed checkpoint](https://docs.pytorch.org/docs/stable/distributed.checkpoint.html)
+- [PyTorch DistributedSampler](https://docs.pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler)
+- [NVIDIA NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/)
 - [Kubernetes Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
-- [Kubernetes Job API reference](https://kubernetes.io/docs/reference/kubernetes-api/batch/job-v1/)
-- [NVIDIA NCCL environment variables](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html)
-- [NVIDIA NCCL troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting.html)
-- [NVIDIA GPU Operator platform support](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/platform-support.html)
+- [Kueue all-or-nothing scheduling](https://kueue.sigs.k8s.io/docs/tasks/manage/setup_wait_for_pods_ready/)
 - [Ray Train PyTorch guide](https://docs.ray.io/en/latest/train/getting-started-pytorch.html)

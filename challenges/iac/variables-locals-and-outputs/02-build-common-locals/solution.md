@@ -19,6 +19,8 @@ variable "extra_tags" {
 }
 ```
 
+The locals name repeated decisions once, while `merge` still allows callers to extend the common tags through the documented input.
+
 ### locals.tf
 
 ```hcl

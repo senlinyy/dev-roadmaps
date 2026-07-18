@@ -1,0 +1,99 @@
+{
+  "language": "yaml",
+  "filename": "deployment.yaml",
+  "completionProfile": "kubernetes",
+  "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout\n  namespace: store\nspec:\n  selector:\n    matchLabels:\n      app: checkout\n  template:\n    metadata:\n      labels:\n        app: checkout\n    spec:\n      containers:\n        - name: checkout\n          image: registry.example.com/checkout:3.7.0\n          resources:\n            requests:\n              cpu: 250m\n              memory: 256Mi\n            limits:\n              cpu: 1\n              memory: 1Gi\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "annotations",
+          "sidecar.istio.io/proxyCPU"
+        ],
+        "equals": "100m",
+        "label": "proxy CPU request"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "annotations",
+          "sidecar.istio.io/proxyMemory"
+        ],
+        "equals": "128Mi",
+        "label": "proxy memory request"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "annotations",
+          "sidecar.istio.io/proxyCPULimit"
+        ],
+        "equals": "500m",
+        "label": "proxy CPU limit"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "annotations",
+          "sidecar.istio.io/proxyMemoryLimit"
+        ],
+        "equals": "512Mi",
+        "label": "proxy memory limit"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "metadata",
+          "annotations",
+          "proxy.istio.io/config"
+        ],
+        "contains": "holdApplicationUntilProxyStarts: true",
+        "label": "proxy startup ordering"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "spec",
+          "containers"
+        ],
+        "containsObject": {
+          "name": "checkout",
+          "image": "registry.example.com/checkout:3.7.0",
+          "resources": {
+            "requests": {
+              "cpu": "250m",
+              "memory": "256Mi"
+            },
+            "limits": {
+              "cpu": 1,
+              "memory": "1Gi"
+            }
+          }
+        },
+        "label": "approved application container preserved"
+      },
+      {
+        "path": [
+          "spec",
+          "template",
+          "spec",
+          "containers"
+        ],
+        "maxItems": 1,
+        "label": "no manually authored proxy container"
+      }
+    ]
+  }
+}

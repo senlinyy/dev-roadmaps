@@ -7,17 +7,6 @@ order: 1
 id: "article-mlops-mlops-foundations-simple-mlops-architecture"
 ---
 
-## Table of Contents
-
-1. [Start With One Production Path](#start-with-one-production-path)
-2. [Data Sources And Feature Preparation](#data-sources-and-feature-preparation)
-3. [Training And Evaluation Jobs](#training-and-evaluation-jobs)
-4. [Artifact Storage And Model Registry](#artifact-storage-and-model-registry)
-5. [Deployment And Serving](#deployment-and-serving)
-6. [Monitoring And Feedback](#monitoring-and-feedback)
-7. [A Minimum Architecture Checklist](#a-minimum-architecture-checklist)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
 
 ## Start With One Production Path
 <!-- section-summary: A simple MLOps architecture should show how data creates a model, how the model reaches production, and how production evidence returns to the next training cycle. -->
@@ -46,6 +35,25 @@ This is the architecture spine. Each box can be simple at first. A small team ca
 ![One MLOps path from product data through training, evaluation, registry, deployment, serving, monitoring, and feedback](/content-assets/articles/article-mlops-mlops-foundations-simple-mlops-architecture/one-mlops-path.png)
 
 *This visual gives beginners one complete path to follow before the architecture adds more tools or platform choices.*
+
+## Read The Architecture In Five Planes
+<!-- section-summary: Five planes separate product traffic, data preparation, learning workloads, control and evidence, and production feedback so each boundary has a clear contract. -->
+
+The lifecycle explains which state follows another. Architecture explains where responsibilities live and how information crosses boundaries. A useful MLOps architecture has five logical planes. A small team can run several planes on one platform, while the contracts between them should remain visible.
+
+| Plane | Responsibility | ParcelPulse example | Boundary contract |
+|---|---|---|---|
+| **Product and serving plane** | Accept production inputs and return or publish decisions | Dispatcher API and nightly parcel-risk table | Request schema, latency or freshness target, model version, fallback |
+| **Data plane** | Collect events, build labels and features, validate and version datasets | Shipment, scan, route, weather, and delivery outcome pipelines | Entity keys, event time, prediction time, label maturity, dataset version |
+| **Learning plane** | Run experiments, training, and evaluation on isolated compute | Scheduled training and candidate evaluation jobs | Run config, input artifacts, resource request, output artifacts, exit state |
+| **Control and evidence plane** | Coordinate workflows, identities, approvals, registry records, policies, and deployment | Orchestrator, tracking server, registry, CI/CD, identity and access management (IAM), secrets | Immutable IDs, lineage, permissions, gate result, release and rollback record |
+| **Observability and feedback plane** | Collect service, data, prediction, label, business, and incident evidence | Latency, feature freshness, score distribution, late-delivery labels | Signal owner, threshold, delay, retention, runbook, link to next change |
+
+This separation clarifies several tool choices. Object storage can hold dataset and model files in the data or learning paths, while a registry record belongs to the control plane because it describes identity, lineage, and approval. Prometheus can collect service metrics, while delayed delivery labels need a data workflow before they support quality monitoring. An orchestrator coordinates work and should avoid hiding the feature or training logic inside one large task.
+
+Security crosses every plane. Product traffic needs authentication and input limits. Data needs access control, privacy, retention, and encryption. Training needs isolated identities and controlled egress. The control plane needs least-privilege release permissions and audit records. Observability needs redaction because logs and prediction records can contain sensitive values.
+
+The next sections walk through these planes using the same ParcelPulse path. Their purpose is to define boundaries and contracts, while the previous lifecycle article owns the detailed state transitions and gates.
 
 ## Data Sources And Feature Preparation
 <!-- section-summary: The data side of the architecture turns production events into validated training examples and serving inputs with clear ownership. -->
@@ -84,7 +92,7 @@ inputs:
   data_snapshot: s3://parcelpulse-ml-data/delivery-delay/2026-06-30/
   config: configs/delivery-delay-risk.yml
 environment:
-  image: ghcr.io/parcelpulse/delivery-delay-training:2026-07-04
+  image: ghcr.io/parcelpulse/delivery-delay-training@sha256:32421559c392d95d51a9468a23a063f881b9e610b81fa77f52f5f930022abc42
 outputs:
   artifact_uri: s3://parcelpulse-ml-models/delivery-delay-risk/candidates/
   metrics_uri: s3://parcelpulse-ml-runs/delivery-delay-risk/
@@ -163,7 +171,7 @@ monitoring:
 
 Feedback closes the loop. When delivery outcomes arrive, the team can compare predictions with outcomes. When an incident happens, the timeline can guide the next model version. When operations finds that the model missed a new warehouse bottleneck, that pattern can shape data collection, feature work, and evaluation.
 
-## A Minimum Architecture Checklist
+## Define The Minimum Operating Architecture
 <!-- section-summary: A minimum MLOps architecture should cover data, training, tracking, registry, deployment, serving, monitoring, rollback, and ownership. -->
 
 A team can start without every advanced ML platform feature on day one. The first architecture should answer basic production questions. The answers can use managed services, open-source tools, or simple internal scripts, and the architecture needs a place for each responsibility.

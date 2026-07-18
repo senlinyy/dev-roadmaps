@@ -1,23 +1,12 @@
 ---
 title: "Regression Metrics"
 description: "Evaluate regression models with MAE, RMSE, MAPE, residuals, prediction intervals, segment checks, and release gates."
-overview: "Regression metrics measure how far numeric predictions miss. This tutorial follows a delivery ETA team as they compare MAE, RMSE, MAPE, residual tables, tail-error gates, segment reports, and Evidently regression checks."
+overview: "Regression metrics measure how far numeric predictions miss. A supporting example follows a delivery ETA team as they compare MAE, RMSE, MAPE, residual tables, tail-error gates, segment reports, and Evidently regression checks."
 tags: ["MLOps", "core", "metrics"]
 order: 3
 id: "article-mlops-model-evaluation-regression-metrics"
 ---
 
-## Table of Contents
-
-1. [Regression Metrics Measure Numeric Error](#regression-metrics-measure-numeric-error)
-2. [Follow One Delivery ETA Review](#follow-one-delivery-eta-review)
-3. [MAE, RMSE, And Business Units](#mae-rmse-and-business-units)
-4. [Percentage Error And Bias](#percentage-error-and-bias)
-5. [Residuals, Tails, And Segments](#residuals-tails-and-segments)
-6. [Build The Evaluation Job](#build-the-evaluation-job)
-7. [Write Release Gates For Numeric Models](#write-release-gates-for-numeric-models)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## Regression Metrics Measure Numeric Error
 <!-- section-summary: Regression metrics compare numeric predictions with numeric labels and explain the size, direction, and concentration of error. -->
@@ -28,10 +17,10 @@ The title answer is straightforward: **regression metrics help you measure numer
 
 The previous article covered classification, where the model chooses a class and the team counts false positives and false negatives. Regression has a different shape. A prediction can miss by 1 minute, 10 minutes, or 60 minutes. The size and direction of the miss matter.
 
-This article follows a delivery ETA model. You will compare MAE, RMSE, MAPE, residuals, tail errors, segment reports, Evidently regression checks, and a release gate that product and operations teams can understand.
+A supporting example follows a delivery ETA model. You will compare MAE, RMSE, MAPE, residuals, tail errors, segment reports, Evidently regression checks, and a release gate that product and operations teams can understand.
 
-## Follow One Delivery ETA Review
-<!-- section-summary: The running scenario uses a delivery ETA model where average error, late-order tails, and segment misses all affect customers. -->
+## A Supporting Example: Delivery ETA Review
+<!-- section-summary: A supporting example uses a delivery ETA model where average error, late-order tails, and segment misses all affect customers. -->
 
 Imagine **QuickBite**, a food delivery company. The app shows customers an estimated arrival time before checkout and keeps updating the ETA during delivery. The current model is `eta-minutes:v31`. A candidate model, `eta-minutes:v32`, adds restaurant prep-delay signals, courier supply features, and weather alerts.
 
@@ -65,7 +54,7 @@ QuickBite compares production and candidate:
 | MAE | 6.8 minutes | 6.1 minutes | Candidate improves average miss |
 | RMSE | 10.9 minutes | 10.4 minutes | Candidate improves large misses slightly |
 | p90 absolute error | 15.7 minutes | 14.9 minutes | Candidate improves tail somewhat |
-| p95 absolute error | 22.8 minutes | 23.6 minutes | Candidate worsens worst common tail |
+| 95th-percentile (p95) absolute error | 22.8 minutes | 23.6 minutes | Candidate worsens worst common tail |
 
 ![QuickBite ETA error metrics](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/eta-error-metrics.png)
 *The ETA panel keeps the metrics in product units: the customer feels the eight-minute miss, while MAE, RMSE, and p95 summarize the pattern across many orders.*
@@ -90,7 +79,34 @@ metrics = {
 }
 ```
 
-The code logs both average and tail metrics. `r2` can help compare statistical fit, but product reviewers usually understand MAE, RMSE, and percentiles faster because they stay close to customer minutes.
+The code logs both average and tail metrics. **R-squared**, written as R², compares the model's squared error with a baseline that always predicts the evaluation set's mean target. A score of `1.0` means perfect predictions, `0.0` means the model performs like that mean baseline on this dataset, and a negative score means it performs worse. R² can change when the target distribution changes and it does not express error in minutes, so QuickBite keeps MAE and tail error as the product-facing gates.
+
+## Add Prediction Intervals And Coverage Checks
+<!-- section-summary: Prediction intervals show a plausible range for each prediction, and coverage checks reveal whether those ranges work for the full population and important segments. -->
+
+A point prediction gives one number, such as `31 minutes`. A **prediction interval** gives a lower and upper bound for a future outcome, such as `24 to 43 minutes`. The range represents uncertainty from the model and the data. It differs from a confidence interval for an average metric: a confidence interval describes uncertainty in an estimate such as MAE, while a prediction interval describes uncertainty around an individual delivery.
+
+QuickBite trains quantile models for the 10th and 90th percentiles, then checks **empirical coverage**. Coverage is the fraction of actual delivery times that fall inside the interval. An 80% interval should cover close to 80% of comparable future orders. The team also checks interval width because a range from 1 to 180 minutes can achieve high coverage without helping a customer.
+
+```python
+import numpy as np
+
+lower = lower_quantile_model.predict(eval_features)
+upper = upper_quantile_model.predict(eval_features)
+actual = eval_df["actual_minutes_to_door"].to_numpy()
+
+inside = (actual >= lower) & (actual <= upper)
+interval_report = {
+    "nominal_coverage": 0.80,
+    "empirical_coverage": float(inside.mean()),
+    "mean_width_minutes": float(np.mean(upper - lower)),
+    "crossed_interval_rate": float(np.mean(lower > upper)),
+}
+```
+
+The release gate rejects crossed intervals immediately. It requires overall coverage between `0.78` and `0.84`, then applies segment floors of `0.75` for heavy rain, long-distance orders, and each launch city. This tolerance accounts for sampling noise while still detecting an uncertainty model that is too narrow. The dashboard plots coverage and mean width together. A sudden width increase can signal unfamiliar traffic even when point-error metrics remain stable.
+
+Intervals also change the product contract. QuickBite can show customers a delivery window, route unusually wide intervals to an operational review, or use the upper bound when staffing dispatch capacity. The product team validates the wording with users because an interval has value only when the interface explains it clearly.
 
 ## Percentage Error And Bias
 <!-- section-summary: Percentage error helps compare different scales, and bias shows whether predictions usually run high or low. -->
@@ -156,14 +172,39 @@ This query is useful because operations managers often trust warehouse reports m
 
 Regression evaluation should run as a job, not as an untracked notebook. The job loads the holdout dataset, scores the candidate, computes metrics, writes segment artifacts, and stores the report beside the model run.
 
-MLflow can log model evaluation metrics, and Evidently can produce regression quality reports with plots such as actual versus predicted and error distributions:
+MLflow can log model evaluation metrics, and Evidently can produce regression quality reports with plots such as actual versus predicted and error distributions. Evidently 0.7 requires an explicit `Dataset` and `DataDefinition` for this prediction-quality workflow. QuickBite maps the observed delivery time as the target and the model's ETA as the prediction, then adds fixed pass or fail conditions for MAE and RMSE.
 
 ```python
+import json
+from importlib.metadata import version
+
 import mlflow
-from evidently import Report
+from evidently import DataDefinition, Dataset, Regression, Report
+from evidently.metrics import MAE, RMSE
 from evidently.presets import RegressionPreset
+from evidently.tests import lte
 
 feature_frame = eval_df[feature_columns + ["actual_minutes_to_door"]]
+definition = DataDefinition(
+    regression=[Regression(
+        target="actual_minutes_to_door",
+        prediction="predicted_minutes_to_door",
+    )],
+    categorical_columns=["market", "restaurant_type", "weather_bucket"],
+    numerical_columns=[
+        "distance_miles",
+        "actual_minutes_to_door",
+        "predicted_minutes_to_door",
+    ],
+)
+current_dataset = Dataset.from_pandas(
+    eval_df,
+    data_definition=definition,
+)
+reference_dataset = Dataset.from_pandas(
+    prod_eval_df,
+    data_definition=definition,
+)
 
 with mlflow.start_run(run_name="eta-minutes-v32-evaluation"):
     result = mlflow.models.evaluate(
@@ -174,13 +215,70 @@ with mlflow.start_run(run_name="eta-minutes-v32-evaluation"):
     )
     mlflow.log_dict(result.metrics, "metrics/mlflow_regression_metrics.json")
 
-    report = Report([RegressionPreset()], include_tests=True)
-    snapshot = report.run(current_data=eval_df, reference_data=prod_eval_df)
-    mlflow.log_dict(snapshot.dict(), "metrics/evidently_regression_snapshot.json")
+    report = Report([
+        RegressionPreset(),
+        MAE(mean_tests=[lte(6.3)]),
+        RMSE(tests=[lte(10.8)]),
+    ])
+    snapshot = report.run(
+        current_data=current_dataset,
+        reference_data=reference_dataset,
+    )
+    payload = json.loads(snapshot.json())
+    failures = [
+        test["name"]
+        for test in payload["tests"]
+        if test["status"] in {"FAIL", "ERROR"}
+    ]
+    if version("evidently") != "0.7.21":
+        raise RuntimeError("evaluation image must pin evidently==0.7.21")
+    mlflow.log_dict(
+        payload,
+        "metrics/evidently_regression_snapshot.json",
+    )
+    if failures:
+        raise RuntimeError(f"Evidently regression gate failed: {failures}")
+    print({
+        "evidently": version("evidently"),
+        "tests": [(test["name"], test["status"]) for test in payload["tests"]],
+    })
 
     segment_table.to_csv("segment_metrics.csv", index=False)
     mlflow.log_artifact("segment_metrics.csv", artifact_path="evaluation")
 ```
+
+`Regression` tells Evidently exactly which two columns form the error. `MAE` returns a mean and standard deviation, so its current API accepts the release condition through `mean_tests`. `RMSE` returns one value and accepts `tests`. The smoke fixture for the pinned evaluation image prints:
+
+```console
+{'evidently': '0.7.21', 'tests': [('Mean Absolute Error: Less or Equal 6.300', 'SUCCESS'), ('RMSE: Less or Equal 10.800', 'SUCCESS')]}
+```
+
+The job fails before promotion if either test reports `FAIL` or `ERROR`. Increasing one fixture prediction from `48` to `108` minutes makes both tests fail, which proves that a large tail miss reaches the gate. Removing `actual_minutes_to_door` makes report execution fail, which proves that missing labels cannot produce a green regression report. As with classification, the job stores the failed report in a failure-artifact location before returning a non-zero exit code.
+
+The evaluation output still needs an executable decision. Current MLflow separates classic evaluation from threshold validation, while QuickBite's tail and segment requirements remain custom product rules:
+
+```python
+from mlflow.models import MetricThreshold
+
+mlflow.validate_evaluation_results(
+    candidate_result=result,
+    validation_thresholds={
+        "mean_absolute_error": MetricThreshold(threshold=6.3, greater_is_better=False),
+        "root_mean_squared_error": MetricThreshold(threshold=10.8, greater_is_better=False),
+    },
+)
+
+failed_segments = segment_table.query(
+    "mae_minutes > mae_limit or p95_abs_error_minutes > p95_limit"
+)
+assert failed_segments.empty, failed_segments[
+    ["segment", "mae_minutes", "p95_abs_error_minutes"]
+].to_dict(orient="records")
+```
+
+The Evidently and MLflow headline thresholds should agree within the versioned evaluation tolerance because they evaluate the same scored rows. A difference points to stale predictions, a column-mapping error, or inconsistent preprocessing. The overall thresholds pass for version 32, while heavy rain and long-distance traffic fail the custom gate. The job emits those observed values, the limits, example order IDs, and the approved scope. A missing segment row also fails because the matrix of required segments is checked before the query runs.
+
+Unit tests use ten hand-calculated deliveries to prove MAE and p95 direction, then increase one tail error and expect the segment gate to fail. An integration test points the job at a dataset without `weather_bucket` and expects an evidence error instead of silently omitting heavy-rain traffic.
 
 The job should fail when required columns are missing, when the holdout dataset version is missing, or when the candidate produces null predictions. A bad evaluation job should block the model before reviewers waste time reading unreliable numbers.
 
@@ -240,5 +338,9 @@ For QuickBite, the candidate improves average ETA error, yet heavy-rain and long
 - [scikit-learn: mean_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_error.html) - Official API reference for MAE.
 - [scikit-learn: root_mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.root_mean_squared_error.html) - Official API reference for RMSE, added in scikit-learn 1.4.
 - [scikit-learn: mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_squared_error.html) - Official API reference for MSE.
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/) - Official guide to classic `mlflow.models.evaluate()` for regression and classification.
+- [scikit-learn: r2_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html) - Official definition and interpretation of R², including negative scores.
+- [scikit-learn: Gradient Boosting quantile regression](https://scikit-learn.org/stable/auto_examples/ensemble/plot_gradient_boosting_quantile.html) - Official example for prediction intervals from quantile regression.
+- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/) - Official guide to classic evaluation and current threshold validation.
+- [Evidently Data Definition](https://docs.evidentlyai.com/docs/library/data_definition) - Current `Dataset`, `DataDefinition`, and `Regression` column-role mapping.
+- [Evidently Tests](https://docs.evidentlyai.com/docs/library/tests) - Current custom test conditions, including the `mean_tests` form used by multi-output metrics.
 - [Evidently Regression Preset](https://docs.evidentlyai.com/metrics/preset_regression) - Official Evidently documentation for regression metrics, plots, and tests.

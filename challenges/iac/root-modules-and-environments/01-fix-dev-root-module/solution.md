@@ -13,6 +13,8 @@ module "orders_service" {
 }
 ```
 
+The development root module now points at the shared child module while keeping names, scale, and protection settings appropriate for development.
+
 ### modules/orders-service/variables.tf
 
 ```hcl

@@ -19,3 +19,5 @@ module "invoice_bucket" {
   versioning_enabled = true
 }
 ```
+
+The root module supplies environment-specific values while the child module owns the repeated private-bucket implementation.

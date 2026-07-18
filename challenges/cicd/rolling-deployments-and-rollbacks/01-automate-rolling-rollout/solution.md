@@ -11,3 +11,5 @@ jobs:
       - run: ./scripts/wait-target-health.sh orders-api-prod
       - run: ./scripts/watch-rollout.sh orders-api-prod --minutes 15
 ```
+
+The workflow registers the tested digest, updates the production service, waits for healthy targets, and observes rollout signals. The production environment keeps the release protected, while each check reduces the chance of declaring success before replacement tasks are ready.

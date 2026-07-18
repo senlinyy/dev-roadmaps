@@ -31,7 +31,41 @@
         ],
         "type": "array",
         "minItems": 6,
+        "maxItems": 6,
         "label": "terraform job has checkout, setup, init, format, validate, and plan steps"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          0,
+          "uses"
+        ],
+        "equals": "actions/checkout@v6",
+        "label": "first step checks out the repository"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          1,
+          "uses"
+        ],
+        "equals": "hashicorp/setup-terraform@v4",
+        "label": "second step sets up Terraform"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          2,
+          "run"
+        ],
+        "equals": "terraform -chdir=infra/orders/prod init -input=false",
+        "label": "third step initializes the production root module"
       },
       {
         "path": [

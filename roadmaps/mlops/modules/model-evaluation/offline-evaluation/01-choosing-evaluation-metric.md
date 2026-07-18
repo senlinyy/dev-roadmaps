@@ -1,23 +1,11 @@
 ---
-title: "Evaluation Metrics"
+title: "Choosing Evaluation Metrics"
 description: "Choose evaluation metrics by connecting model errors to product risk, human workflow, thresholds, segments, and release gates."
-overview: "Evaluation metrics turn model predictions into release evidence. This tutorial follows a hospital triage team as they choose recall, precision, calibration, segment checks, and operating thresholds for a patient-risk model before anyone ships it."
+overview: "Evaluation metrics turn model predictions into release evidence. A supporting example follows a hospital triage team as they choose recall, precision, calibration, segment checks, and operating thresholds for a patient-risk model before anyone ships it."
 tags: ["MLOps", "core", "metrics"]
 order: 1
 id: "article-mlops-model-evaluation-choosing-evaluation-metric"
 ---
-
-## Table of Contents
-
-1. [Metrics Connect Model Output To Product Risk](#metrics-connect-model-output-to-product-risk)
-2. [Follow One Triage Model Review](#follow-one-triage-model-review)
-3. [Name The Error You Fear Most](#name-the-error-you-fear-most)
-4. [Turn Scores Into Decisions With Thresholds](#turn-scores-into-decisions-with-thresholds)
-5. [Check Calibration Before Trusting Risk Scores](#check-calibration-before-trusting-risk-scores)
-6. [Add Segments And Release Gates](#add-segments-and-release-gates)
-7. [Write The Metric Contract](#write-the-metric-contract)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## Metrics Connect Model Output To Product Risk
 <!-- section-summary: An evaluation metric is the measurement that turns model predictions into evidence for a product decision. -->
@@ -26,12 +14,40 @@ An **evaluation metric** is the number you use to judge whether a model is helpi
 
 The title answer is simple: **choose evaluation metrics by starting with the decision the model supports, naming the cost of each mistake, and selecting metrics that expose those mistakes before release**. Accuracy, recall, precision, RMSE, and calibration are useful only after you connect them to a real workflow.
 
+The selection framework has an order. First define the intended decision, population, outcome label, and evaluation window. Then choose a metric family that matches the output: classification errors, numeric forecast error, ranking quality, probability quality, or another task-specific measure. Add product utility and capacity constraints, quantify uncertainty, and inspect important segments before writing the release rule. Later articles teach the calculations for classification, regression, ranking, and paired comparisons.
+
+| Framework step | Question | Evidence |
+|---|---|---|
+| Intended use | Which decision will consume the prediction? | Product workflow and owner |
+| Evaluation protocol | Which population, time window, labels, and split answer that question? | Dataset manifest and label definition |
+| Metric family | Does the model classify, estimate a number, rank, retrieve, or estimate probability? | Task metric report |
+| Decision rule | Which threshold, top-k cutoff, or interval changes the product action? | Operating-point table |
+| Utility and constraints | Which mistakes cost users, money, or human capacity? | Primary metric and guardrails |
+| Reliability | How uncertain is the result, and where can averages hide failure? | Confidence interval, paired comparison, and segment report |
+
+```mermaid
+flowchart LR
+    D["Intended decision"] --> P["Population, label, and time window"]
+    P --> E["Cost of each error"]
+    E --> M["Metric family"]
+    M --> O["Threshold, top-k, or interval"]
+    O --> G["Capacity and safety guardrails"]
+    G --> S["Segments and uncertainty"]
+    S --> R["Release rule"]
+```
+
+The order prevents a familiar mistake: selecting a convenient metric and then inventing a product story around it. Every later choice should be traceable to the decision and its costs.
+
 Think about a model that flags patients who may need a nurse review within the next hour. A missed high-risk patient is dangerous. A false alert still matters because it pulls nurses away from other work, yet it carries a different cost. If the team optimizes plain accuracy, the model may look strong because most patients are stable. If the team optimizes recall without watching false alerts, nurses may drown in alerts and start ignoring them. The metric choice shapes the behavior.
 
-This article follows one review from problem to metric contract. You will see how the team picks primary and guardrail metrics, chooses a threshold, checks calibration, slices results by patient segment, and writes release gates that a reviewer can actually use.
+This article applies the framework to one binary-classification review. You will see how the team picks primary and guardrail metrics, chooses a threshold, checks calibration, slices results by patient segment, and writes release gates that a reviewer can actually use. The clinical names and numbers are illustrative; a real clinical system needs domain validation, governance, safety review, and evidence for its exact intended use.
 
-## Follow One Triage Model Review
-<!-- section-summary: The running scenario uses a patient triage model where missed risk and alert overload both have real consequences. -->
+Metric selection has six layers. Start with the **decision** the product makes, then describe the **cost of each error**, choose a **measurement family** that represents that cost, define the **operating point** or threshold, inspect **calibration and segments**, and finally encode a **release rule** with uncertainty and comparison data. Starting with a familiar metric reverses this logic: the team optimizes what is easy to calculate and only later asks whether it represents the product.
+
+The layers interact. Changing a threshold changes precision and recall. Segment prevalence changes how those rates translate into workload and harm. Calibration affects whether a score can support a risk-based policy. A release gate needs the candidate-baseline difference and its uncertainty, not a single isolated score. The sections below deepen each layer before combining them into a metric contract.
+
+## A Triage Model As A Supporting Example
+<!-- section-summary: A supporting example uses a patient triage model where missed risk and alert overload both have real consequences. -->
 
 Imagine **HarborCare Clinics**, a regional urgent-care network. The data science team trains a model called `triage-escalation-risk` that predicts whether a patient may need urgent nurse escalation during the next hour. The model returns a probability from `0.0` to `1.0`. The triage app turns that score into an alert when the probability crosses a chosen threshold.
 
@@ -100,7 +116,7 @@ For HarborCare, the review team evaluates thresholds from `0.30` to `0.70`. They
 ![HarborCare threshold tradeoff chart](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/threshold-tradeoff.png)
 *The threshold panel makes the release choice concrete: threshold `0.50` catches more urgent cases while keeping alert volume inside the pilot staffing plan.*
 
-The threshold table gives the product owner and clinical lead a shared choice. If the clinics can handle around 13 alerts per 100 visits during the pilot, threshold `0.50` may fit. If staffing drops, threshold `0.60` may protect workload while missing more urgent cases. The release gate should name the planned threshold and the fallback threshold.
+The threshold table gives the product owner and clinical lead a shared choice. If the clinics can handle around 13 alerts per 100 visits during the pilot, threshold `0.50` may fit. A staffing change cannot silently change a clinical operating threshold because the new cutoff changes both missed cases and alert volume. Any threshold change needs the same domain, safety, capacity, and validation review as the original operating point. The release gate should name the planned threshold and any separately approved fallback policy.
 
 You can compute this table with scikit-learn metrics in a repeatable evaluation job:
 

@@ -1,0 +1,23 @@
+{
+  "language": "hcl",
+  "filename": "main.tf",
+  "completionProfile": "terraform-aws",
+  "initialValue": "resource \"aws_lb\" \"app\" {\n  name = \"orders-app\"\n}\n\nresource \"aws_db_instance\" \"orders\" {\n  identifier = \"orders-prod\"\n}\n\nresource \"aws_lb_listener\" \"https\" {\n  load_balancer_arn = aws_lb.app.arn\n  port              = 443\n  protocol          = \"HTTPS\"\n}\n\nresource \"aws_ecs_service\" \"orders\" {\n  name = \"orders\"\n}\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "resource\\s+\"aws_lb\"\\s+\"app\"\\s*\\{[\\s\\S]*?lifecycle\\s*\\{[^}]*create_before_destroy\\s*=\\s*true[^}]*\\}[\\s\\S]*?\\n\\}",
+        "label": "load balancer create-before-destroy"
+      },
+      {
+        "pattern": "resource\\s+\"aws_db_instance\"\\s+\"orders\"\\s*\\{[\\s\\S]*?lifecycle\\s*\\{[^}]*prevent_destroy\\s*=\\s*true[^}]*\\}[\\s\\S]*?\\n\\}",
+        "label": "database destroy prevention"
+      },
+      {
+        "pattern": "resource\\s+\"aws_ecs_service\"\\s+\"orders\"\\s*\\{[^}]*depends_on\\s*=\\s*\\[\\s*aws_lb_listener\\.https\\s*\\][^}]*\\}",
+        "label": "explicit listener dependency"
+      }
+    ]
+  }
+}

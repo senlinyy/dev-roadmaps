@@ -1,0 +1,40 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Test') {\n      steps {\n        sh 'mvn test'\n      }\n    }\n    stage('Build Image') {\n      steps {\n        sh 'docker build -t registry.example.com/checkout-api:${BUILD_NUMBER} .'\n      }\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["pipeline"],
+        "bodyMatches": "agent\\s+none",
+        "label": "pipeline delegates agent selection to stages"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "agent"],
+        "pathArgs": [null, null, "Test", null],
+        "bodyContains": "linux && maven",
+        "label": "Test stage selects the Maven-capable Linux pool"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Test", null],
+        "bodyContains": "mvn test",
+        "label": "Test stage keeps the Maven test command"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "agent"],
+        "pathArgs": [null, null, "Build Image", null],
+        "bodyContains": "linux && docker",
+        "label": "Build Image stage selects the Docker-capable Linux pool"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Build Image", null],
+        "bodyContains": "docker build",
+        "label": "Build Image stage keeps the Docker build command"
+      }
+    ]
+  }
+}

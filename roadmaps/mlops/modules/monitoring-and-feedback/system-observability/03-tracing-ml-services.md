@@ -1,35 +1,24 @@
 ---
 title: "ML Service Tracing"
 description: "Trace model-serving requests across APIs, feature services, model runtimes, fallbacks, logs, and downstream calls."
-overview: "ML service tracing shows the path a prediction request takes through an inference system. This tutorial follows a route ETA ensemble service through OpenTelemetry FastAPI setup, span design, request IDs, sampling, collector export, trace-log correlation, and incident triage."
+overview: "ML service tracing shows the path a prediction request takes through an inference system. A supporting example follows a route ETA ensemble service through OpenTelemetry FastAPI setup, span design, request IDs, sampling, collector export, trace-log correlation, and incident triage."
 tags: ["MLOps", "core", "observability"]
 order: 3
 id: "article-mlops-monitoring-and-feedback-tracing-ml-services"
 ---
 
-## Table of Contents
-
-1. [Tracing Shows The Path Of One Prediction Request](#tracing-shows-the-path-of-one-prediction-request)
-2. [Follow One Route ETA Ensemble](#follow-one-route-eta-ensemble)
-3. [Design Spans Around The Serving Workflow](#design-spans-around-the-serving-workflow)
-4. [Add OpenTelemetry To FastAPI](#add-opentelemetry-to-fastapi)
-5. [Trace Model Steps, Dependencies, And Fallbacks](#trace-model-steps-dependencies-and-fallbacks)
-6. [Sample Traces And Export Them Through A Collector](#sample-traces-and-export-them-through-a-collector)
-7. [Correlate Traces With Logs And Metrics](#correlate-traces-with-logs-and-metrics)
-8. [Practical Checks, Mistakes, And Interview Understanding](#practical-checks-mistakes-and-interview-understanding)
-9. [References](#references)
 
 ## Tracing Shows The Path Of One Prediction Request
 <!-- section-summary: Tracing records the timed path of one request through a model-serving system, including API work, dependency calls, model steps, and fallback decisions. -->
 
 **ML service tracing** means recording the path of one inference request as it moves through APIs, feature services, model runtimes, and downstream calls. A trace is made of **spans**. Each span represents one timed operation, such as accepting the HTTP request, fetching route features, calling a model server, combining model outputs, or writing a fallback response.
 
-Metrics answer aggregate questions: how many requests failed, what p95 latency is, and how much CPU or GPU is in use. Logs answer event questions: which request id, model version, response score, and error message were recorded. Traces answer path questions: where did time go for this request, which dependency slowed down, which model branch ran, and which fallback path produced the answer?
+Metrics answer aggregate questions: how many requests failed, what 95th-percentile (**p95**) latency is, and how much CPU or GPU is in use. P95 is the response time that 95 percent of requests meet or beat. Logs answer event questions: which request id, model version, response score, and error message were recorded. Traces answer path questions: where did time go for this request, which dependency slowed down, which model branch ran, and which fallback path produced the answer?
 
 Tracing matters in MLOps because model-serving paths often have more than one moving part. A single prediction can touch feature stores, vector indexes, geospatial services, online models, rule engines, caches, and policy code. Without a trace, a responder sees "ETA API p95 latency is high" and then jumps between dashboards. With a trace, the responder can open one slow request and see the time spent in each step.
 
-## Follow One Route ETA Ensemble
-<!-- section-summary: The running scenario is a delivery ETA service where an ensemble combines route, traffic, and weather signals before returning a prediction. -->
+## A Supporting Example: Route ETA Ensemble
+<!-- section-summary: A supporting example is a delivery ETA service where an ensemble combines route, traffic, and weather signals before returning a prediction. -->
 
 Imagine **MetroRoute**, a logistics company that predicts delivery arrival time for couriers. The mobile app calls `/v1/eta` with pickup coordinates, dropoff coordinates, courier id, route option, and timestamp. The service returns an estimated arrival time and a confidence band.
 
@@ -107,7 +96,10 @@ The trace gives the responder a timeline. The traffic feature call took most of 
 
 OpenTelemetry is the common open-source standard for traces, metrics, and logs. In Python, the FastAPI instrumentation can create HTTP server spans automatically. You then add manual spans around model-specific operations so traces explain the inference workflow instead of only the web framework.
 
-Here is a minimal FastAPI tracing setup. It creates a tracer provider with service metadata, instruments FastAPI, and exports spans through OTLP to a local OpenTelemetry Collector.
+The service needs a tracer provider with stable service metadata, FastAPI instrumentation for the outer HTTP span, an OTLP exporter, and a named application tracer for ML-specific operations. **OTLP**, the OpenTelemetry Protocol, carries traces, metrics, and logs between OpenTelemetry components.
+
+:::expand[Configure FastAPI tracing and OTLP export]{kind="example"}
+This complete setup sends spans to a local Collector and keeps application sampling enabled so the Collector can make a later tail-sampling decision. Teams that use head sampling must account for the fact that discarded traces never reach a tail sampler.
 
 ```python
 from fastapi import FastAPI
@@ -117,7 +109,6 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 resource = Resource.create(
     {
@@ -130,7 +121,6 @@ resource = Resource.create(
 trace.set_tracer_provider(
     TracerProvider(
         resource=resource,
-        sampler=ParentBased(TraceIdRatioBased(0.10)),
     )
 )
 
@@ -143,15 +133,19 @@ app = FastAPI()
 FastAPIInstrumentor.instrument_app(app)
 tracer = trace.get_tracer("metroroute.eta")
 ```
+:::
 
-The `Resource` fields identify the service in the tracing backend. The `ParentBased(TraceIdRatioBased(0.10))` sampler keeps about 10 percent of new traces while preserving the parent decision for child spans. That is a common starting point for high-volume services. Teams usually keep all error traces through tail sampling or backend rules, then sample healthy traffic to control cost.
+The `Resource` fields identify the service in the tracing backend. This setup keeps the SDK's default recording decision so complete traces reach the Collector. That detail matters because a trace discarded by a 10 percent head sampler cannot be recovered by a later tail sampler, even if the request fails. MetroRoute controls storage volume in the Collector after it has seen completed traces.
 
 FastAPI instrumentation creates the outer HTTP span. The tracer named `metroroute.eta` is for manual spans around the ML workflow. This split is useful because framework instrumentation handles common HTTP attributes, while manual spans carry model names, model versions, fallback reasons, and dependency details.
 
 ## Trace Model Steps, Dependencies, And Fallbacks
 <!-- section-summary: Manual spans around feature fetches, model calls, and fallback branches show where prediction time went and which model path produced the response. -->
 
-Manual spans should wrap the operations the team discusses during incidents. MetroRoute cares about map features, traffic features, base model prediction, delay adjustment, and ensemble combination. The code can attach attributes and record exceptions on each span.
+Manual spans should wrap the operations the team discusses during incidents. MetroRoute cares about map features, traffic features, base model prediction, delay adjustment, and ensemble combination. Each span records bounded identity, timing, decision, and failure evidence.
+
+:::expand[Instrument model steps, dependencies, and fallback]{kind="example"}
+The full workflow below shows the mechanics. Dependency spans identify the called service, model spans identify the exact model version, and the fallback records both the original exception and the business reason for using a cached estimate.
 
 ```python
 from opentelemetry import trace
@@ -204,6 +198,7 @@ async def predict_eta(request_payload: dict) -> dict:
             span.set_attribute("fallback.reason", "dependency_timeout")
             return cached_city_eta(validated)
 ```
+:::
 
 This code shows a few useful patterns. Dependency spans name the service being called. Model spans include model name and version. The fallback span records the exception and writes a reason that responders can query. Output attributes are coarse and safe. The code records `base_eta_seconds` and `delay_seconds`, while exact coordinates and courier ids stay out of span attributes.
 
@@ -214,7 +209,10 @@ Errors should appear as span status and events. If `traffic-snapshot-api` times 
 
 Tracing every request for a busy inference service can create large storage costs. Sampling controls how many traces reach the backend. Head sampling decides near the start of the request, which is simple and cheap. Tail sampling decides after seeing the whole trace, which lets the collector keep errors, slow traces, or specific routes with better targeting.
 
-MetroRoute starts with head sampling in the application and uses collector rules for batching and routing. A production team might move more sampling logic into the collector once it has clear policies for slow requests, errors, and canary traffic.
+MetroRoute sends complete traces from the application to a Collector and makes the keep-or-drop decision there. This costs more network and Collector capacity than early head sampling, but it lets the policy retain errors and slow requests using evidence from the completed trace. A much larger service may combine consistent head sampling with tail sampling to protect the pipeline, while accepting that the tail policy only sees the head-sampled subset and therefore cannot promise to retain every error.
+
+:::expand[Configure Collector redaction and tail sampling]{kind="example"}
+This fuller Collector pipeline removes prohibited fields, keeps errors and requests slower than 500 milliseconds, samples a healthy baseline, and batches the selected spans. The memory limiter runs before stateful processors so the Collector can apply backpressure before pending trace decisions exhaust memory.
 
 ```yaml
 receivers:
@@ -224,6 +222,11 @@ receivers:
       http:
 
 processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 2048
+    spike_limit_mib: 512
+
   batch:
     timeout: 5s
     send_batch_size: 1024
@@ -241,6 +244,24 @@ processors:
       - key: dropoff_longitude
         action: delete
 
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 1000
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: keep-slow-requests
+        type: latency
+        latency:
+          threshold_ms: 500
+      - name: sample-healthy-baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
 exporters:
   otlp/tempo:
     endpoint: tempo-distributor.observability.svc.cluster.local:4317
@@ -251,11 +272,12 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [attributes/safe_trace_fields, batch]
+      processors: [memory_limiter, attributes/safe_trace_fields, tail_sampling, batch]
       exporters: [otlp/tempo]
 ```
+:::
 
-The collector receives OTLP data from the service, removes risky attributes, batches spans, and exports them to a tracing backend such as Grafana Tempo, Jaeger, or another OpenTelemetry-compatible system. The backend choice can vary. The important contract is OTLP export from services and a collector layer where the platform team can centralize batching, filtering, redaction, and routing.
+The collector checks its memory boundary first, removes risky attributes, waits for the trace, keeps errors and requests slower than 500 ms, samples 10 percent of the remaining healthy traces, then batches the selected spans. The memory limiter must run first so it can apply backpressure before stateful processors accumulate more data. Tail sampling still needs enough memory for traces whose decision is pending, so the platform team monitors refused and dropped spans, late spans, decision latency, and Collector memory. For high traffic, use a two-tier Collector design with trace-ID-aware load balancing so every span from one trace reaches the same tail-sampling Collector.
 
 Sampling should also respect incident needs. MetroRoute keeps a way to raise the sample rate for one route or one deployment during an investigation. The runbook might set the canary deployment's trace sample-rate setting to `1.0` for 30 minutes, then restore the normal value after the incident. The key is ownership and time limit, because emergency tracing can raise backend cost quickly.
 
@@ -295,14 +317,57 @@ Now the incident path is clear. The alert points to a route and region. The metr
 ![MetroRoute incident path from metric to trace to log](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/metroroute-metric-trace-log.png)
 *The strongest incident flow connects aggregate symptoms to one trace timeline and then to the prediction log that records model version, request ID, and fallback evidence.*
 
-## Practical Checks, Mistakes, And Interview Understanding
+## Test The Trace Contract, Not Only The Response Body
+<!-- section-summary: An in-memory exporter lets integration tests prove that the normal and fallback paths emit the spans and safe attributes responders depend on. -->
+
+A request can return the right JSON while producing an unusable trace. For example, a refactor can remove the model-version attribute, start the fallback span outside the request context, or catch a timeout without setting an error status. HTTP response tests will miss all three failures. Treat the important span names, parent-child relationships, and decision attributes as an observable contract.
+
+The OpenTelemetry Python SDK includes an in-memory exporter that makes completed spans available to a test. The production application still uses OTLP; this provider exists only inside the test process. MetroRoute passes the tracer into the workflow so the test does not replace the process-wide provider:
+
+```python
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+
+def test_timeout_trace_keeps_request_context_and_explains_fallback():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    test_tracer = provider.get_tracer("metroroute.eta.test")
+
+    with test_tracer.start_as_current_span("HTTP POST /v1/eta"):
+        result = predict_eta_for_test(
+            tracer=test_tracer,
+            traffic_client=AlwaysTimesOut(),
+        )
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+
+    assert result["source"] == "cached_city_eta"
+    assert spans["eta.fetch_traffic_features"].status.status_code is StatusCode.ERROR
+    assert spans["eta.cached_fallback"].attributes["fallback.used"] is True
+    assert spans["eta.cached_fallback"].attributes["fallback.reason"] == "dependency_timeout"
+    assert (
+        spans["eta.cached_fallback"].context.trace_id
+        == spans["HTTP POST /v1/eta"].context.trace_id
+    )
+    assert "courier_id" not in spans["eta.cached_fallback"].attributes
+```
+
+This test injects a deterministic timeout instead of waiting for a real dependency to fail. It proves five different things: the caller receives the documented fallback, the dependency failure is visible, the decision has a machine-queryable reason, the fallback remains in the request's trace, and a prohibited identity field is absent. A companion success-path test should assert the two model spans and their `ml.model.version` attributes. A propagation test should run two small HTTP services and assert that the receiving service's span has the same trace ID as the sending service's client span.
+
+The test should fail during review if a developer renames a span without updating dashboards, drops a required attribute, breaks W3C trace-context propagation, or records the fallback as a separate trace. Recovery is then explicit: restore the instrumentation contract or deliberately migrate the dashboards, alert queries, and runbook with the code change. Merely seeing spans in a local console is not sufficient evidence.
+
+## Operational Checks And Failure Modes
 <!-- section-summary: Good ML tracing follows the serving workflow, keeps safe attributes, samples deliberately, and connects traces with logs and metrics. -->
 
 Before launching tracing for a model service, check that every request creates or receives a request id and trace context. The API should create an HTTP server span automatically, and manual spans should cover feature fetches, model calls, ensemble logic, external dependencies, and fallback branches. Span attributes should include service name, environment, route, model name, model version, dependency name, fallback reason, region, and safe output summaries. Sensitive payload fields should stay out of spans.
 
 The common mistakes are practical. Teams enable framework tracing and stop there, which leaves model steps invisible. They put high-cardinality payload data into span attributes, which creates privacy and cost risk. They sample too aggressively during launch and lose the slow traces they needed. They forget to link logs with trace ids, which makes a trace hard to join with prediction evidence. They trace every tiny helper function, which creates noise and hides the path that responders need.
 
-In an interview, you can explain ML service tracing like this: tracing shows the timed path of one prediction request through the serving workflow. A trace has spans for the API boundary, feature fetches, model runtime calls, ensemble logic, dependency calls, and fallbacks. OpenTelemetry is the standard way to create and export traces. You sample traces to control cost, use the collector for batching and filtering, keep safe low-cardinality attributes, and connect traces with metrics and structured logs through request ids, trace ids, and model version labels.
+ML service tracing records the timed path of one prediction request through the serving workflow. Useful spans cover the API boundary, feature fetches, model runtime calls, ensemble logic, dependencies, and fallbacks. OpenTelemetry creates and exports those traces; sampling controls volume; the Collector handles filtering and batching; and shared request IDs, trace IDs, and model-version fields connect traces with metrics and structured logs.
 
 ## References
 

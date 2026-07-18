@@ -10,7 +10,10 @@
       { "path": ["kind"], "equals": "Role", "label": "Role kind" },
       { "path": ["metadata", "name"], "equals": "orders-release", "label": "release Role name" },
       { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
-      { "path": ["rules"], "equals": [{ "apiGroups": ["apps"], "resources": ["deployments", "replicasets"], "verbs": ["get", "list", "watch", "patch", "update"] }, { "apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"] }], "label": "least-privilege release rules" }
+      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "orders-release", "label": "approved ownership label" },
+      { "path": ["rules"], "containsObject": { "apiGroups": ["apps"], "resources": ["deployments", "replicasets"], "verbs": ["get", "list", "watch", "patch", "update"] }, "label": "workload release rule" },
+      { "path": ["rules"], "containsObject": { "apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"] }, "label": "Pod observation rule" },
+      { "path": ["rules"], "minItems": 2, "maxItems": 2, "label": "only the two approved release rules" }
     ]
   }
 }

@@ -1,30 +1,12 @@
 ---
 title: "ML Audit Trails"
 description: "Build audit trails that connect predictions, model versions, training runs, data snapshots, approvals, access changes, and incidents."
-overview: "An ML audit trail is the chain of records that explains how a prediction or model release happened. This article follows a delivery ETA model from one customer complaint back through serving logs, registry events, MLflow runs, data lineage, approvals, and cloud activity records."
+overview: "An ML audit trail is the chain of records that explains how a prediction or model release happened. A supporting example follows a delivery ETA model from one customer complaint back through serving logs, registry events, MLflow runs, data lineage, approvals, and cloud activity records."
 tags: ["MLOps", "production", "audit"]
 order: 2
 id: "article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems"
 ---
 
-## Table of Contents
-
-1. [What an ML Audit Trail Is](#what-an-ml-audit-trail-is)
-2. [The Trace You Need for One Prediction](#the-trace-you-need-for-one-prediction)
-3. [Logging Prediction Events](#logging-prediction-events)
-4. [Connecting Releases to Training Evidence](#connecting-releases-to-training-evidence)
-5. [Auditing Data and Access Changes](#auditing-data-and-access-changes)
-6. [Investigation Runbook](#investigation-runbook)
-7. [Retention and Security](#retention-and-security)
-8. [Failure Modes](#failure-modes)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
-
-An **ML audit trail** is the chain of records that lets you explain how a model reached production and how a specific prediction happened. It connects the serving request, model version, training run, data snapshot, code commit, approval packet, access changes, and operational logs into one traceable story.
-
-Think about a delivery company called ParcelPilot. It uses an ETA model to tell customers when groceries will arrive. A customer complains that the app promised a 20-minute delivery, the order arrived after 70 minutes, and support asks the ML team a fair question: which model made that ETA, and why was it allowed to serve production traffic that day?
-
-An audit trail should answer that without guesswork. The team should be able to start from `prediction_id=eta-20260704-8f2c91`, find the served model version, find the release that pointed production traffic at that version, find the training run and dataset snapshot behind it, find the approval packet, and see whether any access or configuration changes happened near the incident.
 
 ## What an ML Audit Trail Is
 <!-- section-summary: An audit trail connects model decisions to durable records across serving, training, data, approval, and access systems. -->
@@ -230,7 +212,7 @@ ORDER BY event_time DESC;
 
 The query looks for model and feature-table events near the release. Investigators should treat `request_params` carefully because audit logs can contain sensitive values. Access to audit tables belongs with platform, security, and selected incident roles, not every model author.
 
-For cloud storage and IAM events, CloudTrail gives the AWS-side trail. A team might check who changed an S3 bucket policy, who wrote a model artifact, or which role assumed production deployment access.
+For cloud storage and identity and access management (IAM) events, CloudTrail gives the AWS-side trail. A team might check who changed an S3 bucket policy, who wrote a model artifact, or which role assumed production deployment access.
 
 ```bash
 aws cloudtrail lookup-events \

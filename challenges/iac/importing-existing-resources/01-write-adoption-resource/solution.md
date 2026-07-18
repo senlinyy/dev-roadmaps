@@ -15,3 +15,5 @@ resource "aws_s3_bucket" "orders_invoices" {
   }
 }
 ```
+
+The resource block records the intended managed shape before import, giving the first post-import plan a configuration to compare with the real bucket.

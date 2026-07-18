@@ -1,0 +1,78 @@
+{
+  "language": "yaml",
+  "filename": "roles/orders/tasks/main.yml",
+  "completionProfile": "ansible-playbook",
+  "initialValue": "- name: Copy orders configuration\n  ansible.builtin.shell: cp /tmp/orders.conf /etc/orders/orders.conf\n\n- name: Verify external route\n  ansible.builtin.command: /usr/local/bin/check-orders-route\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "src"
+        ],
+        "equals": "orders.conf.j2",
+        "label": "template source"
+      },
+      {
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "dest"
+        ],
+        "equals": "/etc/orders/orders.conf",
+        "label": "template destination"
+      },
+      {
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "mode"
+        ],
+        "equals": "0640",
+        "label": "configuration mode"
+      },
+      {
+        "path": [
+          0,
+          "diff"
+        ],
+        "equals": true,
+        "label": "configuration diff enabled"
+      },
+      {
+        "path": [
+          0,
+          "notify"
+        ],
+        "equals": "Restart orders",
+        "label": "restart handler notification"
+      },
+      {
+        "path": [
+          1,
+          "ansible.builtin.command"
+        ],
+        "equals": "/usr/local/bin/check-orders-route",
+        "label": "external verification command"
+      },
+      {
+        "path": [
+          1,
+          "when"
+        ],
+        "equals": "not ansible_check_mode",
+        "label": "verification skipped during preview"
+      },
+      {
+        "path": [
+          1,
+          "changed_when"
+        ],
+        "equals": false,
+        "label": "verification remains read-only"
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: "Release Strategies"
-description: "Use progressive delivery patterns to reduce the risk of a bad model release."
+description: "Protect callers with compatible contracts, reduce blast radius with progressive delivery, and measure product impact with controlled experiments."
 tags: ["production", "delivery"]
 order: 2
 ---

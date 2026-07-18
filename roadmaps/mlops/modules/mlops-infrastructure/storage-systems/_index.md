@@ -1,6 +1,6 @@
 ---
 title: "Storage Systems"
-description: "Organize the persistent stores that ML systems rely on."
+description: "Store model, dataset, artifact, and metadata assets with durable identity, integrity, access, and lifecycle controls."
 tags: ["production", "storage"]
-order: 2
+order: 1
 ---

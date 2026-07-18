@@ -10,11 +10,18 @@
       { "path": ["kind"], "equals": "NetworkPolicy", "label": "NetworkPolicy kind" },
       { "path": ["metadata", "name"], "equals": "allow-dns-egress", "label": "policy name" },
       { "path": ["metadata", "namespace"], "equals": "checkout", "label": "checkout namespace" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "checkout", "label": "approved ownership label" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/managed-by"], "equals": "platform-team", "label": "approved manager label" },
+      { "path": ["metadata", "annotations", "devpolaris.io/change-ticket"], "equals": "NET-1842", "label": "approved change ticket" },
       { "path": ["spec", "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "checkout-web", "label": "checkout caller selector" },
       { "path": ["spec", "policyTypes"], "includes": "Egress", "label": "egress policy type" },
+      { "path": ["spec", "policyTypes"], "maxItems": 1, "label": "single egress policy type" },
+      { "path": ["spec", "egress"], "maxItems": 1, "label": "single DNS egress rule" },
+      { "path": ["spec", "egress", 0, "to"], "maxItems": 1, "label": "single combined DNS destination" },
       { "path": ["spec", "egress", 0, "to"], "containsObject": { "namespaceSelector": { "matchLabels": { "kubernetes.io/metadata.name": "kube-system" } }, "podSelector": { "matchLabels": { "k8s-app": "kube-dns" } } }, "label": "CoreDNS destination selectors" },
       { "path": ["spec", "egress", 0, "ports"], "containsObject": { "protocol": "UDP", "port": 53 }, "label": "UDP DNS port" },
-      { "path": ["spec", "egress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 53 }, "label": "TCP DNS port" }
+      { "path": ["spec", "egress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 53 }, "label": "TCP DNS port" },
+      { "path": ["spec", "egress", 0, "ports"], "minItems": 2, "maxItems": 2, "label": "only UDP and TCP DNS ports" }
     ]
   }
 }

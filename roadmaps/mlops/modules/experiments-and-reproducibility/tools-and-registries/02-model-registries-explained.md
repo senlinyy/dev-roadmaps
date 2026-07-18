@@ -1,24 +1,11 @@
 ---
 title: "Model Registries"
 description: "Explain model registries as controlled catalogs that link model versions to artifacts, run evidence, approval metadata, ownership, and deployment readiness."
-overview: "A model registry is the controlled catalog for reviewed model versions. This tutorial follows a marketplace ranking model through registry records, artifact links, run lineage, approval metadata, managed registry options, and release checks."
+overview: "A model registry is a control-plane catalog for candidate identity, artifact integrity, lineage, evaluation evidence, ownership, approval, movable aliases, and deployment links. A marketplace ranking model illustrates the framework."
 tags: ["MLOps", "production", "registry"]
 order: 2
 id: "article-mlops-experiments-and-reproducibility-model-registries-explained"
 ---
-
-## Table of Contents
-
-1. [What A Model Registry Stores](#what-a-model-registry-stores)
-2. [The Marketplace Ranking Example](#the-marketplace-ranking-example)
-3. [Model Name, Version, And Artifact](#model-name-version-and-artifact)
-4. [Run Evidence And Lineage](#run-evidence-and-lineage)
-5. [Approval Metadata](#approval-metadata)
-6. [Registry Versus Artifact Storage](#registry-versus-artifact-storage)
-7. [Where Managed Registries Fit](#where-managed-registries-fit)
-8. [Release Checks From A Registry Record](#release-checks-from-a-registry-record)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## What A Model Registry Stores
 <!-- section-summary: A model registry stores controlled model versions, artifact links, run evidence, approvals, aliases, ownership, and deployment readiness metadata. -->
@@ -29,7 +16,35 @@ The registry sits between experiment tracking and serving. Experiment tracking m
 
 The beginner-friendly version is this: the artifact store keeps the files, and the registry explains the files. The registry tells the team that a specific model file came from a specific run, trained on a specific dataset version, passed specific checks, and has a specific release status. When a deployment reads `models:/trailmarket-search-ranker@production`, it should land on the exact version that the team approved.
 
-## The Marketplace Ranking Example
+A registry is a control-plane system with several separate responsibilities:
+
+| Responsibility | Stable record | Why it exists |
+|---|---|---|
+| **Candidate identity** | Model name and immutable version | Gives every reviewed candidate one durable subject |
+| **Artifact integrity** | Artifact location, digest, signature, input example | Proves which exact bytes and interface the version contains |
+| **Lineage** | Training run, code, data, config, environment | Explains how the candidate was produced |
+| **Evaluation evidence** | Metrics, slices, robustness, latency, limitations | Shows which release claims reviewers checked |
+| **Ownership and approval** | Owner, approvers, policy result, decision time | Makes authority and accountability explicit |
+| **Movable intent** | Aliases such as `candidate` or `champion` | Lets automation express current intent without changing version identity |
+| **Deployment links** | Environments and release records using the version | Connects registry state to real runtime state without pretending the registry routes traffic |
+
+The boundaries matter. Object storage owns large bytes. Experiment tracking owns the full history of attempts. The registry owns the smaller set of governed candidates. Deployment systems own traffic, environment configuration, and rollback execution.
+
+```mermaid
+flowchart LR
+    Runs["Experiment runs and logged models"] --> Select["Candidate selection"]
+    Select --> Registry["Immutable registry version"]
+    Artifact["Artifact store and digest"] --> Registry
+    Registry --> Evidence["Lineage, evaluation, ownership, approval"]
+    Evidence --> Alias["Movable candidate or champion alias"]
+    Evidence --> Release["Pinned deployment request"]
+    Release --> Runtime["Traffic and loaded-version evidence"]
+    Runtime --> Registry
+```
+
+The registry is the control-plane bridge in the middle. It connects a smaller set of candidates with their durable artifacts and evidence. Aliases help discovery, while deployment pins a concrete version and reports actual runtime state back to operations.
+
+## Apply The Registry Framework To Marketplace Ranking
 <!-- section-summary: A marketplace ranking model needs a registry because many training runs produce only a few reviewed candidates for search traffic. -->
 
 TrailMarket is a marketplace for outdoor gear. Users search for tents, packs, stoves, and used climbing equipment. The ranking model decides which listings appear near the top of the results page. If the model over-promotes stale listings or hides trusted sellers, buyers leave and sellers complain about lost traffic.
@@ -43,7 +58,7 @@ The team may train many runs in MLflow or W&B. Only one candidate should move to
 | Which model is this? | `trailmarket-search-ranker`, version `42` |
 | Where did it come from? | Tracking run `mlflow-run-20260703-1842` |
 | Which data trained it? | `ranking_training_clicks_2026_06_29`, label cutoff `2026-06-22` |
-| What files deploy? | Model artifact URI plus feature and dependency files |
+| What files deploy? | Model artifact uniform resource identifier (URI) plus feature and dependency files |
 | Why is it trusted? | Offline metrics, segment checks, latency test, risk review |
 | Who approved it? | Ranking owner, marketplace product owner, trust-and-safety reviewer |
 | What can use it? | Alias `candidate`, later `shadow`, `canary`, or `production` |
@@ -102,7 +117,7 @@ lineage:
   training:
     run_id: mlflow-run-20260703-1842
     git_sha: 51de8f0
-    image: ghcr.io/trailmarket/ranking-train:2026.07.03
+    image: ghcr.io/trailmarket/ranking-train@sha256:ef42c4cf4fc8b506248cd65738eb108cc2f6897dddc38b4073a99f98fb1ec86f
     feature_pipeline: ranking_features_v9
     training_table: warehouse.ml.ranking_training_clicks_2026_06_29
     label_cutoff: 2026-06-22

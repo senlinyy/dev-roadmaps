@@ -1,37 +1,41 @@
 ---
 title: "Robustness Testing"
 description: "Test candidate models against noisy inputs, schema changes, rare segments, stress cases, and release blockers before production rollout."
-overview: "Robustness testing checks whether a candidate model still behaves safely when production inputs are messy, rare, shifted, incomplete, or unusually expensive. This tutorial follows a support-ticket priority model through perturbation tests, schema stress checks, segment risk, MLflow evaluation artifacts, and a release decision packet."
+overview: "Robustness testing checks whether a candidate model still behaves safely when production inputs are messy, rare, shifted, incomplete, or unusually expensive. A supporting example follows a support-ticket priority model through perturbation tests, schema stress checks, segment risk, MLflow evaluation artifacts, and a release decision packet."
 tags: ["MLOps", "production", "readiness"]
 order: 3
 id: "article-mlops-model-evaluation-robustness-testing-before-release"
 ---
 
-## Table of Contents
-
-1. [Robustness Tests Ask How The Model Handles Messy Reality](#robustness-tests-ask-how-the-model-handles-messy-reality)
-2. [Follow One Support Ticket Release](#follow-one-support-ticket-release)
-3. [Map The Risks Before Writing Tests](#map-the-risks-before-writing-tests)
-4. [Build A Robustness Suite](#build-a-robustness-suite)
-5. [Score The Suite With Segment Metrics](#score-the-suite-with-segment-metrics)
-6. [Log The Evidence In MLflow](#log-the-evidence-in-mlflow)
-7. [Turn Failures Into A Release Decision](#turn-failures-into-a-release-decision)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## Robustness Tests Ask How The Model Handles Messy Reality
 <!-- section-summary: Robustness testing checks whether a candidate model keeps acceptable behavior when production inputs are noisy, shifted, rare, incomplete, or stressful. -->
 
-**Robustness testing** means testing a candidate model against the kinds of inputs that show up after launch: typos, missing fields, strange formatting, new product names, rare customer segments, delayed labels, long messages, short messages, and traffic patterns the training notebook never made obvious.
-
-The title answer is direct: **before release, robustness testing checks whether a candidate model still behaves safely outside the clean average-case evaluation report**. A model can pass the main holdout set and still fail short Spanish tickets, unusually long stack traces, missing account metadata, or a burst of tickets after a product outage.
+**Robustness testing** checks whether a candidate keeps acceptable behaviour when inputs, dependencies, scale, or operating conditions vary from the clean average case. A model can pass the main holdout set and still fail short Spanish tickets, unusually long stack traces, missing account metadata, or a burst of tickets after a product outage.
 
 You already saw segment evaluation and fairness checks in the previous production-readiness articles. Robustness testing connects those ideas to release practice. Segment reports tell you which groups matter. Fairness checks tell you where errors can harm people or customers. Robustness tests ask a very practical follow-up question: what happens when the next production input arrives a little messy?
 
 This article keeps the same support-ticket world from the segment evaluation article so the path feels connected. The team has a promising ticket-priority classifier. Now they need to shake it before it touches the live queue.
 
-## Follow One Support Ticket Release
-<!-- section-summary: The running scenario uses a ticket-priority classifier that must route urgent customer issues even when messages are short, noisy, multilingual, or missing metadata. -->
+The framework has five stages: derive stress conditions from production risk, create controlled tests, compare candidate and baseline by risk family, connect failures to release scope, and preserve useful cases for future candidates.
+
+```mermaid
+flowchart LR
+    R["Production risks and known failures"] --> T["Controlled perturbations and stress cases"]
+    T --> C["Candidate and baseline predictions"]
+    C --> M["Metrics by risk family, segment, and severity"]
+    M --> D["Diagnose model, data, contract, or runtime boundary"]
+    D --> G["Pass, restrict, gather evidence, or block"]
+    G --> S["Regression suite and production monitoring"]
+    S --> R
+```
+
+Robustness covers several mechanisms. **Input robustness** tests noise, missing values, formatting, and unusual combinations. **Distribution robustness** tests relevant shifts in time, geography, language, product, or population. **Operational robustness** tests load, timeouts, dependency failures, resource pressure, and fallbacks. **Adversarial robustness** tests intentionally crafted inputs when the threat model makes them plausible. These mechanisms need different data and controls, so one blended robustness score would hide the failing boundary.
+
+The test oracle also needs care. Some perturbations should preserve the label, such as harmless whitespace changes. Others legitimately change meaning, so blindly reusing the original label would create false failures. Domain reviewers should confirm invariance assumptions and expected outcomes for high-consequence cases.
+
+## A Supporting Example: Support Ticket Release
+<!-- section-summary: A supporting example uses a ticket-priority classifier that must route urgent customer issues even when messages are short, noisy, multilingual, or missing metadata. -->
 
 Imagine **HelpHub**, a B2B support platform. HelpHub routes incoming customer tickets to `urgent`, `normal`, or `low` queues. The current production model is `ticket-priority-router:v11`. The candidate is `ticket-priority-router:v12`.
 
@@ -39,7 +43,7 @@ The candidate improves overall macro F1 from `0.71` to `0.76` on the standard ho
 
 The support team still has a release concern. Production tickets rarely arrive as neat examples. A customer may type "api dead prod" from a phone. A Spanish-speaking customer may report a billing outage. A webhook may omit `account_tier` for a few minutes after a CRM sync fails. A stack trace may fill the ticket body with thousands of characters and hide the business sentence at the top.
 
-The release team writes the article spine as a real workflow:
+The release team organizes its review around the robustness framework:
 
 | Step | Question | Evidence |
 |---|---|---|
@@ -102,7 +106,7 @@ A **robustness suite** is a saved evaluation dataset built to stress a model bef
 
 HelpHub stores the suite as JSON Lines because each row is one case:
 
-```json
+```jsonl
 {"case_id":"rob_001","risk":"short_urgent","text":"API down prod now","account_tier":"enterprise","language":"en","expected_priority":"urgent"}
 {"case_id":"rob_002","risk":"spanish_billing","text":"No podemos cobrar clientes desde la API de pagos","account_tier":"growth","language":"es","expected_priority":"urgent"}
 {"case_id":"rob_003","risk":"long_stack_trace","text":"Checkout failing in production. Traceback follows...","account_tier":"enterprise","language":"en","expected_priority":"urgent"}

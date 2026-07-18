@@ -13,12 +13,26 @@
         "label": "runs.using is composite"
       },
       {
-        "path": ["runs", "steps", 0, "shell"],
-        "type": "string"
+        "path": ["runs", "steps"],
+        "containsObject": {
+          "run": "npm ci",
+          "shell": "bash"
+        },
+        "label": "dependency installation runs with bash"
       },
       {
-        "path": ["runs", "steps", 1, "shell"],
-        "type": "string"
+        "path": ["runs", "steps"],
+        "containsObject": {
+          "run": "npm run build",
+          "shell": "bash"
+        },
+        "label": "build runs with bash"
+      },
+      {
+        "path": ["runs", "steps"],
+        "type": "array",
+        "maxItems": 2,
+        "label": "composite action keeps the two intended steps"
       }
     ]
   }

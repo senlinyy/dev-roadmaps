@@ -1,6 +1,6 @@
 ---
 title: "Training Data Basics"
-description: "Cover the vocabulary and dataset structures every learner needs before pipeline work."
-tags: ["core", "datasets"]
+description: "Cover dataset structure, safe splits, leakage, and the human labeling workflow that produces trustworthy targets."
+tags: ["core", "datasets", "labels"]
 order: 1
 ---

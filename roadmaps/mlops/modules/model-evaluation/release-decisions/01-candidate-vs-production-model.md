@@ -1,277 +1,192 @@
 ---
-title: "Candidate vs Production"
-description: "Compare a candidate model with the current production model using frozen evaluation data, shadow traffic, segment tables, registry evidence, and release decisions."
-overview: "A candidate-vs-production review asks whether a new model version should replace the version serving users today. This tutorial follows a delivery ETA model through a comparison packet, MLflow registry aliases, regression metrics, segment risk, shadow traffic, and a decision table."
+title: "Candidate vs Production Models"
+description: "Compare a candidate with the current production system through a shared protocol, paired effects, risk, operational evidence, and explicit decisions."
+overview: "A candidate earns release by improving the current production system under a predeclared comparison framework. This article explains the hypothesis, protocol, uncertainty, segments, live evidence, and decision outcomes."
 tags: ["MLOps", "production", "approval"]
 order: 1
 id: "article-mlops-model-evaluation-candidate-vs-production-model"
 ---
 
-## Table of Contents
+## A Candidate Has to Improve a Running Decision System
+<!-- section-summary: Candidate review compares two complete decision paths and decides whether the evidence justifies changing production. -->
 
-1. [A Candidate Must Beat The Model Users Already Have](#a-candidate-must-beat-the-model-users-already-have)
-2. [Follow One Delivery ETA Review](#follow-one-delivery-eta-review)
-3. [Create The Comparison Packet](#create-the-comparison-packet)
-4. [Score Both Models On The Same Data](#score-both-models-on-the-same-data)
-5. [Compare Segments And Product Harm](#compare-segments-and-product-harm)
-6. [Use Registry Aliases For The Handoff](#use-registry-aliases-for-the-handoff)
-7. [Make The Release Decision](#make-the-release-decision)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
+A **candidate model** is a model version proposed for release. The **production model** is the version currently influencing users, staff, or downstream software. Candidate-versus-production review decides whether replacing the current production path creates enough value, with acceptable uncertainty and risk, to justify that change.
 
-## A Candidate Must Beat The Model Users Already Have
-<!-- section-summary: A candidate-vs-production review compares a new model against the current serving model with the same evidence, same thresholds, and same product risk lens. -->
+The comparison covers more than two sets of model weights. Production usually includes feature definitions, preprocessing, thresholds, post-processing rules, fallbacks, runtime dependencies, and product policy. A candidate that scores well with a new feature can still fail if the online feature arrives late. A classifier can report higher recall while sending twice as many cases to a review team. A smaller model can preserve quality and cut serving cost enough to justify release. The unit under review is therefore the complete **decision system**.
 
-A **candidate model** is the new model version asking for release. The **production model** is the version currently serving users. A candidate-vs-production review asks a plain question: **does the candidate improve the product enough, and safely enough, to replace the production model?**
+The framework has five connected questions:
 
-That sounds simple, but teams often get this wrong. A candidate can win on one headline metric and still create worse customer behavior in a key segment. It can improve the average prediction error while making rainy-day estimates worse. It can pass offline evaluation while adding latency that hurts the API. The review has to compare the two models on the same data, same metrics, same traffic slices, and same release rules.
+1. **Purpose:** Which production outcome should improve, and which outcomes must remain protected?
+2. **Comparability:** Did both systems receive the same eligible examples, labels, policies, and time boundaries?
+3. **Effect:** How large and uncertain is the candidate's change overall and for important segments?
+4. **Operability:** Can the candidate run within the required contract, latency, capacity, monitoring, and recovery limits?
+5. **Authority:** Which scope does the evidence support: more offline work, shadow, canary, restricted traffic, or full promotion?
 
-You just saw robustness testing before release. That article shook the candidate with messy inputs. This release-decision article takes the next step. It shows how the team packages evidence so a reviewer can say yes, no, or limited rollout with a clear reason.
+Each question protects a different failure boundary. Strong statistics cannot repair an invalid data comparison. Good offline quality cannot prove that the candidate will survive production load. A successful canary cannot authorize traffic outside the population that the canary tested.
 
-## Follow One Delivery ETA Review
-<!-- section-summary: The running scenario uses a grocery delivery ETA model where average error, late underestimation, weather, zones, and shadow traffic all affect release. -->
-
-Imagine **CityCart**, a grocery delivery company. When a customer places an order, the app shows an estimated delivery time. The current production model is `delivery_eta:v42`. The candidate is `delivery_eta:v43`.
-
-The model predicts `eta_minutes`, the number of minutes from order confirmation to delivery. The product team cares about average accuracy, yet one error hurts more than another. If the app says 25 minutes and the order arrives in 42 minutes, the customer waits far longer than promised. CityCart calls that a **late underestimation**. It is a prediction that is too optimistic by more than 10 minutes.
-
-The candidate was trained with fresher courier assignment features and a new weather feature. The training team is excited because offline mean absolute error improved. Mean absolute error, or MAE, is the average absolute difference between predicted and actual values. For ETA, an MAE of 6 means predictions miss by 6 minutes on average.
-
-The release team still needs a full comparison:
-
-| Evidence | Why reviewers need it |
-|---|---|
-| Frozen holdout results | Shows both models on the same labeled orders |
-| Segment metrics | Finds weak zones, weather conditions, stores, and courier types |
-| Shadow traffic | Shows how the candidate behaves on current production requests |
-| Latency and failure rate | Confirms the model can serve within API limits |
-| Rollback path | Explains how to return to the current production model |
-| Owner approvals | Shows who accepted product, ML, operations, and risk tradeoffs |
-
-The important habit is fairness between the two versions. The candidate and production model need the same test, same labels, same threshold rules, and same product definitions.
-
-## Create The Comparison Packet
-<!-- section-summary: A comparison packet records model versions, datasets, metrics, segment rules, serving constraints, and the final recommendation in one reviewable artifact. -->
-
-A **comparison packet** is the release artifact that lets reviewers inspect the candidate beside production. It can be a model card section, a markdown report, an MLflow artifact, a dashboard snapshot, or all of those together. The format matters less than the contents and repeatability.
-
-CityCart writes the packet header like this:
-
-```yaml
-comparison_packet:
-  product: citycart_delivery_eta
-  registered_model: citycart.delivery_eta
-  production_version: v42
-  candidate_version: v43
-  production_alias: champion
-  evaluation_dataset: delivery_eta_holdout_2026_06
-  shadow_dataset: delivery_eta_shadow_2026_07_01_to_2026_07_07
-  primary_metric: mean_absolute_error_minutes
-  guardrail_metrics:
-    - p90_absolute_error_minutes
-    - late_underestimation_rate
-    - api_p95_latency_ms
-    - prediction_error_rate
-  blocking_segments:
-    - city_zone
-    - weather_condition
-    - store_type
-    - courier_mode
-  recommendation_owner: delivery-ml-platform
+```mermaid
+flowchart LR
+    P["Purpose and release hypothesis"] --> C["Comparable evaluation protocol"]
+    C --> E["Effect, uncertainty, and segment risk"]
+    E --> O["Operational and recovery evidence"]
+    O --> A["Authorized release scope"]
+    A --> R["Shadow, canary, restricted, or full release"]
+    E --> X["Reject or collect more evidence"]
+    O --> X
 ```
 
-This packet avoids a common release problem: people arguing about which score matters after the result arrives. The release criteria are written before the candidate review, and every candidate uses the same comparison shape.
+This flow prevents a common review mistake: jumping from one improved metric directly to promotion. The evidence accumulates, and every later decision relies on the earlier conditions remaining valid.
 
-CityCart also stores a compact decision table in the packet:
+![Five questions that connect a candidate model to an authorized release scope](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-review-five-questions.png)
 
-| Area | Production v42 | Candidate v43 | Release rule | Status |
-|---|---:|---:|---|---|
-| MAE | 6.8 min | 6.1 min | Candidate improves by at least 0.3 min | Pass |
-| P90 absolute error | 15.4 min | 14.8 min | Candidate improves or stays within 0.2 min | Pass |
-| Late underestimation | 8.7% | 8.2% | Candidate stays below 8.5% | Pass |
-| Rain late underestimation | 11.8% | 13.1% | Candidate stays below 12.0% | Block |
-| API p95 latency | 42 ms | 58 ms | Candidate stays below 75 ms | Pass |
+*The five-question framework keeps purpose, comparison validity, measured effect, operability, and release authority connected.*
 
-![CityCart ETA comparison packet showing v43 and v42 through holdout data, shared metrics, segment review, shadow traffic, and release decision](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/citycart-eta-review-v43-vs-v42.png)
+## Define the Status Quo and Release Hypothesis
+<!-- section-summary: A release hypothesis states the expected benefit, protected outcomes, intended population, and acceptable decision outcomes before results are reviewed. -->
 
-*The comparison packet keeps the candidate and production model in the same review path, so the rain blocker is visible before the team changes the champion alias.*
+The **status quo** is the decision path users receive today. It may use a production model, a rules engine, a human queue, or a combination of all three. The comparison has to include those parts because the proposed release changes their joint behaviour.
 
-The headline result is strong, yet rain behavior blocks full rollout. That is exactly why the packet exists. It lets a reviewer see the product risk instead of only the average improvement.
+Suppose a grocery delivery service predicts arrival time. Its production path uses model version 42, clips extreme predictions to a policy range, and falls back to a route estimate when features are missing. Candidate version 43 adds weather features. Comparing raw model predictions would ignore the clipping and fallback that customers actually experience. The review should compare the two complete paths under the intended production policy.
 
-## Score Both Models On The Same Data
-<!-- section-summary: The production and candidate models should run against the same frozen rows so metric differences come from model behavior rather than data movement. -->
+A **release hypothesis** states the useful change before the team examines the candidate result. It contains four parts:
 
-A frozen evaluation dataset is a labeled dataset that stays fixed for a release comparison. CityCart uses `delivery_eta_holdout_2026_06`, which contains completed orders, actual delivery times, weather labels, store data, courier mode, zone, and timestamp. Both models score the same feature rows.
-
-The scoring script writes one row per order and model:
-
-```python
-import pandas as pd
-from sklearn.metrics import mean_absolute_error
-
-holdout = pd.read_parquet("delivery_eta_holdout_2026_06.parquet")
-
-def score_model(model, model_version: str) -> pd.DataFrame:
-    feature_cols = [
-        "basket_size",
-        "store_queue_depth",
-        "courier_distance_km",
-        "weather_condition",
-        "city_zone",
-        "hour_of_day",
-    ]
-    predictions = model.predict(holdout[feature_cols])
-    return pd.DataFrame({
-        "order_id": holdout["order_id"],
-        "model_version": model_version,
-        "actual_eta_minutes": holdout["actual_eta_minutes"],
-        "predicted_eta_minutes": predictions,
-        "weather_condition": holdout["weather_condition"],
-        "city_zone": holdout["city_zone"],
-        "store_type": holdout["store_type"],
-        "courier_mode": holdout["courier_mode"],
-    })
-
-production_scores = score_model(production_model, "v42")
-candidate_scores = score_model(candidate_model, "v43")
-scores = pd.concat([production_scores, candidate_scores], ignore_index=True)
-
-summary = (
-    scores.assign(
-        abs_error=lambda df: (df["actual_eta_minutes"] - df["predicted_eta_minutes"]).abs(),
-        late_underestimate=lambda df: (df["actual_eta_minutes"] - df["predicted_eta_minutes"]) > 10,
-    )
-    .groupby("model_version")
-    .agg(
-        mae=("abs_error", "mean"),
-        p90_abs_error=("abs_error", lambda s: s.quantile(0.90)),
-        late_underestimation_rate=("late_underestimate", "mean"),
-    )
-)
-```
-
-Scikit-learn provides `mean_absolute_error` for regression error, and its model evaluation guide covers common regression metrics. CityCart still computes the product-specific late-underestimation rate directly because scikit-learn cannot know which error direction hurts this delivery promise.
-
-That last point matters. Official metrics give the team reliable building blocks. Product metrics connect those blocks to the real user experience.
-
-## Compare Segments And Product Harm
-<!-- section-summary: A candidate should beat production in the segments that matter to users, operations, and known release risk. -->
-
-The overall summary says v43 improves. The segment report says where the improvement lands:
-
-| Segment | Production late underestimation | Candidate late underestimation | Delta | Gate |
-|---|---:|---:|---:|---|
-| All orders | 8.7% | 8.2% | -0.5 pp | Pass |
-| Clear weather | 7.1% | 6.4% | -0.7 pp | Pass |
-| Rain | 11.8% | 13.1% | +1.3 pp | Block |
-| Dense downtown | 9.2% | 8.8% | -0.4 pp | Pass |
-| Outer zone | 10.9% | 11.6% | +0.7 pp | Review |
-| Bicycle courier | 12.2% | 12.6% | +0.4 pp | Review |
-
-![CityCart segment risk panel comparing all-order MAE improvement with clear weather, rain, and outer-zone release gates](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/citycart-average-win-segment-risk.png)
-
-*The average ETA score improves, while the rain segment still creates a customer promise risk that reviewers need to block or scope.*
-
-The candidate learned from fresher data, yet the new weather feature appears weak during rain. Maybe the training data has too few rain examples. Maybe the weather join uses hourly observations and misses sudden storms. Maybe bicycle couriers slow down more than the model expects.
-
-The team adds a warehouse query so the report can be recreated:
-
-```sql
-SELECT
-  model_version,
-  weather_condition,
-  COUNT(*) AS orders,
-  AVG(ABS(actual_eta_minutes - predicted_eta_minutes)) AS mae_minutes,
-  APPROX_QUANTILES(ABS(actual_eta_minutes - predicted_eta_minutes), 100)[OFFSET(90)] AS p90_abs_error_minutes,
-  AVG(CASE WHEN actual_eta_minutes - predicted_eta_minutes > 10 THEN 1 ELSE 0 END) AS late_underestimation_rate
-FROM ml_eval.delivery_eta_comparison
-WHERE evaluation_dataset = 'delivery_eta_holdout_2026_06'
-GROUP BY model_version, weather_condition
-ORDER BY weather_condition, model_version;
-```
-
-The product harm is specific. A rainy delivery estimate that is too optimistic can increase support contacts, refunds, and courier pressure. The candidate needs a scoped release or more weather work before it takes the main alias.
-
-## Use Registry Aliases For The Handoff
-<!-- section-summary: Registry aliases let serving systems target a named production reference while the release team changes which model version that reference points to. -->
-
-A **model registry** stores registered models, versions, metadata, and release labels. MLflow Model Registry supports versions, tags, descriptions, and aliases. An **alias** is a mutable name that points to a specific model version. A common pattern is a `champion` alias for the model version serving the main production path.
-
-CityCart uses the model URI `models:/citycart.delivery_eta@champion` in the serving config. During this review, `champion` still points to v42. If v43 earns release, the platform team can move the alias to v43 after approval. If v43 only earns a canary, the team can create a separate `canary` alias and route a small traffic slice there.
-
-The candidate gets tags before approval:
-
-```python
-from mlflow import MlflowClient
-
-client = MlflowClient()
-model_name = "citycart.delivery_eta"
-candidate_version = "43"
-
-client.set_model_version_tag(model_name, candidate_version, "comparison_status", "rain_blocked")
-client.set_model_version_tag(model_name, candidate_version, "comparison_packet", "runs:/8a1f.../comparison_packet.yaml")
-client.set_model_version_tag(model_name, candidate_version, "approved_scope", "shadow_only")
-```
-
-If the rain blocker is fixed in v44, the approval step can move an alias:
-
-```python
-client.set_registered_model_alias("citycart.delivery_eta", "champion", "44")
-```
-
-This is cleaner than editing service code to point at a raw version every time. The service keeps reading `@champion`, while the release process controls which reviewed version owns that alias.
-
-## Make The Release Decision
-<!-- section-summary: The final decision should name the winning evidence, failed evidence, allowed scope, rollback path, and owners. -->
-
-CityCart has three possible decisions:
-
-| Decision | When it fits | What happens |
+| Part | Example | Why it matters |
 |---|---|---|
-| Full release | Candidate passes overall, segment, shadow, latency, and rollback checks | Move `champion` alias after approval |
-| Scoped release | Candidate helps a safe slice and fails a risky slice | Use canary or feature flag for approved traffic only |
-| Hold release | Candidate fails a blocking metric or lacks evidence | Keep production model and require a new packet |
+| Primary benefit | Reduce delivery ETA MAE by at least 0.3 minutes | Prevents promotion for a trivial difference |
+| Protected outcomes | Rainy-weather late underestimation remains below 12% | Prevents a global gain from hiding a harmful regression |
+| Operating limits | p95 latency stays below 75 ms at expected concurrency | Connects predictive quality to a service users can receive |
+| Proposed scope | Ten-percent canary in two cities | Keeps the decision aligned with the evidence and blast radius |
 
-For v43, the decision is hold full release and allow shadow-only testing:
+The improvement margin should reflect product value. A metric change can be statistically detectable and still too small to pay for migration cost, extra features, higher latency, or new operational complexity. Some comparisons use **superiority**, where the candidate must improve by a declared amount. Others use **non-inferiority**, where the candidate may lose no more than a small quality margin because it provides another benefit such as lower cost, stronger privacy, or much faster inference.
 
-```yaml
-release_decision:
-  registered_model: citycart.delivery_eta
-  production_version: v42
-  candidate_version: v43
-  decision: hold_full_release
-  reason:
-    - rain late underestimation increased from 11.8 percent to 13.1 percent
-    - outer-zone delivery estimates need reviewer inspection
-  allowed_next_step:
-    - shadow traffic for all zones
-    - offline retraining with enriched rain examples
-  production_alias:
-    champion: v42
-  rollback_plan:
-    serving_config: models:/citycart.delivery_eta@champion
-    rollback_action: keep champion alias on v42
-  next_review:
-    owner: delivery-ml-platform
-  required_candidate: v44
+The hypothesis also names allowed outcomes. A review can reject the candidate, request more data, authorize shadow traffic, approve a limited canary, approve a restricted population, or approve full promotion. These choices give mixed evidence somewhere useful to go. A candidate with valid offline quality and incomplete rollback evidence may proceed to shadow testing while remaining blocked from decisioning traffic.
+
+## Build One Comparison Protocol for Both Systems
+<!-- section-summary: A shared protocol holds evaluation units, labels, time boundaries, features, policies, metrics, and grouping rules constant. -->
+
+A **comparison protocol** is the recorded method used to evaluate both systems. It identifies the evaluation dataset, label definition, eligibility rules, time window, feature availability, post-processing policy, metric implementation, segment definitions, and statistical unit. Both versions must produce predictions for the same eligible units so the analysis can calculate their difference row by row.
+
+Using the same file is insufficient when the surrounding paths differ. The candidate may use a feature calculated after the prediction timestamp. The production export may contain predictions after policy overrides while the candidate export contains raw scores. One path may silently drop rows that fail validation. These differences create a biased comparison even though the final tables have matching columns.
+
+The protocol should preserve a row for every eligible request and record the outcome of each path: success, timeout, validation failure, fallback, or missing prediction. If failed candidate calls disappear from the evaluation table, the candidate receives credit only for requests it completed.
+
+Three datasets usually answer different questions:
+
+- A **frozen holdout** supports stable comparisons across candidates.
+- A **recent time-based set** checks whether the result still fits current traffic.
+- A **known-failure suite** preserves incidents, rare cases, and product commitments that an average sample may miss.
+
+Teams can add geographic or entity holdouts when a model must generalize to new customers, stores, devices, or sites. Time-series systems often need rolling backtests because performance depends on season and forecast horizon. The protocol should match the way the production problem changes.
+
+Before scoring, the evaluation job should verify coverage. It records how many units each path attempted, completed, rejected, and handled through fallback. Coverage differences deserve investigation before metric comparison because they can change which rows reach the final report.
+
+## Measure the Replacement Effect and Its Uncertainty
+<!-- section-summary: Paired effects estimate what changes when the candidate replaces production on the same evaluation units. -->
+
+Two isolated scores tell you how each system performed on average. A **paired effect** measures the candidate-minus-production difference for the same unit. Pairing matters because some orders, patients, queries, or devices are difficult for both systems. The direct difference removes part of that shared variation and describes the replacement decision more clearly.
+
+For the ETA example, each order has an actual arrival time, a production prediction, and a candidate prediction. The evaluation calculates each system's absolute error and then the difference. A mean difference of `-0.7 minutes` says the candidate reduced absolute error by 0.7 minutes on average. The effect size reports practical magnitude.
+
+Sampling produces uncertainty because the evaluation contains a finite set of orders. A paired bootstrap can resample orders and estimate an interval for the effect. When many orders share a store, route, customer, or day, resampling individual rows can understate uncertainty. The **resampling unit** should follow the dependency: store-day blocks, patient, query, or another unit that captures shared conditions.
+
+```mermaid
+flowchart TD
+    U["Eligible production unit"] --> B["Production decision path"]
+    U --> C["Candidate decision path"]
+    B --> PB["Production outcome and status"]
+    C --> PC["Candidate outcome and status"]
+    PB --> D["Paired difference"]
+    PC --> D
+    D --> G["Aggregate effect by overall, segment, and time block"]
+    G --> I["Estimate uncertainty at the correct grouping unit"]
 ```
 
-![CityCart release decision map with full release, scoped release, and hold release outcomes tied to evidence](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/citycart-release-decision-map.png)
+The interval should support the declared release question. A superiority rule may require the whole interval to exceed the practical improvement margin. A non-inferiority rule may require the lower bound to remain inside the acceptable loss. These rules should be written before result review so the team cannot move the threshold after seeing an attractive candidate.
 
-*The decision map turns the review packet into one of three actions: move the main alias, scope the rollout, or hold the release with named evidence.*
+Statistical uncertainty covers only one source of doubt. Stale labels, an unrepresentative time window, measurement error, and missing segments create **evidence uncertainty** that a narrow confidence interval cannot remove. Reviewers should record those limitations separately.
 
-The decision respects the evidence. The candidate improves average ETA accuracy, yet the rain segment creates enough customer risk to hold the main alias. The team can still learn from shadow traffic while v42 keeps serving users.
+![Paired production and candidate paths combine into effect size, uncertainty, and segment risk](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/paired-replacement-effect.png)
 
-## Putting It Together
-<!-- section-summary: Candidate-vs-production review compares versions with shared data, shared metrics, segment evidence, registry metadata, and an explicit release choice. -->
+*A paired comparison measures the replacement effect on the same units, then examines its size, uncertainty, and uneven segment impact.*
 
-A candidate-vs-production review asks whether a new model should replace the model users already have. Build a comparison packet, score both versions on the same frozen data, inspect product segments, add shadow and latency evidence, attach the result to the registry, and make a decision that names the allowed rollout scope.
+## Inspect Segments, Harms, and Trade-offs
+<!-- section-summary: Segment analysis tests whether the candidate distributes errors and benefits acceptably across important users and operating conditions. -->
 
-For CityCart, v43 beats v42 on average ETA error, yet it performs worse during rain. The team keeps `champion` on v42, records the blocker on v43, and sends the next training run toward a concrete fix.
+An overall improvement can coexist with a serious regression. Weather, language, region, device, customer type, class, and workflow state may each reveal a different failure. Segment selection should follow product consequences, known incidents, domain knowledge, policy commitments, and traffic routing rather than every available column.
+
+Each segment report needs sample size, effect size, uncertainty, and the relevant product outcome. Sparse segments create unstable percentages. An important group with little data may need targeted collection, longer observation, or a restricted release. Low sample size should lead to narrower claims instead of silent exclusion.
+
+Metrics should describe the harm that the product creates. In fraud screening, teams may track missed fraud value and the share of legitimate customers sent to review. In triage, missed urgent cases and reviewer workload both matter. In search, top-result quality and zero-result rate can matter more than an average score over all ranks.
+
+Trade-offs should remain visible. Lowering a classifier threshold can improve recall while increasing false positives and human workload. Adding a remote feature can improve quality while raising latency and outage dependence. A release decision should state which trade-off the product accepts, who owns it, and which production signal will reveal if the assumption was wrong.
+
+## Prove the Candidate Can Operate Safely
+<!-- section-summary: Operational evidence covers contracts, runtime compatibility, capacity, observability, fallback, and recovery for the exact release unit. -->
+
+The candidate needs a complete **release identity**: model digest, serving image digest, feature and schema versions, thresholds, policy configuration, and evaluation report. This identity lets reviewers connect an offline result to the process that will receive traffic.
+
+Operational evidence checks the input and output contract, dependency compatibility, startup behaviour, resource use, latency distribution, throughput, timeouts, failure rates, and fallback path. A load test should use representative request sizes and concurrency. A readiness check should confirm that a process has loaded the intended model before it accepts traffic.
+
+Telemetry must expose the release identity on prediction events. Operators should be able to answer which model, image, feature view, policy, and traffic role produced a decision. Missing identity weakens both incident response and later label joins.
+
+Recovery deserves a real drill. The team directs test or canary traffic to the candidate, invokes rollback, and verifies that new events show the retained production release. Moving a registry alias may leave running workers with a model already loaded in memory. The test therefore checks the version handling requests rather than trusting the control-plane command.
+
+## Use Offline, Shadow, and Canary Evidence for Different Questions
+<!-- section-summary: Offline evaluation supports controlled comparison, shadow traffic checks current inputs and runtime, and canary traffic measures limited real-world effects. -->
+
+Evidence stages answer different questions. **Offline evaluation** uses recorded examples and mature labels to compare behaviour under a controlled protocol. **Shadow traffic** copies current requests to the candidate while the production result remains authoritative. **Canary traffic** lets the candidate influence a small, identifiable share of real decisions.
+
+Shadow testing reveals schema compatibility, current feature coverage, latency, errors, prediction divergence, and resource pressure. It cannot directly measure every product outcome because users still receive the production decision. Shadow infrastructure must isolate candidate resource use so a slow candidate cannot harm the production path.
+
+Canary testing observes product outcomes, workload changes, support contacts, delayed labels, and feedback effects. It creates real exposure, so stop signals and rollback need to work before the first request. Stable assignment matters when repeated users or entities could otherwise move between versions and contaminate the comparison.
+
+```mermaid
+flowchart LR
+    O["Offline: controlled historical evidence"] --> S["Shadow: current inputs and runtime evidence"]
+    S --> C["Canary: limited product and user evidence"]
+    C --> W["Wider release with continued monitoring"]
+    O -. "invalid protocol" .-> H["Hold"]
+    S -. "contract or capacity failure" .-> H
+    C -. "guardrail or harm signal" .-> R["Rollback"]
+```
+
+Teams should avoid treating this as a mandatory ladder for every change. A low-risk batch model may rely on offline replay and output review. A high-impact automated decision may require shadow, canary, human oversight, and a longer label window. The evidence path follows the potential harm and the ability to contain it.
+
+## Convert Evidence Into a Scoped Decision
+<!-- section-summary: The final decision binds an exact release to authorized traffic, conditions, owners, monitoring, stop signals, and expiry. -->
+
+The decision record should identify the candidate and baseline, protocol, effect and uncertainty, important segment findings, operational evidence, approved scope, stop conditions, rollback target, owners, and expiry. It should distinguish artifact status from deployed state. Registry tags and aliases help people find a version, while deployment and routing systems control actual traffic.
+
+A useful decision table keeps the possible outcomes explicit:
+
+| Outcome | Evidence pattern | Production authority |
+|---|---|---|
+| Reject | Invalid evidence or unacceptable known harm | None |
+| More evidence | Important uncertainty remains unresolved | Offline work only |
+| Shadow | Offline result is credible; runtime evidence remains incomplete | No decisioning traffic |
+| Limited canary | Evidence supports an enforceable population and small exposure | Declared segment and traffic cap |
+| Full promotion | Predictive, segment, operational, and recovery gates pass | Approved production scope |
+
+Suppose the ETA candidate improves overall error and passes load testing, while rain underestimation exceeds its limit. A shadow approval lets the team collect current weather evidence without changing customer estimates. A city-only canary is defensible only if routing can enforce that scope and the relevant rain condition receives its own guardrail. If the system cannot enforce the boundary, the candidate remains outside decisioning traffic.
+
+Modern MLflow registry guidance uses model versions, tags, and aliases rather than the deprecated fixed model stages. A tag can record comparison status, and an alias can provide a movable reference such as `candidate`. Release automation should still pin the exact approved version and verify the serving identity after deployment. A mutable alias helps discovery; it should never replace the release decision.
+
+![Offline, shadow, and canary evidence lead to scoped release decisions with persistent guardrails](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/evidence-to-release-scope.png)
+
+*Offline, shadow, and canary evidence answer different questions, while identity, segment limits, stop signals, and recovery protect every release outcome.*
+
+## Candidate Review Protects Both Change and Stability
+<!-- section-summary: Reliable review gives useful candidates a controlled route to production while preserving a known production baseline. -->
+
+Candidate-versus-production review compares complete decision paths under one declared protocol. The release hypothesis states the benefit and protected outcomes. Paired effects and uncertainty describe the replacement. Segment and harm analysis limit broad claims. Operational tests prove that the candidate can run, identify itself, and recover. Offline, shadow, and canary stages add evidence for different parts of the decision.
+
+The result can authorize a precise scope, ask for more evidence, or stop the release. Each outcome supports progress when it keeps production authority aligned with what the evidence actually proves.
 
 ## References
 
-- [scikit-learn regression metrics](https://scikit-learn.org/stable/modules/model_evaluation.html#regression-metrics) - Official scikit-learn guide for regression metrics such as mean absolute error.
-- [scikit-learn mean_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_error.html) - Official API reference for MAE.
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official registry concepts for registered models, model versions, aliases, tags, and descriptions.
-- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Official workflow guide for aliases, tags, model version organization, and deployment handoff.
+- [scikit-learn model evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html)
+- [SciPy bootstrap](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [MLflow model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
+- [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
+- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)

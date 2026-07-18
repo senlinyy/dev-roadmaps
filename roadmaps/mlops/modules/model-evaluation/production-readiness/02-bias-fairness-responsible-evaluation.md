@@ -1,23 +1,12 @@
 ---
 title: "Bias and Fairness Checks"
 description: "Evaluate model behavior across groups with fairness metrics, error analysis, explainability, model cards, and responsible release gates."
-overview: "Bias and fairness checks ask whether model errors and benefits are distributed responsibly across important groups. This tutorial follows a hiring-support model through group metrics, Fairlearn reports, explanations, model-card evidence, and block-the-release decisions."
+overview: "Bias and fairness checks ask whether model errors and benefits are distributed responsibly across important groups. A supporting example follows a hiring-support model through group metrics, Fairlearn reports, explanations, model-card evidence, and block-the-release decisions."
 tags: ["MLOps", "production", "readiness"]
 order: 2
 id: "article-mlops-model-evaluation-bias-fairness-responsible-evaluation"
 ---
 
-## Table of Contents
-
-1. [Fairness Checks Compare Model Outcomes Across Groups](#fairness-checks-compare-model-outcomes-across-groups)
-2. [Follow One Hiring-Support Review](#follow-one-hiring-support-review)
-3. [Choose The Fairness Question](#choose-the-fairness-question)
-4. [Build Group Metrics With Fairlearn](#build-group-metrics-with-fairlearn)
-5. [Add Error Analysis And Explanations](#add-error-analysis-and-explanations)
-6. [Write The Model Card Evidence](#write-the-model-card-evidence)
-7. [When Fairness Blocks Release](#when-fairness-blocks-release)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
 
 ## Fairness Checks Compare Model Outcomes Across Groups
 <!-- section-summary: Fairness evaluation checks whether model benefits and errors differ across groups that matter for the decision. -->
@@ -28,8 +17,25 @@ The title answer is direct: **bias and fairness checks compare model outcomes ac
 
 This article uses a hiring-support scenario because the decision affects people. The examples stay practical, and they avoid pretending that one metric solves every fairness concern. A responsible review combines group metrics, label review, explanation checks, product context, legal or compliance review, and a documented release decision.
 
-## Follow One Hiring-Support Review
-<!-- section-summary: The running scenario uses an apprenticeship screening model where false negatives can remove qualified applicants from review. -->
+The review has two connected layers. **Risk mapping** defines the decision, affected people, benefit, harm, human role, data history, and use boundaries. **Measurement** then checks labels, data coverage, outcome and error differences, uncertainty, intersections between groups, and plausible proxy features. Mitigation and accountable approval come after those layers. A parity table without the risk map can optimize the wrong outcome, while a thoughtful policy statement without measurements gives reviewers too little evidence.
+
+```mermaid
+flowchart LR
+    R["Decision, affected people, and potential harm"] --> L["Label and data validity"]
+    L --> G["Group and intersection metrics"]
+    G --> X["Example, proxy, and workflow diagnosis"]
+    X --> M["Mitigation and trade-off evaluation"]
+    M --> A["Accountable scoped release decision"]
+    A --> P["Production outcomes, appeals, and reassessment"]
+    P --> R
+```
+
+Fairness evaluation follows this loop because a disparity can enter before or after model training. Historical labels may encode an unequal process. Feature extraction can work poorly for one document format. A threshold can distribute errors differently. A human reviewer can over-trust the score. Metrics locate differences, while diagnosis and product context determine the appropriate response.
+
+Different fairness definitions can conflict. Demographic parity compares selection rates without using labels. Equal opportunity compares true-positive rates. Equalized odds considers both true-positive and false-positive rates. Choosing one definition is a product, domain, governance, and sometimes legal decision about which harm matters in the workflow. Teams should document that reasoning rather than selecting the metric with the most favourable result.
+
+## A Supporting Example: Hiring-Support Review
+<!-- section-summary: A supporting example uses an apprenticeship screening model where false negatives can remove qualified applicants from review. -->
 
 Imagine **MetroHire**, a city apprenticeship program that helps applicants enter electrical, plumbing, and transit maintenance training. The team receives thousands of applications every quarter. A model called `apprentice-review-priority` scores applications so human reviewers can prioritize the queue.
 
@@ -60,6 +66,8 @@ That question leads to a metric plan:
 
 The team also records which attributes may be used for fairness evaluation, who can access them, and how results are aggregated. Sensitive attributes require careful governance. The evaluation job should keep raw protected fields out of broad artifacts and publish only approved aggregate reports.
 
+Before computing a gap, MetroHire checks whether `qualified_for_interview` is a valid label for the intended question. Historical reviewer decisions can carry inconsistent standards or reflect who reached review in the old process. The team documents label provenance, missing outcomes, application-channel coverage, and policy changes. It also predefines intersectional slices, such as review group by application channel, when the sample supports a useful estimate. Small slices receive counts and uncertainty notes instead of confident pass or fail labels from a few examples.
+
 ![MetroHire fairness question flow](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/fairness-question-flow.png)
 
 *MetroHire turns the fairness question into a review path: decision, harmful error, group metrics, and release gate.*
@@ -82,8 +90,14 @@ y_true = eval_df["qualified_for_interview"]
 y_pred = eval_df["score"] >= 0.58
 groups = eval_df["review_group"]
 
+
+def sample_count(y_true, y_pred):
+    return len(y_true)
+
+
 metric_frame = MetricFrame(
     metrics={
+        "support": sample_count,
         "selection_rate": selection_rate,
         "true_positive_rate": true_positive_rate,
         "false_negative_rate": false_negative_rate,
@@ -97,7 +111,7 @@ metric_frame = MetricFrame(
 group_report = metric_frame.by_group.reset_index()
 ```
 
-The report looks like this:
+The custom `support` metric is necessary because `MetricFrame.by_group` contains only the metrics supplied to it. Without that function, the later gate would ask for a column the code never created. The report looks like this:
 
 | Review group | Support | Selection rate | True positive rate | False negative rate | False positive rate | Gate |
 |---|---:|---:|---:|---:|---:|---|
@@ -108,6 +122,39 @@ The report looks like this:
 | Group D | 6,500 | 0.33 | 0.83 | 0.17 | 0.22 | Pass |
 
 Group C fails because qualified applicants in that group receive priority at a much lower rate. The table does not explain why. It tells the team where to investigate.
+
+The release packet should include the numerator, denominator, and an uncertainty interval for every blocking gap. A fixed threshold such as `0.78` is a product-governance rule rather than a universal fairness standard. MetroHire needs to justify that rule for this workflow and review the tradeoff with affected groups and accountable domain owners.
+
+The gate should execute against the same table reviewers see:
+
+```python
+rules = {
+    "minimum_support": 500,
+    "true_positive_rate_min": 0.78,
+    "false_negative_rate_max": 0.22,
+}
+
+gate_results = []
+for row in group_report.to_dict(orient="records"):
+    enough_evidence = row["support"] >= rules["minimum_support"]
+    passed = (
+        enough_evidence
+        and row["true_positive_rate"] >= rules["true_positive_rate_min"]
+        and row["false_negative_rate"] <= rules["false_negative_rate_max"]
+    )
+    gate_results.append({
+        "group": row["review_group"],
+        "support": row["support"],
+        "state": "passed" if passed else "blocked",
+        "reason": None if passed else "metric_or_evidence_rule_failed",
+    })
+
+assert all(result["state"] == "passed" for result in gate_results), gate_results
+```
+
+Group C produces `blocked`, so CI keeps the candidate from receiving production authority. A group below the support floor also avoids an automatic pass; it receives a data-collection or reviewed limited-scope decision. The team tests the gate with hand-built rows at the support and metric boundaries, then changes one qualified Group C prediction to a miss and verifies the false-negative rule fails.
+
+The artifact records the rule version, evaluation snapshot, model digest, group counts, metric values, and failed example IDs. That evidence lets a reviewer reproduce the block and prevents a dashboard filter from hiding the failed group.
 
 The next step is to inspect data coverage and labels. Maybe Group C applicants more often have nontraditional experience that the feature pipeline undercounts. Maybe reviewers applied labels inconsistently. Maybe the model relies too heavily on a proxy feature such as school name or resume format. The group metric opens the investigation.
 
@@ -124,7 +171,7 @@ A fairness table should lead to example review. MetroHire samples false negative
 
 The examples suggest a feature problem. The pipeline captures formal certificates and exact job-title matches better than apprenticeship prep courses, portfolios, and contractor titles. That is a product and data issue, not only a model issue.
 
-Explanations help reviewers see which features influenced scores. SHAP is one common library for feature contribution explanations. The team should use explanations carefully because they summarize model behavior; they do not prove the model is fair. Still, they help identify whether group-level gaps line up with problematic proxies or missing data.
+Explanations help reviewers see which features influenced scores. SHAP is one common library for feature contribution explanations. The team should use explanations carefully because they summarize associations inside the fitted model; they do not prove causality, label validity, or fairness. They can still help identify whether group-level gaps line up with questionable proxies or missing data, followed by data and policy investigation.
 
 ```python
 import shap
@@ -222,7 +269,7 @@ For MetroHire, the fairness report finds a real problem before the model changes
 
 - [NIST AI Risk Management Framework 1.0](https://nvlpubs.nist.gov/nistpubs/ai/nist.ai.100-1.pdf) - Primary source for trustworthy AI risk management characteristics and governance functions.
 - [Fairlearn MetricFrame](https://fairlearn.org/main/api_reference/generated/fairlearn.metrics.MetricFrame.html) - Official Fairlearn API reference for group metric computation.
-- [Fairlearn metrics](https://fairlearn.org/main/api_reference/metrics.html) - Official Fairlearn reference for selection rate, true positive rate, false positive rate, and related metrics.
+- [Fairlearn metrics API](https://fairlearn.org/main/api_reference/) - Official Fairlearn reference for selection rate, true positive rate, false positive rate, and related metrics.
 - [Microsoft Responsible AI Dashboard](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-responsible-ai-dashboard?view=azureml-api-2) - Official Azure Machine Learning guide for cohort analysis, error analysis, and responsible AI dashboards.
 - [SHAP documentation](https://shap.readthedocs.io/en/latest/) - Official SHAP documentation for feature contribution explanations.
 - [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) - Primary model-card paper describing structured model reporting.

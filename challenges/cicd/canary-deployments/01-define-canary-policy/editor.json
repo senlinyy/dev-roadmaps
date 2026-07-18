@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "canary-policy.yml",
   "completionProfile": "yaml",
-  "initialValue": "service: devpolaris-orders-api\nrelease: rel-2026-04-30-184\nchange: discount validation rewrite\ncanary:\n  first_slice_percent: 10\n  watch_window_minutes: 5\n  metrics_by_release: false\n  stop_rules:\n    - stop if the team feels uncomfortable\npromotion:\n  keep_previous_task_set: true\n",
+  "initialValue": "service: devpolaris-orders-api\nrelease: rel-2026-04-30-184\nchange: discount validation rewrite\ncanary:\n  first_slice_percent: 10\n  watch_window_minutes: 5\n  metrics_by_release: false\n  stop_rules:\n    - signal: team_confidence\n      action: ask_for_opinions\npromotion:\n  keep_previous_task_set: true\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [
@@ -33,28 +33,43 @@
       {
         "path": ["canary", "stop_rules"],
         "type": "array",
-        "includes": "stop if canary 5xx rate is higher than stable",
+        "containsObject": {
+          "signal": "5xx_rate",
+          "comparison": "canary_above_stable",
+          "action": "stop"
+        },
         "label": "stop rules include 5xx comparison"
       },
       {
         "path": ["canary", "stop_rules"],
         "type": "array",
-        "includes": "stop if checkout success drops below stable",
+        "containsObject": {
+          "signal": "checkout_success",
+          "comparison": "canary_below_stable",
+          "action": "stop"
+        },
         "label": "stop rules include checkout success"
       },
       {
         "path": ["canary", "stop_rules"],
         "type": "array",
-        "includes": "stop if canary p95 latency is much worse than stable",
+        "containsObject": {
+          "signal": "p95_latency",
+          "comparison": "canary_above_stable",
+          "action": "stop"
+        },
         "label": "stop rules include p95 latency"
       },
       {
         "path": ["canary", "stop_rules"],
         "type": "array",
-        "includes": "stop if logs show a new error pattern",
+        "containsObject": {
+          "signal": "new_error_pattern",
+          "comparison": "present_in_canary_only",
+          "action": "stop"
+        },
         "label": "stop rules include new error patterns"
       }
     ]
   }
 }
-

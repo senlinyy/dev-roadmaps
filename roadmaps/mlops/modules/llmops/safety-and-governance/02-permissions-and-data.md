@@ -1,56 +1,43 @@
 ---
 title: "Permissions and Data"
 description: "Control what agents can read, write, call, remember, and expose across users, tenants, environments, and tools."
-overview: "Learn how to design permissions, data boundaries, credentials, memory controls, and trace policies for LLM apps and agents that handle real users and real business systems."
+overview: "Carry trusted authority through authentication, policy decisions, tenant-scoped retrieval, task-specific tools, short-lived credentials, memory writes, durable approvals, traces, and boundary tests."
 tags: ["MLOps","LLMOps","advanced","security"]
 order: 2
 id: "article-mlops-llmops-permissions-and-data"
 ---
 
-## Agents Need Real Authorization
-<!-- section-summary: An LLM app often starts as a chat box. Production systems rarely stay there. They search documents, remember preferences, call APIs, create tickets, update records, send... -->
+## An Agent Uses Someone’s Authority
 
-An LLM app often starts as a chat box. Production systems rarely stay there. They search documents, remember preferences, call APIs, create tickets, update records, send messages, and run workflows. Once an assistant can read or write business data, it needs the same authorization discipline as any other application.
+<!-- section-summary: A production agent must act with the authenticated user's authority and the application's task and policy limits. -->
 
-Imagine `TenantDesk`, a support agent used by a SaaS company. It can answer customer questions, summarize logs, open billing tickets, and draft account changes. The company has many tenants. A user from tenant A should never see tenant B logs. A support engineer can view more data than a customer. A production agent can draft a refund, but finance approval is required before submission.
+An LLM application needs normal authorization as soon as it can read or change business data. The model may decide which tool would help, but it should never expand the authority of the person using the product.
 
-The core lesson is simple: the model should not expand a user's authority. If the user cannot read a record through the normal product, the agent should not reveal it. If the user cannot submit an action directly, the agent should not submit it on their behalf without the same approval path.
+Imagine **TenantDesk**, a support agent for a business-to-business software company. Customers use it to explain errors, search their own support history, and prepare billing requests. Internal support engineers can inspect more detailed logs, while finance staff can approve account credits. The company serves many tenants, so a user from one customer must never see another customer’s records.
 
-## Define Permission Scopes
-<!-- section-summary: Start with a permission manifest. It should describe what the agent can read, write, call, remember, and expose. -->
+A user named Maya asks, “Why did our checkout service fail this morning?” TenantDesk needs application logs, but the question alone does not prove which tenant Maya belongs to or whether she may read logs. Those facts come from the authenticated session. The agent can help interpret the request; trusted code establishes the authority behind it.
 
-Start with a permission manifest. It should describe what the agent can read, write, call, remember, and expose.
-
-```yaml
-agent: tenantdesk-support-agent
-environment: production
-scopes:
-  read:
-    - customer_visible_docs
-    - tenant_logs_own_tenant
-    - ticket_history_own_tenant
-  write:
-    - draft_support_reply
-    - draft_billing_ticket
-  blocked:
-    - cross_tenant_logs
-    - raw_payment_data
-    - production_secret_values
-  approval_required:
-    - issue_refund
-    - change_plan
-    - close_security_incident
+```mermaid
+flowchart LR
+    A[Authenticated user and workload] --> B[Task and purpose scope]
+    B --> C[Context and tool eligibility]
+    C --> D[Model proposes read or action]
+    D --> E[Policy decision: principal, action, resource, context]
+    E --> F[Short-lived scoped credential]
+    F --> G[Domain service authorization]
+    G --> H[Filtered result or controlled effect]
+    H --> I[Audit, trace, and retention policy]
 ```
 
-This file helps engineering, security, product, and support agree on the boundary. It also gives your harness something deterministic to enforce.
+Authority stays outside model-visible arguments at every transition. The model can choose a useful operation, while trusted identity, tenant scope, domain authorization, credentials, and audit follow application policy.
 
-![TenantDesk permission manifest](/content-assets/articles/article-mlops-llmops-permissions-and-data/permissions-manifest.png)
-*The manifest turns TenantDesk permissions into explicit read, write, approval, and blocked categories that reviewers can check before launch.*
+## Authorization Follows the Request Into the Tool
 
-## Pass User Context To Every Tool
-<!-- section-summary: Every tool call should carry the authenticated user, tenant, role, request ID, and purpose. Do not let the model invent these values. -->
+<!-- section-summary: Every tool decision joins a trusted principal, requested action, exact resource, and runtime conditions. -->
 
-Every tool call should carry the authenticated user, tenant, role, request ID, and purpose. Do not let the model invent these values.
+When TenantDesk considers a log query, the application evaluates four things. The **principal** is Maya together with the support-agent workload identity. The **action** is `logs:read`. The **resource** is the checkout service for Maya’s tenant. The **context** includes the production environment, support-case ID, read-only purpose, and current time.
+
+The model can suggest “read checkout logs for the last 30 minutes.” It does not supply the authoritative tenant ID or user role. The server attaches those values from the authenticated session before the tool runs.
 
 ```python
 from dataclasses import dataclass
@@ -61,368 +48,201 @@ class ToolContext:
     user_id: str
     tenant_id: str
     role: str
-    request_id: str
+    case_id: str
     purpose: str
+    environment: str
 
 
-def fetch_tenant_logs(ctx: ToolContext, service: str, minutes: int):
-    if ctx.role not in {"support_engineer", "tenant_admin"}:
+def fetch_service_logs(ctx: ToolContext, service: str, minutes: int):
+    if ctx.role not in {"tenant_admin", "support_engineer"}:
         raise PermissionError("role_cannot_read_logs")
+    if ctx.purpose != "support_case_investigation":
+        raise PermissionError("purpose_cannot_read_logs")
+    if ctx.environment != "production":
+        raise PermissionError("environment_mismatch")
+    case = case_registry.require_active_assignment(ctx.case_id, ctx.user_id, ctx.tenant_id)
+    resource = service_catalog.require_exact(
+        tenant_id=ctx.tenant_id,
+        environment=ctx.environment,
+        service=service,
+    )
+    if resource.service_id not in case.allowed_service_ids:
+        raise PermissionError("service_outside_case")
 
     return log_store.query(
         tenant_id=ctx.tenant_id,
-        service=service,
+        service_id=resource.service_id,
+        environment=ctx.environment,
+        case_id=ctx.case_id,
+        purpose=ctx.purpose,
         since_minutes=min(minutes, 60),
     )
 ```
 
-The key point is that `tenant_id` comes from authentication rather than the model's tool arguments. The model can ask for "checkout logs"; your code decides which tenant's checkout logs are visible.
+This function receives the tenant from `ToolContext`, which the application created after authentication. The model never gets an argument such as `tenant_id="another-company"` that the tool blindly trusts. The same rule should continue into the log store, where row-level or index-level controls filter the actual query.
 
-## Use Scoped Credentials
-<!-- section-summary: Agents should use workload credentials with narrow permissions. A support agent that reads tenant logs should not hold a token that can delete storage buckets, change billing... -->
+TenantDesk also checks purpose and environment. A customer-facing support task may read sanitized application logs, while a security investigation tool may expose more detail to a smaller internal role. Production and staging use separate identities and data paths so a broad development permission cannot leak into live support.
 
-Agents should use workload credentials with narrow permissions. A support agent that reads tenant logs should not hold a token that can delete storage buckets, change billing plans, and read production secrets.
+## Authorization as a Testable Policy Decision
 
-Prefer:
+<!-- section-summary: A policy engine receives trusted identity and resource facts, returns an allow or deny decision, and gives teams a versioned rule set they can test independently from model behavior. -->
 
-- Short-lived tokens.
-- Workload identity federation for CI and Kubernetes workloads.
-- Separate credentials per environment.
-- Separate credentials per agent or tool group.
-- Read-only access when the tool only reads.
-- Approval-gated credentials for high-impact actions.
+The Python tool wrapper demonstrates where authorization runs. Larger platforms often move shared rules into a policy engine such as Open Policy Agent (OPA), whose Rego language evaluates structured input. The model never writes the policy input directly. TenantDesk's gateway builds it from the authenticated session, route, resource catalog, and bounded model request.
 
-A tool call can request a short-lived token from a broker:
+```rego
+package tenantdesk.logs
 
-```json
-{
-  "subject": "tenantdesk-support-agent",
-  "tool": "fetch_tenant_logs",
-  "tenant_id": "tenant_487",
-  "scope": "logs:read",
-  "ttl_seconds": 300,
-  "reason": "support_case_9182"
+import rego.v1
+
+default allow := false
+
+allowed_role contains "tenant_admin"
+allowed_role contains "support_engineer"
+
+allow if {
+    input.principal.role in allowed_role
+    input.action == "logs:read"
+    input.resource.tenant_id == input.principal.tenant_id
+    input.resource.environment == "production"
+    input.resource.service_id == input.context.case.allowed_service_id
+    input.context.case.status == "active"
+    input.context.case.assigned_user_id == input.principal.user_id
+    input.context.purpose == "support_case_investigation"
+    input.context.minutes >= 1
+    input.context.minutes <= 60
 }
 ```
 
-The broker can deny requests that do not match policy. It can also log who asked, why, and which trace triggered the token.
+`default allow := false` makes an incomplete input deny access. `allowed_role` contains only the roles that may use this path. The tenant, environment, exact catalog service ID, active case assignment, purpose, and time window must all match. The gateway resolves the service name into that catalog record and loads the case fields; the model supplies neither object. A broad permission for “logs” therefore cannot drift across a different service or unrelated case.
 
-## Keep Memory On A Diet
-<!-- section-summary: Memory is useful, and memory is risky. If your agent stores everything, it can leak private data later or let old instructions poison future sessions. -->
+The service evaluates this document before it exchanges its workload identity for log-platform credentials. A denial returns a safe tool error with policy version and reason code. A policy timeout also denies the production read. Teams can choose a different availability tradeoff for low-risk public resources, but that choice belongs in an explicit resource policy rather than exception handling inside the agent.
 
-Memory is useful, and memory is risky. If your agent stores everything, it can leak private data later or let old instructions poison future sessions.
+OPA tests prove the boundary without running a model:
 
-Separate memory types:
+```rego
+package tenantdesk.logs_test
 
-| Memory type | Example | Retention |
-|---|---|---|
-| Session state | Current support case ID, selected product area | Minutes or one session |
-| User preference | Preferred language, timezone | Until user changes it |
-| Case memory | Troubleshooting steps already tried | Case lifetime |
-| Prohibited memory | Secrets, payment data, raw access tokens | Never store |
+import rego.v1
+import data.tenantdesk.logs
 
-Use a memory policy:
+test_same_tenant_admin_is_allowed if {
+    logs.allow with input as {
+        "principal": {"user_id": "usr_maya", "role": "tenant_admin", "tenant_id": "tenant_acme"},
+        "action": "logs:read",
+        "resource": {"tenant_id": "tenant_acme", "environment": "production", "service_id": "svc_checkout_prod"},
+        "context": {"purpose": "support_case_investigation", "case": {"status": "active", "assigned_user_id": "usr_maya", "allowed_service_id": "svc_checkout_prod"}, "minutes": 30}
+    }
+}
 
-```yaml
-memory_policy:
-  allow:
-    - preferred_language
-    - product_area
-    - open_case_id
-  deny_patterns:
-    - access_token
-    - password
-    - credit_card_number
-    - private_key
-  retention:
-    session_state: "24h"
-    user_preferences: "until_deleted"
-    case_memory: "90d"
-```
-
-Before writing memory, validate the content:
-
-```python
-def write_memory(user_id: str, key: str, value: str):
-    if key in {"password", "access_token", "private_key"}:
-        raise ValueError("prohibited_memory_key")
-    if secret_detector.find(value):
-        raise ValueError("possible_secret_in_memory")
-    memory_store.put(user_id=user_id, key=key, value=value)
-```
-
-## Protect Prompts And Traces
-<!-- section-summary: LLM traces are incredibly useful. They can also contain user messages, retrieved snippets, tool arguments, and model outputs. Treat traces as sensitive operational data. -->
-
-LLM traces are incredibly useful. They can also contain user messages, retrieved snippets, tool arguments, and model outputs. Treat traces as sensitive operational data.
-
-Trace policy should decide:
-
-- Which fields are redacted.
-- Which roles can view raw traces.
-- How long traces are retained.
-- Whether prompts and completions are sampled.
-- How tenant boundaries apply to trace search.
-- How incident exports are approved.
-
-Example event shape:
-
-```json
-{
-  "trace_id": "tr_9ac4",
-  "tenant_id": "tenant_487",
-  "user_id_hash": "u_94b1",
-  "agent": "tenantdesk-support-agent",
-  "tool": "fetch_tenant_logs",
-  "allowed": true,
-  "scope": "logs:read",
-  "redaction": {
-    "prompt": "pii_redacted",
-    "tool_result": "log_lines_redacted"
-  }
+test_cross_tenant_read_is_denied if {
+    not logs.allow with input as {
+        "principal": {"user_id": "usr_maya", "role": "tenant_admin", "tenant_id": "tenant_acme"},
+        "action": "logs:read",
+        "resource": {"tenant_id": "tenant_other", "environment": "production", "service_id": "svc_checkout_prod"},
+        "context": {"purpose": "support_case_investigation", "case": {"status": "active", "assigned_user_id": "usr_maya", "allowed_service_id": "svc_checkout_prod"}, "minutes": 30}
+    }
 }
 ```
 
-The trace should help you debug without turning observability into a data leak.
+Run `opa test . -v --fail-on-empty` in CI. The first test proves the intended path. The second changes only the resource tenant and proves fail-closed isolation. Add tests for missing case ID, a 61-minute window, customer role, expired principal, and staging resource. The `--fail-on-empty` flag catches a misnamed test suite that would otherwise report success without evaluating rules.
 
-## Approval Flows For High-Impact Actions
-<!-- section-summary: Some actions should stay draft-only until a person approves them. A model can prepare the work, but the application should own the approval step. -->
+Policy evaluation is one layer. The log store still enforces tenant filters, and the short-lived credential still has read-only scope. During an incident, compare gateway input, OPA decision, credential claims, and warehouse audit row. Agreement across those records shows which boundary allowed the request; disagreement identifies the broken propagation step.
 
-Some actions should stay draft-only until a person approves them. A model can prepare the work, but the application should own the approval step.
+## Tool Scope Changes With the Task
 
-For TenantDesk, issuing a refund might look like:
+<!-- section-summary: The harness offers only the capabilities needed for the current task and opens a separate controlled path for higher-impact actions. -->
 
-```json
-{
-  "action": "issue_refund",
-  "status": "pending_approval",
-  "tenant_id": "tenant_487",
-  "amount_usd": 180,
-  "reason": "documented outage credit",
-  "prepared_by": "tenantdesk-support-agent",
-  "approver_role": "finance_ops",
-  "trace_id": "tr_9ac4"
-}
-```
+Maya’s first request needs read-only investigation. TenantDesk receives tools for searching approved support documents, reading sanitized logs for Maya’s tenant, and opening her existing cases. It does not receive account-credit, plan-change, or incident-closure tools.
 
-The final submission happens only after a finance user approves in a normal UI. That keeps the agent useful without giving it unchecked authority.
+After reading the logs, the agent explains that a provider timeout caused failed payments. Maya then asks for a service credit. This request enters a new workflow. The model can gather the incident ID, affected period, account plan, and credit policy. It can prepare a proposal, while finance policy decides whether a credit is allowed and who must approve it.
 
-![TenantDesk approval and audit workflow](/content-assets/articles/article-mlops-llmops-permissions-and-data/approval-audit-workflow.png)
-*High-impact TenantDesk actions stay draft-only until finance approval, and the audit event records the trace and policy version.*
+Changing the task creates a new permission boundary. A read-only investigation should not carry latent write capabilities “just in case.” Narrow tool sets reduce accidental calls, simplify model choice, and shrink the impact of prompt injection.
 
-## Data Boundary Tests
-<!-- section-summary: Permission bugs need tests. Add cases like:. -->
+The server still validates every action even when the model had permission to see the tool description. Tool availability helps guide the model. Authorization at execution time creates the real security decision.
 
-Permission bugs need tests. Add cases like:
+## Credentials Should Expire With the Work
 
-```yaml
-tests:
-  - id: cross_tenant_log_denied
-    user:
-      tenant_id: tenant_a
-      role: tenant_admin
-    tool_call:
-      name: fetch_tenant_logs
-      arguments:
-        tenant_id: tenant_b
-        service: api
-    expected:
-      allowed: false
-      reason: tenant_mismatch
+<!-- section-summary: Short-lived workload credentials give tools the smallest practical permission for the current environment and action. -->
 
-  - id: refund_requires_approval
-    user:
-      role: support_engineer
-    tool_call:
-      name: issue_refund
-      arguments:
-        amount_usd: 200
-    expected:
-      status: pending_approval
-```
+TenantDesk needs a machine identity when its log tool calls the observability platform. A long-lived administrator token would let any compromised run query every tenant and change configuration. The platform instead issues a short-lived credential for the log-reading service and the permitted tenant scope.
 
-Run these tests when you change tools, auth middleware, memory behavior, or retrieval filters.
+The credential expires after a few minutes and cannot perform writes. A different tool that prepares a billing request uses a separate identity. Submitting the request after approval uses another narrowly scoped action. This separation makes audit records clearer and limits the value of a stolen token.
 
-## Environment Boundaries
-<!-- section-summary: Permissions should change across development, staging, and production. A development agent may use synthetic data and a fake ticketing system. A staging agent may use replayed... -->
+On cloud platforms, workload identity is usually safer than static access keys stored in environment variables. Kubernetes workloads can exchange their service identity for cloud credentials. CI systems can use OpenID Connect, usually shortened to OIDC, to receive temporary deployment access. The exact provider mechanism differs, while the principle stays the same: the credential should match the workload, environment, resource, and duration.
 
-Permissions should change across development, staging, and production. A development agent may use synthetic data and a fake ticketing system. A staging agent may use replayed traces with redacted content. A production agent may use live data, yet only through approved tools and scoped identities.
+The model does not need to see these credentials. A tool executor holds them and returns only the fields needed for the next model decision.
 
-```yaml
-environments:
-  dev:
-    allowed_data: ["synthetic_tickets", "sample_docs"]
-    tool_targets:
-      ticketing: "mock"
-      billing: "mock"
-    trace_retention_days: 7
-  staging:
-    allowed_data: ["redacted_replay_tickets", "approved_docs"]
-    tool_targets:
-      ticketing: "staging"
-      billing: "disabled"
-    trace_retention_days: 14
-  production:
-    allowed_data: ["tenant_scoped_live_data", "approved_docs"]
-    tool_targets:
-      ticketing: "production"
-      billing: "draft_only"
-    trace_retention_days: 30
-```
+## Retrieval Must Enforce the Same Boundary
 
-This matters because agents often move fast from prototype to production. If the environment policy is explicit, your CI/CD pipeline can reject a production deployment that still points at a development memory store or a mock approval path.
+<!-- section-summary: Search filters and source permissions must run before retrieved chunks enter model context. -->
 
-## Retrieval Permissions
-<!-- section-summary: Retrieval systems need authorization too. A vector search result can leak data even when the final answer sounds harmless. Filter before returning chunks to the model. -->
+TenantDesk searches support tickets and internal documentation to explain incidents. Retrieval can leak data before the model writes its final answer, so the search layer needs authorization too.
 
-Retrieval systems need authorization too. A vector search result can leak data even when the final answer sounds harmless. Filter before returning chunks to the model.
+Maya’s query carries her tenant ID and user role into the retrieval service. The service filters candidate documents before vector or keyword ranking returns them. A chunk from another customer never enters the model context, even if its text is highly similar to Maya’s error.
 
-```python
-def retrieve_for_user(query_embedding, ctx):
-    return vector_store.search(
-        embedding=query_embedding,
-        filters={
-            "tenant_id": ctx.tenant_id,
-            "visibility": {"$in": ["public", ctx.role]},
-            "environment": "production",
-            "status": "approved",
-        },
-        limit=8,
-    )
-```
+The source document keeps ownership, tenant, data classification, and retention metadata. If a user loses access to a case, the retrieval index must reflect that change. Filtering only after the model generates an answer is too late because the model has already received the content.
 
-Do not retrieve everything and ask the model to ignore chunks it should not see. The safest chunk is the one that never enters the context.
+Internal support engineers may have cross-tenant access for an active incident, but that authority should come through a named role and case assignment. The trace should explain why the broader search was permitted.
 
-![TenantDesk retrieval permission filter](/content-assets/articles/article-mlops-llmops-permissions-and-data/retrieval-permission-filter.png)
-*TenantDesk filters by authenticated tenant and role before retrieval results enter the model context.*
+## Memory Needs a Write Policy
 
-## A Permission Review Packet
-<!-- section-summary: Before launch, create a small packet that reviewers can understand:. -->
+<!-- section-summary: Durable memory stores selected, correctable information with a clear purpose, scope, lifetime, and authorisation rule. -->
 
-Before launch, create a small packet that reviewers can understand:
+At the end of the conversation, TenantDesk may want to remember that Maya prefers incident updates by email. That preference could improve future support, but the application should decide whether it is appropriate to store and reuse.
 
-```yaml
-permission_review:
-  agent: tenantdesk-support-agent
-  release: 2026-07-05.1
-  users:
-    - tenant_admin
-    - support_engineer
-  tools:
-    fetch_tenant_logs:
-      scopes: ["logs:read"]
-      tenant_filter: required
-      max_window_minutes: 60
-    create_billing_ticket:
-      scopes: ["ticket:draft"]
-      approval_required: true
-  memory:
-    store: tenant_scoped_memory
-    prohibited: ["secrets", "payment_data", "raw_tokens"]
-  traces:
-    raw_prompt_access: ["security_oncall"]
-    redaction: enabled
-```
+Memory is another data write. TenantDesk needs a purpose, an owner, a tenant and user scope, a retention period, and a correction path. It should save a confirmed preference rather than an uncertain inference such as “Maya is always unhappy with the checkout service.” Sensitive log excerpts, payment details, and raw prompts should not turn into long-term memory by default.
 
-This packet gives security and product reviewers a concrete artifact. It also gives future maintainers a starting point when someone asks why the agent can or cannot perform an action.
+When a later conversation starts, the harness selects only relevant and permitted memories for context. Deleting or correcting a preference should remove it from future use. Tenant boundaries apply to memory just as they apply to source records and retrieval.
 
-## Common Mistakes
-<!-- section-summary: Watch for these permission problems:. -->
+This separation also keeps run state from quietly becoming personal history. A tool result can remain in the current support case without being copied into every future conversation.
 
-Watch for these permission problems:
+## High-Impact Actions Need a Durable Pause
 
-- Tool arguments include `tenant_id` and the backend trusts it.
-- One service token can read every tenant.
-- Memory stores are global by default.
-- Trace search ignores tenant boundaries.
-- A low-risk summarization workflow receives high-risk action tools.
-- Production uses the same fake approval path as staging.
-- Retrieval filters happen after chunks enter the model context.
-- A model refusal is treated as the main privacy control.
+<!-- section-summary: Approval binds an authorised person to one exact proposed action and expires when the action changes. -->
 
-The fix is to make permissions boring and explicit. Let the agent help users, while normal application code enforces identity, scope, tenant, environment, and approval.
+TenantDesk calculates that Maya’s incident qualifies for a £200 service credit. The model prepares the request, but finance policy requires approval above £100. The run saves the proposal and pauses.
 
-## A Small Implementation Plan
-<!-- section-summary: If your agent already exists, improve permission safety in a staged way:. -->
+The approver sees the tenant, incident, amount, policy reason, evidence, and proposed account change. Their decision is tied to this exact request. If the model changes the amount or destination account, the previous approval no longer applies.
 
-If your agent already exists, improve permission safety in a staged way:
+After approval, the billing service checks authorization again and executes the change with an idempotency key. Approval does not replace service-level authorization. It adds a human decision to the existing identity and policy checks.
 
-1. List every tool and mark it read, draft, or action.
-2. Add a `ToolContext` object that comes from authentication.
-3. Remove user-controlled `tenant_id`, `user_id`, and `role` fields from tool arguments.
-4. Add allowlists for each workflow.
-5. Move high-impact actions to draft or approval mode.
-6. Add memory filters for secrets and sensitive values.
-7. Add trace redaction before traces leave the application.
-8. Add regression tests for cross-tenant access and approval paths.
+This durable pause survives worker restarts and creates a clean audit trail. A generic “allow” button without the action details would force the person to approve a hidden state they cannot evaluate.
 
-This plan is intentionally practical. You can ship it one slice at a time. The biggest early win is usually step three: stop trusting identity fields that arrive through model-generated tool arguments.
+## Traces Need Privacy Boundaries Too
 
-## What To Log For Audits
-<!-- section-summary: A permission audit should answer who tried to do what, which policy applied, and what the application decided. Keep an audit event for every sensitive tool call:. -->
+<!-- section-summary: Audit and debugging records preserve identity, decisions, versions, and outcomes while limiting raw sensitive content and retention. -->
 
-A permission audit should answer who tried to do what, which policy applied, and what the application decided. Keep an audit event for every sensitive tool call:
+TenantDesk records the run ID, authenticated principal, tenant, tool names, policy decisions, approval, model and prompt versions, and final outcome. That evidence helps operators investigate a leak or explain why an account change occurred.
 
-```json
-{
-  "event": "agent_tool_authorization",
-  "trace_id": "tr_9ac4",
-  "agent": "tenantdesk-support-agent",
-  "tool": "create_billing_ticket",
-  "user_id_hash": "u_94b1",
-  "tenant_id": "tenant_487",
-  "role": "support_engineer",
-  "requested_scope": "ticket:draft",
-  "decision": "allowed",
-  "approval_required": true,
-  "policy_version": "tenantdesk-permissions-2026-07-05"
-}
-```
+The trace should not copy every log line, ticket body, or payment field into a broadly accessible telemetry backend. Sensitive payloads can remain in a governed store and appear in the trace through protected references or approved summaries. Access and retention for traces should match the risk of the data they contain.
 
-For blocked calls, keep the reason:
+Audit evidence also needs integrity. The model should not write its own authoritative statement that “authorization passed.” The policy component and tool executor emit those events from the actual decision path.
 
-```json
-{
-  "event": "agent_tool_authorization",
-  "tool": "fetch_tenant_logs",
-  "decision": "blocked",
-  "reason": "tenant_mismatch",
-  "requested_tenant": "tenant_b",
-  "authenticated_tenant": "tenant_a"
-}
-```
+## Test the Boundaries as a System
 
-These records are useful during incident response, customer escalations, and internal reviews. They also discourage vague permission rules because every decision needs a policy reason.
+<!-- section-summary: Security tests try cross-tenant reads, role changes, prompt injection, stale sessions, memory leaks, and altered approvals through the complete application path. -->
 
-## What Good Feels Like
-<!-- section-summary: In a well-designed system, the agent can still feel helpful. It answers questions, fetches allowed records, drafts useful work, and remembers safe preferences. The difference... -->
+TenantDesk’s test suite creates users from two tenants and attempts to cross the boundary through chat text, tool arguments, retrieval queries, memory, and direct API calls. It tests a customer role against internal log tools, an expired session against an active run, and a changed credit amount against an old approval.
 
-In a well-designed system, the agent can still feel helpful. It answers questions, fetches allowed records, drafts useful work, and remembers safe preferences. The difference is that every powerful action passes through normal application control. A user who has access gets help quickly. A user who lacks access gets a clear boundary. A reviewer can trace the decision later.
+The team also places prompt-injection instructions inside a support ticket and checks that the agent cannot expand its tool scope or query another tenant. These tests matter because each individual service may look secure while the composition passes the wrong identity or fails to recheck a decision.
 
-One quick test: ask the agent to fetch another tenant's record, store a fake secret in memory, and submit a refund. All three should produce clear policy outcomes with traceable audit reasons.
+When a test fails, the team fixes the authoritative layer. A retrieval leak needs a search filter or source-permission repair. A write performed with an expired approval needs an execution-gate repair. Prompt wording may improve behaviour, but it should not carry the security boundary.
 
-## Practical Checks
-<!-- section-summary: Before shipping an agent, ask:. -->
+## Following Maya’s Authority Through the Run
 
-Before shipping an agent, ask:
+<!-- section-summary: The complete design carries trusted identity and tenant scope through context, retrieval, tools, memory, approval, and evidence. -->
 
-- Does every tool receive authenticated context from the application?
-- Are user-provided tenant IDs ignored or validated?
-- Are credentials short-lived and scoped?
-- Does memory reject secrets and sensitive values?
-- Are raw traces protected by role and tenant?
-- Do high-impact actions require approval?
-- Can you explain which data the agent can read in dev, staging, and production?
-- Does CI include permission-boundary tests?
+Maya’s support request now has one continuous authority story. Authentication identifies her and her tenant. The harness offers tools that fit the current task. Each tool receives trusted runtime context and uses a short-lived workload identity. Retrieval filters sources before the model sees them. Memory stores only approved, correctable facts. A high-value credit pauses for a person and still passes service authorization at execution time. The trace records the decisions without spreading raw sensitive data.
 
-The interview-ready answer is: an agent should act with the user's authority, limited by task scope, environment, and policy. The model proposes actions; the application authorizes them.
+That is how permissions fit into an agent system. The model helps interpret goals and propose actions. The application carries identity, policy, and data boundaries through every component that can read, remember, or change something.
 
 ## References
 
-- [OpenAI Safety Best Practices](https://developers.openai.com/api/docs/guides/safety-best-practices)
-- [OpenAI Function Calling](https://developers.openai.com/api/docs/guides/function-calling)
-- [OpenAI Workload Identity Federation](https://developers.openai.com/api/docs/guides/workload-identity-federation)
-- [OWASP Top 10 for LLM Applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
-- [OWASP LLM02: Sensitive Information Disclosure](https://genai.owasp.org/llmrisk/llm02-sensitive-information-disclosure/)
-- [Kubernetes Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/)
-- [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect)
+- [NIST: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final)
+- [OWASP: Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+- [OpenAI: Safety in building agents](https://developers.openai.com/api/docs/guides/agent-builder-safety)
+- [OpenAI Agents SDK: Human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [Kubernetes: Service Accounts](https://kubernetes.io/docs/concepts/security/service-accounts/)
+- [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)
+- [Open Policy Agent policy language](https://www.openpolicyagent.org/docs/policy-language)
+- [Open Policy Agent policy testing](https://www.openpolicyagent.org/docs/policy-testing)

@@ -5,6 +5,7 @@
   "files": [
     {
       "filename": "variables.tf",
+      "readOnly": true,
       "initialValue": "variable \"environment\" {\n  description = \"Deployment environment for the orders service.\"\n  type        = string\n}\n\nvariable \"service_name\" {\n  description = \"Short service name used in tags and resource names.\"\n  type        = string\n  default     = \"devpolaris-orders\"\n}\n\nvariable \"extra_tags\" {\n  description = \"Additional tags to add to orders resources.\"\n  type        = map(string)\n  default     = {}\n}\n"
     },
     {

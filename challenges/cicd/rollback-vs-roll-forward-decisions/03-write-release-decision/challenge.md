@@ -4,14 +4,13 @@ sectionSlug: putting-it-all-together
 order: 3
 ---
 
-The incident notes are too vague to help the next release. Record the recovery action, the evidence, and the alternatives the team rejected while the facts are still fresh.
+The incident notes show that the canary was missing `DISCOUNT_RULES_URL` while stable task set `orders-api:41` stayed healthy. Maya chose a traffic revert because the previous task set was healthy. A patch forward was rejected because artifact code was not the first cause, and redeploying the previous artifact was unnecessary because stable was already serving traffic.
 
 Your task:
 
 1. **Set the decision type** to `traffic revert`.
-2. **Explain why traffic revert fit** this failure.
-3. **Record the key evidence** from the canary.
-4. **Capture rejected options** with short reasons.
+2. **Explain why traffic revert fit** using the healthy previous task set.
+3. **Record both evidence facts** from the incident notes.
+4. **Capture the rejected `patch_forward` option** with the stated reason and record Maya as owner.
 
 The grader checks the release decision record.
-

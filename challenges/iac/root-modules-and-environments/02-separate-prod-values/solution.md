@@ -14,6 +14,8 @@ module "orders_service" {
 }
 ```
 
+The production values file carries only environment inputs, leaving module source and wiring in the root module where Terraform configuration belongs.
+
 ### envs/prod/terraform.tfvars
 
 ```hcl

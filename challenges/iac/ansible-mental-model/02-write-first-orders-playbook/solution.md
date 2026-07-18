@@ -11,6 +11,8 @@ all:
           ansible_host: 10.0.10.22
 ```
 
+The play targets the intended inventory group, elevates for package management, and expresses nginx as desired state instead of an ad hoc command.
+
 ### site.yml
 
 ```yaml

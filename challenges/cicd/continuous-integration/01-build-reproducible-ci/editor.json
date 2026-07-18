@@ -1,0 +1,114 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/ci.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: CI\non:\n  push:\n    branches: [main]\n\njobs:\n  validate:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v6\n      - uses: actions/setup-node@v6\n        with:\n          node-version: \"22\"\n      - run: npm install\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "on",
+          "pull_request",
+          "branches"
+        ],
+        "includes": "main",
+        "label": "pull requests to main"
+      },
+      {
+        "path": [
+          "permissions",
+          "contents"
+        ],
+        "equals": "read",
+        "label": "read-only repository permission"
+      },
+      {
+        "path": [
+          "concurrency",
+          "group"
+        ],
+        "contains": "github.workflow",
+        "label": "workflow-scoped concurrency group"
+      },
+      {
+        "path": [
+          "concurrency",
+          "cancel-in-progress"
+        ],
+        "equals": true,
+        "label": "superseded runs cancelled"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "containsObject": {
+          "uses": "actions/setup-node@v6",
+          "with": {
+            "node-version": "22",
+            "cache": "npm"
+          }
+        },
+        "label": "Node.js setup with npm cache"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "npm ci"
+        },
+        "label": "locked dependency installation"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "npm run lint"
+        },
+        "label": "lint gate"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "npm test"
+        },
+        "label": "test gate"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "npm run build"
+        },
+        "label": "build gate"
+      },
+      {
+        "path": [
+          "jobs",
+          "validate",
+          "steps"
+        ],
+        "excludesObject": {
+          "run": "npm install"
+        },
+        "label": "mutable install removed"
+      }
+    ]
+  }
+}

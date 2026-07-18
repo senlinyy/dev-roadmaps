@@ -1,0 +1,1 @@
+`needs` controls when the deploy job starts, but it does not copy files between runner workspaces. Preserve the package at the end of `build`, then retrieve it by the same artifact name before deployment.

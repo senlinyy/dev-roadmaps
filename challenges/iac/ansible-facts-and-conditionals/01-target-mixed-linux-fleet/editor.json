@@ -1,0 +1,67 @@
+{
+  "language": "yaml",
+  "activeFile": "group_vars/all.yml",
+  "completionProfile": "ansible-playbook",
+  "files": [
+    {
+      "filename": "group_vars/all.yml",
+      "initialValue": "web_package_by_os:\n  Debian: nginx\n"
+    },
+    {
+      "filename": "roles/web/tasks/main.yml",
+      "initialValue": "- name: Install web package\n  ansible.builtin.package:\n    name: nginx\n    state: present\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "group_vars/all.yml",
+        "path": [
+          "web_package_by_os",
+          "Debian"
+        ],
+        "equals": "nginx",
+        "label": "Debian package name"
+      },
+      {
+        "file": "group_vars/all.yml",
+        "path": [
+          "web_package_by_os",
+          "RedHat"
+        ],
+        "equals": "httpd",
+        "label": "Red Hat package name"
+      },
+      {
+        "file": "roles/web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.package",
+          "name"
+        ],
+        "equals": "{{ web_package_by_os[ansible_facts.os_family] }}",
+        "label": "fact-driven package lookup"
+      },
+      {
+        "file": "roles/web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.package",
+          "state"
+        ],
+        "equals": "present",
+        "label": "package desired state"
+      },
+      {
+        "file": "roles/web/tasks/main.yml",
+        "path": [
+          0,
+          "when"
+        ],
+        "equals": "ansible_facts.os_family in ['Debian', 'RedHat']",
+        "label": "supported operating-system condition"
+      }
+    ]
+  }
+}

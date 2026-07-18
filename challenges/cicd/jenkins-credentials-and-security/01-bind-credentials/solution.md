@@ -28,4 +28,4 @@ pipeline {
 }
 ```
 
-- The two credentials are bound for the duration of the closure, exposed as env vars, and masked in the build log. Once the closure exits, the variables go out of scope. The `environment { ... }` block is gone because anything inside it is dumped to stdout at startup, which would defeat the masking.
+The two credentials are bound only for the duration of the closure, exposed as environment variables, and eligible for Jenkins masking. Removing the literal values from the Jenkinsfile prevents source-control exposure, while keeping the binding around only the deploy command limits credential scope. Masking is a safety net, so deploy commands must still avoid intentionally printing secrets.

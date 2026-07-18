@@ -9,6 +9,7 @@
     },
     {
       "filename": "infra/orders/prod/s3.tf",
+      "readOnly": true,
       "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-orders-invoices-prod\"\n}\n"
     }
   ],

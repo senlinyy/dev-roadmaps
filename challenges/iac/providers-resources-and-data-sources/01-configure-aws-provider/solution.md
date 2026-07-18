@@ -21,3 +21,5 @@ provider "aws" {
   }
 }
 ```
+
+The required-provider block controls source and compatible versions, while the provider block supplies the deployment region without embedding credentials.

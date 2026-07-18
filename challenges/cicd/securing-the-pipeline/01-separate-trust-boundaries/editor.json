@@ -1,0 +1,108 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/secure-release.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Secure release\non: [pull_request, push]\n\npermissions:\n  contents: read\n  id-token: write\n  packages: write\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm test\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "permissions"
+        ],
+        "exists": false,
+        "label": "no workflow-wide elevated permissions"
+      },
+      {
+        "path": [
+          "jobs",
+          "test",
+          "permissions"
+        ],
+        "equals": {
+          "contents": "read"
+        },
+        "label": "read-only test permissions"
+      },
+      {
+        "path": [
+          "jobs",
+          "test",
+          "steps"
+        ],
+        "containsObject": {
+          "uses": "actions/dependency-review-action@v4"
+        },
+        "label": "dependency review gate"
+      },
+      {
+        "path": [
+          "jobs",
+          "test",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "npm test"
+        },
+        "label": "test gate"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "needs"
+        ],
+        "equals": "test",
+        "label": "publish waits for validation"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "if"
+        ],
+        "contains": "refs/heads/main",
+        "label": "publish restricted to main"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "environment"
+        ],
+        "equals": "production",
+        "label": "protected production environment"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "permissions",
+          "contents"
+        ],
+        "equals": "read",
+        "label": "publish repository permission"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "permissions",
+          "id-token"
+        ],
+        "equals": "write",
+        "label": "publish OIDC permission"
+      },
+      {
+        "path": [
+          "jobs",
+          "publish",
+          "permissions",
+          "packages"
+        ],
+        "equals": "write",
+        "label": "publish package permission"
+      }
+    ]
+  }
+}

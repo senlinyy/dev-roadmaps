@@ -9,7 +9,8 @@
     },
     {
       "filename": "group_vars/prod/vault.yml",
-      "initialValue": "{}\n"
+      "readOnly": true,
+      "initialValue": "$ANSIBLE_VAULT;1.1;AES256\n6530613236643936383936613161333536666631653563663561663531643062\n3566303463356633386536663634313931326662613963643463396564363438\n3964643836343965383234626462326533393436636261646631386539346263\n3037373637643038310a39376634393436373731363066396466633462353861\n"
     }
   ],
   "grader": {
@@ -19,11 +20,6 @@
         "file": "group_vars/prod/main.yml",
         "pattern": "orders_api_token:\\s*[\"']\\{\\{\\s*vault_orders_api_token\\s*\\}\\}[\"']",
         "label": "public vars reference vaulted token"
-      },
-      {
-        "file": "group_vars/prod/vault.yml",
-        "pattern": "vault_orders_api_token:",
-        "label": "vault file defines vaulted token variable"
       },
       {
         "file": "group_vars/prod/main.yml",

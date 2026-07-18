@@ -21,3 +21,5 @@ runbook:
     task_definition: orders-api:41
     image_digest: sha256:6447f5a96a80a87f19f6a6549e6dc03f63a2b8124c9d1c2f4a71f5b95ab9a621
 ```
+
+The runbook records named owners and an immutable rollback target before the release begins. Concrete stop rules turn an ambiguous dashboard watch into decisions the team can execute under pressure.

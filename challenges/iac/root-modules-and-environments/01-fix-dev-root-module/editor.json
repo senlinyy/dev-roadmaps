@@ -9,6 +9,7 @@
     },
     {
       "filename": "modules/orders-service/variables.tf",
+      "readOnly": true,
       "initialValue": "variable \"service_name\" {\n  type = string\n}\n\nvariable \"environment\" {\n  type = string\n}\n\nvariable \"invoice_bucket_name\" {\n  type = string\n}\n\nvariable \"export_bucket_name\" {\n  type = string\n}\n\nvariable \"deletion_protection\" {\n  type = bool\n}\n\nvariable \"replica_count\" {\n  type = number\n}\n"
     }
   ],

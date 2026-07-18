@@ -1,0 +1,32 @@
+{
+  "language": "hcl",
+  "filename": "subnets.tf",
+  "completionProfile": "terraform-aws",
+  "initialValue": "variable \"web_subnets\" {\n  type    = list(string)\n  default = [\"us-east-1a\", \"us-east-1b\", \"us-east-1c\"]\n}\n\nresource \"aws_subnet\" \"web\" {\n  count = length(var.web_subnets)\n\n  vpc_id            = aws_vpc.main.id\n  cidr_block        = cidrsubnet(\"10.0.0.0/16\", 8, count.index + 1)\n  availability_zone = var.web_subnets[count.index]\n\n  tags = {\n    Name = \"web-${count.index + 1}\"\n  }\n}\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "variable\\s+\"web_subnets\"\\s*\\{[\\s\\S]*type\\s*=\\s*map\\s*\\(\\s*object\\s*\\(\\s*\\{[\\s\\S]*availability_zone\\s*=\\s*string[\\s\\S]*netnum\\s*=\\s*number",
+        "label": "web_subnets is a map of subnet objects"
+      },
+      {
+        "pattern": "default\\s*=\\s*\\{[\\s\\S]*use1a\\s*=\\s*\\{[^}]*availability_zone\\s*=\\s*\"us-east-1a\"[^}]*netnum\\s*=\\s*1[\\s\\S]*use1b\\s*=\\s*\\{[^}]*availability_zone\\s*=\\s*\"us-east-1b\"[^}]*netnum\\s*=\\s*2[\\s\\S]*use1c\\s*=\\s*\\{[^}]*availability_zone\\s*=\\s*\"us-east-1c\"[^}]*netnum\\s*=\\s*3",
+        "label": "subnet map keeps stable keys and subnet numbers"
+      },
+      {
+        "pattern": "resource\\s+\"aws_subnet\"\\s+\"web\"\\s*\\{[\\s\\S]*for_each\\s*=\\s*var\\.web_subnets[\\s\\S]*cidr_block\\s*=\\s*cidrsubnet\\(\\s*\"10\\.0\\.0\\.0/16\"\\s*,\\s*8\\s*,\\s*each\\.value\\.netnum\\s*\\)[\\s\\S]*availability_zone\\s*=\\s*each\\.value\\.availability_zone",
+        "label": "subnets use each.value settings from the keyed map"
+      },
+      {
+        "pattern": "Name\\s*=\\s*\"web-\\$\\{each\\.key\\}\"",
+        "label": "Name tag includes the stable map key"
+      },
+      {
+        "pattern": "\\bcount(?:\\.index)?\\b",
+        "label": "count-based addressing is removed",
+        "negate": true
+      }
+    ]
+  }
+}

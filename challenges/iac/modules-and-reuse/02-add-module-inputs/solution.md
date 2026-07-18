@@ -33,3 +33,5 @@ variable "versioning_enabled" {
   default     = false
 }
 ```
+
+Typed inputs make the module contract explicit, and validation rejects unsupported environments before provider operations begin.

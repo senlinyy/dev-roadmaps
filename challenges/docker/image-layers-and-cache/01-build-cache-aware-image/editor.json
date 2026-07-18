@@ -1,0 +1,45 @@
+{
+  "language": "dockerfile",
+  "filename": "Dockerfile",
+  "initialValue": "FROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm install && npm run build\nCMD [\"node\", \"dist/server.js\"]\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "^FROM\\s+node:22-alpine\\s+AS\\s+build\\s*$",
+        "flags": "im",
+        "label": "named build stage"
+      },
+      {
+        "pattern": "^RUN\\s+--mount=type=cache,target=/root/\\.npm\\s+npm\\s+ci\\s*$",
+        "label": "BuildKit npm cache mount",
+        "flags": "m"
+      },
+      {
+        "pattern": "^RUN\\s+npm\\s+run\\s+build\\s*$",
+        "label": "application build",
+        "flags": "m"
+      },
+      {
+        "pattern": "^FROM\\s+node:22-alpine\\s+AS\\s+runtime\\s*$",
+        "flags": "im",
+        "label": "named runtime stage"
+      },
+      {
+        "pattern": "^COPY\\s+--from=build\\s+/app/dist\\s+\\./dist/?\\s*$",
+        "label": "compiled artifact copied from build stage",
+        "flags": "m"
+      },
+      {
+        "pattern": "^USER\\s+node\\s*$",
+        "label": "non-root runtime user",
+        "flags": "m"
+      },
+      {
+        "pattern": "^CMD\\s+\\[\\s*[\"']node[\"']\\s*,\\s*[\"']dist/server\\.js[\"']\\s*\\]\\s*$",
+        "label": "runtime command",
+        "flags": "m"
+      }
+    ]
+  }
+}

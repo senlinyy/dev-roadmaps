@@ -1,361 +1,196 @@
 ---
 title: "What Is MLOps?"
 description: "Define MLOps in plain language and connect it to the work of shipping models safely."
-overview: "MLOps gives teams a repeatable way to train, test, deploy, monitor, and improve machine learning models after the notebook stage. This article uses one production model to show why code, data, model versions, automation, monitoring, and people all need to work together."
-tags: ["MLOps", "core", "lifecycle"]
+overview: "MLOps is the engineering and operating practice that gives machine learning a repeatable path from a product question to production evidence and the next model improvement. This article introduces the three working loops and the evidence that connects them."
+tags: ["MLOps", "core", "foundations"]
 order: 1
 id: "article-mlops-mlops-foundations-what-is-mlops"
 ---
 
-## Table of Contents
+## MLOps Connects Model Development to Production
+<!-- section-summary: MLOps is the engineering and operating practice that makes model development, release, production use, and improvement repeatable and accountable. -->
 
-1. [The Problem Starts After The Notebook](#the-problem-starts-after-the-notebook)
-2. [MLOps In Plain Language](#mlops-in-plain-language)
-3. [Why Models Need Their Own Operating Loop](#why-models-need-their-own-operating-loop)
-4. [The Assets MLOps Tracks](#the-assets-mlops-tracks)
-5. [The MLOps Lifecycle](#the-mlops-lifecycle)
-6. [Automation And Release Gates](#automation-and-release-gates)
-7. [Monitoring And Feedback](#monitoring-and-feedback)
-8. [Who Does The Work](#who-does-the-work)
-9. [What Good MLOps Changes](#what-good-mlops-changes)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+**MLOps**, short for **machine learning operations**, is the engineering and operating practice that gives a machine-learning system a repeatable path from a product question to a production outcome. It connects data, training, evaluation, release, serving, monitoring, feedback, and ownership around one model-powered decision.
 
-## The Problem Starts After The Notebook
-<!-- section-summary: A model that works in a notebook still needs a repeatable path into a real product, with data, code, infrastructure, and people moving together. -->
+Imagine **CityEats**, a meal-delivery product that predicts how many minutes a restaurant will need to prepare an order. A data scientist can train a useful model in a notebook. The product still needs a reliable answer to many connected questions. Which historical orders trained this version? Which feature definitions produced the inputs? Which evaluation allowed the model to ship? Which service loads it? How does the team detect a change in restaurant behaviour? Who can pause the release and restore the previous version?
 
-A food delivery company called CityEats gives us a concrete scenario. The data science team builds a model that predicts whether an order will arrive late. If the model sees a high risk, the product can warn the customer, offer a small credit, or ask operations to move a courier sooner.
+MLOps gives the team an operating system for those questions. That system includes software and infrastructure, along with review rules, versioned evidence, ownership, and incident response. MLflow, Kubeflow, SageMaker AI, Vertex AI, Azure Machine Learning, Databricks, and other platforms can supply useful parts. The team still defines the product decision, quality bar, responsibilities, and acceptable risk.
 
-Inside a notebook, the first version looks great. The data scientist loads three months of order history, trains a model, checks accuracy, and shares a chart with the team. Everyone feels good because the model seems useful and the business problem feels real.
+This scope is wider than deploying a model file. A production ML system includes the data and code that create the model, the runtime that uses it, the surrounding product logic, and the feedback that eventually tells the team whether its predictions helped. MLOps coordinates that full lifecycle.
 
-Then the product team asks the production question: how does this model run every day without breaking the app? That question pulls in much more than the model file. Someone has to refresh training data, run the training code again, store the model artifact, test the model, deploy it behind an API, watch prediction quality, and roll back if the model hurts the customer experience.
+## The Big Picture: Three Connected Loops
+<!-- section-summary: The MLOps lifecycle has a learning loop, a release loop, and an operating loop connected by versioned assets and evidence. -->
 
-That whole path is where **MLOps** lives. In this article, we will connect the main ideas in this order: **the model**, **the data**, **the model artifact**, **the release path**, **monitoring**, and **team ownership**. Each piece matters because production machine learning depends on all of them at the same time.
+A useful framework has three connected loops. Each loop answers a different question, produces different evidence, and has a different rhythm.
 
-## MLOps In Plain Language
-<!-- section-summary: MLOps is the practice of running machine learning systems through repeatable workflows for training, release, monitoring, and improvement. -->
+The **learning loop** asks whether the available data can support a useful model for a product decision. Teams define examples and labels, build features, train candidates, compare metrics, inspect failure cases, and record experiments. Its output is a candidate model with evidence about where it works and where it struggles.
 
-**MLOps**, short for **machine learning operations**, is the set of practices, processes, and platform pieces that help teams build, deploy, monitor, and improve machine learning systems in production. It borrows many ideas from DevOps, especially automation, testing, versioning, and release discipline. It also adds the parts that normal software delivery does not usually handle deeply: changing datasets, trained model artifacts, experiment results, feature definitions, model evaluation, and production feedback.
+The **release loop** asks whether one exact candidate can enter production safely. Teams package the runtime, register the model, verify input and output contracts, review risk, test in a production-like environment, expose a small amount of traffic, and preserve a rollback target. Its output is a traceable release rather than a loose model file.
 
-A **machine learning model** is software that learned patterns from data. For the CityEats late-order model, the training data might include restaurant preparation time, distance, courier availability, weather, order size, and the final delivery outcome. The model learns from those examples and later produces a prediction for a new order.
-
-MLOps gives that model a production workflow. A team can answer practical questions like: which data trained the model, which code produced it, which metrics approved it, which environment serves it, who reviewed it, and what production signals show that it still behaves well. Those questions sound simple during exploration. They turn into operational work once the model affects real customers.
-
-The plain version is worth saying directly: **MLOps is how a team turns machine learning from a one-time experiment into a reliable production system.** For CityEats, that means the model can move through training, approval, release, monitoring, and improvement without depending on one person's notebook.
-
-In the CityEats example, the team wants more than a good model in a notebook. They want a repeatable way to create model version `late-order-risk-v12`, compare it with `v11`, deploy it to 5 percent of traffic, watch late-order alerts, and switch back if the customer experience gets worse.
-
-![MLOps operating loop showing data, training, evaluation, registry, deployment, monitoring, and feedback around a food delivery ETA model](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/mlops-operating-loop.png)
-
-_The loop shows why MLOps keeps data, model versions, release control, monitoring, and feedback connected instead of treating the model as one isolated file._
-
-The loop matters because a model keeps meeting new data after release. Restaurants change menus, weather patterns shift, courier supply changes, and promotions create unusual traffic. MLOps gives the team a way to keep learning from that world without treating every model update like a fresh emergency.
-
-## Why Models Need Their Own Operating Loop
-<!-- section-summary: Production ML needs extra controls because model behavior depends on data, training choices, runtime inputs, and feedback from the real product. -->
-
-A normal web service usually ships code. The team changes code, tests code, builds code, deploys code, and watches the service. The service can still fail in many ways, but the main artifact came from the source repository.
-
-A machine learning system ships code plus a trained model, and that model came from data. The model also depends on training configuration, library versions, feature definitions, evaluation rules, and the environment used to run inference. **Inference** means using a trained model to make a prediction on new input.
-
-For CityEats, the application code might call an endpoint named `/predict-late-order`. That endpoint returns a score like `0.82`, which means the model sees an 82 percent risk of lateness. The product logic then decides whether to notify a customer, offer a credit, or do nothing.
-
-The model can create a production issue even if the API stays healthy. The endpoint can return fast responses with `200 OK`, while the predictions slowly lose value because restaurant behavior changed. That is why MLOps tracks **system health** and **model health** together.
-
-Here are four production questions that MLOps keeps visible. They are practical questions that come up during releases, incidents, audits, and model improvement work.
-
-| Question | Why it matters in production |
-|---|---|
-| **Can we reproduce this model?** | The team needs the code, data snapshot, configuration, and environment that created a model version. |
-| **Can we compare model versions fairly?** | A new model should beat the current production model on agreed metrics and important customer segments. |
-| **Can we release with control?** | A model should move through review, staging, canary traffic, and rollback paths like other production changes. |
-| **Can we notice bad behavior?** | A model can fail through data drift, poor predictions, missing labels, latency, or product-side side effects. **Data drift** means production inputs start looking different from the data the model learned from. |
-
-This is the first big idea in MLOps: the model lives inside a system. The system includes data pipelines, training jobs, registries, deployment infrastructure, monitoring dashboards, people, and decisions. A good notebook proves that a model idea might work. MLOps creates the path for the idea to survive production.
-
-## The Assets MLOps Tracks
-<!-- section-summary: MLOps makes code, data, models, configuration, environments, and evaluation results traceable so teams can explain and repeat releases. -->
-
-Once the CityEats team has a useful late-order model, the next problem is traceability. Traceability means the team can connect an output back to the inputs and decisions that produced it. If model version `v12` starts warning too many customers, the team needs more than the file name `model.pkl`.
-
-MLOps treats several things as first-class production assets. Each asset needs a name, version, owner, and place in the release story, because the model can change when any one of them changes.
-
-![Production evidence infographic connecting code commit, data snapshot, model artifact, evaluation report, model release, and owner approval](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/production-evidence.png)
-
-_The evidence view shows the release packet reviewers need before a candidate model reaches customers._
-
-**Code** includes feature-building code, training code, evaluation code, serving code, and pipeline code. A small change in how the team calculates `courier_distance_minutes` can change model behavior, even if the model algorithm stays the same.
-
-**Data** includes raw training data, cleaned datasets, labels, feature tables, validation datasets, and test datasets. A model trained on orders from January might behave differently from a model trained on orders from a holiday week, so the training data version matters.
-
-**Model artifacts** are the files produced by training. A model artifact might contain learned weights, a serialized scikit-learn pipeline, a TensorFlow SavedModel directory, a PyTorch checkpoint, or another framework-specific output. The artifact needs a version, a storage location, and metadata that explains how the team created it.
-
-**Configuration** includes training parameters like learning rate, feature lists, date ranges, model type, threshold values, and evaluation settings. Two runs with the same code and data can produce different models if the configuration changes.
-
-**Environment** means the runtime ingredients: Python version, package versions, operating system image, container image, hardware type, and sometimes GPU driver versions. A model can train successfully in one environment and fail in another because one dependency changed.
-
-**Evaluation results** record how the model performed before release. The CityEats team might track precision, recall, calibration, latency, and performance by city, restaurant type, and order size. Segment-level checks matter because a model can look strong overall while doing poorly for one important group.
-
-A practical release record can pull those assets into one place. The format can change by team, but the record should make a future incident review much less confusing.
-
-```yaml
-model:
-  name: late-order-risk
-  version: v12
-  artifact_uri: s3://cityeats-ml-models/late-order-risk/v12/model.pkl
-code:
-  training_commit: 8f41c2a
-  serving_commit: 91b6d20
-data:
-  training_snapshot: s3://cityeats-ml-data/orders/2026-05-01-to-2026-05-31/
-  label_definition: delivered_more_than_10_minutes_late
-environment:
-  image: ghcr.io/cityeats/ml-training:2026-06-08
-evaluation:
-  validation_auc: 0.89
-  high_risk_precision: 0.74
-  p95_inference_latency_ms: 42
-approval:
-  reviewer: ml-platform-review
-  status: approved-for-canary
-```
-
-This small record changes the conversation during an incident. The team can see exactly which code, data, environment, and metrics created `v12`. They can compare it with `v11`, find the difference, and choose whether to retrain, change a threshold, or roll back.
-
-Traceability connects naturally to the next topic. Once the team can track the assets, they need a repeatable path that moves those assets through the lifecycle.
-
-## The MLOps Lifecycle
-<!-- section-summary: The MLOps lifecycle connects data preparation, training, evaluation, registration, deployment, monitoring, and feedback into one repeatable loop. -->
-
-The **MLOps lifecycle** is the repeating path a model follows from idea to production and back into improvement. Different teams draw the lifecycle in different ways, but the main shape stays familiar: collect data, train, evaluate, register, deploy, monitor, and learn from feedback.
-
-For CityEats, the lifecycle might look like this. The diagram keeps the same late-order model in the center so each step feels connected to a real product workflow.
+The **operating loop** asks whether the running system remains healthy and useful. Teams monitor service reliability, feature health, prediction behaviour, delayed labels, user impact, and incidents. Its output includes alerts, incident decisions, production evidence, and the reason for the next model or product change.
 
 ```mermaid
-flowchart TB
-    A[Define the business problem<br/>late order risk]:::plan
-    B[Prepare data and features<br/>orders, weather, courier state]:::data
-    C[Train candidate models<br/>scheduled pipeline run]:::compute
-    D[Evaluate candidates<br/>metrics and segment checks]:::quality
-    E[Register approved model<br/>versioned artifact and metadata]:::artifact
-    F[Deploy controlled release<br/>staging, canary, production]:::compute
-    G[Monitor production<br/>latency, drift, prediction quality]:::quality
-    H[Collect labels and feedback<br/>actual delivery outcomes]:::data
-
-    A --> B --> C --> D --> E --> F --> G --> H --> B
-
-    classDef plan fill:#2a2a2a,stroke:#777,stroke-width:2px,color:#fff
-    classDef data fill:#19313a,stroke:#31c6d4,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef quality fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef artifact fill:#24351f,stroke:#6bd95f,stroke-width:2px,color:#fff
+flowchart LR
+    P["Product decision and quality contract"] --> L["Learning loop<br/>data, train, evaluate"]
+    L --> C["Candidate model and evaluation evidence"]
+    C --> R["Release loop<br/>package, approve, deploy"]
+    R --> S["Running model service or batch job"]
+    S --> O["Operating loop<br/>monitor, respond, collect outcomes"]
+    O --> F["Labels, incidents, user and business feedback"]
+    F --> L
+    P --> R
+    P --> O
 ```
 
-**Problem definition** gives the model a purpose. CityEats wants fewer surprise late deliveries and fewer unnecessary credits. The team needs a clear target label, such as "order delivered more than 10 minutes later than promised," because vague goals create vague models.
+CityEats uses the learning loop to train preparation-time models from completed orders. It uses the release loop to replay one candidate against recent traffic, run it in shadow mode, and expose a small city canary. It uses the operating loop to watch endpoint latency, missing menu features, courier wait time, support reports, and prediction error after actual preparation times arrive.
 
-**Data preparation** turns production records into training examples. The pipeline joins order history, courier availability, restaurant preparation times, traffic or weather data, and final delivery outcomes. The team also checks missing values, broken schemas, impossible timestamps, and label quality before training starts.
+All three loops share a **product contract**: what the model predicts, when it predicts it, who or what uses the result, and what good performance means. CityEats predicts preparation minutes when a restaurant accepts an order. That statement fixes the prediction time, the label, the information allowed at that time, the serving latency, and the product action. Moving the prediction to checkout would change the available information and require a new data and evaluation review.
 
-**Training** creates one or more candidate models. A training job reads a specific data snapshot, uses a specific configuration, produces metrics, and writes an artifact. In a mature workflow, the training job runs in a controlled environment instead of one person's laptop.
+This framework keeps tools in their proper place. An experiment tracker supports the learning loop. A registry connects a candidate to release evidence. Kubernetes or a managed endpoint can run the serving path. Prometheus, OpenTelemetry, warehouse checks, and model-monitoring systems support operations. Each tool owns a part of the lifecycle; the responsibility remains understandable even when a team changes vendors.
 
-**Evaluation** decides whether the candidate deserves a release. The team compares the candidate to the current production model, checks important segments, and reviews business impact. For the late-order model, a candidate that improves the average score but sends too many warnings in one city needs more review.
+## Why Machine Learning Needs More Than Normal CI/CD
+<!-- section-summary: ML keeps normal software-delivery needs and adds changing data, learned behaviour, delayed outcomes, and feedback effects. -->
 
-**Registration** stores the approved model artifact with metadata. A model registry gives the team a catalog of model versions, evaluation results, owners, and deployment status. The registry helps separate "someone trained a model" from "the team approved this model for production."
+Machine-learning systems still need normal software engineering. Teams use version control, tests, build artifacts, deployment automation, observability, security controls, and incident response. The ML lifecycle adds uncertainty through data and learned behaviour.
 
-**Deployment** puts the model into a serving path. The team might run batch predictions every hour, expose an online API, or stream predictions through an event pipeline. The deployment method depends on the product need, latency budget, cost, and operational risk.
+First, a trained model depends on **code, data, configuration, and runtime together**. The same Git commit can produce a different model after a dataset rebuild, dependency upgrade, seed change, or hardware change. A reproducible run therefore records every material input, including the dataset identity and environment.
 
-**Monitoring** watches the model after release. The team tracks API latency and errors, plus model-specific signals like input drift, output distribution, prediction quality, and label delay. A model can pass all pre-release checks and still need attention after real users interact with it.
+Second, many model outputs have no single expected answer that a unit test can assert. A preparation-time prediction of 18 minutes and one of 19 minutes may both be reasonable. Teams combine software tests with data contracts, training smoke tests, baseline comparisons, segment metrics, calibration checks, robustness tests, and product guardrails. Evaluation needs to reflect the cost of errors in the product.
 
-**Feedback** closes the loop. Once CityEats learns which orders actually arrived late, those outcomes feed future training and evaluation. Feedback lets the team improve the model with real production evidence instead of guessing from an old dataset.
+Third, the real outcome often arrives later. CityEats produces an estimate when an order is accepted, while the actual preparation time appears after the kitchen finishes. During that delay, the team can inspect feature availability, score distributions, service errors, and fallbacks. Label-based quality arrives later and must join back to the original prediction.
 
-This lifecycle needs automation because many steps repeat. Manual notebooks and hand-written release notes can work for a tiny prototype, but production teams need pipelines that run the same way each time.
+Fourth, a prediction can influence the data the team later observes. CityEats may send a courier later after a high preparation-time estimate. The resulting courier wait reflects both restaurant behaviour and the product's response to the model. Production records need the model decision and intervention so future training data has an honest interpretation.
 
-## Automation And Release Gates
-<!-- section-summary: Automation makes model changes repeatable, while release gates make sure teams review metrics, risk, and production readiness before rollout. -->
+Fifth, model quality can vary sharply across groups that an overall average hides. A candidate can improve average error while getting worse for new restaurants or late-night orders. Release and monitoring evidence needs segments that match product risk, not only one headline score.
 
-**Automation** means a pipeline performs repeatable work with the same steps each time. In MLOps, automation often covers data validation, training, evaluation, artifact storage, deployment, and monitoring setup. The goal is consistency, because a model release has too many moving pieces for memory-based operations.
+MLOps extends CI/CD with these ML-specific controls. **Continuous integration** still tests changes to code and pipeline components. **Continuous delivery** still moves reviewed artifacts through environments. Many ML systems also use **continuous training**, which runs a versioned training pipeline when approved data, code, or schedules trigger it. Continuous training creates a candidate; release gates still decide whether that candidate should serve users.
 
-CityEats might create a training pipeline that runs every Monday morning. The pipeline reads the latest approved data snapshot, validates the schema, trains a candidate model, evaluates it against `v11`, saves the artifact, and opens a review record. The team still makes the release decision, but the evidence arrives in a standard shape.
+## The Lifecycle Runs on Versioned Assets
+<!-- section-summary: Data, features, code, environments, runs, models, releases, predictions, and outcomes need stable identities so the lifecycle can be traced and repeated. -->
 
-A simplified pipeline can look like this. The names here are generic, but the sequence shows the kind of repeatable path a production model needs.
+An ML system works with more assets than a conventional application release. The list usually includes source data, labels, dataset snapshots, feature definitions, training code, configuration, dependency environments, training runs, model artifacts, evaluation reports, serving images, deployment records, prediction logs, and later outcomes.
+
+These assets need stable identities. A file called `model.pkl` says almost nothing about how it was produced or where it is running. A model version linked to a training run, dataset manifest, code commit, environment digest, and evaluation report gives the team a reviewable unit.
+
+```mermaid
+flowchart LR
+    D["Dataset version"] --> T["Training run"]
+    C["Code and config version"] --> T
+    E["Environment digest"] --> T
+    T --> M["Model version"]
+    M --> Q["Evaluation and approval"]
+    Q --> R["Serving release"]
+    R --> P["Prediction record"]
+    P --> O["Observed outcome"]
+    O --> N["Next dataset and product decision"]
+```
+
+This chain is often called **lineage**. Lineage records how one asset derives from another. It lets an incident responder move from a bad prediction to the serving release, model version, training run, code, data, and evaluation that produced it. It also lets a reviewer move forward from a vulnerable package or bad data partition to every affected model and release.
+
+A compact release record can connect the important identities:
 
 ```yaml
-name: late-order-risk-training
-trigger:
-  schedule: weekly
-steps:
-  - validate_data:
-      dataset: orders_last_30_days
-      checks:
-        - required_columns
-        - missing_value_limits
-        - timestamp_order
-  - train_model:
-      config: configs/late_order_risk.yml
-      output: artifacts/model.pkl
-  - evaluate_model:
-      baseline: production
-      checks:
-        - overall_metrics
-        - city_segments
-        - restaurant_type_segments
-        - latency_budget
-  - register_candidate:
-      registry: late-order-risk
-      require_approval: true
+product_contract: prep-time-at-order-acceptance-v3
+dataset_version: restaurant-prep-examples:2026-06-30-r2
+training_run: prep-xgb-2026-07-04-0915
+code_commit: 7d83a14
+training_image: ghcr.io/cityeats/prep-train@sha256:32421559c392d95d
+model_version: restaurant-prep-time:42
+evaluation_report: s3://cityeats-ml/reviews/prep-time/42/report.json
+serving_release: prep-api-2026-07-05.2
+rollback_target: restaurant-prep-time:41
 ```
 
-This pipeline gives the team a repeatable route from data to candidate model. It also creates a natural place for **release gates**. A release gate is a check that a model must pass before it moves to the next environment or receives more traffic.
+The syntax matters less than the links. A warehouse table, registry, metadata catalog, or managed ML platform can hold the record. The team should be able to query it automatically and verify that every release points to approved evidence and a recoverable previous version.
 
-Some gates are technical. The model artifact must load successfully, the serving image must build, the API contract must stay compatible, and latency must stay inside the product budget. For CityEats, the model has to return a prediction fast enough that the checkout flow does not feel slow.
+Large artifacts usually live in object storage or a lakehouse. Metadata systems store their identifiers, locations, checksums, schemas, and relationships. Registries add lifecycle controls around model versions. Experiment trackers capture run parameters, metrics, and artifacts. Data catalogs and lineage platforms cover broader data relationships. A team can start with a manifest and a few controlled tables, then adopt specialized systems as scale and governance needs grow.
 
-Some gates are model-specific. The model must beat the current production model on agreed metrics, avoid large regressions for important segments, and keep calibration within an acceptable range. Calibration means a score like `0.80` should roughly match an 80 percent chance across similar examples, because product decisions often depend on thresholds.
+## Repeatability Means Rebuilding the Process, Not Chasing Identical Bits
+<!-- section-summary: A repeatable ML workflow records material inputs, runs the same stages, and explains expected sources of variation. -->
 
-Some gates are business and risk checks. A human reviewer might approve the model because it changes customer messaging or refund behavior. A high-stakes model might require privacy review, fairness checks, compliance review, or a documented rollback plan.
+**Repeatability** means that a team can run the same defined process with known inputs and understand the result. For many ML workloads, exact byte-for-byte reproduction across hardware and library versions is unrealistic. Randomness, parallel execution, GPU kernels, and floating-point behaviour can create small differences.
 
-Deployment also needs control. CityEats can release `v12` to staging first, then send 5 percent of production traffic to it, then increase traffic after the dashboards look healthy. This style of gradual rollout gives the team time to see real behavior before the model affects everyone.
+The practical goal is a replay packet. It records the dataset snapshot, code commit, configuration, container or lockfile, random seeds, hardware class, framework versions, and commands or pipeline version. The team also records expected tolerances, such as an acceptable metric range or prediction agreement rate.
 
-Automation connects naturally to monitoring. A pipeline can prove that a model looked good before release, but production decides whether it keeps working.
+This evidence separates an explained variation from a broken process. If a replay on the same approved environment produces a large metric drop, the team has a reproducibility incident. If a newer GPU kernel changes the final decimal place while protected segments stay inside tolerance, the release evidence can record that difference.
 
-## Monitoring And Feedback
-<!-- section-summary: MLOps monitoring watches both the serving system and the model behavior, then uses production feedback to guide fixes and retraining. -->
+Orchestration helps by turning notebook steps into named pipeline stages. Data validation, feature building, training, evaluation, registration, and packaging receive versioned inputs and produce versioned outputs. A failure can restart from an appropriate stage, and the trace shows which stage created each artifact.
 
-**Monitoring** means collecting signals that show how a system behaves after release. For an ML system, monitoring has two layers. The first layer watches the service like any other production service. The second layer watches the model's inputs, outputs, and real-world results.
+## Evaluation and Gates Turn Metrics Into Release Decisions
+<!-- section-summary: Evaluation measures model behaviour, while gates compare versioned evidence with product rules and decide whether a candidate may move forward. -->
 
-CityEats still needs normal service signals: request rate, error rate, latency, CPU, memory, and deployment health. If the prediction endpoint times out, the product can fail even if the model itself is accurate.
+An evaluation report describes how a candidate behaves. A **gate** applies explicit rules to that report and decides whether the candidate can cross a lifecycle boundary. The distinction keeps measurement separate from authority.
 
-The team also needs model signals. They can track input distributions, such as delivery distance, restaurant preparation time, order size, and courier availability. If those distributions shift far from the training data, the model may see examples it learned poorly.
+CityEats may compare candidate version 42 with production version 41. The candidate improves overall mean absolute error from 5.1 to 4.8 minutes, yet error for new restaurants rises from 7.6 to 8.9 minutes. The evaluation reports both results. A release gate blocks the candidate because the product contract protects new restaurants with an 8-minute maximum.
 
-They can track output distributions too. If the model suddenly marks 70 percent of orders as high risk after a city-wide promotion, the product team needs to know. That shift might reflect a real operational problem, a broken feature pipeline, or a model threshold that no longer fits the business.
+The gate needs a version, an owner, and a response. A data-quality gate can stop a bad dataset before training. A model-quality gate can block registration or promotion. A canary gate can freeze traffic expansion and restore the previous release. Each boundary protects a different asset and therefore needs a different recovery action.
 
-The strongest signal comes from labels. For CityEats, labels arrive after the delivery finishes, because only then does the team know whether the order was actually late. Label delay is common in ML systems. A fraud model might wait for chargebacks, a churn model might wait weeks for subscription behavior, and a medical workflow might wait for human review.
+Human review belongs where judgement or authority matters. A reviewer can inspect unusual segment tradeoffs, privacy evidence, or a high-impact use case. Automation should prepare a compact evidence packet rather than asking the reviewer to search across dashboards. The resulting decision records the subject, evidence versions, policy version, reviewer, time, reason, and expiry where appropriate.
 
-A useful prediction log keeps enough context for later monitoring and debugging. The exact fields vary by system, but the log should connect a prediction to the model version, the inputs, the score, and the product decision.
+Automated retraining follows the same rule. A schedule or drift signal can launch the learning loop. The resulting candidate still passes the current data, evaluation, security, and release gates. Retraining frequency and release frequency serve different purposes.
 
-```json
-{
-  "request_id": "ord_732884",
-  "model_name": "late-order-risk",
-  "model_version": "v12",
-  "prediction_timestamp": "2026-06-13T18:24:10Z",
-  "features": {
-    "restaurant_prep_minutes": 18,
-    "courier_distance_minutes": 9,
-    "order_items": 6,
-    "rain_level": "moderate"
-  },
-  "score": 0.82,
-  "decision": "warn_customer"
-}
-```
+## Production Operation Covers Service, Data, Model, and Product Health
+<!-- section-summary: Operating an ML system requires several layers of signals because a healthy endpoint can still produce harmful or stale predictions. -->
 
-Later, the team can join this prediction log with the actual delivery outcome. That join powers prediction-quality dashboards, retraining datasets, and incident reviews. It also helps answer a customer-support question like, "Why did this order receive a late warning?"
+A model endpoint can return HTTP 200 while its predictions quietly lose value. MLOps operations therefore watch several layers of the system.
 
-Monitoring should lead to clear actions. A latency alert can roll traffic back to the previous serving image. A broken feature alert can pause the model decision and use a safer product fallback. A quality regression can trigger retraining or send the candidate back to evaluation. A strong MLOps setup connects each alert to an owner and a response path.
+**Service health** covers latency, errors, saturation, queue depth, resource use, and dependency failures. **Data health** covers schema, missing values, freshness, ranges, category changes, and feature availability. **Prediction health** covers score distributions, confidence, fallback use, and protected slices. **Model quality** compares predictions with mature labels. **Product health** measures the user or business outcome the model was intended to improve.
 
-The next question is who owns those paths. MLOps works across roles, so the team design matters as much as the tools.
+The layers help teams locate a failure. A spike in missing menu features points toward the data path. Stable features with worsening error after a restaurant policy change point toward concept drift, where the relationship between inputs and outcomes has changed. Healthy model error with rising courier wait may point toward product routing or capacity rather than the model itself.
 
-## Who Does The Work
-<!-- section-summary: MLOps spreads ownership across data science, engineering, platform, product, and operations so model releases have clear responsibilities. -->
+Every alert needs an owner, a threshold or detection rule, and a response. Some alerts trigger investigation. A few justify an automatic fallback or traffic rollback. Automatic retraining is rarely the first response to an unexplained quality change because a pipeline can learn from corrupted labels, broken features, or a temporary event.
 
-MLOps usually needs several roles working together. One person can wear multiple hats in a small company, but the responsibilities still exist. The important part is that the team names the handoffs before something breaks.
+Feedback closes the lifecycle. Prediction records join to later outcomes through stable IDs and timestamps. Human corrections, support reports, overrides, and incident labels can also contribute. Data and ML teams review how the product action influenced those outcomes before turning the records into new training examples.
 
-**Data scientists** or **ML scientists** usually explore the problem, train candidate models, choose features, review metrics, and explain model behavior. For CityEats, they decide whether the late-order model should optimize precision, recall, calibration, cost savings, or customer trust.
+## Ownership Connects the Technical Loops
+<!-- section-summary: Clear decision rights keep data, models, platforms, products, security, and incidents from falling between teams. -->
 
-**ML engineers** turn model ideas into repeatable training and serving workflows. They package the model, write pipeline code, handle feature logic, test model loading, and make sure the prediction path can run outside a notebook. In many teams, ML engineers bridge data science and software engineering.
+MLOps crosses several disciplines. Data engineers may own source reliability and dataset construction. Data scientists may own problem formulation, features, training, and analysis. ML engineers may own repeatable pipelines, evaluation systems, packaging, and serving integration. Platform engineers may own shared compute, deployment, observability, and developer workflows.
 
-**Data engineers** keep the data pipelines reliable. They build the tables, streams, validation checks, and lineage that feed training and monitoring. If the `restaurant_prep_minutes` field changes meaning, the data engineering workflow should catch it before training silently changes.
+Product owners define the decision, acceptable tradeoffs, and user outcome. Security, privacy, legal, risk, or domain specialists join according to the use case. Operations teams may supply labels and investigate real-world exceptions. Job titles vary, while the need for explicit decision rights stays constant.
 
-**Platform engineers** provide shared infrastructure. They manage CI/CD systems, container platforms, model registries, secrets, compute, observability, and environment templates. Their work lets model teams ship without rebuilding the same plumbing each time.
+Every important asset and transition should have one accountable owner. Someone owns the dataset contract, evaluation gate, registry policy, production alert, rollback action, and retirement decision. Several teams can contribute, yet an incident still needs a known group with authority to act.
 
-**Product owners and business reviewers** define acceptable behavior. They decide what the prediction should trigger in the product, how much risk the business accepts, and which customer outcomes matter. For CityEats, product owns the decision to warn a customer or offer a credit; the model only supplies evidence.
+Ownership also shapes access. A training job can read approved data and write artifacts. A release pipeline can deploy an approved version. An analyst can inspect evaluation evidence. A production service can read the active model. Least-privilege identities and audit records make these boundaries enforceable.
 
-**Operations, risk, security, and compliance teams** add guardrails where the model touches sensitive data or important decisions. They care about access control, audit trails, privacy, approval records, incident response, and rollback plans. A model that affects refunds, fraud, hiring, lending, healthcare, or safety needs especially clear review.
+## A Small Team Can Start With a Complete Thin Path
+<!-- section-summary: A useful first MLOps system covers the full lifecycle for one important model with simple tools and explicit evidence. -->
 
-A simple ownership table can prevent confusion. CityEats can keep the table small at first, then expand it as the model affects more teams and environments.
+A small team needs complete responsibilities more than a large product catalog. The first useful target is one thin path from data to a running model and back to measured outcomes.
 
-| Workflow area | Primary owner | Shared reviewers |
+| Responsibility | Small-team implementation | Growth path |
 |---|---|---|
-| Training data quality | Data engineering | Data science, ML engineering |
-| Candidate model metrics | Data science | Product, ML engineering |
-| Training pipeline reliability | ML engineering | Platform engineering |
-| Serving infrastructure | Platform engineering | ML engineering |
-| Release approval | Product or risk owner | Data science, engineering |
-| Production monitoring | ML engineering | Operations, product |
+| Version code and config | Git with reviewed configuration | Policy checks and protected branches |
+| Identify datasets | Snapshot table or manifest with checksum | DVC, lakeFS, lakehouse versions, catalog and lineage |
+| Run training | Containerized script on a scheduled job | Airflow, Dagster, Prefect, Kubeflow, Argo, or managed pipelines |
+| Track experiments | MLflow or W&B with code, data, config, metrics, artifacts | Shared tracking service and automated evidence checks |
+| Evaluate candidates | Versioned report compared with the production baseline | Segment gates, robustness suites, approval workflow |
+| Record model versions | Registry or controlled catalog table | Managed registry with aliases, permissions, audit, and lineage |
+| Release safely | Staging, shadow or small canary, known rollback | Progressive delivery and policy-controlled promotion |
+| Operate | Logs, service metrics, data checks, predictions, label joins | Unified observability, on-call runbooks, feedback pipelines |
 
-The exact titles can change from company to company. The useful pattern stays the same: every model release needs owners for data, code, artifacts, infrastructure, metrics, monitoring, and business decisions.
+CityEats could start with GitHub Actions, warehouse snapshots, a Docker training job, MLflow, object storage, a FastAPI service, and Prometheus. A larger organization may use managed feature stores, pipeline platforms, governed registries, Kubernetes serving, OpenTelemetry, and a data catalog. Both setups should answer the same lifecycle, evidence, and ownership questions.
 
-Now the pieces are in place. We can talk about what improves once a team practices MLOps well.
+The first maturity step is a repeatable and recoverable path for one important model. A broad platform offers little value when a team can still train from an unknown dataset, skip segment evaluation, or discover during an incident that the previous model can no longer load.
 
-## What Good MLOps Changes
-<!-- section-summary: Good MLOps shortens the path from experiment to production while improving traceability, release safety, monitoring, and team accountability. -->
+## How the Pieces Work Together
+<!-- section-summary: MLOps connects learning, release, and operations around one product contract, a versioned asset chain, explicit gates, and clear ownership. -->
 
-Good MLOps changes the daily work around machine learning. The team spends less time asking where a model came from and more time deciding whether it should ship. That matters because ML projects often fail from messy handoffs rather than weak algorithms.
+MLOps gives a model-powered product three connected loops. The learning loop creates and evaluates candidates. The release loop moves one exact candidate through controlled checks and environments. The operating loop watches the running system, responds to failures, and returns outcomes to future work.
 
-For CityEats, the first model release might take extra time because the team builds the pipeline, registry entries, dashboards, and review flow. The second release follows a known path. The team can reuse the same steps, compare metrics with the previous version, and roll out with a tested playbook.
+Versioned assets connect the loops. A team can trace a prediction to its serving release, model version, training run, dataset, code, environment, evaluation, and owner. Automation repeats defined work. Gates turn evidence into lifecycle decisions. Monitoring and feedback show how the model and product behave after release.
 
-Here are the main changes a team should feel. Each row connects a common early-stage habit with the production habit that replaces it.
-
-| Before MLOps | With MLOps |
-|---|---|
-| A model lives as a notebook output on one laptop. | A model version lives in a registry with artifact, metadata, metrics, and owner. |
-| Training depends on manual steps and memory. | A pipeline runs data checks, training, evaluation, and registration repeatably. |
-| Release decisions happen through screenshots and chat messages. | Release gates compare candidates against agreed metrics and review rules. |
-| Production issues start with confusion about which model is running. | Logs and deployment records show model version, code version, data snapshot, and serving image. |
-| Monitoring only shows API health. | Dashboards show API health, input drift, output drift, label-based quality, and business effects. |
-| Rollback depends on finding the previous file. | The deployment system can route traffic back to the previous approved model version. |
-
-MLOps also changes how teams choose tools. A small team can begin with Git, scheduled jobs, object storage, a simple model registry, CI/CD, structured logs, and dashboards. A larger team may use managed platforms such as Azure Machine Learning, Amazon SageMaker, Google Vertex AI, Kubeflow, MLflow, or internal platform services.
-
-The tool choice matters less than the workflow quality. The team needs versioned assets, repeatable pipelines, clear release gates, monitoring, feedback, and ownership. A shiny platform cannot rescue a workflow where nobody knows which data trained the model or who approves a risky deployment.
-
-## Putting It All Together
-<!-- section-summary: MLOps connects people, process, and platform so a model can move through production with evidence, control, monitoring, and feedback. -->
-
-Now we can return to CityEats with the full picture. The same late-order model gives us a compact view of the system around production machine learning.
-
-The data science team has a late-order model that predicts delivery risk. MLOps turns that model into a production system by giving the team a lifecycle. Data pipelines prepare examples, training jobs create candidates, evaluation checks compare them with production, the registry stores approved versions, deployment releases them gradually, monitoring watches real behavior, and feedback feeds the next training cycle.
-
-```mermaid
-flowchart TB
-    Team[Team ownership<br/>data science, ML engineering, platform, product]:::people
-    Assets[Versioned assets<br/>code, data, model, config, environment]:::artifact
-    Pipeline[Automated pipeline<br/>validate, train, evaluate, register]:::compute
-    Gates[Release gates<br/>metrics, segments, risk, approval]:::quality
-    Serving[Production serving<br/>batch, online, or streaming]:::compute
-    Signals[Monitoring signals<br/>service health, drift, labels, business impact]:::quality
-    Improve[Feedback loop<br/>debug, retrain, rollback, improve]:::data
-
-    Team --> Assets --> Pipeline --> Gates --> Serving --> Signals --> Improve --> Assets
-    Team --> Gates
-    Team --> Signals
-
-    classDef people fill:#2a2a2a,stroke:#777,stroke-width:2px,color:#fff
-    classDef data fill:#19313a,stroke:#31c6d4,stroke-width:2px,color:#fff
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef quality fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef artifact fill:#24351f,stroke:#6bd95f,stroke-width:2px,color:#fff
-```
-
-MLOps connects the model, data, release process, monitoring, and owners into one operating loop. The team treats machine learning as a production system around a changing model, changing data, and changing product behavior. Every model version gets evidence. Every release has a path. Every production signal has an owner. Every serious issue can lead to rollback, retraining, or a product change.
-
-![Notebook to service infographic showing a notebook feeding an MLOps pipeline, then a monitored API and batch job with repeatability, rollback, and alerts](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/notebook-to-service.png)
-
-_The final visual shows the practical shift from a local notebook to a monitored service with repeatable release and rollback paths._
-
-A beginner can feel pressure to start with a platform logo. A more useful starting point is practical: can the team reproduce the model, evaluate it fairly, release it safely, monitor it honestly, and improve it from feedback? Use those answers to choose tools, instead of starting with a platform logo.
+The rest of this roadmap studies each responsibility in detail. Data validation, experiment tracking, training pipelines, registries, serving, monitoring, governance, and LLM operations all fit inside this lifecycle. Their value comes from the production question they answer and the failure they help the team control.
 
 ## What's Next
-<!-- section-summary: The next article turns the broad MLOps picture into a concrete lifecycle that later modules expand in detail. -->
+<!-- section-summary: The next article follows one model version through the lifecycle and identifies the artifact and decision at each handoff. -->
 
-You now have the broad shape of MLOps: repeatable model lifecycle, versioned assets, automation, release gates, monitoring, feedback, and shared ownership. The next article walks through the lifecycle in more detail, from the first business question to production monitoring and the next training cycle.
-
-That lifecycle gives the rest of the roadmap a map. Data modules, training modules, evaluation modules, serving modules, monitoring modules, and governance modules all fit into different parts of the same operating loop.
+The next article follows one model version through the full lifecycle. It shows which artifact enters and leaves each stage, which gate controls the handoff, and how production feedback creates the next reviewed change.
 
 ## References
 
-- [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Explains CI, CD, and continuous training for ML systems, including why ML pipelines need automation beyond normal software delivery.
-- [AWS SageMaker AI: Why should you use MLOps?](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-projects-why.html) - Describes MLOps as applying DevOps practices to ML workloads and highlights project management, CI/CD, and quality assurance concerns.
-- [AWS SageMaker AI: Implement MLOps](https://docs.aws.amazon.com/sagemaker/latest/dg/mlops.html) - Shows common MLOps infrastructure topics such as workflow automation, deployment, and model monitoring in a managed ML platform.
-- [Microsoft Learn: MLOps model management with Azure Machine Learning](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-management-and-deployment?view=azureml-api-2) - Covers model lifecycle management, deployment, and quality and consistency improvements from MLOps practices.
-- [Microsoft Azure Architecture Center: Machine learning operations](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/machine-learning-operations-v2) - Describes architectures that combine CI/CD pipelines with retraining pipelines for ML applications.
-- [Google Cloud: Practitioners Guide to Machine Learning Operations](https://cloud.google.com/resources/mlops-whitepaper) - Provides an overview of the MLOps lifecycle, continuous training, deployment, and monitoring of predictive performance.
+- [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)
+- [Google: Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
+- [Google Research: Hidden Technical Debt in Machine Learning Systems](https://research.google/pubs/hidden-technical-debt-in-machine-learning-systems/)
+- [Microsoft Azure Architecture Center: Machine learning operations](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/machine-learning-operations-v2)
+- [AWS SageMaker AI: Implement MLOps](https://docs.aws.amazon.com/sagemaker/latest/dg/mlops.html)

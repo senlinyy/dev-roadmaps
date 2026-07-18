@@ -4,6 +4,8 @@ kind: Role
 metadata:
   name: orders-release
   namespace: orders
+  labels:
+    app.kubernetes.io/part-of: orders-release
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]

@@ -1,24 +1,11 @@
 ---
 title: "Caching Predictions"
 description: "Use cached inference results safely by choosing stable inputs, versioned cache keys, TTLs, invalidation rules, and monitoring."
-overview: "Prediction caching stores a model response for repeated requests so the serving path can answer faster and cheaper. This guide follows a travel search ranking service through cache-key design, TTLs, Redis storage, invalidation, safety limits, and monitoring."
+overview: "Prediction caching reuses model outputs within an explicit equivalence and freshness boundary. This article explains eligibility, identity, expiry, invalidation, isolation, failure behavior, and quality monitoring."
 tags: ["MLOps", "advanced", "performance"]
 order: 2
 id: "article-mlops-model-serving-caching-predictions"
 ---
-
-## Table of Contents
-
-1. [Prediction Caching Trades Freshness For Speed](#prediction-caching-trades-freshness-for-speed)
-2. [Follow One Search Ranking Service](#follow-one-search-ranking-service)
-3. [Decide What Can Be Cached](#decide-what-can-be-cached)
-4. [Build A Versioned Cache Key](#build-a-versioned-cache-key)
-5. [Use TTLs And Invalidation Rules](#use-ttls-and-invalidation-rules)
-6. [Add A Redis Cache Around Inference](#add-a-redis-cache-around-inference)
-7. [Monitor Cache Quality](#monitor-cache-quality)
-8. [Failure Modes](#failure-modes)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## Prediction Caching Trades Freshness For Speed
 <!-- section-summary: Prediction caching stores model outputs for repeated inputs so serving can answer faster, with a clear freshness boundary. -->
@@ -31,8 +18,12 @@ Caching is powerful because many ML products repeat work. A travel site might ra
 
 The risk is stale or unsafe reuse. If you cache a prediction after the user changes, the inventory changes, or the model changes, the product may return the wrong answer. That is why prediction caching needs versioned keys, TTLs, invalidation rules, and monitoring.
 
-## Follow One Search Ranking Service
-<!-- section-summary: The running scenario uses a travel search ranker where repeated searches can reuse short-lived ranking results. -->
+A cache design has six responsibilities. **Eligibility** defines which predictions may be reused at all. **Equivalence** defines when two requests mean the same thing. **Version identity** binds the result to the model, feature, policy, and schema versions that produced it. **Freshness** sets time-to-live and event-driven invalidation. **Isolation and failure behavior** prevent cross-user leakage and define what happens when the cache is unavailable. **Quality monitoring** checks hit rate alongside stale-result and outcome risk. Redis or another store implements lookup and expiry, while these responsibilities determine whether reuse is correct.
+
+The key is a claim about equivalence, not merely a hash. Omitting a personalization field claims that it cannot change the answer. Omitting the model version claims that old and new releases are interchangeable. A long TTL claims that the relevant world stays stable for that duration. Each omission should therefore be justified by product semantics and tested during changes.
+
+## A Search Ranking Cache As A Supporting Example
+<!-- section-summary: A travel-search example shows when repeated ranking requests can safely reuse a narrow, short-lived result. -->
 
 Imagine **TripNest**, a travel marketplace. Users search for hotels with a city, dates, guest count, filters, and sort preferences. The ranking service calls a model named `hotel_search_ranker` to order candidate hotels. During popular travel windows, thousands of users search the same city and dates within minutes.
 
@@ -42,7 +33,7 @@ The online serving path looks like this:
 search-api -> candidate-service -> feature-service -> ranker-api -> model-server
 ```
 
-The model scores 250 hotel candidates per request. The p95 latency target is 450 ms. During weekend sale traffic, p95 rises above 900 ms because the same Paris and Barcelona searches repeat across users. The platform team wants a cache that protects the model server without hiding stale inventory or pricing.
+The model scores 250 hotel candidates per request. Its 95th-percentile latency, abbreviated **p95**, should stay below 450 ms; this means 95 percent of requests should finish within that time. During weekend sale traffic, p95 rises above 900 ms because the same Paris and Barcelona searches repeat across users. The platform team wants a cache that protects the model server without hiding stale inventory or pricing.
 
 TripNest decides to cache only anonymous search ranking results for short windows. Personalized loyalty offers, user-specific discounts, payment risk, and hotel availability checks stay outside the cache. The cache stores the ranking order and model metadata. The final product response still calls the pricing and availability service before showing bookable rooms.
 
@@ -188,6 +179,8 @@ Redis is a common choice for low-latency cache storage. The same design can work
 
 Here is a compact FastAPI-style cache wrapper:
 
+:::expand[Implement the complete Redis cache path]{kind="example"}
+
 ```python
 import json
 import time
@@ -202,7 +195,11 @@ async def rank_hotels(request, redis: Redis, model_client, feature_client):
     cache_key = ranking_cache_key(request, candidates, feature_versions, model_version)
 
     started = time.perf_counter()
-    cached = await redis.get(cache_key)
+    try:
+        cached = await redis.get(cache_key)
+    except Exception as exc:
+        record_cache_error(operation="get", error=type(exc).__name__)
+        cached = None
     if cached:
         payload = json.loads(cached)
         log_prediction_cache(
@@ -214,6 +211,22 @@ async def rank_hotels(request, redis: Redis, model_client, feature_client):
         )
         return payload["ranking"]
 
+    lock_key = f"{cache_key}:fill-lock"
+    owns_fill = False
+    try:
+        owns_fill = bool(await redis.set(lock_key, request.request_id, nx=True, ex=10))
+    except Exception as exc:
+        record_cache_error(operation="lock", error=type(exc).__name__)
+
+    if not owns_fill:
+        await asyncio.sleep(0.05 + random.random() * 0.05)
+        try:
+            filled = await redis.get(cache_key)
+        except Exception:
+            filled = None
+        if filled:
+            return json.loads(filled)["ranking"]
+
     features = await feature_client.fetch_online_features(request, candidates.hotel_ids)
     ranking = await model_client.score(features)
 
@@ -223,7 +236,13 @@ async def rank_hotels(request, redis: Redis, model_client, feature_client):
         "ranking": ranking,
         "created_at_ms": int(time.time() * 1000),
     }
-    await redis.set(cache_key, json.dumps(payload), ex=300)
+    try:
+        await redis.set(cache_key, json.dumps(payload), ex=300)
+    except Exception as exc:
+        record_cache_error(operation="set", error=type(exc).__name__)
+    finally:
+        if owns_fill:
+            await release_lock_if_owned(redis, lock_key, request.request_id)
 
     log_prediction_cache(
         request_id=request.request_id,
@@ -234,6 +253,12 @@ async def rank_hotels(request, redis: Redis, model_client, feature_client):
     )
     return ranking
 ```
+
+:::
+
+The wrapper assumes `asyncio`, `random`, and a small compare-and-delete `release_lock_if_owned` helper are available. The `try` blocks implement **failure-open** behavior: if Redis is unavailable, the request still reaches the model path. That choice fits ranking because a fresh prediction is safe, although it can increase model load. The service pairs it with concurrency limits and a circuit breaker so a cache outage cannot overwhelm the model server.
+
+The short fill lock controls a **cache stampede**, where many requests miss the same key and all run the expensive model call. One request owns the fill; other requests wait with jitter and check once more. If the result still has not appeared, they compute normally so a lost lock cannot stall users. The owner token prevents one request from deleting a lock acquired later by another request after expiry.
 
 The wrapper logs hit and miss events. Those logs help answer operational questions later:
 
@@ -312,6 +337,8 @@ Prediction caches usually fail in familiar ways.
 | TTL too short | Cache adds complexity with few hits | Increase TTL or remove cache |
 | No bypass flag | Incident response is slow | Add runtime cache-disable flag |
 | No hit/miss logs | Team cannot explain behavior | Log cache metadata with request traces |
+| Redis outage fails the endpoint | Search returns errors although the model works | Fail open, cap model concurrency, and alert on cache errors |
+| Hot-key cache stampede | Model request rate spikes when one popular key expires | Use a short per-key fill lock, jitter, and stale-if-safe policy |
 
 The safest review question is simple: "What would make this cached answer wrong?" For TripNest, wrong answers come from model version changes, feature changes, candidate set changes, and fast-moving availability. The design handles those by keying model and feature versions, hashing candidates, keeping TTL short, and running live availability checks after ranking.
 
@@ -332,6 +359,7 @@ A cache is a serving feature, not only an infrastructure trick. It changes how p
 
 - [Redis SET command](https://redis.io/docs/latest/commands/set/)
 - [Redis key expiration](https://redis.io/docs/latest/commands/expire/)
+- [Redis distributed locks](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/)
 - [FastAPI lifespan events](https://fastapi.tiangolo.com/advanced/events/)
 - [OpenTelemetry HTTP metrics semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
 - [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)

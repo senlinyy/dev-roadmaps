@@ -1,39 +1,50 @@
 ---
 title: "Tracking Experiment Runs"
 description: "Show what real teams log for each experiment run: parameters, metrics, artifacts, data, code, environment, notes, and review decisions."
-overview: "Experiment tracking records the choices, results, files, lineage, and human context for each ML run. This article follows a marketplace search ranking team using Weights & Biases to log configs, metrics, dataset artifacts, model artifacts, segment tables, and review notes."
+overview: "Experiment tracking records one run through six connected layers: identity and intent, inputs, execution environment, measurements, output artifacts, and review decisions. A marketplace ranking example shows how those layers appear in Weights & Biases."
 tags: ["MLOps", "core", "tracking"]
 order: 2
 id: "article-mlops-experiments-and-reproducibility-tracking-parameters-metrics-artifacts-data-code"
 ---
-
-## Table of Contents
-
-1. [Tracking Gives Each Run A Receipt](#tracking-gives-each-run-a-receipt)
-2. [Follow One Search Ranking Team](#follow-one-search-ranking-team)
-3. [Log Parameters And Configuration](#log-parameters-and-configuration)
-4. [Log Metrics And Segments](#log-metrics-and-segments)
-5. [Track Artifacts, Data, And Code](#track-artifacts-data-and-code)
-6. [Write Notes And Review Decisions](#write-notes-and-review-decisions)
-7. [Check A Run Before Comparison](#check-a-run-before-comparison)
-8. [Keep Tracking Useful At Team Scale](#keep-tracking-useful-at-team-scale)
-9. [Putting It Together](#putting-it-together)
-10. [What's Next](#whats-next)
-11. [References](#references)
 
 ## Tracking Gives Each Run A Receipt
 <!-- section-summary: Experiment tracking records the choices, results, files, lineage, and human notes for one run. -->
 
 Experiment tracking is the practice of saving a structured receipt for every model run. The receipt says what choices went into the run, what results came out, which files were produced, which data and code were used, and what the team decided after looking at the evidence.
 
-The previous article introduced reproducibility as the larger goal. Tracking is the day-to-day habit that supports it. Instead of keeping scores in file names, screenshots, chat threads, and half-remembered notebook cells, the team sends parameters, metrics, artifacts, lineage, and notes to a tracking system such as MLflow or Weights & Biases.
+The previous article defined the experiment contract, run receipt, and replay acceptance rule. This article owns the instrumentation layer. Instead of keeping scores in file names, screenshots, chat threads, and notebook cells, the team sends parameters, metrics, artifacts, lineage, and notes to a tracking system such as MLflow or Weights & Biases.
 
 The title answer is direct: **tracking experiment runs means logging the important facts of each training or evaluation attempt so the team can compare candidates, rerun important work, and explain why one result mattered**. An untracked run may still produce a model file. A tracked run gives that model file context.
 
 If you have ever reopened an old notebook and wondered which setting produced the good score, this is the problem tracking solves. The run page should let you answer the basic questions without searching chat history: what changed, what data was used, what artifact was produced, and what decision did the team make after review?
 
-## Follow One Search Ranking Team
-<!-- section-summary: The running scenario follows a marketplace search team that compares many ranking experiments. -->
+The run record has six connected layers. The first three explain what executed. The next two explain what happened. The last explains what people decided.
+
+| Layer | What it records | Failure when missing |
+|---|---|---|
+| **Identity and intent** | Run ID, experiment question, owner, parent search or pipeline run | Nobody knows why two runs should be compared |
+| **Inputs** | Dataset, labels, features, resolved config, code commit | A result cannot be reproduced or explained |
+| **Execution** | Container, packages, hardware, seeds, distributed settings | Environment changes hide behind the same source code |
+| **Measurements** | Metric definitions, step curves, segments, uncertainty, runtime | A headline score hides behaviour and operating cost |
+| **Outputs** | Model, schema, reports, predictions, logs, checksums | Reviewers see numbers without the files that produced them |
+| **Decision context** | Notes, limitations, approval link, rejection reason | The dashboard records activity without preserving judgment |
+
+These layers interact. A metric belongs to a specific dataset and metric implementation. A model artifact belongs to a specific code, config, and runtime. A review decision points to the complete record. One attractive chart cannot carry the evidence by itself.
+
+```mermaid
+flowchart LR
+    Intent["Identity and experiment intent"] --> Inputs["Data, code, and resolved config"]
+    Inputs --> Execution["Runtime, hardware, and randomness"]
+    Execution --> Measures["Metrics, slices, and resource use"]
+    Execution --> Outputs["Models, reports, predictions, and logs"]
+    Measures --> Decision["Notes, limitations, and review decision"]
+    Outputs --> Decision
+```
+
+The first three layers explain the execution that produced the result. Measurements and outputs show the observed behaviour and durable files. Decision context records what people concluded. Tracking stays useful when these relationships remain visible instead of flattening every run into a metric leaderboard.
+
+## Apply The Run Record To Search Ranking
+<!-- section-summary: A supporting example follows a marketplace search team that compares many ranking experiments. -->
 
 Imagine **Cedar Market**, a marketplace where buyers search for handmade furniture, tools, fabric, and vintage electronics. The search ranking team owns the model that orders products after a user types a query such as "oak desk", "linen curtains", or "soldering station". Their current production model is `cedar-search-lambdamart:v6`.
 

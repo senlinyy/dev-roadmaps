@@ -1,0 +1,41 @@
+{
+  "language": "hcl",
+  "activeFile": "providers.tf",
+  "completionProfile": "terraform-aws",
+  "files": [
+    {
+      "filename": "providers.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region     = \"eu-west-2\"\n  access_key = \"AKIAEXAMPLE\"\n  secret_key = \"copied-secret\"\n}\n"
+    },
+    {
+      "filename": "variables.tf",
+      "initialValue": ""
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "providers.tf",
+        "pattern": "required_providers\\s*\\{[\\s\\S]*?aws\\s*=\\s*\\{[^}]*source\\s*=\\s*\"hashicorp/aws\"[^}]*version\\s*=\\s*\"~>\\s*5\\.0\"[^}]*\\}",
+        "label": "versioned AWS provider source"
+      },
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"aws_region\"\\s*\\{[^}]*type\\s*=\\s*string[^}]*\\}",
+        "label": "typed AWS region input"
+      },
+      {
+        "file": "providers.tf",
+        "pattern": "provider\\s+\"aws\"\\s*\\{[^}]*region\\s*=\\s*var\\.aws_region[^}]*\\}",
+        "label": "provider uses region variable"
+      },
+      {
+        "pattern": "^\\s*(access_key|secret_key|token|profile)\\s*=",
+        "negate": true,
+        "label": "no static credential or profile fields",
+        "flags": "im"
+      }
+    ]
+  }
+}

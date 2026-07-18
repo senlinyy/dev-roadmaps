@@ -1,0 +1,65 @@
+{
+  "language": "yaml",
+  "filename": "compose.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "services:\n  api:\n    image: registry.example.com/orders-api:5.0.0\n    ports:\n      - \"8080:8080\"\n    environment:\n      DB_HOST: localhost\n  db:\n    image: postgres:17-alpine\n    ports:\n      - \"5432:5432\"\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "services",
+          "api",
+          "environment",
+          "DB_HOST"
+        ],
+        "equals": "db",
+        "label": "Compose service discovery name"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "ports"
+        ],
+        "equals": [
+          "8080:8080"
+        ],
+        "label": "API host exposure preserved"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "ports"
+        ],
+        "exists": false,
+        "label": "database host exposure removed"
+      },
+      {
+        "path": [
+          "services",
+          "db",
+          "healthcheck",
+          "test"
+        ],
+        "equals": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "label": "database readiness command"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "depends_on",
+          "db",
+          "condition"
+        ],
+        "equals": "service_healthy",
+        "label": "API waits for healthy database"
+      }
+    ]
+  }
+}

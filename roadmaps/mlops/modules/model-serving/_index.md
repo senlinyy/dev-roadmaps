@@ -1,7 +1,7 @@
 ---
 title: "Model Serving"
-description: "Package models, expose inference paths, design APIs, and manage serving performance."
+description: "Choose an inference pattern, define the serving contract, package a reproducible runtime, and operate latency, capacity, cost, and quality together."
 tags: ["serving", "inference", "api"]
 icon: "Cloud"
-order: 6
+order: 8
 ---

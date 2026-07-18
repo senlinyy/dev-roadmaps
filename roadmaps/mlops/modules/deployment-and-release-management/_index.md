@@ -1,7 +1,7 @@
 ---
 title: "Deployment and Release Management"
-description: "Version, promote, release, test, and recover ML model changes in production environments."
+description: "Connect immutable release identity, compatible contracts, progressive traffic, live evidence, rollback, and incident learning for ML changes."
 tags: ["deployment", "release", "rollback"]
 icon: "GitBranch"
-order: 7
+order: 9
 ---

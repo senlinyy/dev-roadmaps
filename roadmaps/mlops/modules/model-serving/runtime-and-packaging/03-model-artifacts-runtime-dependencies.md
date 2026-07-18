@@ -1,186 +1,106 @@
 ---
 title: "Runtime Compatibility"
-description: "Connect model artifacts, feature schemas, package versions, container images, CPU/GPU libraries, and serving frameworks so inference stays reliable."
-overview: "Runtime compatibility means the artifact, API schema, dependency lock, container image, hardware, and serving framework all agree. This article follows a document classification service and shows compatibility manifests, matrix tests, GPU library checks, model server choices, and rollback evidence."
+description: "Connect request contracts, preprocessing, artifacts, libraries, serving runtimes, hardware, loading, and rollback."
+overview: "Runtime compatibility is a chain of agreements from the API request to the hardware executing the model. This article develops each boundary before showing how a compatibility matrix and release record preserve supported combinations."
 tags: ["MLOps", "production", "packaging"]
 order: 3
 id: "article-mlops-model-serving-model-artifacts-runtime-dependencies"
 ---
 
-## Table of Contents
+## Compatibility Is A Chain Across The Serving Path
+<!-- section-summary: Runtime compatibility requires every boundary from request to hardware to agree on data, format, software, and behaviour. -->
 
-1. [Compatibility Means The Whole Runtime Agrees](#compatibility-means-the-whole-runtime-agrees)
-2. [Follow One Document Classifier](#follow-one-document-classifier)
-3. [Create A Compatibility Manifest](#create-a-compatibility-manifest)
-4. [Check Feature Schema And Model Signature](#check-feature-schema-and-model-signature)
-5. [Check Packages, System Libraries, And Images](#check-packages-system-libraries-and-images)
-6. [Check CPU, GPU, And Server Runtime](#check-cpu-gpu-and-server-runtime)
-7. [Run A Compatibility Matrix In CI](#run-a-compatibility-matrix-in-ci)
-8. [Operate And Roll Back Compatibility Incidents](#operate-and-roll-back-compatibility-incidents)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+**Runtime compatibility** means an approved model can load and produce the reviewed behaviour inside the intended serving environment. Compatibility spans several boundaries:
 
-## Compatibility Means The Whole Runtime Agrees
-<!-- section-summary: Runtime compatibility means the model artifact, schema, libraries, image, hardware, and serving framework can run together with the same behavior the team reviewed. -->
+1. Request contract to preprocessing.
+2. Preprocessing output to model signature.
+3. Serialized artifact to loading library.
+4. Language packages to native system libraries.
+5. Model format to serving runtime.
+6. Runtime to CPU, GPU, driver, and accelerator libraries.
+7. Loaded model to readiness, traffic, and fallback.
 
-**Runtime compatibility** means the saved model and the serving environment agree on how inference should run. The artifact, input schema, Python packages, system libraries, container image, CPU or GPU hardware, CUDA stack, and serving framework all need to fit together. If one piece drifts, the model may fail to load, return wrong shapes, run slowly, or crash under real traffic.
+A release can fail at any one of these boundaries. The API may accept a renamed field that preprocessing ignores. A tokenizer may produce different IDs. A Python object may fail to deserialize under a new library. A CUDA image may require a driver the node cannot support. A server may report HTTP health before the model finishes loading.
 
-This article connects the previous two articles. You learned how to save a model with signatures and how to package an API in a container. Compatibility is the review layer across both. It asks: can this exact model run inside this exact image on this exact hardware with this exact request contract?
+The correct response is to model each compatibility relationship and test supported combinations. A manifest records the result afterward; it should not substitute for understanding the chain.
 
-That question matters because serving failures often come from small mismatches. A feature column changes order. A library minor version changes model deserialization. A GPU image expects a CUDA runtime that the node driver cannot support. A model server expects a repository layout the team copied incorrectly. Compatibility work turns those surprises into checks.
+## Request, Preprocessing, And Signature Form One Contract
+<!-- section-summary: The request schema, transformation logic, and model signature must agree on names, types, shapes, order, defaults, and semantics. -->
 
-## Follow One Document Classifier
-<!-- section-summary: The running example serves a document classifier where tokenizer versions, model weights, schemas, and hardware choices must line up. -->
+The caller sends an API or batch record. Preprocessing validates and transforms it into the tensor, dataframe, or structured input the model expects. The model signature defines names, types, shapes, and sometimes optionality.
 
-Imagine **LedgerLine**, a finance operations platform. Customers upload invoices, receipts, tax forms, and bank letters. A model classifies each document so the workflow can send invoices to accounts payable, tax forms to compliance, and bank letters to account review.
+Compatibility includes semantics as well as shape. Two fields may both be floating-point values while one uses dollars and the other cents. A timestamp may be UTC in training and local time in serving. A categorical encoder may assign a new index to an existing value. Passing schema validation can still produce wrong predictions.
 
-The model is a transformer-based classifier. It needs model weights, tokenizer files, label mapping, preprocessing code, Python dependencies, and enough CPU or GPU capacity for the expected document volume. The API receives a `document_uri` and returns `document_type`, confidence, model version, and label set version.
-
-LedgerLine has two serving paths:
-
-| Path | Runtime | Why it exists |
-|---|---|---|
-| Normal traffic | FastAPI plus PyTorch CPU image | Handles steady document uploads at predictable cost |
-| End-of-month surge | GPU node pool with NVIDIA Triton candidate | Tests higher throughput for batch-like spikes |
-
-The team wants one compatibility process that works for both paths. The details differ, yet the review question stays the same: does the model artifact match the runtime that will serve it?
-
-## Create A Compatibility Manifest
-<!-- section-summary: A compatibility manifest records the exact artifact, schema, packages, image, hardware, and server settings approved for a release. -->
-
-A compatibility manifest is the release receipt for serving. It records the artifact and the runtime side by side. It should live with the deployment ticket, model registry entry, or artifact bundle.
-
-```yaml
-model:
-  name: document-classifier
-  version: document-classifier-2026-07-04
-  registry_uri: models:/document-classifier@candidate
-  mlflow_run_id: 8616dbdfb47e4d62a1c7e13baf0ddba1
-  artifact_sha256: 5f31d2f6c7a4a1b2e6f4e7250ec7df18bbd71f85c8d61a9f4d2c83ddc5a1f910
-  signature_version: mlflow-signature-v1
-
-schema:
-  request_schema: document_classification_request_v3
-  feature_schema: document_text_features_v5
-  label_set: ledgerline_document_labels_v4
-
-runtime:
-  image: ghcr.io/ledgerline/document-api@sha256:cb41...
-  python: "3.12.5"
-  requirements_lock: requirements.lock
-  torch: "2.8.0"
-  transformers: "4.53.0"
-  tokenizer_sha256: 1c9ed276e8f693a1...
-
-hardware:
-  default_pool: cpu-inference
-  gpu_pool_candidate: l4-inference
-  cuda_runtime_image: nvidia/cuda:12.8.1-runtime-ubuntu24.04
-
-serving:
-  framework: fastapi
-  endpoint: /v1/document-classifier:predict
-  readiness_smoke_test: tests/fixtures/document_invoice_request.json
-  rollback_model: document-classifier-2026-06-20
-  rollback_image: ghcr.io/ledgerline/document-api@sha256:8aa2...
-```
-
-The manifest makes compatibility review visible. It gives platform, ML, and on-call engineers one place to check model, code, package, image, hardware, and rollback identity.
-
-![LedgerLine compatibility manifest board](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/compatibility-manifest-board.png)
-
-*LedgerLine's compatibility manifest keeps model, schema, runtime, hardware, serving framework, and rollback entries in one review packet before release.*
-
-## Check Feature Schema And Model Signature
-<!-- section-summary: Schema and signature checks catch request-to-feature mismatches before serving traffic reaches the model. -->
-
-The first compatibility boundary is the request-to-model path. The API request schema describes what the caller sends. The feature schema describes what the model expects after preprocessing. The model signature describes the shape accepted by the saved artifact. These three should agree through tests.
-
-LedgerLine can store an expected feature list:
-
-```json
-{
-  "feature_schema_version": "document_text_features_v5",
-  "features": [
-    {"name": "token_ids", "dtype": "int64", "shape": ["batch", 512]},
-    {"name": "attention_mask", "dtype": "int64", "shape": ["batch", 512]},
-    {"name": "source_system_id", "dtype": "string"},
-    {"name": "document_language", "dtype": "string"}
-  ]
-}
-```
-
-Then a CI test can compare the preprocessing output against the model signature:
+Contract tests should begin with reviewed fixtures that travel through the whole path. They compare the preprocessing output with the saved signature and verify known prediction results or tolerances.
 
 ```python
-import json
-
-import mlflow
-
-from app.preprocessing import build_features
-from app.schemas import DocumentClassificationRequest
-
-
-def test_request_features_match_model_signature():
-    model = mlflow.pyfunc.load_model("models/document-classifier")
-    request = DocumentClassificationRequest.model_validate_json(
-        open("tests/fixtures/document_invoice_request.json").read()
-    )
+def test_request_matches_saved_signature():
+    request = Request.model_validate_json(fixture.read_text())
     features = build_features(request)
-    signature = model.metadata.signature
+    model = mlflow.pyfunc.load_model("models/document-classifier")
 
-    expected_inputs = [item.name for item in signature.inputs.inputs]
-    actual_inputs = list(features.columns)
-
-    assert actual_inputs == expected_inputs
+    expected = [item.name for item in model.metadata.signature.inputs.inputs]
+    assert list(features.columns) == expected
+    assert features.dtypes.astype(str).to_dict() == expected_dtypes
 ```
 
-This test is plain and valuable. If preprocessing drops `attention_mask`, changes column order, or renames a field, CI fails before deployment. The serving team should treat signature mismatch as a release blocker.
+The fixture set should include missing values, optional fields, boundary sizes, unseen categories, and legacy clients. Contract versioning and backward-compatibility policy determine whether an old caller is rejected, translated, or supported by another endpoint version.
 
-## Check Packages, System Libraries, And Images
-<!-- section-summary: Dependency compatibility needs lock files, image digests, system package records, import checks, and model-load smoke tests. -->
+## Serialization Defines A Trust And Library Boundary
+<!-- section-summary: The artifact format determines how code, weights, metadata, and executable behaviour cross from training to serving. -->
 
-The second boundary is the software runtime. Python packages, OS libraries, and image base all affect model loading. For document classification, the tokenizer and model libraries matter as much as the model weights. A tokenizer version mismatch can change token IDs, and changed token IDs can change predictions.
+Model artifacts can store only weights, a portable graph, or an executable language object. Pickle-based formats can execute code during loading and require a trusted source. Framework-native formats can still depend on exact library behaviour. ONNX or TensorRT artifacts improve runtime portability for supported operators while introducing export and numerical-compatibility checks.
 
-Record the package set in a lock file and the image as a digest. During CI, run import and version checks:
+The artifact should carry or link to preprocessing, postprocessing, label maps, tokenizer, signature, example input, framework version, code identity, and integrity digest. If one of these changes, the loadable release identity changes.
 
-```python
-import importlib.metadata
+A cryptographic digest detects altered bytes. Signing and provenance can strengthen supply-chain assurance. Scanning catches known package and image vulnerabilities. None of these prove predictive correctness, so load and prediction fixtures remain necessary.
 
+Teams should avoid loading untrusted serialized objects in production or review notebooks. Model registries and artifact stores need restricted write access, immutable versions, audit logs, and promotion controls.
 
-def test_runtime_versions_match_manifest():
-    expected = {
-        "torch": "2.8.0",
-        "transformers": "4.53.0",
-        "fastapi": "0.116.0",
-        "pydantic": "2.11.0",
-    }
-    for package, version in expected.items():
-        assert importlib.metadata.version(package) == version
-```
+## Package And Native Libraries Must Match The Artifact
+<!-- section-summary: Language and system dependencies affect deserialization, preprocessing, operators, numerical behaviour, and performance. -->
 
-This test should use the team's actual approved versions. The versions in this article are examples, not a universal recommendation. The real review should use the versions that passed training, evaluation, scanning, and serving smoke tests.
+A Python lock file can pin PyTorch, scikit-learn, transformers, tokenizer, NumPy, and serving libraries. The container image pins operating-system libraries and runtime components. A digest identifies the exact built image.
 
-System libraries also matter. Image decoding may need `libjpeg` or `libpng`. OCR preprocessing may need native libraries. GPU images need NVIDIA runtime libraries. Keep those dependencies in the Dockerfile and deployment manifest instead of relying on a node that happens to have them installed.
+Minor upgrades can matter. A changed tokenizer implementation can alter inputs. A numerical library can select another kernel. An OCR dependency can disappear from the base image. A model may load successfully while prediction behaviour moves outside the accepted tolerance.
 
-## Check CPU, GPU, And Server Runtime
-<!-- section-summary: Hardware and model server compatibility depend on resource requests, CUDA stack, GPU operator support, and the server's model repository rules. -->
+Compatibility testing should therefore include import and version checks, model load, fixture predictions, concurrency smoke tests, and representative numerical comparison. The approved versions come from evaluation and security review; article examples should never be copied as universal version recommendations.
 
-The third boundary is hardware and serving framework. CPU inference mainly needs package and resource checks. GPU inference adds driver, CUDA, container runtime, device plugin, and scheduling checks. NVIDIA's GPU Operator documentation and support matrices are the right place to verify supported platforms, drivers, and GPU software stack details before a production rollout.
+Training and serving do not always need identical environments. A portable exported artifact may intentionally serve in a smaller runtime. The team must test that boundary and document the supported exporter-to-runtime combination.
 
-For LedgerLine's CPU path, the deployment can request CPU and memory:
+### Version Pins Do Not Capture The Whole Compatibility Surface
 
-```yaml
-resources:
-  requests:
-    cpu: "1"
-    memory: 2Gi
-  limits:
-    cpu: "2"
-    memory: 4Gi
-```
+A package lock identifies resolver output, but native numerical software also depends on the operating-system ABI, CPU instruction set, system libraries, and dynamically loaded accelerator components. Two containers with the same Python package list can behave differently if one wheel was built for another architecture or if the host exposes a different driver. Conversely, training and serving can use different package versions safely when a stable exported graph is the deliberate boundary and the combination has passed comparison tests.
 
-For the GPU candidate, the deployment must request GPU resources and land on a compatible node pool:
+This is why “copy the training environment” is an incomplete strategy. It may carry compilers, notebook tools, data clients, and credentials into serving without proving hardware support. The stronger strategy is to define the smallest serving environment, record its immutable image digest, and test the artifact across the exact boundary it will cross.
+
+Compatibility tests should distinguish three outcomes:
+
+1. **Cannot load:** the format, operator, library, or hardware is unsupported.
+2. **Loads but changes behaviour:** preprocessing, numerical kernels, precision, or defaults moved results outside tolerance.
+3. **Loads correctly but misses the operating envelope:** latency, memory, concurrency, or startup time is unacceptable.
+
+A single import test sees only part of the first outcome. A production compatibility suite needs fixtures, numerical comparison, and resource measurements because an apparently compatible model can still be unreleasable.
+
+## Serving Runtime And Model Format Need A Supported Pair
+<!-- section-summary: A serving runtime supports specific formats, repository layouts, operators, batching behaviour, and lifecycle controls. -->
+
+FastAPI can host application code that loads a Python model directly. BentoML packages Python model services. Ray Serve supports distributed Python serving graphs. ONNX Runtime executes ONNX graphs. NVIDIA Triton serves several backends through a model repository and adds scheduling and batching. KServe can operate approved runtimes on Kubernetes.
+
+Each runtime has a contract. Triton expects model repository structure and backend configuration. ONNX Runtime needs supported operators and execution providers. A custom Python service needs process, concurrency, and lifecycle design. A platform should publish supported combinations rather than allow every model to choose arbitrary formats and servers.
+
+TorchServe may appear in existing PyTorch estates, while its official documentation currently marks it as Limited Maintenance. Maintenance status belongs in compatibility and lifecycle decisions because unsupported runtime software can create a security and upgrade blocker.
+
+Runtime selection also affects model behaviour. Dynamic batching changes request grouping and latency. Quantization changes numerical precision. Concurrent execution can expose thread-safety problems in preprocessing. Load tests need correctness checks alongside throughput.
+
+## Hardware Compatibility Extends Through Drivers And Kernels
+<!-- section-summary: Accelerator serving requires agreement among model, runtime, container libraries, host driver, device plugin, and node resources. -->
+
+CPU serving mainly depends on architecture, instruction support, libraries, and resources. GPU serving adds model precision, accelerator type, CUDA runtime, host driver, cuDNN or other libraries, Kubernetes device plugin, scheduling labels, and memory capacity.
+
+The container carries user-space accelerator libraries, while the host driver connects to the device. Compatibility follows the vendor's support matrix. A newer container runtime cannot assume every node driver supports it.
+
+Kubernetes workloads request accelerator resources and target an approved node pool:
 
 ```yaml
 resources:
@@ -189,97 +109,117 @@ resources:
     memory: 8Gi
     nvidia.com/gpu: "1"
   limits:
-    cpu: "4"
-    memory: 16Gi
     nvidia.com/gpu: "1"
 nodeSelector:
   accelerator: nvidia-l4
 ```
 
-If the team uses NVIDIA Triton, it also needs a model repository layout and model configuration that Triton understands. Triton can serve models from a repository with versioned directories, and features such as dynamic batching need deliberate configuration and load testing. If the team uses BentoML or Ray Serve, compatibility moves into their service and deployment model. The habit is the same: check the framework's current docs, build a small smoke test, and record the exact runtime version.
+Scheduling success does not prove runtime compatibility. Startup tests should report detected device, driver and library versions, model precision, memory allocation, and execution provider. Representative inference should then verify output tolerance and latency.
 
-TorchServe deserves a specific note. Its official documentation currently describes the project as in limited maintenance. That makes it a candidate for existing systems or legacy support, while new production services should evaluate current maintenance status before choosing it as a default.
+Multi-instance GPU, tensor parallelism, and distributed inference add further topology and collective-library constraints. These combinations need explicit support and testing rather than inheritance from a generic “GPU compatible” label.
 
-![LedgerLine CPU and GPU runtime compatibility checks](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/cpu-gpu-runtime-checks.png)
+## Load Lifecycle Is Part Of Compatibility
+<!-- section-summary: A compatible service loads, warms, reports readiness, handles failure, and exposes the model identity users reach. -->
 
-*The CPU path and GPU candidate share the same artifact, but the GPU route needs extra checks for node pool, driver, CUDA image, GPU request, smoke test, and traffic gate.*
+The process can start before the model is usable. Liveness should indicate that the process can continue. Readiness should remain false until required artifacts are loaded, warm-up or compilation succeeds, dependencies are reachable, and the service can produce a valid fixture result.
 
-## Run A Compatibility Matrix In CI
-<!-- section-summary: A CI matrix should load the model, run smoke predictions, check versions, and test planned CPU or GPU runtime combinations. -->
+Large models may load slowly or exceed memory only under concurrency. Startup timeout, model cache, download retries, disk capacity, and eviction policy need operational testing. A failed reload should preserve the current working model or route to a defined fallback rather than leave a half-initialized endpoint.
 
-A compatibility matrix tests the combinations the team plans to ship. It should stay small. Test the approved image, the approved model artifact, and the approved hardware class or runtime target.
+The service reports model version and digest, image digest, feature or tokenizer version, runtime, and loaded time. Prediction telemetry records the version handling live requests. This closes the gap between what deployment intended and what users reached.
+
+## A Compatibility Matrix Defines Supported Combinations
+<!-- section-summary: CI tests the small set of model, image, runtime, and hardware combinations the platform promises to operate. -->
+
+A platform should avoid testing every possible package and hardware combination. It defines a supported matrix: approved artifact format, serving image, runtime version, CPU architecture or GPU class, driver family, and request contract.
+
+CI can test CPU load and fixtures on every candidate. GPU jobs may run on release branches or a dedicated pool. Staging then tests startup, warm-up, load, concurrency, and telemetry under production-like configuration.
+
+The matrix should include rollback compatibility. A previous model may not run after a breaking feature or image update. Either retain a complete previous release or prove that the old artifact works in the new runtime before treating it as a rollback target.
+
+Failures are easier to locate when tests follow the same boundaries as the framework: request-to-feature, feature-to-signature, artifact-to-library, format-to-runtime, runtime-to-hardware, and load-to-readiness.
+
+The matrix should stay intentionally small. Teams sometimes respond to compatibility risk by generating a combinatorial grid of every framework, Python, image, and GPU version. That test estate quickly grows unaffordable and still fails to define what users may rely on. A platform instead publishes a few supported lanes—for example, current CPU, current GPU, and the retained rollback lane—and gives each lane an owner and an upgrade window. Experimental combinations may run in a sandbox; promotion into the supported matrix makes them production options.
+
+Upgrades then follow a controlled migration. First add the proposed runtime or hardware as a new lane. Run existing artifacts and fixtures on both old and new lanes. Compare task quality, numerical tolerance, load behaviour, and performance. Move canary traffic only after the new lane passes. Keep the old lane until rollback has been exercised. Removing it is a separate decision from declaring the new lane healthy.
+
+The matrix can run as a small set of release jobs rather than one vague “serving test”:
 
 ```yaml
-name: document-classifier-compatibility
-
-on:
-  pull_request:
-  workflow_dispatch:
-
-jobs:
-  cpu-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build image
-        run: docker build -t document-api:${{ github.sha }} .
-      - name: Run smoke tests
-        run: ./scripts/docker-smoke.sh document-api:${{ github.sha }}
-
-  gpu-smoke:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: gpu-l4-runner
-    steps:
-      - uses: actions/checkout@v5
-      - name: Check GPU
-        run: nvidia-smi
-      - name: Build GPU image
-        run: docker build -f Dockerfile.gpu -t document-api-gpu:${{ github.sha }} .
-      - name: Run GPU smoke tests
-        run: ./scripts/docker-gpu-smoke.sh document-api-gpu:${{ github.sha }}
+include:
+  - id: cpu-current
+    artifact: document-classifier-42.onnx
+    image: document-api@sha256:cb41...
+    runner: linux-x86_64-avx2
+    providers: [CPUExecutionProvider]
+  - id: gpu-l4
+    artifact: document-classifier-42.onnx
+    image: document-api-cuda@sha256:912e...
+    runner: nvidia-l4-driver-550
+    providers: [CUDAExecutionProvider]
+  - id: rollback-cpu
+    artifact: document-classifier-41.onnx
+    image: document-api@sha256:cb41...
+    runner: linux-x86_64-avx2
+    providers: [CPUExecutionProvider]
 ```
 
-The CPU smoke can run on every pull request. GPU smoke may run on demand or before release because GPU runners cost more. The GPU test should still exist. A model that only fails on the target accelerator should fail before deployment, not during an end-of-month surge.
+Each job validates the request fixture, feature tensor, runtime providers, loaded digest, output tolerance, two concurrent predictions, and readiness metadata. `rollback-cpu` answers a separate question: whether the retained artifact still works after the image changed. A green current-model test cannot answer it.
 
-The matrix should produce artifacts: version report, smoke-test response, model load logs, and image digest. Those artifacts help release reviewers see exactly what passed.
+The job should print the first failed boundary:
 
-## Operate And Roll Back Compatibility Incidents
-<!-- section-summary: Compatibility incidents need fast evidence about the failing boundary and a rollback plan for model, image, or hardware target. -->
+```json
+{
+  "matrix_id": "gpu-l4",
+  "state": "failed",
+  "boundary": "runtime_to_hardware",
+  "expected_provider": "CUDAExecutionProvider",
+  "available_providers": ["CPUExecutionProvider"],
+  "loaded_model": false,
+  "traffic_allowed": false
+}
+```
 
-When a compatibility incident happens, first identify the boundary. A model load error points to artifact, dependency, or serialization mismatch. A validation spike points to schema mismatch. A crash only on GPU points to image, driver, CUDA, or hardware scheduling. A slow response after moving to a model server points to batching, worker count, or resource settings.
+This output points operators toward image libraries, driver compatibility, device exposure, or scheduling. Retrying artifact download cannot repair a missing provider. After the node or image is corrected, the same matrix job must report the expected provider and pass the prediction fixture before the release can advance.
 
-Use a runbook like this:
+## The Release Record Captures The Proven Combination
+<!-- section-summary: A compatibility record links the tested model, schema, software, hardware, lifecycle, and rollback identities. -->
 
-| Symptom | First checks | Likely rollback |
-|---|---|---|
-| Startup fails | Manifest hash, load logs, missing package | Previous image or previous artifact |
-| Validation failures spike | Caller version, schema version, field errors | Re-enable previous accepted schema |
-| CPU service memory spikes | batch size, model copy count, worker count | Previous image or lower concurrency |
-| GPU service fails to start | `nvidia-smi`, node labels, driver/runtime support | Move traffic back to CPU pool |
-| Triton returns shape error | model config, repository layout, request tensor names | Previous Triton config or FastAPI path |
+After the relationships pass, a release record can identify the supported combination:
 
-Compatibility rollback should be precise. If the model artifact changed and the image stayed the same, roll back the model. If the image changed and the model stayed the same, roll back the image digest. If the GPU pool caused the failure, route traffic back to the CPU path and keep the artifact in place.
+```yaml
+model:
+  version: document-classifier-42
+  artifact_sha256: 5f31d2f6...
+schema:
+  request: document-request-v3
+  features: document-features-v5
+runtime:
+  image: ghcr.io/example/document-api@sha256:cb41...
+  server: fastapi
+hardware:
+  node_pool: cpu-inference-v4
+verification:
+  fixture_suite: document-serving-compatibility-v8
+rollback:
+  release: document-classifier-41
+```
 
-![LedgerLine compatibility matrix and rollback boundaries](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/compatibility-matrix-rollback.png)
+The record makes the tested result reviewable. It should link to detailed test evidence rather than repeat every dependency. Any changed component that can alter compatibility creates a new matrix result and release decision.
 
-*The compatibility matrix records what passed in CI, then maps incidents to the boundary that failed: schema, package, image, GPU route, or model artifact.*
+## Compatibility Incidents Follow The Boundary Chain
+<!-- section-summary: Incident triage identifies the first incompatible boundary and restores a complete known release. -->
 
-## Putting It Together
-<!-- section-summary: Runtime compatibility joins schemas, signatures, dependencies, images, hardware, serving frameworks, CI smoke tests, and rollback evidence into one release discipline. -->
+A schema error points to caller, validation, or preprocessing. A deserialization error points to artifact and library compatibility. Missing GPU providers point to image, driver, or scheduling. Readiness failures point to download, load, warm-up, or dependency lifecycle. Wrong outputs with healthy service metrics point to semantic preprocessing or numerical change.
 
-Runtime compatibility asks whether the whole serving system agrees. The model artifact, input schema, model signature, dependencies, container image, hardware, and serving framework all have to line up. A failure in any one of those places can break inference.
+Rollback restores the previous model, image, schema path, and compatible feature configuration as one release. Operators verify the loaded identity and fixture result before returning traffic.
 
-LedgerLine's document classifier shows the practical flow. Create a compatibility manifest. Compare feature schema to model signature. Pin and test packages. Record image digest and hardware target. Verify GPU support from official NVIDIA docs when accelerators enter the path. Run CPU and GPU smoke tests in CI. Keep rollback split by model, image, and hardware route.
+Runtime compatibility is therefore a chain of explicit agreements. The manifest is useful because the team has already understood and tested those agreements.
 
 ## References
 
-- [MLflow model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
-- [Kubernetes scheduling GPUs](https://kubernetes.io/docs/tasks/manage-gpus/scheduling-gpus/)
+- [MLflow model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
+- [ONNX Runtime compatibility](https://onnxruntime.ai/docs/reference/compatibility.html)
+- [NVIDIA CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/)
 - [NVIDIA GPU Operator platform support](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/platform-support.html)
-- [NVIDIA AI Enterprise Infrastructure Support Matrix](https://docs.nvidia.com/ai-enterprise/support-matrix/latest/index.html)
-- [NVIDIA Triton model repository](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_repository.html)
-- [NVIDIA Triton model configuration](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_configuration.html)
-- [BentoML services](https://docs.bentoml.com/en/latest/build-with-bentoml/services.html)
-- [Ray Serve overview](https://docs.ray.io/en/latest/serve/index.html)
+- [NVIDIA Triton Inference Server](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/)
 - [TorchServe documentation](https://docs.pytorch.org/serve/)

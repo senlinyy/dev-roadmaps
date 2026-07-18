@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "activeFile": "k8s/base/kustomization.yaml",
+  "completionProfile": "yaml",
+  "files": [
+    { "filename": "k8s/base/deployment.yaml", "readOnly": true, "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: orders-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: orders-api\n    spec:\n      containers:\n        - name: orders-api\n          image: ghcr.io/devpolaris/orders-api:2026.06.16-dev\n          ports:\n            - name: http\n              containerPort: 8080\n" },
+    { "filename": "k8s/base/service.yaml", "readOnly": true, "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: orders-api\nspec:\n  selector:\n    app.kubernetes.io/name: orders-api\n  ports:\n    - port: 80\n      targetPort: http\n" },
+    { "filename": "k8s/base/kustomization.yaml", "initialValue": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n" },
+    { "filename": "k8s/overlays/prod/kustomization.yaml", "initialValue": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n" }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "file": "k8s/base/kustomization.yaml", "path": ["apiVersion"], "equals": "kustomize.config.k8s.io/v1beta1", "label": "base Kustomize API" },
+      { "file": "k8s/base/kustomization.yaml", "path": ["kind"], "equals": "Kustomization", "label": "base kind" },
+      { "file": "k8s/base/kustomization.yaml", "path": ["resources"], "includes": "deployment.yaml", "minItems": 2, "maxItems": 2, "label": "base resource list" },
+      { "file": "k8s/base/kustomization.yaml", "path": ["resources"], "includes": "service.yaml", "label": "base Service resource" },
+      { "file": "k8s/overlays/prod/kustomization.yaml", "path": ["namespace"], "equals": "devpolaris-prod", "label": "production namespace" },
+      { "file": "k8s/overlays/prod/kustomization.yaml", "path": ["resources"], "equals": ["../../base"], "label": "shared base import" },
+      { "file": "k8s/overlays/prod/kustomization.yaml", "path": ["images"], "equals": [{ "name": "ghcr.io/devpolaris/orders-api", "newTag": "2026.06.16.1" }], "label": "approved production image" },
+      { "file": "k8s/overlays/prod/kustomization.yaml", "path": ["replicas"], "equals": [{ "name": "orders-api", "count": 3 }], "label": "production replica override" }
+    ]
+  }
+}

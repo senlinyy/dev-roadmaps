@@ -1,35 +1,26 @@
 ---
 title: "Service Health Metrics"
 description: "Track latency, errors, traffic, CPU, memory, and accelerator pressure for model-serving APIs."
-overview: "Service health metrics show whether an inference service is fast, reliable, and sized for current demand. This tutorial follows a recommendations API through FastAPI instrumentation, Prometheus histograms, SLO-style alert rules, Kubernetes resource metrics, GPU telemetry, dashboards, and incident triage."
+overview: "Service health metrics show whether an inference service is fast, reliable, and sized for current demand. A supporting example follows a recommendations API through FastAPI instrumentation, Prometheus histograms, SLO-style alert rules, Kubernetes resource metrics, GPU telemetry, dashboards, and incident triage."
 tags: ["MLOps", "core", "observability"]
 order: 1
 id: "article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources"
 ---
 
-## Table of Contents
-
-1. [Service Health Metrics Show If The Model Service Can Keep Serving](#service-health-metrics-show-if-the-model-service-can-keep-serving)
-2. [Follow One Recommendations API](#follow-one-recommendations-api)
-3. [Measure Traffic, Latency, Errors, And Saturation](#measure-traffic-latency-errors-and-saturation)
-4. [Add FastAPI Metrics At The Request Boundary](#add-fastapi-metrics-at-the-request-boundary)
-5. [Turn Metrics Into SLO Alerts](#turn-metrics-into-slo-alerts)
-6. [Watch Kubernetes And GPU Resources](#watch-kubernetes-and-gpu-resources)
-7. [Build The Dashboard For Triage](#build-the-dashboard-for-triage)
-8. [Practical Checks, Mistakes, And Interview Understanding](#practical-checks-mistakes-and-interview-understanding)
-9. [References](#references)
 
 ## Service Health Metrics Show If The Model Service Can Keep Serving
 <!-- section-summary: Service health metrics track the serving API around the model so the team can see speed, failures, traffic, and resource pressure before users feel the outage. -->
 
 **Service health metrics** are the numbers that tell you whether a model-serving service is healthy as an API. They answer questions such as: how many requests are arriving, how long inference takes, how often requests fail, how much CPU and memory the service uses, and whether the GPU worker pool has enough headroom. The model may have great offline accuracy, yet the product still suffers if the service times out, returns errors, or runs out of memory during a traffic spike.
 
-In MLOps, service health sits before model-quality monitoring. You can only trust drift charts, prediction-quality charts, and feedback loops after the service reliably accepts requests and emits evidence. If a recommendation model misses its latency target, the first incident question is rarely about embeddings or training data. The first question is usually, "Which part of the serving path slowed down, and did capacity or code change?"
+The monitoring module follows four connected layers. **Service health** covers traffic, latency, errors, and saturation. **Input and feature health** covers schema, freshness, missing values, skew, and drift. **Prediction and outcome health** covers score distributions, decisions, delayed labels, product quality, and segments. **Feedback health** covers label coverage, human-review quality, and retraining evidence. Every layer keeps model, feature, policy, and release identity so an alert can lead to a specific owner and action.
+
+Service health comes first because the later layers depend on a reliable prediction and evidence path. A recommendation model can miss its latency target before any label arrives, while a service can also return `200 OK` and still make poor decisions. The module keeps those failure classes separate, then connects them during incident triage.
 
 This article focuses on the normal service signals around inference. You will see how a team instruments a FastAPI service, exports Prometheus metrics, writes alert rules, checks Kubernetes CPU and memory pressure, includes GPU telemetry where accelerators matter, and uses a small dashboard to triage incidents. The goal is simple: give every model request a measurable service envelope before deeper model monitoring enters the picture.
 
-## Follow One Recommendations API
-<!-- section-summary: The running scenario is a product recommendations API where slow inference directly hurts page load time and revenue. -->
+## A Supporting Example: Recommendations API
+<!-- section-summary: A supporting example is a product recommendations API where slow inference directly hurts page load time and revenue. -->
 
 Imagine **ShopGarden**, a marketplace for home goods and plants. The product page calls a service named `recommendation-api` every time a shopper opens a listing. The endpoint `/v1/recommendations` receives a user id, product id, locale, and device type. It returns eight recommended items from a two-stage system: a fast candidate lookup and a ranking model.
 
@@ -40,9 +31,9 @@ ShopGarden uses this stack:
 | Layer | Tooling | What The Team Watches |
 |---|---|---|
 | API service | FastAPI, Uvicorn, Pydantic | request count, duration, status code, exceptions |
-| Metrics system | Prometheus and Grafana | p50/p95/p99 latency, error rate, traffic, saturation |
+| Metrics system | Prometheus and Grafana | 50th-, 95th-, and 99th-percentile latency (p50, p95, p99), error rate, traffic, saturation |
 | Cluster runtime | Kubernetes | CPU, memory, restarts, OOM kills, requested versus used capacity |
-| GPU telemetry | NVIDIA DCGM Exporter | GPU utilization, memory usage, temperature, error counters |
+| GPU telemetry | NVIDIA Data Center GPU Manager (DCGM) Exporter | GPU utilization, memory usage, temperature, error counters |
 | Release evidence | model version labels and deployment labels | whether a new model or image changed health |
 | Load checks | k6 in CI and staging | whether latency and error thresholds hold under expected demand |
 
@@ -77,7 +68,10 @@ Latency needs histograms rather than plain averages. Averages hide the tail, and
 
 The easiest place to measure service health is the request boundary. FastAPI middleware runs around each request, so it can start a timer before the endpoint runs and record the result after the response is ready. The model code can add a second timer around the actual inference call so the team can compare API latency with model latency.
 
-Here is a compact FastAPI setup using the official Prometheus Python client. In real production code, the metrics module often lives beside the application setup so every router uses the same metric names and label rules.
+The application needs one request counter, one request-duration histogram, a bounded error counter, an in-flight gauge, and a separate model-inference histogram. A shared metrics module keeps names, labels, and buckets consistent across routers.
+
+:::expand[Instrument the FastAPI request and inference boundaries]{kind="example"}
+The complete middleware example below uses the official Prometheus Python client. It groups status codes, attaches stable release identity, times the whole request, and provides a separate context manager for inference duration. Keep raw user, request, and product identifiers out of metric labels.
 
 ```python
 import time
@@ -91,19 +85,19 @@ app = FastAPI()
 REQUESTS = Counter(
     "recommendation_requests_total",
     "Total recommendation API requests",
-    ["route", "method", "status_class", "model_version"],
+    ["route", "method", "status_class", "model_version", "environment"],
 )
 
 ERRORS = Counter(
     "recommendation_errors_total",
     "Total recommendation API errors by category",
-    ["route", "error_type", "model_version"],
+    ["route", "error_type", "model_version", "environment"],
 )
 
 REQUEST_DURATION = Histogram(
     "recommendation_request_duration_seconds",
     "Recommendation API request duration in seconds",
-    ["route", "method", "model_version"],
+    ["route", "method", "model_version", "environment"],
     buckets=(0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0),
 )
 
@@ -120,6 +114,7 @@ INFLIGHT = Gauge(
 )
 
 MODEL_VERSION = "ranker-2026-07-01"
+ENVIRONMENT = "prod"
 
 
 @contextmanager
@@ -144,10 +139,10 @@ async def record_request_metrics(request: Request, call_next):
         response = await call_next(request)
         return response
     except ValueError:
-        ERRORS.labels(route=route, error_type="validation", model_version=MODEL_VERSION).inc()
+        ERRORS.labels(route=route, error_type="validation", model_version=MODEL_VERSION, environment=ENVIRONMENT).inc()
         raise
     except TimeoutError:
-        ERRORS.labels(route=route, error_type="dependency_timeout", model_version=MODEL_VERSION).inc()
+        ERRORS.labels(route=route, error_type="dependency_timeout", model_version=MODEL_VERSION, environment=ENVIRONMENT).inc()
         raise
     finally:
         status_code = getattr(locals().get("response", None), "status_code", 500)
@@ -157,11 +152,13 @@ async def record_request_metrics(request: Request, call_next):
             method=method,
             status_class=status_class,
             model_version=MODEL_VERSION,
+            environment=ENVIRONMENT,
         ).inc()
         REQUEST_DURATION.labels(
             route=route,
             method=method,
             model_version=MODEL_VERSION,
+            environment=ENVIRONMENT,
         ).observe(time.perf_counter() - start)
         INFLIGHT.dec()
 
@@ -169,6 +166,7 @@ async def record_request_metrics(request: Request, call_next):
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
 ```
+:::
 
 The code counts every request, records duration, and exposes `/metrics` for Prometheus scraping. The `status_class` label groups status codes into `2xx`, `4xx`, and `5xx`, which keeps cardinality low. The `model_version` label lets the team compare a new release with the previous release during a canary. The separate inference histogram shows whether slow requests came from the model runtime or from request parsing, feature fetching, or response building.
 
@@ -184,51 +182,57 @@ Metrics help on dashboards, yet production teams need alerts for urgent user har
 
 Prometheus alerting rules turn queries into notifications. A useful rule has a condition, a duration, labels, and annotations. The duration matters because a one-minute spike during a deploy can create noise, while a sustained fifteen-minute burn can deserve a page. The labels route the alert to the right team. The annotations tell the responder what to check first.
 
+:::expand[Encode latency, error, and fallback alerts]{kind="example"}
+This complete rule group shows three different operational meanings. Latency and server errors use fast multi-window burn-rate pages because they consume formal SLO budgets. A fallback spike creates a lower-urgency ticket because the service still answers while product quality may be degraded.
+
 ```yaml
 groups:
   - name: recommendation-api-slo
     rules:
-      - alert: RecommendationApiHighTailLatency
+      - alert: RecommendationApiLatencyBudgetBurn
         expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le, route, model_version) (
-              rate(recommendation_request_duration_seconds_bucket{
-                route="/v1/recommendations",
-                environment="prod"
-              }[5m])
-            )
-          ) > 0.300
-        for: 15m
+          (
+            1 -
+            sum(rate(recommendation_request_duration_seconds_bucket{route="/v1/recommendations",environment="prod",le="0.3"}[1h]))
+            /
+            sum(rate(recommendation_request_duration_seconds_count{route="/v1/recommendations",environment="prod"}[1h]))
+          ) > 14.4 * 0.01
+          and
+          (
+            1 -
+            sum(rate(recommendation_request_duration_seconds_bucket{route="/v1/recommendations",environment="prod",le="0.3"}[5m]))
+            /
+            sum(rate(recommendation_request_duration_seconds_count{route="/v1/recommendations",environment="prod"}[5m]))
+          ) > 14.4 * 0.01
+        for: 2m
         labels:
           severity: page
           service: recommendation-api
           owner: personalization-platform
         annotations:
-          summary: "Recommendation API p95 latency is above 300 ms"
+          summary: "Recommendation API is rapidly consuming its 99%-under-300-ms latency budget"
           runbook: "https://runbooks.shopgarden.example/recommendation-api/latency"
 
       - alert: RecommendationApiErrorBudgetBurn
         expr: |
           (
-            sum(rate(recommendation_requests_total{
-              route="/v1/recommendations",
-              status_class="5xx",
-              environment="prod"
-            }[5m]))
+            sum(rate(recommendation_requests_total{route="/v1/recommendations",status_class="5xx",environment="prod"}[1h]))
             /
-            sum(rate(recommendation_requests_total{
-              route="/v1/recommendations",
-              environment="prod"
-            }[5m]))
-          ) > 0.005
-        for: 10m
+            sum(rate(recommendation_requests_total{route="/v1/recommendations",environment="prod"}[1h]))
+          ) > 14.4 * 0.005
+          and
+          (
+            sum(rate(recommendation_requests_total{route="/v1/recommendations",status_class="5xx",environment="prod"}[5m]))
+            /
+            sum(rate(recommendation_requests_total{route="/v1/recommendations",environment="prod"}[5m]))
+          ) > 14.4 * 0.005
+        for: 2m
         labels:
           severity: page
           service: recommendation-api
           owner: personalization-platform
         annotations:
-          summary: "Recommendation API server error rate is above 0.5 percent"
+          summary: "Recommendation API is rapidly consuming its server-error budget"
           runbook: "https://runbooks.shopgarden.example/recommendation-api/errors"
 
       - alert: RecommendationApiFallbackSpike
@@ -245,8 +249,9 @@ groups:
         annotations:
           summary: "Recommendation fallback rate is above 2 percent"
 ```
+:::
 
-The latency alert uses `histogram_quantile` over histogram buckets. The error alert divides server errors by total requests, which makes it stable across traffic changes. The fallback alert catches degraded behavior that still returns HTTP 200. Together, these rules page on user-facing harm rather than raw CPU alone.
+The latency alert measures the exact service-level indicator in the SLO: the fraction of requests slower than 300 ms. A p95 query would answer a different question and could not prove that 99 percent stayed below the boundary. The alert applies a 14.4-times **burn rate** to both a one-hour and five-minute window. Burn rate describes how quickly the service consumes its allowed bad-request budget; the two windows require both sustained impact and current impact before paging. The error alert applies the same pattern to the separate 0.5 percent server-error budget. The fallback alert catches degraded behavior that still returns HTTP 200.
 
 Load tests help before production. A small k6 test can encode the same latency and error expectations used by production alerts. That gives the team a CI or staging gate before a model image reaches the canary.
 
@@ -284,7 +289,10 @@ The staging test cannot prove production health, yet it catches obvious release 
 
 Service metrics tell you what users experience. Runtime metrics help explain why. Kubernetes resource requests and limits describe how much CPU and memory the scheduler reserves for a container and what limits the runtime enforces. For a model API, those settings influence cost, latency, and incident behavior.
 
-ShopGarden deploys `recommendation-api` with separate CPU and memory requests, a memory limit, and an optional GPU limit for the ranking worker. A simplified deployment fragment can look like this:
+ShopGarden deploys `recommendation-api` with separate CPU and memory requests, a memory limit, and an optional GPU limit for the ranking worker. The workload identity, immutable image, model version, accelerator selector, and resource contract should all be visible in the release record.
+
+:::expand[Inspect the Kubernetes resource declaration]{kind="example"}
+This simplified fragment shows how scheduler inputs connect to service-health signals. The GPU resource and node selector place the workload, CPU and memory requests influence scheduling, and the memory limit defines a termination boundary that an incident dashboard should expose.
 
 ```yaml
 apiVersion: apps/v1
@@ -319,6 +327,7 @@ spec:
               memory: "4Gi"
               nvidia.com/gpu: "1"
 ```
+:::
 
 The request values help Kubernetes schedule Pods onto nodes with enough capacity. The memory limit protects the node, and crossing it can terminate the container with an OOM kill. For CPU, many teams set requests carefully and evaluate CPU limits with workload-specific testing because CPU throttling can raise latency. The right policy depends on the cluster, tenancy, and service profile, so teams record the reasoning in the service runbook.
 
@@ -360,14 +369,14 @@ The runbook ties the dashboard to action. A practical latency runbook for this s
 ![ShopGarden latency incident triage](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/shopgarden-latency-triage.png)
 *A useful incident dashboard lines up user-visible symptoms, release annotations, runtime pressure, and the next runbook decision on one page.*
 
-## Practical Checks, Mistakes, And Interview Understanding
+## Operational Checks And Failure Modes
 <!-- section-summary: A strong service-health practice uses low-cardinality metrics, user-centered alerts, runtime evidence, and a clear triage path. -->
 
 Before a model service goes live, the team should verify a small set of checks. The `/metrics` endpoint should expose request count, request duration, error count, in-flight requests, and model inference duration. Each metric should use bounded labels such as route, method, status class, environment, model version, and device pool. The dashboard should show p95 latency, error rate, fallback rate, request rate, CPU, memory, restarts, and GPU metrics where accelerators are in use. The alert rules should page on user harm, and every page should include an owner and runbook.
 
 The most common mistakes are easy to make. Teams put user ids or request ids into metric labels and create high-cardinality time series. They alert on raw CPU instead of user-visible latency or errors. They average latency and miss the tail. They instrument the API boundary while skipping the model inference timer, which leaves them guessing during incidents. They collect GPU utilization without linking it to request latency, model version, and node pool capacity.
 
-In an interview, you can explain service health metrics like this: a model service needs the same health signals as any production API, plus model-aware labels and runtime evidence. You track traffic, latency, errors, and saturation. You use histograms for latency, counters for requests and errors, gauges for in-flight work, Kubernetes metrics for CPU and memory, and DCGM-style exporter metrics for NVIDIA GPUs. You write SLO-style alerts around user harm, then use dashboards and runbooks to decide whether to rollback, scale, reduce traffic, or investigate a dependency.
+A production model service needs the same health signals as any production API, plus model-aware labels and runtime evidence. The operating view combines traffic, latency, errors, saturation, model version, fallback use, and accelerator pressure. Histograms, counters, gauges, Kubernetes metrics, and DCGM exporter metrics feed alerts and dashboards, while the runbook tells responders when to roll back, scale, reduce traffic, or investigate a dependency.
 
 ## References
 
@@ -379,3 +388,4 @@ In an interview, you can explain service health metrics like this: a model servi
 - [Kubernetes Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
 - [NVIDIA DCGM Exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html)
 - [Grafana k6 Thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
+- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/)

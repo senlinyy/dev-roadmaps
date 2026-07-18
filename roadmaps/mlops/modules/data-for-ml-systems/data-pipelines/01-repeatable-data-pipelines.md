@@ -1,24 +1,12 @@
 ---
 title: "Repeatable Data Pipelines"
 description: "Show how data preparation turns into a versioned, rerunnable workflow."
-overview: "A repeatable data pipeline turns changing source data into validated ML-ready datasets through fixed inputs, reviewed steps, declared outputs, and run records. This article follows a grocery forecasting team as they move from notebook preparation to a DVC-backed pipeline with data checks and operational review."
+overview: "A repeatable data pipeline turns changing sources into validated, versioned ML datasets through explicit inputs and time, a transformation graph, gates, immutable outputs, lineage, and safe reruns. DVC is one implementation example."
 tags: ["MLOps", "production", "pipelines"]
 order: 1
 id: "article-mlops-data-for-ml-systems-repeatable-data-pipelines"
 ---
 
-## Table of Contents
-
-1. [A Pipeline Gives Dataset Builds A Recipe](#a-pipeline-gives-dataset-builds-a-recipe)
-2. [Follow One Grocery Forecasting Team](#follow-one-grocery-forecasting-team)
-3. [Name The Inputs And The Time Window](#name-the-inputs-and-the-time-window)
-4. [Turn Notebook Steps Into Pipeline Stages](#turn-notebook-steps-into-pipeline-stages)
-5. [Validate The Dataset Before Training](#validate-the-dataset-before-training)
-6. [Record The Run And Publish The Output](#record-the-run-and-publish-the-output)
-7. [Operate Reruns, Backfills, And Incidents](#operate-reruns-backfills-and-incidents)
-8. [Putting It Together](#putting-it-together)
-9. [What's Next](#whats-next)
-10. [References](#references)
 
 ## A Pipeline Gives Dataset Builds A Recipe
 <!-- section-summary: A repeatable data pipeline gives an ML dataset a reviewed recipe, fixed inputs, declared outputs, validation checks, and a run record. -->
@@ -29,10 +17,25 @@ You need this as soon as a model result matters beyond one experiment. A noteboo
 
 Think about a demand forecasting model for a grocery chain. The model predicts how many baskets of strawberries, tomatoes, and salad kits each store will sell tomorrow. If the dataset build quietly changes because a promotion table arrives late, the model may learn the wrong relationship between discounts and demand. If the team can rerun the pipeline with the same inputs and see the same output, the team can trust comparisons between model versions.
 
-The spine for this article is simple: a familiar dataset problem, a plain definition, the pieces of the workflow, a concrete DVC-style pipeline, and the checks that keep reruns safe.
+The pipeline framework has six responsibilities. The input contract identifies source versions, parameters, and event-time boundaries. A directed acyclic graph, or DAG, orders transformations. Validation gates protect intermediate and final data. Publication creates an immutable versioned output. Run metadata records code, config, lineage, and evidence. Operational semantics define idempotency, retries, backfills, ownership, and recovery.
 
-## Follow One Grocery Forecasting Team
-<!-- section-summary: The running scenario follows a grocery forecasting team that needs reliable datasets from messy daily source data. -->
+Those responsibilities organize the article. The grocery dataset and DVC configuration show how the framework looks in one implementation; they do not define the architecture.
+
+```mermaid
+flowchart LR
+    Contract["Input and time contract"] --> Transform["Ordered transformation graph"]
+    Transform --> Validate{"Validation gates"}
+    Validate -->|fail| Quarantine["Quarantine evidence and repair"]
+    Validate -->|pass| Publish["Immutable dataset publication"]
+    Publish --> Record["Run metadata and lineage"]
+    Record --> Operate["Retry, backfill, and recovery"]
+    Operate --> Contract
+```
+
+The diagram shows why a pipeline is more than an ordered script. Input identity controls what the graph reads. Gates control whether output can enter training. Publication gives the result a stable identity. Run metadata explains the build, while operating rules keep retries and backfills from creating conflicting datasets.
+
+## A Supporting Example: Grocery Forecasting Team
+<!-- section-summary: A supporting example follows a grocery forecasting team that needs reliable datasets from messy daily source data. -->
 
 Imagine **RiverCart Grocers**, a regional grocery delivery company with 85 stores and a small ML team. The team owns a demand model called `fresh-demand-forecast`. Store managers use the forecast to order perishable items before the morning supplier cutoff. A bad forecast can waste food, create empty shelves, or push shoppers toward substitutions they dislike.
 

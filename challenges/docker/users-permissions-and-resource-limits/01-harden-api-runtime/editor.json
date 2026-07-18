@@ -1,0 +1,99 @@
+{
+  "language": "yaml",
+  "filename": "compose.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "services:\n  api:\n    image: registry.example.com/shipping-api:1.8.0\n    ports:\n      - \"8080:8080\"\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "services",
+          "api",
+          "user"
+        ],
+        "equals": "10001:10001",
+        "label": "fixed non-root UID and GID"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "cap_drop"
+        ],
+        "includes": "ALL",
+        "maxItems": 1,
+        "label": "all capabilities dropped"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "cap_add"
+        ],
+        "exists": false,
+        "label": "no capabilities added"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "security_opt"
+        ],
+        "includes": "no-new-privileges:true",
+        "label": "privilege escalation disabled"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "read_only"
+        ],
+        "equals": true,
+        "label": "read-only root filesystem"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "tmpfs"
+        ],
+        "includes": "/tmp",
+        "label": "writable temporary filesystem"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "deploy",
+          "resources",
+          "limits",
+          "cpus"
+        ],
+        "equals": "0.50",
+        "label": "CPU limit"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "deploy",
+          "resources",
+          "limits",
+          "memory"
+        ],
+        "equals": "512M",
+        "label": "memory limit"
+      },
+      {
+        "path": [
+          "services",
+          "api",
+          "privileged"
+        ],
+        "exists": false,
+        "label": "privileged mode absent"
+      }
+    ]
+  }
+}

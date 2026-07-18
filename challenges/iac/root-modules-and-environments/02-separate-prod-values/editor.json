@@ -5,6 +5,7 @@
   "files": [
     {
       "filename": "envs/prod/main.tf",
+      "readOnly": true,
       "initialValue": "module \"orders_service\" {\n  source = \"../../modules/orders-service\"\n\n  service_name        = \"orders-api\"\n  environment         = var.environment\n  aws_region          = var.aws_region\n  replica_count       = var.replica_count\n  deletion_protection = var.deletion_protection\n  invoice_bucket_name = var.invoice_bucket_name\n  export_bucket_name  = var.export_bucket_name\n}\n"
     },
     {

@@ -1,7 +1,7 @@
 ---
 title: "CI and Regression"
 description: "Run agent eval suites in CI, compare against baselines, publish reports, and gate releases for prompts, models, tools, retrieval, and grading changes."
-overview: "Learn how to wire LLMOps evals into a CI workflow for an internal coding and research agent, including regression baselines, release thresholds, GitHub Actions, report artifacts, drift checks, and false-signal review."
+overview: "CI regression turns versioned eval cases, graders, baselines, thresholds, reports, and review evidence into an enforceable release decision for an LLM system."
 tags: ["MLOps","LLMOps","production","evals"]
 order: 3
 id: "article-mlops-llmops-ci-and-regression"
@@ -18,6 +18,21 @@ In this article, you are working on **Atlas Research**, an internal coding and r
 This kind of agent needs CI evals because failures can look subtle. The agent may still sound confident while citing a file that no longer exists. It may skip tests after a prompt change. It may use a broad repository search and miss the exact package that owns the bug. It may pass easy research questions and fail the known incident playbook question that senior engineers care about. Manual spot checks catch some of this, and a regression suite catches it every time.
 
 OpenAI's current agent evaluation guidance points to traces, graders, datasets, and eval runs for improving agent quality. Its evaluation best-practices guidance also emphasizes task-specific evals, logging, automation, human feedback, and continuous evaluation. For CI, those ideas turn into a practical rule: every meaningful agent change should produce a report that compares the new agent run against a trusted baseline and makes the release decision visible.
+
+```mermaid
+flowchart LR
+    A[Prompt, model, tool, retrieval, or policy change] --> B[Versioned eval bundle]
+    B --> C[Candidate and baseline runs]
+    C --> D[Deterministic, model, and outcome graders]
+    D --> E[Slice, severity, latency, and cost report]
+    E --> F{Release gates pass?}
+    F -->|no| G[Block and diagnose]
+    F -->|yes| H[Staged deployment]
+    H --> I[Production outcomes]
+    I -. confirmed failures .-> B
+```
+
+CI owns the repeatable evidence up to the gate. Staged deployment and production monitoring own the remaining uncertainty from live traffic, integrations, and delayed outcomes.
 
 ## What You Put Under Version Control
 
@@ -43,6 +58,7 @@ gates:
   severe_slice_min_pass_rate: 0.98
   max_quality_score_drop: 0.025
   max_cost_increase_ratio: 1.20
+  max_mean_cost_usd_when_baseline_zero: 0.01
 slices:
   repo_grounding:
     min_pass_rate: 0.94
@@ -104,7 +120,7 @@ The dataset item should also be versioned. Here is one regression case that came
 }
 ```
 
-This item tests more than the final paragraph. It checks whether the agent used the RFC index, searched the repo, read the live README, avoided the legacy RFC, and included the operational details that matter for replay-safe events. A CI runner can grade those pieces with trace assertions and answer rubrics.
+An **idempotency key** names one intended event publication so a retry can replay the recorded result instead of publishing the event twice. A **dead-letter queue** holds messages that repeatedly fail processing so operators can inspect and replay them after the cause is fixed. Those are domain requirements inside the fixture, while the fixture itself tests more than the final paragraph: it checks whether the agent used the RFC index, searched the repo, read the live README, avoided the legacy RFC, and included the operational details that matter for replay-safe events. A CI runner can grade those pieces with trace assertions and answer rubrics.
 
 ![Atlas Research versioned eval artifacts](/content-assets/articles/article-mlops-llmops-ci-and-regression/atlas-versioned-eval-artifacts.png)
 
@@ -159,7 +175,7 @@ Avoid refreshing baselines casually. If every failing prompt change updates the 
 
 GitHub Actions workflows are YAML files under `.github/workflows`. A workflow can run on pull requests, pushes, schedules, or manual triggers. GitHub's official docs describe workflows as configurable automated processes made of jobs and steps, and its artifact docs describe uploading files from a workflow run for debugging and review.
 
-Here is a practical workflow for Atlas Research. It runs when agent prompts, tools, graders, datasets, or the workflow itself change. It uses current major versions from the official GitHub actions repositories checked during this audit: `actions/checkout@v6`, `actions/setup-python@v6`, and `actions/upload-artifact@v6`. If your company runs self-hosted runners, verify the runner version supports those action releases before adopting them.
+Here is a practical workflow for Atlas Research. It runs when agent prompts, tools, graders, datasets, or the workflow itself change. It uses current major versions from the official GitHub actions repositories checked during this audit: `actions/checkout@v6`, `actions/setup-python@v6`, and `actions/upload-artifact@v7`. The v7 artifact action uses the Node.js 24 action runtime, so self-hosted runners need a compatible runner release. Production repositories can pin the full commit SHA as an additional supply-chain control instead of accepting a moving major tag.
 
 ```yaml
 name: atlas-research-agent-evals
@@ -189,12 +205,14 @@ jobs:
         with:
           python-version: "3.13"
           cache: "pip"
-          cache-dependency-path: "evals/atlas-research/requirements.txt"
+          cache-dependency-path: "evals/atlas-research/requirements.lock"
+
+      - name: Verify the reviewed dependency lock
+        working-directory: evals/atlas-research
+        run: sha256sum --check requirements.lock.sha256
 
       - name: Install eval dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r evals/atlas-research/requirements.txt
+        run: python -m pip install --require-hashes -r evals/atlas-research/requirements.lock
 
       - name: Run regression suite
         env:
@@ -217,14 +235,15 @@ jobs:
 
       - name: Upload eval report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: atlas-research-eval-report
           path: reports/atlas-research/
+          if-no-files-found: error
           retention-days: 14
 ```
 
-The workflow separates running the suite from comparing the report. That makes debugging easier. If the runner fails because a tool schema changed, you inspect `current.json` and `items.jsonl`. If the runner succeeds and the comparison fails, you inspect `regression-summary.json`. The artifact upload runs with `if: always()` so reviewers still get evidence after a failing gate.
+The workflow separates running the suite from comparing the report. That makes debugging easier. If the runner fails because a tool schema changed, you inspect `current.json` and `items.jsonl`. If the runner succeeds and the comparison fails, you inspect `regression-summary.json`. The artifact upload runs with `if: always()` so reviewers still get evidence after a failing gate. `requirements.lock` is both the pip input and the cache key input; `requirements.lock.sha256` is a small reviewed file containing a line such as `7dc6...  requirements.lock`. The checksum step detects a lockfile change that was not accompanied by an intentional checksum review, while `pip --require-hashes` verifies the downloaded distributions named inside the lock.
 
 Do not put provider keys or tracing keys in the dataset. Keep them in CI secrets or workload identity. Also keep traces privacy-aware. Internal coding agents can expose private repo names, incident details, customer IDs in logs, or security-sensitive instructions. The OpenAI Agents SDK tracing docs call out sensitive data capture controls, and the same habit applies to any tracing backend.
 
@@ -289,11 +308,21 @@ def main() -> int:
             f"{gates['max_quality_score_drop']:.3f}"
         )
 
-    cost_ratio = current_summary["mean_cost_usd"] / baseline_summary["mean_cost_usd"]
-    if cost_ratio > gates["max_cost_increase_ratio"]:
-        failures.append(
-            f"mean cost ratio: {cost_ratio:.2f} > {gates['max_cost_increase_ratio']:.2f}"
-        )
+    baseline_cost = baseline_summary["mean_cost_usd"]
+    current_cost = current_summary["mean_cost_usd"]
+    if baseline_cost <= 0:
+        if current_cost > gates.get("max_mean_cost_usd_when_baseline_zero", 0):
+            failures.append(
+                "mean cost: baseline is zero and current cost exceeds "
+                "max_mean_cost_usd_when_baseline_zero"
+            )
+    else:
+        cost_ratio = current_cost / baseline_cost
+        if cost_ratio > gates["max_cost_increase_ratio"]:
+            failures.append(
+                f"mean cost ratio: {cost_ratio:.2f} > "
+                f"{gates['max_cost_increase_ratio']:.2f}"
+            )
 
     for slice_name, slice_config in config["slices"].items():
         pass_rate = current["slices"][slice_name]["pass_rate"]
@@ -434,7 +463,7 @@ The maintenance loop should also include grader tests. A grader is code, and cod
 
 *The regression gate loop links golden cases, pull requests, eval runs, privacy-safe trace packets, baseline comparison, reports, failure review, baseline refreshes, and release decisions.*
 
-## Practical Checks, Common Mistakes, and Interview-Ready Understanding
+## Review The Regression Gate
 
 <!-- section-summary: A production CI eval system has versioned datasets, baselines, trace evidence, release gates, report artifacts, and an explicit process for maintaining trust. -->
 
@@ -442,7 +471,7 @@ Before calling a CI regression setup ready, check that the whole chain is versio
 
 Common mistakes follow a pattern. Teams run evals manually and forget them during urgent prompt changes. They compare only the overall score and miss a severe slice regression. They let the same pull request update the prompt and the baseline. They use brittle string graders for research answers that need citation and source checks. They upload no artifacts, so failed CI leaves no evidence. They allow stale eval items to block releases months after the source-of-truth document moved.
 
-The interview-ready explanation is straightforward. CI regression evals run the agent suite automatically on every meaningful change. The runner executes versioned dataset items, captures traces, applies deterministic and model-based graders, compares the current report against a baseline, and enforces release gates. The report artifact shows pass rates, score deltas, blockers, failing items, trace evidence, and owners. The team maintains the suite by adding production failures, reviewing false positives and false negatives, tracking flakes, and refreshing baselines only through explicit approval.
+CI regression evals run the agent suite automatically on every meaningful change. The runner executes versioned dataset items, captures traces, applies deterministic and model-based graders, compares the current report against a baseline, and enforces release gates. The report artifact shows pass rates, score deltas, blockers, failing items, trace evidence, and owners. The team maintains the suite by adding production failures, reviewing false positives and false negatives, tracking flakes, and refreshing baselines only through explicit approval.
 
 That is the industrial practice: evals are part of the delivery pipeline. They are reviewed like code, run like tests, stored like build artifacts, and maintained like any other production signal. When the agent changes, the CI report gives the team evidence about quality instead of a debate about whether a demo felt good.
 

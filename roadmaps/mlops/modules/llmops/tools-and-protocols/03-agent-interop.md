@@ -1,401 +1,215 @@
 ---
 title: "Agent Interop"
-description: "Design multi-agent handoffs with typed packets, trace IDs, scopes, audit logs, protocol versions, and failure handling across agent frameworks."
-overview: "Learn how agents can hand work to each other safely through a research-to-ticket workflow that uses structured handoff packets, scopes, traces, and review gates."
+description: "Design agent collaboration across local runtimes and remote A2A services using clear boundaries, capability discovery, task lifecycles, typed artifacts, identity, and audit continuity."
+overview: "Agent interoperability is a boundary problem. This article distinguishes in-process orchestration from remote protocols, explains the A2A 1.0 task model, and shows how business handoff packets, authorization, versioning, failure recovery, and evaluation fit around the wire format."
 tags: ["MLOps","LLMOps","advanced","tools"]
 order: 3
 id: "article-mlops-llmops-agent-interop"
 ---
 
-## What Agent Interop Means
+Agents can collaborate without sharing the same model, framework, tools, or memory. What they need is a contract for transferring work. That contract must preserve the goal, evidence, state, authority, and outcome across the boundary.
 
-<!-- section-summary: Agent interop is the ability for agents, tools, and runtimes to pass work across boundaries with enough structure for another system to continue safely. -->
+**Agent interoperability** is the ability of independently implemented agent systems to discover capabilities and exchange tasks, messages, status, and artifacts without exposing their internal reasoning or implementation. Inside one application, a framework handoff or graph may be enough. Across teams, vendors, or trust domains, a network protocol such as Agent2Agent (A2A) can replace a collection of one-off adapters.
 
-**Agent interop** means agents can work together across boundaries without losing task state, permissions, traceability, or user intent. One agent may research an issue. Another may turn that research into an engineering ticket. A third may check policy or ask for approval. Interop is the set of contracts that lets those pieces cooperate.
+## Choose The Boundary Before The Protocol
+<!-- section-summary: Local orchestration, service APIs, MCP, and A2A solve different boundaries; the smallest boundary that preserves ownership is usually the clearest. -->
 
-The simplest multi-agent demo passes a paragraph from one agent to another. Production systems need more. The receiving agent needs the task objective, the evidence already gathered, the user-visible summary, the data sensitivity level, the allowed tools, the trace ID, and the failure state. If the receiving agent has to infer all of that from prose, handoffs will be inconsistent and hard to audit.
+Use BrightDesk, a SaaS support company. A Research Agent investigates a reported CSV duplication issue. A Ticket Agent drafts an engineering ticket. A Review Agent checks customer-data policy before creation.
 
-In this article, we will use **BrightDesk**, a SaaS company with an AI support workflow. A customer reports that exported CSV files from the analytics page have duplicated rows. The **Research Agent** reads the support conversation, searches runbooks, inspects recent deploy notes, and summarizes likely causes. The **Ticket Agent** turns the research into a Jira-style engineering ticket with reproduction steps, impact, labels, and owners. A **Review Agent** checks whether the ticket includes sensitive customer data before it is created.
+If all three run inside one application, share one release cadence, and use the same state store, ordinary orchestration is enough. The coordinator can call specialists as tools or transfer active control through a framework handoff. A wire protocol adds little.
 
-That scenario teaches the core interop lesson. A handoff is a controlled transfer of work. It needs a typed packet, scoped access, trace IDs, audit logs, versioning, and failure handling. Frameworks such as the OpenAI Agents SDK, LangGraph, and LlamaIndex give you orchestration patterns, yet your business still needs the packet shape and policy.
+If Ticket Agent is operated by another team as an independent service, a typed service API may fit when the operation is stable: `draft_ticket(evidence_packet)`. A2A fits when the remote system is intentionally agent-like: it advertises several skills, may ask for more input, performs long-running work, produces multiple artifacts, and can evolve independently.
 
-## Handoffs, Managers, and Agents-as-Tools
+```mermaid
+flowchart TB
+    Q{"Where is the collaborator?"}
+    Q -->|Same process and trust domain| L["Framework handoff, graph, or agent-as-tool"]
+    Q -->|Separate service, stable business operation| S["Typed service API or queue contract"]
+    Q -->|Independent agent with dynamic tasks| A["A2A protocol"]
+    Q -->|Host needs tools, resources, or prompts| M["MCP"]
+    L --> B["Business handoff contract"]
+    S --> B
+    A --> B
+    M --> T["Tool or context contract"]
+```
 
-<!-- section-summary: Multi-agent systems usually use manager routing, direct handoffs, or agents exposed as tools. The right choice depends on who should keep control after the next step. -->
+A2A and MCP are complementary. MCP connects a host to capabilities such as tools and resources. A2A connects a client agent to another agent that owns how work is performed. A remote A2A agent may use MCP internally; the caller does not need to see that tool topology.
 
-There are several ways to make agents cooperate.
+The protocol choice does not define who may create a ticket, which customer data may cross the boundary, or what evidence makes the ticket acceptable. Those remain business and security contracts.
 
-| Pattern | How it works | BrightDesk example |
-| --- | --- | --- |
-| Manager routing | One coordinator calls specialist agents and combines results. | A Support Orchestrator asks Research Agent and Ticket Agent for outputs. |
-| Direct handoff | One active agent transfers control to another active agent. | Research Agent hands the case to Ticket Agent after evidence is ready. |
-| Agent as tool | A specialist agent is callable like a tool and returns a result. | Ticket Agent drafts a ticket while Research Agent stays in control. |
-| Workflow graph | Nodes pass structured state through a graph. | Research, review, ticket creation, and approval run as graph steps. |
+## Interop Has A Control Plane And A Work Plane
+<!-- section-summary: Capability discovery and negotiation establish how agents can interact; messages, tasks, status, and artifacts carry the actual work. -->
 
-The OpenAI Agents SDK describes agents as LLMs configured with instructions, tools, and optional handoffs, guardrails, and structured outputs. It also treats handoffs as tools the model can select. LangGraph documents both supervisor-style subagents and handoff patterns. LlamaIndex documents AgentWorkflow, orchestrator, and custom planner patterns. The vocabulary differs by framework, but the production design question stays the same: who owns control after the next step?
+Think about the boundary in two planes.
 
-For BrightDesk, direct handoff is useful after research is complete because the next task has a different owner and a different output format. The Research Agent should stop gathering evidence and transfer to Ticket Agent with a packet. If the Ticket Agent only needed a small draft while Research Agent kept control, then agent-as-tool would fit.
+The **control plane** answers: Which agent is this? What capabilities and interaction modes does it advertise? Which protocol and interface versions does it support? How is it authenticated? What policy allows this caller to use it?
 
-The handoff packet is the boundary. It should contain enough structure that the Ticket Agent can continue without re-reading the whole chat transcript or inventing missing state.
+The **work plane** answers: What task is being attempted? Which messages and artifacts belong to it? Is it running, waiting for input, completed, failed, rejected, or cancelled? How does the caller resume, stream, or retrieve it?
 
-## The Handoff Packet
+A2A 1.0 supplies a common model for these concerns. An Agent Card advertises an agent and its capabilities. Messages carry content between participants. A task represents work whose lifecycle may outlive one request. Artifacts are task outputs. The protocol supports multiple bindings and version negotiation so independently released agents can interoperate.
 
-<!-- section-summary: A handoff packet is a typed payload that carries objective, context, evidence, permissions, trace data, and expected output from one agent to another. -->
+```mermaid
+sequenceDiagram
+    participant C as Client agent
+    participant D as Discovery and identity
+    participant R as Remote agent
+    C->>D: Resolve trusted Agent Card
+    D-->>C: Capabilities, interfaces, security, version
+    C->>R: Authenticated message with task context
+    R-->>C: Task accepted and current status
+    R-->>C: Status or artifact updates
+    alt More information required
+        R-->>C: Input required
+        C->>R: Additional approved evidence
+    end
+    R-->>C: Completed, failed, rejected, or cancelled
+```
 
-A **handoff packet** is a JSON object that one agent sends when it delegates work. It is similar to a tool call input, yet it carries broader task context. It should be easy to validate, easy to log, and safe to pass across services.
+Discovery information is not automatically trustworthy because it is formatted as an Agent Card. Fetch it from an authenticated location, validate allowed domains and certificates, bind it to service identity, and apply local allowlists. Capabilities are claims that still need authorization and evaluation.
 
-Here is the BrightDesk packet from Research Agent to Ticket Agent.
+## Discovery Supplies Candidates, While Policy Selects a Collaborator
+
+<!-- section-summary: Agent Cards advertise capabilities and interfaces, while the calling organization decides trust, eligibility, fit, and allowed delegation. -->
+
+An **Agent Card** is discovery metadata. It can describe the provider, supported interfaces, capabilities, skills, security schemes, and other connection details. This lets a client learn how to communicate without hard-coding every field for every agent. It should be read as a service claim that the caller verifies, rather than a recommendation to delegate work.
+
+A collaborator-selection policy can use four gates:
+
+1. **Trust:** Is the card resolved from an approved location, associated with the expected provider, fresh enough, and valid under the organization’s signature or service-identity policy?
+2. **Compatibility:** Does the client support one advertised protocol binding, version, extension set, content type, streaming mode, and authentication scheme?
+3. **Capability:** Does an advertised skill match the task and required artifact, and has evaluation shown that the agent performs that capability reliably?
+4. **Authority:** May this caller share the required evidence and ask this remote service to perform the proposed work?
+
+These gates lead to a selected **agent interface**, which is the concrete endpoint and protocol binding used for the task. A service may advertise JSON-RPC, HTTP with JSON, or gRPC interfaces. The client chooses one it supports and records the choice. Switching bindings should preserve the protocol’s business semantics, while transport-specific performance and failure behaviour may still differ.
+
+```mermaid
+flowchart LR
+    A[Trusted Agent Card source] --> B[Verify provider and freshness]
+    B --> C[Choose compatible interface and version]
+    C --> D[Match evaluated skill to task]
+    D --> E[Authorize data and delegation scope]
+    E --> F[Create or continue remote task]
+    F --> G[Validate artifacts and outcome]
+    G -. measured evidence .-> D
+```
+
+Cache Agent Cards according to their current protocol guidance and local risk policy. Cache entries need an origin, retrieval time, version or digest, and expiry. A changed card can remove an interface, alter authentication, or revise a skill description. High-impact integrations should review and test those changes before a new card affects routing.
+
+An extended or authenticated Agent Card may expose capabilities intended only for authorized clients. That is useful for private workflows, but it also means discovery itself can reveal sensitive operational information. Fetch it with the appropriate identity, retain it under the right access controls, and disclose only the small skill description needed for coordinator selection.
+
+Capability evaluation belongs beside discovery. If the remote service advertises `draft_engineering_ticket`, maintain contract cases for evidence preservation, forbidden customer data, artifact schema, clarification, timeout, and cancellation. A valid signed card proves who published the claim; it cannot prove that the implementation currently meets the claim. Production outcome and compatibility evidence close that gap.
+
+## A Task Is A Durable Conversation About Work
+<!-- section-summary: A remote task gives long-running work a stable identity and state, while messages exchange information and artifacts carry outputs. -->
+
+A synchronous tool call usually returns one result or error. Agent work may take minutes, wait for a reviewer, stream intermediate artifacts, or require clarification. A task makes that lifecycle explicit.
+
+The application should map remote states into its own durable state rather than letting a UI infer progress from text. At minimum, distinguish queued or submitted, working, input required, completed, failed, rejected, and cancelled according to the current binding and business needs. Terminal states should not silently return to working under the same identity.
+
+Messages are conversation units, not necessarily completed work. An agent can respond with a direct message for a simple interaction or create/update a task for longer work. Artifacts are named outputs such as a ticket draft, evidence bundle, report, or generated file. Keep artifacts addressable and versioned so the caller can validate and store them without scraping prose.
+
+The remote task ID and local workflow ID need a durable mapping. Also retain caller request ID, trace context, user or service subject, agent identity/version, and protocol version. If a network call times out after the remote agent accepted work, query or reconcile by that identity before submitting again.
+
+## The Business Handoff Packet Remains Essential
+<!-- section-summary: The protocol transports work, while a typed business packet defines the objective, evidence, constraints, permissions, and acceptance criteria the receiving agent needs. -->
+
+The Research Agent should not hand Ticket Agent a paragraph and hope it infers the important parts. BrightDesk defines one application-level packet:
 
 ```json
 {
-  "handoff_version": "2026-07-01",
-  "handoff_id": "hnd_01JZK8R2CKE9B7T3G5ZK5P1QAA",
-  "trace_id": "trc_4f79a13d8a20494b9dcd3f7e0e1a9bb2",
-  "source_agent": "support_research_agent",
-  "target_agent": "engineering_ticket_agent",
+  "handoff_version": "support-to-engineering-3",
   "task": {
-    "objective": "Create an engineering ticket for duplicate rows in CSV exports.",
-    "priority_hint": "high",
-    "requested_output": "ticket_draft"
-  },
-  "case": {
-    "support_case_id": "case_874221",
-    "customer_tier": "enterprise",
-    "product_area": "analytics_exports",
-    "reported_at": "2026-07-05T09:20:00Z"
+    "objective": "Draft an engineering ticket for duplicated CSV export rows",
+    "acceptance": ["reproduction conditions", "observed impact", "evidence links", "owner suggestion"]
   },
   "evidence": [
-    {
-      "kind": "customer_report",
-      "summary": "Customer sees duplicate rows when exporting filtered dashboard data to CSV.",
-      "source_ref": "support_case:case_874221#message_4"
-    },
-    {
-      "kind": "runbook",
-      "summary": "Exports are produced by export-worker using report_snapshot_id as the dedupe key.",
-      "source_ref": "runbook:analytics-export-debugging#dedupe"
-    },
-    {
-      "kind": "deploy_note",
-      "summary": "export-worker 4.18.0 changed pagination for filtered exports on 2026-07-04.",
-      "source_ref": "deploy:export-worker-4.18.0"
-    }
+    {"id": "deploy-2026-0715", "kind": "release-note", "trust": "internal-reviewed"},
+    {"id": "trace-88c1", "kind": "support-trace", "trust": "customer-reported"}
   ],
   "constraints": {
-    "allowed_tools": ["ticket.create_draft", "ticket.search_similar", "audit.write_event"],
-    "forbidden_fields": ["customer_email", "access_token", "raw_csv"],
-    "human_approval_required": true,
-    "data_classification": "customer_confidential"
+    "customer_pii": "exclude",
+    "allowed_actions": ["draft_ticket"],
+    "requires_human_approval": true
   },
-  "audit": {
-    "handoff_reason": "research_complete",
-    "created_by": "support_research_agent",
-    "visible_to_user": false
+  "continuity": {
+    "local_run_id": "support-run-10421",
+    "traceparent": "00-...",
+    "deadline": "2026-07-16T16:00:00Z"
   }
 }
 ```
 
-This packet gives the Ticket Agent concrete inputs. It has a version, ID, trace ID, source, target, task, case metadata, evidence, constraints, and audit details. The receiving agent can validate the packet before doing anything. If `allowed_tools` lacks `ticket.create_draft`, the Ticket Agent should stop and return a rejected result. If the evidence includes `raw_csv`, the Review Agent should block the handoff before ticket creation.
+This packet is not an A2A replacement. It can be one structured part inside an A2A message or the payload of an internal API. It defines BrightDesk's semantics while the protocol defines transport and task interaction.
 
-The packet also limits repeated work. The Ticket Agent can cite the deploy note and runbook reference without searching from scratch. That saves tokens and reduces drift between agents.
+Include references rather than copying every transcript and log. The receiving agent retrieves only evidence it is authorized to read. Label provenance and trust: customer claims, model inferences, reviewed runbooks, and authoritative deployment records should not appear equivalent.
 
-![BrightDesk duplicate CSV export research-to-ticket handoff](/content-assets/articles/article-mlops-llmops-agent-interop/research-to-ticket-handoff.png)
+Acceptance criteria tell the receiver what “done” means. Constraints name forbidden data and allowed actions. Continuity links traces and deadlines. Versioning lets the receiver reject or adapt an unsupported packet instead of silently misreading a new field.
 
-*BrightDesk passes a typed packet from research to review to ticket drafting, with evidence references, allowed tools, forbidden fields, and approval requirements carried together.*
+## Identity And Delegation Cross The Boundary
+<!-- section-summary: Authentication proves the calling service, authorization limits the requested capability, and delegation preserves which user or workflow authority the agent may exercise. -->
 
-## Validating Handoffs
+Agent-to-agent calls often contain two identities: the service agent and the user or workflow on whose behalf it acts. Do not replace both with one broad API key.
 
-<!-- section-summary: Handoff validation protects the receiving agent from vague, stale, or unsafe inputs. Treat packet schemas like API schemas and test them in CI. -->
+Authenticate the service through a supported transport mechanism such as mutually authenticated TLS, OAuth, or workload identity. Authorize capability and resource scope. If user delegation is required, transmit a bounded assertion or token exchange that identifies subject, audience, permissions, purpose, and expiry. The remote agent must not treat user text that says “I am an administrator” as authority.
 
-Use a schema for handoff packets. The schema can live in a shared package used by all agent services. The goal is to reject unsafe or incomplete transfers before a model sees the packet.
+Separate permission to ask for a draft from permission to create the real ticket. BrightDesk lets remote Ticket Agent produce an artifact; a local reviewed tool performs the external side effect after human approval. This keeps high-impact authority near the system that owns the policy.
 
-```json
-{
-  "$id": "https://brightdesk.example/schemas/agent-handoff-2026-07-01.json",
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "handoff_version": { "type": "string", "enum": ["2026-07-01"] },
-    "handoff_id": { "type": "string", "pattern": "^hnd_[A-Z0-9]{26}$" },
-    "trace_id": { "type": "string", "pattern": "^trc_[0-9a-f]{32}$" },
-    "source_agent": { "type": "string" },
-    "target_agent": { "type": "string" },
-    "task": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "objective": { "type": "string", "minLength": 20, "maxLength": 300 },
-        "priority_hint": { "type": "string", "enum": ["low", "normal", "high", "urgent"] },
-        "requested_output": { "type": "string", "enum": ["ticket_draft", "research_summary", "approval_request"] }
-      },
-      "required": ["objective", "priority_hint", "requested_output"]
-    },
-    "case": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "support_case_id": { "type": "string" },
-        "customer_tier": { "type": "string", "enum": ["free", "team", "business", "enterprise"] },
-        "product_area": { "type": "string" },
-        "reported_at": { "type": "string", "format": "date-time" }
-      },
-      "required": ["support_case_id", "customer_tier", "product_area", "reported_at"]
-    },
-    "evidence": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 10,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "kind": { "type": "string", "enum": ["customer_report", "runbook", "deploy_note", "log_summary", "similar_ticket"] },
-          "summary": { "type": "string", "minLength": 20, "maxLength": 500 },
-          "source_ref": { "type": "string", "minLength": 5, "maxLength": 200 }
-        },
-        "required": ["kind", "summary", "source_ref"]
-      }
-    },
-    "constraints": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "allowed_tools": { "type": "array", "items": { "type": "string" } },
-        "forbidden_fields": { "type": "array", "items": { "type": "string" } },
-        "human_approval_required": { "type": "boolean" },
-        "data_classification": { "type": "string", "enum": ["public", "internal", "customer_confidential", "regulated"] }
-      },
-      "required": ["allowed_tools", "forbidden_fields", "human_approval_required", "data_classification"]
-    },
-    "audit": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "handoff_reason": { "type": "string" },
-        "created_by": { "type": "string" },
-        "visible_to_user": { "type": "boolean" }
-      },
-      "required": ["handoff_reason", "created_by", "visible_to_user"]
-    }
-  },
-  "required": ["handoff_version", "handoff_id", "trace_id", "source_agent", "target_agent", "task", "case", "evidence", "constraints", "audit"]
-}
-```
+Avoid sending provider credentials, internal tool tokens, or the caller's complete permission set. Each agent obtains its own credentials for its tools. The handoff grants the minimum capability needed for the task and expires when the task or approval window ends.
 
-The schema checks basic structure. You also need policy checks. For example, a packet marked `customer_confidential` should pass through Review Agent before ticket creation. A packet with `human_approval_required: true` should create a draft ticket, then wait for a human approval action before posting it to the engineering queue.
+## Preserve Audit And Trace Continuity
+<!-- section-summary: Cross-agent evidence links local and remote spans, messages, artifacts, approvals, and side effects without assuming one vendor owns the complete trace. -->
 
-Here are validation tests that catch common handoff failures.
+A trace header can correlate services, but audit evidence needs application identities too. Record local workflow and step, remote agent and version, protocol/interface version, task and message IDs, packet digest, artifact identities, authorization decision, approval, final status, and external side effects.
 
-```ts
-describe("agent handoff packet", () => {
-  it("accepts a research-to-ticket packet with evidence and approval", () => {
-    expect(validateHandoff(validResearchToTicketPacket())).toBe(true);
-  });
+Do not require a vendor to expose chain-of-thought or private internal memory. Interoperability needs observable inputs, decisions, state transitions, artifacts, and outcomes—not hidden reasoning. The remote agent can retain its internal trace and return a correlation ID under an agreed support and retention policy.
 
-  it("rejects packets with raw customer fields", () => {
-    const packet = validResearchToTicketPacket({
-      evidence: [
-        {
-          kind: "customer_report",
-          summary: "Customer attached raw CSV output with private account rows.",
-          source_ref: "support_case:case_874221#raw_csv"
-        }
-      ]
-    });
+Sensitive content should not be duplicated into every trace system. Store digests, classifications, and controlled evidence links. Preserve enough metadata to answer who sent what task, which agent accepted it, what artifact came back, who approved it, and which system committed the effect.
 
-    const result = runPolicyChecks(packet);
-    expect(result.status).toBe("rejected");
-    expect(result.error.code).toBe("forbidden_source_ref");
-  });
+## Version The Boundary In Layers
+<!-- section-summary: Protocol, binding, Agent Card, capability, business packet, and artifact schemas can evolve independently and need explicit compatibility policy. -->
 
-  it("requires ticket tool scope before draft creation", () => {
-    const packet = validResearchToTicketPacket({
-      constraints: {
-        allowed_tools: ["ticket.search_similar"],
-        forbidden_fields: ["customer_email", "access_token", "raw_csv"],
-        human_approval_required: true,
-        data_classification: "customer_confidential"
-      }
-    });
+An interop boundary has several versions:
 
-    const result = runPolicyChecks(packet);
-    expect(result.error.code).toBe("missing_allowed_tool");
-  });
-});
-```
+| Layer | Example change |
+| --- | --- |
+| A2A protocol | semantic model or negotiation rule changes |
+| Transport binding | JSON/HTTP, JSON-RPC, gRPC, or another supported interface |
+| Agent Card and skill | capability or authentication changes |
+| Business handoff packet | new evidence or constraint field |
+| Artifact schema | ticket draft adds a structured risk section |
+| Agent implementation | prompt, model, tools, or workflow changes |
 
-The tests use the same language as the incident review would use: forbidden source reference, missing allowed tool, approval required. That keeps validation understandable for engineers, security reviewers, and support leaders.
+Negotiate protocol and binding through the current specification. Version business schemas separately. Prefer additive compatible fields, explicit enums, and rejection of unknown critical requirements. Run contract tests between supported client and server versions and keep a compatibility window during staggered releases.
 
-## Auth Scopes, Audit Logs, and Trace IDs
+An agent version update can change behaviour without changing the wire schema. Treat it as a model-system release: run interop evals, shadow or canary traffic, monitor outcomes, and preserve a rollback target.
 
-<!-- section-summary: Interop needs security and observability fields in every handoff because work crosses agent, service, and team boundaries. -->
+## Failure Recovery Follows Ownership
+<!-- section-summary: Timeouts, duplicate submission, input waits, cancellation, partial artifacts, and remote failures need reconciliation based on durable task identity. -->
 
-Agent interop creates a new access-control question. The Research Agent may read support cases and runbooks. The Ticket Agent may create engineering tickets. The Review Agent may inspect redacted content. Each agent needs a different set of scopes.
+Failures happen before acceptance, after acceptance but before the response, during work, while waiting for input, or after an artifact is produced but before a local side effect. Each point has a different safe action.
 
-Here is a scope manifest for the BrightDesk workflow.
+If submission fails before a task identity exists, a bounded retry may be safe. If the outcome is unknown, query by request or task identity before resubmitting. If input is required, validate that the requested data is allowed and still relevant. Cancellation is a request whose outcome must be observed; it cannot undo a side effect already committed. Partial artifacts need explicit completeness markers and should not be mistaken for final output.
 
-```yaml
-workflow: support-research-to-ticket
-version: "2026-07-01"
-agents:
-  support_research_agent:
-    scopes:
-      - support.case:read
-      - runbook:read
-      - deploy_notes:read
-      - handoff:create
-  engineering_ticket_agent:
-    scopes:
-      - ticket.search:read
-      - ticket.draft:create
-      - audit.event:write
-  handoff_review_agent:
-    scopes:
-      - handoff:review
-      - policy.redaction:check
-gates:
-  customer_confidential:
-    required_agent: handoff_review_agent
-    required_human_action: approve_ticket_draft
-trace:
-  required_fields:
-    - trace_id
-    - handoff_id
-    - source_agent
-    - target_agent
-audit:
-  event_stream: agent_audit_events
-  retention_days: 400
-  payload_logging: redacted
-```
+Set deadlines and retry budgets across the whole chain so each agent does not multiply attempts independently. Use circuit breakers and queues to prevent one unavailable collaborator from exhausting the coordinator. Define a human or local fallback for critical work.
 
-The manifest says which agent can do which work. It also says that customer-confidential handoffs need review and human approval before the ticket leaves draft state. That matters because a model-generated ticket can accidentally include private customer details. The Review Agent can check for forbidden fields and ask for redaction.
+Test duplicate messages, reordered status events, expired delegated credentials, unsupported versions, malformed artifacts, lost streaming connections, task cancellation races, and a remote agent that completes after the local deadline.
 
-Every handoff should create an audit event.
+## Evaluate The Boundary, Not Just Each Agent
+<!-- section-summary: Interop evals measure capability selection, information preservation, policy enforcement, lifecycle correctness, artifact quality, and end-to-end task outcome. -->
 
-```json
-{
-  "event_type": "agent_handoff_created",
-  "event_version": "2026-07-01",
-  "timestamp": "2026-07-05T10:02:11Z",
-  "trace_id": "trc_4f79a13d8a20494b9dcd3f7e0e1a9bb2",
-  "handoff_id": "hnd_01JZK8R2CKE9B7T3G5ZK5P1QAA",
-  "source_agent": "support_research_agent",
-  "target_agent": "engineering_ticket_agent",
-  "support_case_id": "case_874221",
-  "data_classification": "customer_confidential",
-  "policy_result": "requires_review",
-  "allowed_tools": ["ticket.create_draft", "ticket.search_similar", "audit.write_event"]
-}
-```
+An individually strong Research Agent and Ticket Agent can still fail together. Evaluate whether the coordinator chooses the correct collaborator, whether the packet preserves required evidence, whether the receiver asks for missing information, whether forbidden data stays excluded, and whether retries create duplicate effects.
 
-Trace IDs connect the handoff to the model calls, tool calls, MCP server calls, ticket API calls, and audit events. The OpenAI Agents SDK includes tracing for model generations, tool calls, handoffs, guardrails, and custom events. OpenTelemetry's GenAI conventions give teams a common place to standardize spans, metrics, and events across providers and frameworks. Even if your framework has its own trace viewer, emit vendor-neutral trace data for long-term operations and incident response.
+Include compatibility matrices, long-running and input-required paths, policy denials, expired authentication, network failures, and adversarial remote content. Measure task completion, artifact validity, evidence coverage, approval correctness, latency, cost, and audit completeness. Conformance tooling can test protocol behaviour; product evals still test BrightDesk's meaning.
 
-![BrightDesk handoff validation and observability gates](/content-assets/articles/article-mlops-llmops-agent-interop/validation-observability.png)
-
-*The handoff runtime validates required fields, checks customer-confidential policy, replays safe retries, and links agents, tools, tickets, and audit events with one trace ID.*
-
-## Producing the Ticket Draft
-
-<!-- section-summary: The receiving agent should transform the packet into a bounded output, then wait for required approval before creating or publishing work in another system. -->
-
-After validation, the Ticket Agent can create a draft. The output should be structured so the UI can display it and a human reviewer can approve it.
-
-```json
-{
-  "ticket_draft": {
-    "title": "CSV exports can duplicate rows for filtered analytics dashboards",
-    "product_area": "analytics_exports",
-    "priority": "high",
-    "customer_impact": "Enterprise customer reports duplicated rows in filtered CSV exports. Impact may affect weekly reporting workflows.",
-    "reproduction_steps": [
-      "Open an analytics dashboard with a filtered date range.",
-      "Export the dashboard to CSV.",
-      "Compare account_id_hash and event_date pairs for repeated rows."
-    ],
-    "evidence": [
-      "support_case:case_874221#message_4",
-      "runbook:analytics-export-debugging#dedupe",
-      "deploy:export-worker-4.18.0"
-    ],
-    "suspected_change": "export-worker 4.18.0 changed filtered export pagination on 2026-07-04.",
-    "labels": ["analytics", "csv-export", "enterprise-impact"],
-    "owner_team": "data-experience",
-    "approval_state": "pending_human_review"
-  },
-  "handoff_id": "hnd_01JZK8R2CKE9B7T3G5ZK5P1QAA",
-  "trace_id": "trc_4f79a13d8a20494b9dcd3f7e0e1a9bb2"
-}
-```
-
-This output is useful because it stays bounded. The Ticket Agent can draft, search for similar tickets, and write audit events. It needs human approval before publishing. If a human edits the draft, record that as a separate audit event. During a later incident review, the team should see which parts came from the agent and which parts came from a person.
-
-The ticket body should cite evidence references instead of copying sensitive content. For example, use `support_case:case_874221#message_4` rather than a customer's raw file. Engineers with the right access can follow the reference. People without access still get enough summary to triage the ticket.
-
-## Failure Handling Across Agents
-
-<!-- section-summary: Handoffs fail in predictable ways: missing scopes, stale versions, unsafe evidence, duplicate handoff IDs, and unavailable target agents. Each failure should return a structured result. -->
-
-Interop failure can be messy because more than one system participates. A robust workflow uses a shared failure envelope so the caller can recover.
-
-```json
-{
-  "status": "rejected",
-  "handoff_id": "hnd_01JZK8R2CKE9B7T3G5ZK5P1QAA",
-  "trace_id": "trc_4f79a13d8a20494b9dcd3f7e0e1a9bb2",
-  "source_agent": "support_research_agent",
-  "target_agent": "engineering_ticket_agent",
-  "error": {
-    "code": "review_required",
-    "message": "Customer-confidential evidence needs policy review before ticket draft creation.",
-    "safe_next_step": "Route the packet to handoff_review_agent."
-  }
-}
-```
-
-Here are the failures BrightDesk tests:
-
-- **Unsupported version:** The receiving agent only accepts `handoff_version: "2026-07-01"`.
-- **Missing scope:** The target agent lacks `ticket.draft:create`.
-- **Unsafe evidence:** A `source_ref` points to raw CSV or a token-bearing attachment.
-- **Duplicate handoff ID:** The runtime receives the same `handoff_id` with different content.
-- **Unavailable target:** The Ticket Agent service is down or over its rate limit.
-- **Approval timeout:** The draft approval remains pending past the support SLA.
-
-Each failure should tell the caller where to route the work next. Some failures go back to the source agent for more research. Some go to the Review Agent. Some create a human queue item. Avoid asking the receiving model to improvise recovery from a stack trace. Give it a clear code and a safe next step.
-
-Idempotency matters here too. `handoff_id` should be stable for one transfer attempt. If the Research Agent retries after a timeout, the workflow can replay the same result. If the same ID arrives with different evidence, reject it as a conflict and write an audit event.
-
-## Practical Checks, Common Mistakes, and Interview-Ready Understanding
-
-<!-- section-summary: Good agent interop feels like API design plus workflow operations. Typed packets, scopes, traces, review gates, and failure envelopes are the core skills to explain. -->
-
-Use this checklist before shipping a multi-agent handoff:
-
-- **Packet schema:** The handoff has a typed schema with version, ID, trace ID, source, target, task, evidence, constraints, and audit fields.
-- **Policy checks:** The runtime checks data classification, allowed tools, forbidden fields, human approval requirements, and target-agent scopes.
-- **Trace continuity:** The same trace ID connects model calls, tool calls, MCP calls, handoff events, and ticket API calls.
-- **Audit events:** Every handoff, review decision, draft creation, human edit, and publish action writes a redacted audit event.
-- **Idempotency:** The workflow can replay duplicate handoff attempts and reject conflicting attempts.
-- **Versioning:** Agents agree on `handoff_version`, and old versions have an explicit migration window.
-- **Failure envelopes:** Rejections and system failures return stable codes and safe next steps.
-- **Human gates:** Customer-confidential or external side-effecting work waits for human approval where policy requires it.
-
-Common mistakes usually come from passing prose where a packet is needed. The receiving agent gets a long summary and has to guess the product area, priority, evidence links, and permissions. Another mistake is giving every agent the same broad tool access. That makes audit trails vague and raises the blast radius of a bad prompt or bad handoff. Teams also forget that handoff traces need to cross framework boundaries. A LangGraph step, an OpenAI Agents SDK handoff, a LlamaIndex AgentWorkflow call, and an MCP tool call can all participate in one business workflow. Use trace IDs and audit events that outlive any single framework.
-
-In an interview, a strong answer ties the pieces together: "Agent interop is a contract for transferring work. I would use a versioned handoff packet with objective, evidence, constraints, scopes, trace ID, and audit fields. The receiving agent validates the packet, checks policy, emits audit events, and returns a structured result or failure envelope. Framework handoffs help orchestration, while the business contract keeps the transfer safe."
-
-![BrightDesk agent interop shipping checklist](/content-assets/articles/article-mlops-llmops-agent-interop/shipping-checklist.png)
-
-*BrightDesk ships interop only after the packet schema, scoped agents, review gate, trace continuity, failure envelopes, and rollback path are ready for the duplicate CSV export workflow.*
+The durable design is boundary-first. Keep local orchestration local when possible. Use a typed API for stable operations. Use A2A when independent agents need discovery and a shared task model. In every case, carry a versioned business handoff, least authority, durable identity, trace continuity, and a tested failure policy.
 
 ## References
 
-- [OpenAI Agents SDK overview](https://openai.github.io/openai-agents-python/)
-- [OpenAI Agents SDK: Agents](https://openai.github.io/openai-agents-python/agents/)
-- [OpenAI Agents SDK: Handoffs](https://openai.github.io/openai-agents-python/handoffs/)
-- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/)
-- [LangChain docs: Multi-agent patterns](https://docs.langchain.com/oss/python/langchain/multi-agent)
-- [LlamaIndex docs: Multi-agent patterns](https://developers.llamaindex.ai/python/framework/understanding/agent/multi_agent/)
-- [Model Context Protocol specification](https://modelcontextprotocol.io/specification/2025-11-25)
-- [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
+- [A2A Protocol 1.0 documentation](https://a2a-protocol.org/v1.0.0/)
+- [A2A Protocol specification](https://a2a-protocol.org/latest/specification/)
+- [A2A task lifecycle](https://a2a-protocol.org/latest/topics/life-of-a-task/)
+- [Model Context Protocol specification](https://modelcontextprotocol.io/specification/latest)
+- [OpenAI Agents SDK handoffs](https://openai.github.io/openai-agents-python/handoffs/)
+- [OpenAI Agents SDK orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
+- [LangChain multi-agent patterns](https://docs.langchain.com/oss/python/langchain/multi-agent)
+- [OpenTelemetry trace context](https://www.w3.org/TR/trace-context/)

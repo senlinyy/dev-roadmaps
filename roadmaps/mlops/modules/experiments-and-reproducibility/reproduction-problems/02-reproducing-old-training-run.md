@@ -1,377 +1,244 @@
 ---
 title: "Reproduce Old Runs"
-description: "Follow a past model version through registry, tracking, code, dataset, environment, replay, and comparison evidence."
-overview: "Reproducing an old training run starts with the model version, then follows registry metadata to the tracking run, code commit, dataset snapshot, config, environment, replay command, metrics, artifacts, and gaps. This guide uses a warehouse demand forecast run to show a practical replay workflow."
+description: "Reconstruct an old training run from model identity, lineage, code, data, configuration, environment, randomness, and comparison evidence."
+overview: "Old-run reproduction is an evidence problem before it is an execution problem. This article explains reproduction goals, the replay bundle, evidence grades, comparison tolerances, and honest handling of missing ingredients."
 tags: ["MLOps", "production", "debugging"]
 order: 2
 id: "article-mlops-experiments-and-reproducibility-reproducing-old-training-run"
 ---
 
-## Table of Contents
+To **reproduce an old training run**, a team reconstructs the conditions that produced a model, executes an equivalent training process when needed, and compares the result with recorded evidence. The work starts from a model or run identity. It does not start by running the current training script and hoping for a similar metric.
 
-1. [What Reproducing an Old Run Means](#what-reproducing-an-old-run-means)
-2. [Start From the Model Version](#start-from-the-model-version)
-3. [Follow the Registry to the Tracking Run](#follow-the-registry-to-the-tracking-run)
-4. [Recover Code, Data, and Config](#recover-code-data-and-config)
-5. [Rebuild the Environment](#rebuild-the-environment)
-6. [Replay and Record a New Run](#replay-and-record-a-new-run)
-7. [Compare the Replay](#compare-the-replay)
-8. [When Evidence Is Missing](#when-evidence-is-missing)
-9. [Putting It Together](#putting-it-together)
-10. [What's Next](#whats-next)
-11. [References](#references)
+Reproduction is valuable during incident investigation, audit, migration, scientific review, and platform change. It answers questions such as: Which data created the model that served this prediction? Can the old training path still run? Does a new environment preserve accepted behaviour? Which missing record prevents a confident explanation?
 
-## What Reproducing an Old Run Means
-<!-- section-summary: Reproducing an old run means following evidence from a model version back to the exact run ingredients and replaying or inspecting them honestly. -->
+## Define What “Reproduce” Means For The Question
+<!-- section-summary: Exact replay, functional reproduction, and forensic reconstruction have different success criteria and evidence requirements. -->
 
-To **reproduce an old training run**, you start from the model version someone cares about and follow the evidence back to the original training ingredients. The useful chain is model version -> registry -> tracking run -> code commit -> dataset snapshot -> config -> environment -> replay -> comparison. Each arrow should be backed by metadata, artifacts, or commands a teammate can inspect.
+Teams use the word *reproduce* for several goals:
 
-That chain sounds formal, so let us make it concrete. **HarborMart Supply** runs warehouses for home goods retailers. Its planning team uses a model named `harbormart-demand-forecast` to predict daily demand for each SKU and fulfillment center. One Monday morning, the Chicago warehouse runs out of shelf brackets even though the forecast expected normal demand. The operations lead asks whether model version `27` can be reproduced from the run that trained it.
+| Goal | Main question | Reasonable success condition |
+| --- | --- | --- |
+| **Exact replay** | Can the same ingredients create the same bytes? | Identical artifact hash where the stack is deterministic |
+| **Numerical reproduction** | Can the same process create equivalent numerical results? | Metrics and predictions within declared tolerances |
+| **Functional reproduction** | Does a rebuilt system preserve approved behaviour? | Contract, cohort, robustness, latency, and outcome gates pass |
+| **Forensic reconstruction** | Can we explain what most likely produced the old model? | Evidence chain is complete enough to support the investigation |
 
-The replay has a narrow production goal: can the team reconstruct the run that produced model version `27`, rerun it under the recorded inputs, and compare the result with the original metrics and artifacts? A better forecast can come later, after the team understands the version already in production.
+Bit-for-bit identity is sometimes possible for deterministic preprocessing or packaging. Training on accelerators can remain nondeterministic even with the same seeds and software. A hardware or library change may alter floating-point order. PyTorch explicitly warns that complete reproducibility is not guaranteed across releases, platforms, or CPU and GPU execution.
 
-The investigation should produce a packet like this:
+The success contract must therefore come before the replay. An audit may require the original artifact hash and provenance. A platform migration may care about prediction equivalence and cohort metrics. An incident may only need to prove that the production model used an outdated data snapshot.
 
-| Evidence | What it answers | Example |
-|---|---|---|
-| Model version | Which deployed model are we investigating? | `harbormart-demand-forecast` version `27` |
-| Tracking run | Which training run created that model? | MLflow run `demand-2026-05-31-0315` |
-| Code commit | Which source code executed? | Git commit `4f2c8d1` |
-| Dataset snapshot | Which rows and labels trained it? | `lakefs://demand-lake/forecasting@7a91cf2` |
-| Config | Which horizons, features, and parameters were used? | `configs/demand/prod_14_day.yml` |
-| Environment | Which image, lockfile, Python, and package versions ran it? | `registry.harbor.ai/ml/demand-trainer@sha256:...` |
-| Replay output | Did the rerun match the old evidence? | WAPE, bias, row counts, artifact hash, logs |
+## The Reproducibility Bundle Has Seven Identities
+<!-- section-summary: A replayable run records model, code, data, configuration, environment, execution, and evidence identities as one bundle. -->
 
-![HarborMart old-run reproduction chain from model version to replay comparison.](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/old-run-evidence-chain.png)
-
-*HarborMart starts from model version `27`, follows the registry and tracking run back to the recorded inputs, then compares the replay against the original evidence.*
-
-This workflow gives beginners a stable order. You do not jump straight into rerunning a script. You first collect the evidence that defines the old run, then choose the replay path that matches the question.
-
-## Start From the Model Version
-<!-- section-summary: The model version is the safest investigation entry point because it is the object production actually served. -->
-
-The model version is the right starting point because production systems usually serve a named registered model or a model artifact promoted from a registry. A service log, a feature flag, or a deployment manifest should tell you which model version was active when the warehouse saw the bad forecast. In HarborMart's case, the serving metadata says Chicago used `harbormart-demand-forecast` version `27` from May 31 through June 18.
-
-In MLflow, the registry entry should carry the link back to the training run. A small export script can read the registry and create the first replay packet:
-
-```python
-from mlflow import MlflowClient
-
-client = MlflowClient()
-
-model_version = client.get_model_version(
-    name="harbormart-demand-forecast",
-    version="27",
-)
-
-run = client.get_run(model_version.run_id)
-
-print(
-    {
-        "model_name": model_version.name,
-        "model_version": model_version.version,
-        "run_id": model_version.run_id,
-        "source": model_version.source,
-        "artifact_uri": run.info.artifact_uri,
-        "code_commit": run.data.tags.get("code_commit"),
-        "data_snapshot": run.data.tags.get("data_snapshot"),
-    }
-)
+```mermaid
+flowchart TD
+    M["Model or release identity"] --> R["Training run identity"]
+    R --> C["Code identity"]
+    R --> D["Data identity"]
+    R --> G["Configuration identity"]
+    R --> E["Environment identity"]
+    R --> X["Execution identity"]
+    R --> V["Evaluation and artifact evidence"]
+    C --> P["Replay bundle"]
+    D --> P
+    G --> P
+    E --> P
+    X --> P
+    V --> P
 ```
 
-Example output:
+### Model and run identity
 
-```console
-{
-  "model_name": "harbormart-demand-forecast",
-  "model_version": "27",
-  "run_id": "demand-2026-05-31-0315",
-  "source": "s3://harbormart-ml-artifacts/demand/runs/demand-2026-05-31-0315/model",
-  "artifact_uri": "s3://harbormart-ml-artifacts/demand/runs/demand-2026-05-31-0315",
-  "code_commit": "4f2c8d1",
-  "data_snapshot": "lakefs://demand-lake/forecasting@7a91cf2"
-}
+Start from the object that production actually used: a registry model version, deployment manifest, artifact digest, or release record. That object should link to the training run. An experiment name is too broad; it may contain hundreds of runs.
+
+### Code identity
+
+Record the repository, immutable commit, training entry point, and any generated or vendored code. A Git commit does not capture uncommitted notebook cells or a package downloaded dynamically during the run. Store the submitted source bundle or a hash when the platform supports it.
+
+### Data identity
+
+Record the exact training, validation, and test snapshots. A table name or object-store folder can move. Strong identities include an immutable lakeFS commit, DVC content reference, table snapshot or time-travel version, object manifest with checksums, or a dataset registry version.
+
+Also capture the transformation contract. Raw-data identity alone cannot reproduce features if query text, feature code, reference data, join windows, or label cut-off rules changed.
+
+### Configuration identity
+
+Parameters include model hyperparameters and system choices: split boundaries, feature lists, target definition, early stopping, seed values, batch size, precision mode, checkpoint policy, and resource topology. Preserve the resolved configuration after defaults and overrides, not only the source file.
+
+### Environment identity
+
+Record the container image digest, operating system, language version, dependency lock, ML and accelerator libraries, and relevant environment variables. A mutable image tag such as `trainer:latest` is a label, not an environment identity.
+
+### Execution identity
+
+Record hardware class, worker count, region, distributed topology, random controls, and runtime flags. For distributed training, collective algorithms and worker count can affect results. For managed services, keep the submitted job specification and provider job ID.
+
+### Evidence identity
+
+Preserve metrics, cohort reports, predictions on a stable comparison set, feature schema, logs, plots, checkpoints, final model artifact, and their hashes. These records define what the replay will compare.
+
+## Follow The Chain Backward From Production
+<!-- section-summary: The safest investigation starts with the served model and traces lineage backward to the run and its ingredients. -->
+
+```mermaid
+flowchart RL
+    P["Production prediction or deployment"] --> M["Concrete model version"]
+    M --> R["Tracking run"]
+    R --> C["Code commit and source bundle"]
+    R --> D["Dataset and feature snapshots"]
+    R --> E["Image, lockfile, hardware"]
+    R --> V["Original metrics and artifacts"]
 ```
 
-The output gives the investigation a clean anchor. If the registry lacks a run ID, the team can still inspect deployment manifests and artifact paths, yet the replay confidence is lower. The gap should be recorded right away because missing lineage is part of the incident evidence.
+This direction matters. Starting from a current branch can reproduce today's pipeline while telling you little about the model under investigation. The production record should reveal a concrete model version. The registry version should reveal its source run and artifact. The tracking run should reveal the remaining ingredients.
 
-## Follow the Registry to the Tracking Run
-<!-- section-summary: The tracking run should hold parameters, metrics, tags, artifacts, and dataset links that define the training job. -->
+Useful systems split the evidence across several stores:
 
-The **tracking run** is where the experiment system stores the details that the registry entry usually summarizes. For HarborMart, MLflow should hold the forecast horizon, feature list, validation period, random seed, input snapshots, training metrics, plots, model artifact, and replay packet. This is where a reproduction effort shifts from "Which model?" to "What exactly trained it?"
+| Store | Expected evidence |
+| --- | --- |
+| Deployment or prediction record | loaded model version, release ID, timestamp |
+| Model registry | concrete version, artifact URI, run link, approval |
+| Experiment tracker | parameters, metrics, tags, artifacts, dataset inputs |
+| Source control | immutable commit and build definition |
+| Data version system | snapshot identity and manifest |
+| Image registry | container digest and provenance |
+| Orchestrator or compute platform | submitted job spec, hardware, logs, state |
 
-Run metadata should answer these questions:
+The chain should be traversable by identity, not by guessing from timestamps and filenames. Missing links are findings. Do not silently substitute the nearest available run.
 
-| Question | Tracking field or artifact |
-|---|---|
-| Which code ran? | `code_commit`, repository URL, training entrypoint |
-| Which data trained it? | `data_snapshot`, manifest artifact, MLflow dataset input |
-| Which config controlled it? | Config file artifact and logged parameters |
-| Which environment ran it? | Image digest, lockfile artifact, Python and package tags |
-| Which metrics did it report? | WAPE, MAE, bias by warehouse, service-level metrics |
-| Which artifacts should match? | Model file, feature schema, evaluation report, plots |
+## Assemble A Replay Bundle Before Starting Compute
+<!-- section-summary: A replay bundle freezes recovered identities, expected evidence, known gaps, and the planned comparison before training starts. -->
 
-The replay export script should download the key artifacts into a local review folder:
-
-```python
-import mlflow.artifacts
-
-RUN_ID = "demand-2026-05-31-0315"
-
-for artifact_path in [
-    "reproducibility/replay_packet.yml",
-    "config/prod_14_day.yml",
-    "reports/evaluation.json",
-    "schemas/feature_schema.json",
-]:
-    local_path = mlflow.artifacts.download_artifacts(
-        run_id=RUN_ID,
-        artifact_path=artifact_path,
-        dst_path="replay-work/demand-v27",
-    )
-    print(local_path)
-```
-
-The replay folder now has the human-readable packet, the training config, the original evaluation report, and the feature schema. Those files matter because the run may have used a config that no longer matches the current repository default. Reproduction should follow the old run's recorded config, not the latest training default.
-
-## Recover Code, Data, and Config
-<!-- section-summary: A replay needs the old code commit, immutable dataset snapshot, and original training config before any training command runs. -->
-
-Code, data, and config are the visible inputs that most teams remember first. They still need exact versions. A branch name such as `main`, a table name such as `warehouse_demand_train`, or a config name such as `prod.yml` is too loose for replay because those names can point to different contents later.
-
-For HarborMart, the run says:
+A compact, human-readable manifest can coordinate the work:
 
 ```yaml
-code:
-  repo: git@github.com:harbormart/ml-forecasting.git
-  commit: 4f2c8d1
-  entrypoint: training/train_forecast.py
-data:
-  lakefs_snapshot: lakefs://demand-lake/forecasting@7a91cf2
-  dvc_pointer: data/warehouse_demand_train.parquet.dvc
-  row_count: 238441912
-  min_event_date: "2025-12-01"
-  max_event_date: "2026-05-30"
-config:
-  path: configs/demand/prod_14_day.yml
-  forecast_horizon_days: 14
-  target: units_shipped
-```
-
-The code recovery uses Git:
-
-```bash
-git clone git@github.com:harbormart/ml-forecasting.git replay-harbormart-demand
-cd replay-harbormart-demand
-git checkout 4f2c8d1
-```
-
-The data recovery depends on the team's versioning system. With DVC, the Git commit can carry the `.dvc` metadata that points to the exact data content:
-
-```bash
-dvc pull data/warehouse_demand_train.parquet.dvc
-dvc pull data/warehouse_demand_validation.parquet.dvc
-```
-
-With lakeFS, the replay packet can point to a commit-like ref for the data lake:
-
-```bash
-lakectl fs ls lakefs://demand-lake/forecasting@7a91cf2/curated/demand/
-```
-
-The important habit is to verify counts before training. A replay that uses the wrong data snapshot can still execute and produce a model, and that model tells you little about the original run.
-
-```sql
-SELECT
-  COUNT(*) AS rows,
-  MIN(event_date) AS min_event_date,
-  MAX(event_date) AS max_event_date,
-  COUNT(DISTINCT fulfillment_center_id) AS centers,
-  COUNT(DISTINCT sku_id) AS skus
-FROM demand_training_examples
-WHERE snapshot_id = '7a91cf2';
-```
-
-Expected output:
-
-```console
-rows       min_event_date  max_event_date  centers  skus
-238441912  2025-12-01      2026-05-30      42       184921
-```
-
-If the row count, date range, center count, or SKU count differs, the team should fix the data recovery before touching the model training command.
-
-![Code, data, and config recovered into a HarborMart replay workspace.](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/recover-code-data-config.png)
-
-*The replay workspace is only trustworthy after the team has recovered the old code commit, immutable data snapshot, forecast config, and row count evidence.*
-
-## Rebuild the Environment
-<!-- section-summary: The old environment includes the image digest, lockfiles, Python packages, CUDA libraries, hardware class, and runtime flags. -->
-
-The environment is the next layer. A demand forecast may use LightGBM, XGBoost, PyTorch, or scikit-learn pipelines depending on the team. HarborMart uses a PyTorch temporal model for high-volume SKUs and a scikit-learn fallback model for sparse SKUs. That mix makes the run sensitive to PyTorch, CUDA, NumPy, pandas, and scikit-learn versions.
-
-The replay packet should name the exact container image and lockfile:
-
-```yaml
-environment:
-  image_digest: registry.harbor.ai/ml/demand-trainer@sha256:8e73aa19c4d2
-  dockerfile_commit: 4f2c8d1
-  lockfiles:
-    pip: requirements.lock
-    conda: conda-lock.yml
-  python: "3.11.8"
-  packages:
-    pytorch: "2.5.1"
-    cuda_runtime: "12.4"
-    numpy: "2.0.2"
-    pandas: "2.2.3"
-    scikit_learn: "1.5.2"
-runtime:
-  gpu: "NVIDIA A10G"
-  gpu_count: 1
-  cpu_threads: 24
+replay_id: demand-v27-replay-2026-07-16
+target:
+  registered_model: demand-forecast
+  model_version: "27"
+  original_run_id: demand-2026-05-31-0315
+ingredients:
+  code_commit: 4f2c8d1
+  dataset_snapshot: lakefs://demand-lake/forecasting@7a91cf2
+  resolved_config_artifact: artifacts://demand-2026-05-31-0315/config.yml
+  image_digest: registry.example.com/demand-trainer@sha256:8e73...
+  hardware: nvidia-a10g-1x
   seed: 1407
+comparison:
+  stable_dataset: demand-eval-2026-05-31
+  primary_metric: wape
+  metric_tolerance: 0.002
+  prediction_max_abs_delta: 0.01
+known_gaps: []
 ```
 
-Pull the image by digest where possible:
+The manifest separates the **target** from the **replay**. The replay receives a new identity and should never overwrite the original run. It also declares comparison rules before results are visible, which prevents convenient tolerances from being chosen afterward.
 
-```bash
-docker pull registry.harbor.ai/ml/demand-trainer@sha256:8e73aa19c4d2
-```
+Verify the bundle before launching expensive work:
 
-If the old image is gone, rebuild from the recorded Dockerfile commit and the lockfile. That replay has weaker evidence than a digest pull, so the result should say "rebuilt equivalent image" instead of "original image." The wording matters because the team may later need to explain why the replay carried more environment uncertainty.
+- Can the code commit and source bundle still be retrieved?
+- Does the dataset snapshot resolve, and do row counts and checksums match recorded evidence?
+- Can the image be pulled by digest?
+- Does the resolved configuration exist?
+- Are the original metrics and comparison predictions available?
+- Does the chosen platform still support the hardware and runtime?
+- Are secrets and external dependencies replaced with approved replay access?
 
-You can record the runtime inside the container before training:
+A replay should avoid live mutable dependencies. If preprocessing reads a current exchange-rate table or feature definition, pin the old version or record that exact replay is impossible.
 
-```bash
-docker run --rm --gpus all \
-  registry.harbor.ai/ml/demand-trainer@sha256:8e73aa19c4d2 \
-  python tools/print_runtime.py
-```
+## Rebuild In Layers So Failures Stay Explainable
+<!-- section-summary: Recover data, code, environment, and execution separately before combining them into the replay run. -->
 
-Example output:
+Reconstruction is easier when each layer is verified independently.
 
-```console
-python=3.11.8
-torch=2.5.1
-cuda_runtime=12.4
-sklearn=1.5.2
-gpu=NVIDIA A10G
-driver=550.54
-```
+### Verify code and configuration
 
-This output should be stored as a replay artifact. It proves the replay used the intended runtime rather than the developer laptop or the current training image.
+Check out the immutable commit in a separate workspace and compare the stored resolved configuration with the files at that commit. If the original run used uncommitted code, record the gap. Avoid editing the old commit to make it run on a new platform; create a documented compatibility patch and treat the result as a modified replay.
 
-## Replay and Record a New Run
-<!-- section-summary: A replay should create its own tracking run linked to the original so later reviewers can inspect both records. -->
+### Verify the dataset
 
-Now the team can run the training command. The replay run should write a new MLflow record and link itself to the original run. That keeps the audit trail clear: the original run produced model version `27`, and the replay run tested whether those old ingredients still produce a close match.
+Resolve the snapshot and compare schema, row count, date range, label distribution, important cohort counts, and content checksums where feasible. The row count alone is weak: rows can change while the count stays constant.
 
-A replay command might look like this:
+Feature computation must preserve point-in-time rules. Rebuilding from today's corrected source data can remove the very condition under investigation. Keep separate paths for “as recorded then” and “corrected now.”
 
-```bash
-docker run --rm --gpus all \
-  -e MLFLOW_TRACKING_URI=https://mlflow.harbor.ai \
-  -e RUN_TYPE=replay \
-  -e ORIGINAL_RUN_ID=demand-2026-05-31-0315 \
-  -v "$PWD":/workspace \
-  -w /workspace \
-  registry.harbor.ai/ml/demand-trainer@sha256:8e73aa19c4d2 \
-  python training/train_forecast.py \
-    --config configs/demand/prod_14_day.yml \
-    --data-snapshot lakefs://demand-lake/forecasting@7a91cf2 \
-    --seed 1407 \
-    --run-name replay-demand-v27-2026-07-04
-```
+### Verify the environment
 
-The replay should log a tag set like this:
+Pull the original image by digest. If it is unavailable, rebuild from the old definition and lockfiles. Label that result **reconstructed environment** rather than **original environment**. Capture the new image digest and list unavoidable changes.
 
-```yaml
-run_type: replay
-original_run_id: demand-2026-05-31-0315
-model_version_under_review: harbormart-demand-forecast/27
-replay_reason: chicago_stockout_investigation
-replay_operator: ml-platform-oncall
-replay_date: "2026-07-04"
-```
+Run a lightweight environment probe before training: language and package versions, accelerator visibility, driver and runtime libraries, CPU architecture, locale, and critical environment flags. This detects a mismatched execution envelope without spending hours on a training run.
 
-That tag set protects the registry from accidental promotion. The replay is evidence for an investigation, and any candidate promotion should use a separate training and approval path.
+### Verify execution controls
 
-The replay should also log the same packet fields as the original run. If a field differs, such as GPU type or image recovery method, the replay packet should show both original and replay values.
+Restore seeds, deterministic settings, worker count, precision mode, and checkpoint behaviour. Some deterministic settings reduce performance or reject unsupported operations; use them according to the reproduction goal.
 
-## Compare the Replay
-<!-- section-summary: Replay success comes from comparing data counts, metrics, artifacts, logs, and accepted tolerances against the original run. -->
+If the original accelerator is unavailable, decide whether a different device supports the success contract. A functional comparison may allow it. An exact numerical investigation may not.
 
-The comparison should be written before anyone declares success. Forecasting models rarely need byte-for-byte model files to count as a useful replay. HarborMart cares more about business metrics, segment behavior, and whether the replay used the same rows, config, and runtime.
+## Execute As A Linked, Read-Only Replay
+<!-- section-summary: The replay creates new evidence linked to the original run and avoids mutating production aliases, artifacts, or datasets. -->
 
-For the demand model, the comparison table can be direct:
+Submit the replay under a new run ID with tags that identify the original model and run. Write outputs to a new immutable location. Disable registration, alias movement, deployment, notifications, and downstream business actions unless the isolated replay explicitly needs them.
 
-| Evidence | Original run | Replay run | Tolerance | Result |
-|---|---:|---:|---:|---|
-| Training rows | 238,441,912 | 238,441,912 | exact | pass |
-| Validation rows | 14,882,004 | 14,882,004 | exact | pass |
-| WAPE overall | 0.184 | 0.185 | <= 0.002 | pass |
-| WAPE Chicago | 0.213 | 0.217 | <= 0.003 | review |
-| Bias Chicago brackets | -7.4% | -7.6% | <= 0.5 percentage points | pass |
-| Feature schema hash | `91ab2e` | `91ab2e` | exact | pass |
-| Model file hash | `6c10fa` | `a413e2` | informational | expected difference |
+The execution path should be observable. Capture the resolved bundle, environment probe, data verification, logs, metrics, checkpoints, and final artifact. If a failure occurs, the team should know which reconstruction layer failed.
 
-![Original run and replay run comparison with HarborMart tolerance decisions.](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/replay-comparison.png)
+Replay code may require temporary compatibility changes because an old dependency no longer runs on current infrastructure. Keep those patches separate and hash them. Compare both the original commit and the replay patch in the final report.
 
-*The replay can pass row, WAPE, and feature-schema checks while Chicago WAPE still needs review, which keeps the investigation focused on the warehouse segment that failed tolerance.*
+Security still applies. Old images and dependencies can contain known vulnerabilities. Run them in an isolated environment with restricted data and egress. Reproduction authority is not permission to expose historic secrets or run untrusted software on a production network.
 
-WAPE means weighted absolute percentage error. It is common in demand forecasting because one expensive SKU should matter more than one slow-moving SKU with tiny volume. HarborMart also checks bias for critical categories because under-forecasting shelf brackets hurts warehouse picking more than over-forecasting a slow item by one unit.
+## Compare Results As A Ladder
+<!-- section-summary: Comparison moves from ingredient identity through intermediate outputs to model behaviour, using declared tolerances and uncertainty. -->
 
-A small comparison script can pull the original evaluation artifact and the replay evaluation artifact:
+Compare from the bottom of the stack upward:
 
-```bash
-python tools/compare_forecast_replay.py \
-  --original-run demand-2026-05-31-0315 \
-  --replay-run replay-demand-v27-2026-07-04 \
-  --metrics reports/evaluation.json \
-  --out reports/replay_comparison.md
-```
+1. **Ingredient match:** code, data, configuration, image, and hardware identities.
+2. **Data match:** schema, counts, distributions, splits, and feature fingerprints.
+3. **Process match:** completed steps, logs, checkpoints, training curves, and warnings.
+4. **Metric match:** primary and cohort metrics within declared tolerances.
+5. **Prediction match:** outputs on a frozen comparison set.
+6. **Artifact match:** model hash when exact determinism is expected.
 
-The output should include row counts, metric deltas, segment deltas, artifact hashes, runtime differences, and an overall status. If Chicago WAPE exceeds tolerance, the status can be `review` even when the overall metric passes. That status tells the team where to continue the investigation.
+If the data fingerprint differs, a later metric comparison has limited meaning. If data and environment match while predictions differ slightly within an accepted tolerance, the replay may satisfy numerical reproduction. If predictions differ materially, compare intermediate checkpoints or training curves to locate when divergence appeared.
 
-## When Evidence Is Missing
-<!-- section-summary: Missing evidence should be recorded as a replay limitation with a practical next step, rather than hidden inside a successful rerun. -->
+Tolerance should reflect the goal, metric variability, sample size, and impact. Report absolute and relative differences, confidence intervals where appropriate, and cohort results. One global average can hide a failed segment.
 
-Old runs often have gaps. The image registry may have garbage-collected the old digest. The data team may have overwritten a table snapshot. The tracking run may have logged metrics and artifacts while leaving out the seed. A replay can still be useful, as long as the final report names the missing evidence clearly.
+Artifact hashes are strong evidence only when identical bytes are expected. Serialization metadata, archive timestamps, or ordering can change a hash without changing predictions. Conversely, matching metrics do not prove identical models.
 
-Use a gap table:
+## Grade The Confidence Of The Result
+<!-- section-summary: An evidence grade communicates how closely the replay matched the original conditions and what conclusions remain unsupported. -->
 
-| Missing evidence | Risk | Practical next step |
-|---|---|---|
-| Image digest unavailable | Runtime may differ from original | Rebuild from Dockerfile commit and lockfile, then label replay as rebuilt |
-| Dataset snapshot unavailable | Replay may train on changed rows | Use raw event replay or warehouse time travel if available; lower confidence if neither exists |
-| Seed missing | Small metric movement may be hard to explain | Replay several seeds and compare distribution around the original metric |
-| Feature schema missing | Feature order or encoding may differ | Reconstruct from model artifact and training logs, then add schema logging to future runs |
-| Artifact hash missing | Exact model bytes cannot be checked | Compare metrics, predictions on a frozen sample, and generated reports |
+Use an explicit confidence statement:
 
-This is the production lesson. A replay report with honest limitations is better than a clean-looking rerun that hides uncertainty. The report helps the platform team fix tracking gaps for future runs while still giving operations a useful answer for the current incident.
+| Grade | Evidence condition | Safe claim |
+| --- | --- | --- |
+| **A: original replay** | Original code, data, image, config, hardware class, and expected evidence recovered | Strong reproduction under recorded controls |
+| **B: equivalent replay** | Known substitutions with passed functional or numerical contract | Behaviour reproduced within declared scope |
+| **C: partial reconstruction** | Important ingredients or outputs missing | Some mechanism or lineage claims supported |
+| **D: unreproducible** | Critical identity or evidence missing | Cause cannot be established from available records |
 
-## Putting It Together
-<!-- section-summary: Old-run reproduction is a chain from model version to registry, tracking run, code, data, environment, replay, and comparison. -->
+Record every gap: missing image, mutable dataset, absent seed, lost package index, unavailable hardware, or incomplete model lineage. Explain how the gap affects the conclusion and how future runs will preserve the missing evidence.
 
-Reproducing old runs is a workflow, not a single command. For HarborMart, the team starts with `harbormart-demand-forecast` version `27`, reads the MLflow registry entry, finds run `demand-2026-05-31-0315`, recovers commit `4f2c8d1`, checks out dataset snapshot `7a91cf2`, pulls the old container digest, runs a labeled replay, and compares metrics, counts, artifacts, and runtime.
+“The script ran” is not a reproduction result. A useful result states the target, goal, recovered identities, substitutions, comparison, differences, confidence grade, and remaining uncertainty.
 
-That chain gives the business answer more weight. If the replay matches within tolerance, the team can investigate production demand shifts or serving data next. If the replay diverges, the team has a structured path through data, dependencies, seeds, hardware, and metric code instead of guessing from memory.
+## Design Future Runs For Replay
+<!-- section-summary: Automatic evidence bundles make reproduction a routine capability for every production candidate. -->
 
-## What's Next
-<!-- section-summary: The next article explains why identical source code can still train a different model and how teams decide whether the difference matters. -->
+The best time to prepare an old-run replay is during the original run. The training platform should automatically capture code identity, data inputs, resolved configuration, environment digest, execution shape, source run, metrics, comparison predictions, artifact hashes, and ownership.
 
-Next we look at same-code differences. The source commit can match while data, dependencies, hardware, randomness, and evaluation details still move the trained model.
+Retention policy must cover dependencies as well as metadata. A run record that points to a deleted container or expired dataset cannot replay. Align retention with audit, incident, and model-lifecycle needs. Periodically test a small sample of old bundles so gaps appear before a serious investigation.
+
+## The Durable Reproduction Method
+<!-- section-summary: Old-run reproduction is a traceable comparison between a production target and a new, isolated replay with explicit evidence and uncertainty. -->
+
+Define the reproduction goal. Start from the concrete model used in production. Follow lineage to the source run. Recover seven identities: model, code, data, configuration, environment, execution, and evidence. Assemble and verify a replay bundle. Rebuild in layers, execute under a new identity, compare through the evidence ladder, and state the confidence honestly.
+
+That method teaches more than a list of recovery commands. It shows which records make an ML system explainable months after training has finished.
 
 ## References
 
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) - Official tracking documentation for runs, parameters, metrics, tags, artifact storage, and team tracking setups.
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official registry documentation for model versions, aliases, tags, and lineage back to runs.
-- [MLflow artifacts API](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.artifacts.html) - Official Python API for listing and downloading run or model artifacts.
-- [MLflow Dataset Tracking](https://mlflow.org/docs/latest/ml/dataset/) - Official documentation for dataset lineage and dataset version evidence in MLflow.
-- [DVC Get Started](https://doc.dvc.org/start) - Official DVC guide showing data tracking, `dvc pull`, and switching data versions through Git-tracked metadata.
-- [lakeFS concepts](https://docs.lakefs.io/understand/model/) - Official lakeFS documentation for commits, branches, tags, and immutable data references.
-- [Docker image tag reference](https://docs.docker.com/reference/cli/docker/image/tag/) - Official Docker reference for image references, repositories, and tags.
-- [PyTorch Reproducibility Notes](https://docs.pytorch.org/docs/stable/notes/randomness.html) - Official notes on release, platform, seed, and deterministic-operation limits.
-- [scikit-learn common pitfalls](https://scikit-learn.org/stable/common_pitfalls.html) - Official guidance on preprocessing, leakage, pipelines, and randomness issues that affect replay comparisons.
+- [PyTorch reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html)
+- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
+- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/ml/tracking/data-api/)
+- [DVC data and model versioning](https://dvc.org/doc/user-guide/data-management)
+- [lakeFS commits](https://docs.lakefs.io/latest/understand/model/)
+- [OCI image digests](https://github.com/opencontainers/image-spec/blob/main/descriptor.md)
+- [NVIDIA framework reproducibility](https://docs.nvidia.com/deeplearning/frameworks/reproducibility/)

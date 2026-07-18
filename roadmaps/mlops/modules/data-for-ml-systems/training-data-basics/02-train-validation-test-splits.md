@@ -7,18 +7,6 @@ order: 2
 id: "article-mlops-data-for-ml-systems-train-validation-test-splits"
 ---
 
-## Table of Contents
-
-1. [Dataset Splits Separate Learning From Judgment](#dataset-splits-separate-learning-from-judgment)
-2. [Follow One Loan-Risk Model](#follow-one-loan-risk-model)
-3. [Train, Validation, And Test Sets](#train-validation-and-test-sets)
-4. [Why Time Often Drives Production Splits](#why-time-often-drives-production-splits)
-5. [Write The Split Contract](#write-the-split-contract)
-6. [Check Segment Coverage](#check-segment-coverage)
-7. [Runbook For Split Problems](#runbook-for-split-problems)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
-
 ## Dataset Splits Separate Learning From Judgment
 <!-- section-summary: A dataset split gives the model one part of history for learning, one part for tuning, and one untouched part for final judgment. -->
 
@@ -28,8 +16,25 @@ This matters because a model can memorize patterns that only exist in the data i
 
 The previous article defined examples, features, labels, targets, and prediction time. Splits use those same pieces. You split examples, preserve target meaning, respect label maturity, and keep the prediction timestamp at the center of the design.
 
-## Follow One Loan-Risk Model
-<!-- section-summary: The loan-risk scenario has delayed labels, changing market conditions, and borrower groups that need careful split review. -->
+A split design has five decisions. **Partition purpose** separates fitting, tuning, and final judgement. **Boundary shape** decides whether rows separate randomly, by entity, site, or time. **Label maturity** prevents incomplete outcomes from entering supervised evaluation. **Contamination control** keeps duplicates, preprocessing knowledge, and future facts from crossing the boundary. **Coverage and uncertainty** test whether each partition can support the product claim. The familiar train-validation-test names describe only the first decision.
+
+These decisions depend on the deployment claim. A random split can estimate performance on new independent rows from a stable population. It cannot establish performance in a future time period when market conditions change, or at a new hospital when patients from each hospital appear on both sides. The split is therefore part of the evaluation design, not a generic preprocessing step.
+
+```mermaid
+flowchart LR
+    Claim["Production generalization claim"] --> Shape["Random, time, entity, or site boundary"]
+    Shape --> Train["Training: fit parameters"]
+    Shape --> Validation["Validation: choose design and thresholds"]
+    Shape --> Test["Protected test: final judgment"]
+    Maturity["Label maturity and prediction time"] --> Shape
+    Contamination["Duplicate, entity, and preprocessing controls"] --> Shape
+    Test --> Decision["Release evidence with coverage and uncertainty"]
+```
+
+The production claim selects the boundary shape. Label maturity decides which examples are eligible. Contamination controls protect the separation, and each partition receives one role. The protected test evidence can then support the same claim the deployed model must satisfy.
+
+## A Loan-Risk Split As A Supporting Example
+<!-- section-summary: A loan-risk example shows how delayed labels, changing conditions, and borrower groups constrain split design. -->
 
 Imagine **Cedar Credit**, a lender that offers small-business working-capital loans. The model predicts whether a new loan application has a high risk of serious delinquency within 90 days after funding. The score helps underwriters decide which applications need extra review.
 
@@ -57,6 +62,26 @@ Many tutorials start with a random `train_test_split`, and scikit-learn document
 ![Cedar Credit split lanes showing loan applications divided into train, validation, and protected test sets](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/train-validation-test-lanes.png)
 
 *Train, validation, and test sets answer different review questions, so the held-back test lane stays protected from tuning decisions.*
+
+## Choose The Split Shape
+<!-- section-summary: The deployment question determines whether examples should split randomly, by class, by entity, by time, by site, or through cross-validation. -->
+
+Train, validation, and test describe what each partition does. A **split shape** describes which examples are allowed to enter each partition. The right shape follows the prediction claim. A random split can support a claim about new independent examples from the same population. It gives weak evidence when the same customer, device, patient, location, or future time period appears on both sides of the boundary.
+
+Use this decision map before writing split code:
+
+| Production question | Useful split shape | Boundary to protect |
+|---|---|---|
+| New independent rows from a stable population | Random split, often stratified by target | Preserve class balance without copying duplicate examples across partitions |
+| New events for entities already seen in history | Time split, with an entity-overlap report | Later events stay outside earlier training windows |
+| New customers, patients, devices, or sellers | Group split by entity | One entity stays in one partition |
+| New hospitals, stores, regions, or factories | Group or site holdout | One operating site stays outside training |
+| Forecasting future periods | Blocked time split or rolling evaluation | Training time always precedes evaluation time |
+| Small independent dataset | Cross-validation, with stratified or grouped folds as needed | Every fold follows the same leakage rules |
+
+**Stratification** preserves an important distribution, usually the target class ratio, across partitions. **Group splitting** keeps every row for one entity or site together. **Blocked time splitting** gives each partition a continuous time window. **Rolling evaluation** repeats training and evaluation across several historical cutoffs so reviewers can see whether the model survives more than one period. These controls can combine. A fraud model may use time blocks and also report merchant overlap, while a medical model may hold out entire hospitals and preserve outcome balance inside the remaining folds.
+
+Cross-validation supports model selection when one holdout would waste too much data. The team still needs a final protected test set when repeated tuning decisions use the folds. For grouped or time-dependent data, use a splitter that preserves those boundaries instead of default random K-fold validation. The chosen split shape, group key, cutoff time, and exclusion rules belong in the dataset manifest so later runs use the same judgment boundary.
 
 ## Why Time Often Drives Production Splits
 <!-- section-summary: Time-based splits match production questions when labels mature later and future data can differ from past data. -->
@@ -135,8 +160,10 @@ SELECT
     ELSE 'excluded'
   END AS split_name
 FROM ml_curated.loan_risk_examples
-WHERE funded_ts < TIMESTAMP '2026-09-06 00:00:00 UTC';
+WHERE funded_ts < TIMESTAMP '2026-06-01 00:00:00 UTC';
 ```
+
+This dataset release has an evaluation as-of time of `2026-09-06T00:00:00Z`. Subtracting the 90-day outcome window and seven-day processing buffer gives a latest eligible funding time of `2026-06-01T00:00:00Z`. The query uses that eligibility cutoff, rather than the evaluation date itself, so every May test label has had time to mature.
 
 The split column should be stored with the dataset or reproduced from a versioned query. A training script should read the split assignment instead of inventing a fresh split every time.
 

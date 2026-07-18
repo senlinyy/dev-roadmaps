@@ -10,11 +10,16 @@
       { "path": ["kind"], "equals": "NetworkPolicy", "label": "resource kind" },
       { "path": ["metadata", "name"], "equals": "allow-checkout-web-to-orders-api", "label": "policy name" },
       { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
+      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "orders", "label": "approved ownership label" },
       { "path": ["spec", "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "orders-api", "label": "protected orders API Pods" },
       { "path": ["spec", "policyTypes", 0], "equals": "Ingress", "label": "ingress isolation" },
+      { "path": ["spec", "policyTypes"], "maxItems": 1, "label": "single ingress policy type" },
+      { "path": ["spec", "ingress"], "maxItems": 1, "label": "single scoped ingress rule" },
+      { "path": ["spec", "ingress", 0, "from"], "maxItems": 1, "label": "single combined source peer" },
       { "path": ["spec", "ingress", 0, "from", 0, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"], "equals": "checkout", "label": "checkout namespace source" },
       { "path": ["spec", "ingress", 0, "from", 0, "podSelector", "matchLabels", "app.kubernetes.io/name"], "equals": "checkout-web", "label": "checkout web source Pods" },
-      { "path": ["spec", "ingress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 8080 }, "label": "orders API Pod port" }
+      { "path": ["spec", "ingress", 0, "ports"], "containsObject": { "protocol": "TCP", "port": 8080 }, "label": "orders API Pod port" },
+      { "path": ["spec", "ingress", 0, "ports"], "maxItems": 1, "label": "single approved ingress port" }
     ]
   }
 }

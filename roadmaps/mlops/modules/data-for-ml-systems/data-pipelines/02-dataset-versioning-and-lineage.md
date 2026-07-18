@@ -1,24 +1,12 @@
 ---
 title: "Dataset Versioning"
 description: "Connect dataset identity, provenance, and traceability in one article."
-overview: "Dataset versioning gives each ML dataset a stable identity, while lineage explains which sources, jobs, validation checks, and model runs connect to it. This article follows a factory inspection team as they version image metadata, lakehouse tables, and lineage events for model review."
+overview: "Dataset versioning and lineage connect immutable identity, content integrity, provenance, consumers, retention, access, and rebuild policy. Lakehouse snapshots and object commits are implementation examples."
 tags: ["MLOps", "production", "pipelines"]
 order: 2
 id: "article-mlops-data-for-ml-systems-dataset-versioning-and-lineage"
 ---
 
-## Table of Contents
-
-1. [A Dataset Version Is The Dataset's Release Label](#a-dataset-version-is-the-datasets-release-label)
-2. [Follow One Factory Inspection Model](#follow-one-factory-inspection-model)
-3. [Choose The Version Identity](#choose-the-version-identity)
-4. [Write A Dataset Manifest](#write-a-dataset-manifest)
-5. [Connect Versioning To Lineage](#connect-versioning-to-lineage)
-6. [Use Versions During Model Review](#use-versions-during-model-review)
-7. [Operate Versions Over Time](#operate-versions-over-time)
-8. [Putting It Together](#putting-it-together)
-9. [What's Next](#whats-next)
-10. [References](#references)
 
 ## A Dataset Version Is The Dataset's Release Label
 <!-- section-summary: Dataset versioning gives one ML dataset output a stable identity, and lineage explains how that output was created and used. -->
@@ -29,10 +17,25 @@ The previous article showed how a repeatable pipeline gives a dataset build a re
 
 **Lineage** explains provenance and downstream use. Upstream lineage says which source systems, tables, object prefixes, jobs, code commits, and validation checks created the dataset. Downstream lineage says which training runs, model versions, batch scoring jobs, or reports consumed it. Versioning answers, "Which dataset?" Lineage answers, "Where did it come from, and where did it go?"
 
-This article follows that path: choose a version identity, write a manifest, connect lineage, use the version during model review, and operate versions as source data changes.
+The framework has six parts. Version semantics define what changed and which identity is immutable. A snapshot or commit preserves retrievable content. A manifest records schema, counts, integrity, and policy. Upstream lineage connects sources and jobs. Downstream lineage connects training, models, reports, and releases. Retention, access, and rebuild policy keep the version usable over time.
 
-## Follow One Factory Inspection Model
-<!-- section-summary: The running scenario follows a factory inspection team that needs traceable image metadata and labels for defect detection. -->
+Those parts organize the article. The factory inspection data, lakehouse snapshots, and object commits provide one concrete implementation.
+
+```mermaid
+flowchart LR
+    Sources["Source snapshots and label state"] --> Build["Pipeline run and code identity"]
+    Build --> Version["Immutable dataset version"]
+    Version --> Manifest["Schema, counts, policy, and integrity"]
+    Version --> Training["Training and evaluation runs"]
+    Training --> Models["Registered model versions"]
+    Manifest --> Catalog["Ownership and discovery"]
+    Models --> Impact["Downstream impact analysis"]
+```
+
+Version identity anchors the graph. Upstream edges explain how the content was produced. Downstream edges show which runs and models depend on it. The manifest describes the version itself, while catalog records help people discover the owner and policy. This separation lets a team replace one storage tool without losing the lineage responsibilities.
+
+## A Supporting Example: Factory Inspection Model
+<!-- section-summary: A supporting example follows a factory inspection team that needs traceable image metadata and labels for defect detection. -->
 
 Imagine **ForgeVision Components**, a company that manufactures small metal housings for industrial sensors. Each housing passes under a camera before packaging. A computer vision model flags cracks, burrs, missing screw holes, and coating defects. The quality team reviews flagged items, and the production line uses the result to decide whether to send a housing to rework.
 
@@ -86,7 +89,7 @@ The beginner takeaway is straightforward: a version string that humans can read 
 ![Dataset version identity linking a friendly dataset name and version to table snapshots, object commits, and a manifest hash](/content-assets/articles/article-mlops-data-for-ml-systems-dataset-versioning-and-lineage/dataset-version-identity.png)
 *A good version label gives people a simple name while the manifest keeps exact technical pointers for retrieval and review.*
 
-## Write A Dataset Manifest
+## Record Dataset Identity And Lineage
 <!-- section-summary: A dataset manifest records content, source identities, schema, validation results, ownership, and intended use. -->
 
 A **dataset manifest** is a structured receipt for one dataset version. It should travel with the dataset and appear in the catalog. The manifest is useful because it puts the most important facts in one place instead of spreading them across object storage, warehouse history, job logs, and chat threads.

@@ -5,6 +5,7 @@
   "files": [
     {
       "filename": "inventory/prod.yml",
+      "readOnly": true,
       "initialValue": "all:\n  children:\n    orders_web:\n      hosts:\n        orders-web-01:\n          ansible_host: 10.0.10.21\n        orders-web-02:\n          ansible_host: 10.0.10.22\n"
     },
     {

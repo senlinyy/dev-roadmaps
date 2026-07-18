@@ -4,7 +4,13 @@ kind: Service
 metadata:
   name: public-gateway
   namespace: platform
+  labels:
+    app.kubernetes.io/part-of: platform-edge
+    app.kubernetes.io/managed-by: platform-team
+  annotations:
+    devpolaris.io/owner: edge-team
 spec:
+  externalTrafficPolicy: Cluster
   type: LoadBalancer
   selector:
     app.kubernetes.io/name: public-gateway

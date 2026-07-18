@@ -1,24 +1,11 @@
 ---
 title: "Training Pipelines"
 description: "Connect data preparation, validation, training, evaluation, artifact publishing, and registry handoff into one repeatable workflow."
-overview: "A training pipeline is a repeatable workflow that runs the steps around model training in the right order. This guide follows a delivery ETA model through data prep, validation, training, evaluation, artifact logging, registry handoff, CI checks, and a Kubeflow Pipelines example."
+overview: "A training pipeline connects typed stages through inputs, outputs, gates, evidence, retry rules, and candidate handoff. A delivery ETA model illustrates that framework with Kubeflow Pipelines."
 tags: ["MLOps", "production", "orchestration"]
 order: 1
 id: "article-mlops-training-pipelines-repeatable-training-pipeline"
 ---
-
-## Table of Contents
-
-1. [A Training Pipeline Connects The Steps Around Training](#a-training-pipeline-connects-the-steps-around-training)
-2. [Follow One Delivery ETA Model](#follow-one-delivery-eta-model)
-3. [Map The Pipeline Stages](#map-the-pipeline-stages)
-4. [Make Each Stage Produce Evidence](#make-each-stage-produce-evidence)
-5. [Write A Pipeline Spec](#write-a-pipeline-spec)
-6. [Run The Pipeline In CI And Production](#run-the-pipeline-in-ci-and-production)
-7. [Add Registry Handoff And Rollback Evidence](#add-registry-handoff-and-rollback-evidence)
-8. [Failure Modes You Can Diagnose](#failure-modes-you-can-diagnose)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
 
 ## A Training Pipeline Connects The Steps Around Training
 <!-- section-summary: A training pipeline is a repeatable workflow that runs data prep, validation, training, evaluation, and artifact publishing in order. -->
@@ -42,8 +29,8 @@ Here is the pipeline shape you will build in this article:
 ![Delivery ETA training pipeline stages](/content-assets/articles/article-mlops-training-pipelines-repeatable-training-pipeline/delivery-eta-training-pipeline.png)
 *HarborRoute's pipeline is useful because each stage has a clear input, a clear output, and a place to stop when evidence fails.*
 
-## Follow One Delivery ETA Model
-<!-- section-summary: The running scenario follows a delivery platform that retrains an ETA model through a pipeline instead of manual commands. -->
+## Apply The Stage Contract To Delivery ETA
+<!-- section-summary: A supporting example follows a delivery platform that retrains an ETA model through a pipeline instead of manual commands. -->
 
 Imagine **HarborRoute**, a delivery platform that predicts estimated arrival times for grocery and pharmacy orders. The model is `delivery_eta_lightgbm_v12`. It uses order distance, courier availability, weather, store prep delay, traffic zone, and historical route speed features. The prediction feeds customer-facing ETA windows, dispatcher views, and late-order alerts.
 
@@ -180,11 +167,13 @@ Many teams use a pipeline platform such as Kubeflow Pipelines, Vertex AI Pipelin
 
 Kubeflow Pipelines uses Python functions decorated as components and a pipeline function decorated with `@dsl.pipeline`. Here is a compact version of HarborRoute's workflow:
 
+:::expand[Implement the stage graph with Kubeflow Pipelines]{kind="example"}
+
 ```python
 from kfp import compiler, dsl
 
 
-@dsl.component(base_image="python:3.12")
+@dsl.component(base_image="ghcr.io/harborroute/eta-trainer@sha256:85c0d7a999bb5a1c40ff1353de2a1c0f8d5e4f3a2b1c998877665544332211aa")
 def extract_features(config_uri: str, snapshot_uri: dsl.OutputPath(str)) -> None:
     from harborroute.features import build_eta_snapshot
 
@@ -193,7 +182,7 @@ def extract_features(config_uri: str, snapshot_uri: dsl.OutputPath(str)) -> None
         f.write(snapshot.to_yaml())
 
 
-@dsl.component(base_image="python:3.12")
+@dsl.component(base_image="ghcr.io/harborroute/eta-trainer@sha256:85c0d7a999bb5a1c40ff1353de2a1c0f8d5e4f3a2b1c998877665544332211aa")
 def validate_data(snapshot_uri: dsl.InputPath(str), report_uri: dsl.OutputPath(str)) -> None:
     from harborroute.validation import validate_eta_snapshot
 
@@ -211,7 +200,7 @@ def train_model(snapshot_uri: dsl.InputPath(str), config_uri: str, artifact_root
     )
 
 
-@dsl.component(base_image="python:3.12")
+@dsl.component(base_image="ghcr.io/harborroute/eta-trainer@sha256:85c0d7a999bb5a1c40ff1353de2a1c0f8d5e4f3a2b1c998877665544332211aa")
 def evaluate_model(run_id: str, review_packet_uri: dsl.OutputPath(str)) -> None:
     from harborroute.evaluation import write_review_packet
 
@@ -234,9 +223,11 @@ def delivery_eta_training(config_uri: str, artifact_root: str):
 compiler.Compiler().compile(delivery_eta_training, package_path="delivery_eta_training.yaml")
 ```
 
-This example shows the graph. `extract_features` produces a snapshot file. `validate_data` checks it. `train_model` uses the same snapshot and config, then returns a run ID. `evaluate_model` uses the run ID to find artifacts and write a review packet. The compiled YAML can run on a Kubeflow-compatible backend or a managed pipeline service that supports KFP-style pipelines.
+:::
 
-For SageMaker Pipelines or Vertex AI Pipelines, the same conceptual stages remain. The platform-specific syntax and IAM setup differ, so the team should keep the stage contract clear and let the platform adapter handle cloud-specific details.
+This example shows the graph. `extract_features` produces a snapshot file. `validate_data` checks it. `train_model` uses the same snapshot and config, then returns a run ID. `evaluate_model` uses the run ID to find artifacts and write a review packet. The compiled YAML can run on a Kubeflow-compatible backend or a managed pipeline service that supports Kubeflow Pipelines (KFP) specifications.
+
+For SageMaker Pipelines or Vertex AI Pipelines, the same conceptual stages remain. The platform-specific syntax and identity and access management (IAM) setup differ, so the team should keep the stage contract clear and let the platform adapter handle cloud-specific details.
 
 ## Run The Pipeline In CI And Production
 <!-- section-summary: CI should validate the pipeline graph and components, while production runs use approved snapshots, service accounts, and artifact storage. -->
@@ -244,6 +235,8 @@ For SageMaker Pipelines or Vertex AI Pipelines, the same conceptual stages remai
 Pipeline CI should check the graph before a full production run. HarborRoute can compile the KFP spec, run unit tests for components, and execute a tiny local smoke path. The point is to catch broken imports, missing config fields, and graph wiring errors before the scheduler requests production compute.
 
 A CI workflow can look like this:
+
+:::expand[Compile and test the pipeline in CI]{kind="example"}
 
 ```yaml
 name: eta-pipeline-check
@@ -260,12 +253,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install pipeline dependencies
-        run: pip install -r requirements-pipeline.txt
+        run: python -m pip install --require-hashes -r requirements-pipeline.lock
       - name: Run unit tests
         run: pytest tests/pipelines tests/training
       - name: Compile pipeline
@@ -274,6 +267,8 @@ jobs:
         run: test -s delivery_eta_training.yaml
 ```
 
+:::
+
 Production runs need stronger controls:
 
 | Control | HarborRoute setting |
@@ -281,7 +276,7 @@ Production runs need stronger controls:
 | Service account | `eta-training-pipeline` with warehouse read and artifact write access |
 | Artifact root | `s3://harborroute-ml-artifacts/eta/{run_id}/` |
 | Runtime image | Pinned image digest in config and component spec |
-| Secret handling | Tracking URI and warehouse credentials from platform secret store |
+| Secret handling | Tracking uniform resource identifier (URI) and warehouse credentials from platform secret store |
 | Retry policy | Retry data extraction once, train step once, publish step manually |
 | Timeout | Stop the full pipeline after four hours |
 
@@ -313,7 +308,7 @@ registry_candidate:
 The previous approved version matters because release systems need a safe return path. If the new ETA model underpredicts rainy-day deliveries during shadow testing, the team can keep the previous approved version active, close the candidate, and rerun the training pipeline with a fixed feature snapshot or threshold.
 
 ![Candidate handoff and rollback path](/content-assets/articles/article-mlops-training-pipelines-repeatable-training-pipeline/candidate-handoff-rollback.png)
-*A candidate handoff should carry the previous approved version and rollback plan, not just the new model URI.*
+*A candidate handoff should carry the previous approved version and rollback plan alongside the new model URI.*
 
 ## Failure Modes You Can Diagnose
 <!-- section-summary: A staged pipeline lets the team find whether a failure came from data, validation, training, evaluation, publish, or platform runtime. -->

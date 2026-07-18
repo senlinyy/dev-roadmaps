@@ -1,394 +1,205 @@
 ---
-title: "Bad Predictions"
-description: "Respond when model output harms product behavior by triaging impact, adding guardrails, routing around risky segments, and collecting evidence for rollback or repair."
-overview: "Bad predictions need a response path that protects users while the team investigates. This guide follows a grocery substitution model through impact triage, segment isolation, fallback rules, human review, rollback choices, monitoring, and a repair packet."
-tags: ["MLOps", "production", "incidents"]
+title: "Handling Bad Predictions"
+description: "Show how a team contains harmful model decisions, finds the affected traffic, and restores a safe product path."
+overview: "Handling bad predictions is a product-incident discipline that separates user harm from service health, finds the smallest unsafe decision boundary, applies reversible containment, verifies recovery, and repairs the control system."
+tags: ["MLOps", "production", "recovery"]
 order: 2
 id: "article-mlops-deployment-and-release-management-handling-bad-predictions"
 ---
 
-## Table of Contents
+## Treat The Decision As The Incident
+<!-- section-summary: A bad-prediction incident begins when model-driven decisions harm users or operations, whether or not the service itself is failing. -->
 
-1. [Bad Predictions Are Product Incidents](#bad-predictions-are-product-incidents)
-2. [Follow One Substitution Model](#follow-one-substitution-model)
-3. [Triage The Prediction Impact](#triage-the-prediction-impact)
-4. [Find The Failing Segment](#find-the-failing-segment)
-5. [Choose A Containment Path](#choose-a-containment-path)
-6. [Add Human Review And Fallbacks](#add-human-review-and-fallbacks)
-7. [Collect The Repair Packet](#collect-the-repair-packet)
-8. [Verify Recovery](#verify-recovery)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+A **bad-prediction incident** occurs when a model-driven decision harms users, operations, money, or policy outcomes. The API may remain fast and available because service health only proves that computation completed. Incident response must protect the product decision while preserving evidence about the model, features, policy, and runtime that produced it.
 
-## Bad Predictions Are Product Incidents
-<!-- section-summary: Bad predictions matter because the model can harm a product workflow even while the service stays healthy. -->
+The response framework has six stages:
 
-A **bad prediction** is a model output that pushes the product toward a harmful or low-quality decision. The model service might return `200 OK`, the pods might stay healthy, and the latency dashboard might look calm. The issue lives in the decision. A customer gets the wrong recommendation, a support ticket goes to the wrong queue, a delivery estimate misleads the shopper, or a fraud model blocks a good payment.
-
-That makes bad predictions different from ordinary service outages. With a service outage, the first question is often, "Is the API up?" With a prediction incident, the better first question is, "Which decisions are now unsafe?" You need product evidence, model evidence, and system evidence together.
-
-You usually have several response choices:
-
-| Response | What it protects | When it fits |
+| Stage | Question | Failure when skipped |
 |---|---|---|
-| Threshold change | A decision boundary | Scores are calibrated enough, and one threshold is too aggressive |
-| Segment disablement | One risky group | The issue is concentrated in a region, product type, channel, or customer segment |
-| Fallback rule | The whole workflow | A simple rule is safer than the current model output |
-| Human review | High-risk decisions | The model can still help, yet the final action needs a person |
-| Model rollback | Production model version | The new model is the likely cause |
-| Feature rollback | Feature feed or transformation | The model version is stable, while input data changed |
+| **Impact classification** | Which user action or operational workflow is unsafe, and how severe is it? | The team optimizes a technical symptom while harm continues |
+| **Evidence preservation** | Which model, feature, policy, route, and outcome records describe the event? | Emergency changes erase the path needed for diagnosis |
+| **Boundary discovery** | Which enforceable traffic, segment, action, or dependency contains the failure? | The team disables healthy traffic or leaves the risky slice active |
+| **Reversible containment** | Which guard, fallback, threshold, route, or rollback reduces harm fastest? | A speculative permanent fix expands the incident |
+| **Recovery verification** | Did runtime state, product decisions, and user outcomes return to an acceptable range? | A successful command gets confused with recovered users |
+| **System repair** | Which evaluation, data, policy, release, or monitoring control allowed escape? | Retraining alone leaves the same path open for the next failure |
 
-This article teaches the response path. You will not try to debug everything at once. You will protect the workflow, isolate the failing slice, collect evidence, and then choose repair or rollback.
-
-## Follow One Substitution Model
-<!-- section-summary: The running scenario follows a grocery model that recommends product substitutions when an item is out of stock. -->
-
-Imagine **ShelfSwap**, a grocery delivery company. When a shopper orders an item that is out of stock, ShelfSwap uses a model called `substitution_ranker` to suggest replacements. If oat milk is missing, the system might suggest another oat milk brand, lactose-free milk, almond milk, or a refund. The model ranks choices, and the product applies a decision policy.
-
-The normal policy looks like this:
-
-```yaml
-substitution_policy:
-  model: substitution_ranker
-  production_alias: champion
-  auto_accept:
-    min_score: 0.82
-    max_price_delta_percent: 15
-    require_same_dietary_flags: true
-  human_review:
-    min_score: 0.55
-    max_queue_wait_minutes: 8
-  fallback:
-    default_action: refund
+```mermaid
+flowchart LR
+    H["User or workflow harm"] --> I["Classify impact and preserve evidence"]
+    I --> B["Find smallest enforceable unsafe boundary"]
+    B --> C["Apply reversible containment"]
+    C --> V["Verify runtime, decisions, operations, and outcomes"]
+    V --> R["Repair evaluation and control gaps"]
+    V -. "harm continues" .-> E["Escalate containment"]
+    E --> V
 ```
 
-The policy matters because the model score alone is not the final product behavior. A high score can auto-accept a replacement. A medium score can ask a store picker to review. A low score can refund the item. Bad predictions happen when that chain sends users to poor outcomes.
+This loop keeps protection and diagnosis connected. The team can contain a known harmful boundary before it proves the root cause, then widen containment if recovery signals remain outside the acceptable range.
 
-After a new model release, support tickets mention strange substitutions. Customers who ordered gluten-free bread receive regular bread suggestions. Vegan shoppers see dairy cheese suggestions. Store pickers also report that the review queue fills with products the old model handled well. The model service is healthy, but the product behavior is unsafe.
+Containment choices carry different costs. A global threshold change acts quickly but can overload a review queue. Segment restriction preserves healthy traffic but requires a stable decision-time boundary. Model rollback helps when the previous artifact remains compatible. A deterministic guard belongs outside the model when the product rule must hold for every version.
 
-The incident owner opens a prediction incident:
+Severity comes from consequence and exposure rather than the size of a metric movement. A single unsafe automated action can justify immediate containment in a high-impact workflow. A small quality regression across millions of low-risk decisions can also create large aggregate harm. The incident owner records affected users, decision authority, traffic share, duration, reversibility, and downstream side effects before choosing the response level.
 
-```yaml
-incident:
-  id: inc-2026-07-05-substitutions
-  service: substitution-api
-  model: substitution_ranker
-  current_alias: champion
-  current_version: "42"
-  previous_version: "41"
-  first_bad_signal: support-ticket spike for dietary substitutions
-  primary_owner: grocery-ml-oncall
-  product_owner: substitutions-product
-  decision_deadline_minutes: 20
+FreshBasket illustrates the framework with a grocery-substitution model. Complaints report vegan orders containing dairy and gluten-free orders receiving ordinary bread while model version 42 returns well-formed scores. The later sections use this incident to show how each response stage works.
+
+## Separate Prediction Error, Decision Error, and Product Harm
+<!-- section-summary: Responders trace the chain from model output through policy and product action because each layer can create or prevent harm. -->
+
+A **prediction** is the model output, such as a substitution score. A **decision policy** turns that output into an action, such as automatic acceptance above a threshold. The product then applies the action inside a workflow where a picker, customer, or downstream system can change the final outcome.
+
+This chain gives the incident several possible failure boundaries. The model can score an unsuitable replacement highly. Product metadata can mark an item incorrectly. A threshold can grant too much automatic authority. A fallback can select an unsafe default after a timeout. A user interface can hide information that a reviewer needs to correct the suggestion.
+
+The response should reconstruct every step:
+
+```mermaid
+flowchart LR
+    X["Request-time product facts"] --> F["Feature values and versions"]
+    F --> M["Model score and version"]
+    M --> P["Policy threshold, guard, or fallback"]
+    P --> A["Product action"]
+    A --> O["Human response and later outcome"]
 ```
 
-That packet creates a shared clock. The team has 20 minutes to choose containment. Deeper retraining can wait.
+The distinction changes containment. A reliable hard rule can block dietary conflicts even while the ML team investigates model and feature causes. If the issue comes from corrupt metadata, model rollback may leave the same harmful input in place. If the policy expanded automatic acceptance, restoring the earlier policy may reduce harm faster than replacing the model.
 
-## Triage The Prediction Impact
-<!-- section-summary: Triage starts by measuring which decisions are affected, how many users are exposed, and whether the harm has a simple containment path. -->
+Responders should avoid calling every disagreement a bad prediction. Some examples lack clear ground truth, and some product harms arise from correct predictions used for an unsuitable purpose. The incident definition follows consequence and breached product expectations, while later analysis determines which layer failed.
 
-Start with impact before model internals. You need to know how many decisions are affected and which customer promise is at risk. For ShelfSwap, the most urgent promise is dietary safety. Price quality and substitution relevance matter too. Dietary mismatch gets the first response.
+## Reconstruct What Changed
+<!-- section-summary: Prediction and decision records connect user harm to model, feature, policy, and release changes. -->
 
-A triage query can compare the new production window with the previous stable window:
+The incident owner starts with the affected decisions. Each substitution record includes the ordered item, proposed replacement, model version, feature-set version, score, threshold, policy result, and whether the picker or customer rejected it. Dietary attributes are stored as governed product metadata rather than inferred from customer identity.
 
-```sql
-WITH recent AS (
-  SELECT
-    request_id,
-    event_time,
-    model_version,
-    ordered_item_id,
-    suggested_item_id,
-    ordered_dietary_flags,
-    suggested_dietary_flags,
-    auto_accepted,
-    picker_overrode,
-    customer_rejected,
-    support_ticket_id
-  FROM warehouse.substitution_decisions
-  WHERE event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
-),
-checks AS (
-  SELECT
-    model_version,
-    COUNT(*) AS decisions,
-    AVG(CASE WHEN auto_accepted THEN 1 ELSE 0 END) AS auto_accept_rate,
-    AVG(CASE WHEN picker_overrode THEN 1 ELSE 0 END) AS picker_override_rate,
-    AVG(CASE WHEN customer_rejected THEN 1 ELSE 0 END) AS customer_reject_rate,
-    AVG(
-      CASE
-        WHEN ordered_dietary_flags != suggested_dietary_flags THEN 1
-        ELSE 0
-      END
-    ) AS dietary_mismatch_rate,
-    COUNTIF(support_ticket_id IS NOT NULL) AS support_tickets
-  FROM recent
-  GROUP BY model_version
-)
-SELECT *
-FROM checks
-ORDER BY model_version;
-```
+Before version 42, FreshBasket automatically accepted 48 percent of substitutions. After release, that rate rose to 61 percent. Picker overrides doubled, customer rejection rose from 7 to 15 percent, and dietary mismatches rose from 0.3 to 2.8 percent. Those numbers show more than a small accuracy regression: the release changed how often the product acted without review.
 
-The output might look like this:
+The team compares four histories around the start of the incident. The model registry shows version 42 entering traffic. The feature catalog shows a new product-embedding source. The policy repository shows an unchanged auto-accept threshold. The serving image did not change. This narrows the investigation without claiming yet whether the model or new feature data caused the behaviour.
 
-| model_version | decisions | auto_accept_rate | picker_override_rate | customer_reject_rate | dietary_mismatch_rate |
-|---|---:|---:|---:|---:|---:|
-| 41 | 18,420 | 0.48 | 0.12 | 0.07 | 0.003 |
-| 42 | 19,015 | 0.61 | 0.24 | 0.15 | 0.028 |
-
-Version 42 is automatically accepting more substitutions, and the dietary mismatch rate has jumped. That points to immediate containment. You can lower auto-accept, disable auto-accept for dietary-sensitive categories, or move the `champion` alias back to version 41.
-
-The triage note should name the business harm in plain language:
-
-![ShelfSwap bad prediction triage](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/shelfswap-bad-prediction-triage.png)
-*ShelfSwap's first triage view separates service health from decision safety, which is the key difference in a prediction incident.*
-
-```yaml
-impact:
-  affected_workflow: grocery substitution
-  strongest_signal: dietary_mismatch_rate increased from 0.3% to 2.8%
-  user_harm: shoppers may receive unsafe or unwanted dietary substitutions
-  current_scope: substitutions for bakery, dairy, and prepared meals
-  immediate_risk: auto-accepted substitutions without picker review
-```
-
-This keeps the team aligned. The incident is not about "model quality" in the abstract. It is about a specific unsafe decision path.
-
-## Find The Failing Segment
-<!-- section-summary: Segment analysis helps the team contain the unsafe slice without overreacting across the whole product. -->
-
-A bad prediction incident often starts broad and then narrows. You need to know whether the issue affects every substitution, one category, one region, one app version, or one feature feed. Segment analysis helps you avoid a blind rollback when a smaller guardrail can protect users.
-
-For ShelfSwap, segment the decisions by product category and dietary flag:
+An incident query can reconstruct those identities for every harmful decision:
 
 ```sql
 SELECT
-  category,
-  ordered_dietary_flags,
-  COUNT(*) AS decisions,
-  AVG(CASE WHEN ordered_dietary_flags != suggested_dietary_flags THEN 1 ELSE 0 END) AS mismatch_rate,
-  AVG(CASE WHEN customer_rejected THEN 1 ELSE 0 END) AS reject_rate,
-  AVG(CASE WHEN picker_overrode THEN 1 ELSE 0 END) AS picker_override_rate
-FROM warehouse.substitution_decisions
-WHERE event_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
-  AND model_version = "42"
-GROUP BY category, ordered_dietary_flags
-HAVING decisions >= 100
-ORDER BY mismatch_rate DESC
-LIMIT 20;
+  d.decision_id,
+  d.decided_at,
+  d.model_version,
+  d.feature_version,
+  d.policy_version,
+  d.ordered_item_id,
+  d.ordered_dietary_flags,
+  d.replacement_item_id,
+  d.replacement_dietary_flags,
+  d.auto_accepted,
+  o.customer_rejected,
+  o.picker_overrode
+FROM substitution_decisions AS d
+LEFT JOIN substitution_outcomes AS o USING (decision_id)
+WHERE d.decided_at >= TIMESTAMP '2026-07-14 10:00:00+00:00'
+  AND d.decided_at < TIMESTAMP '2026-07-14 12:00:00+00:00'
+  AND d.model_version IN ('41', '42');
 ```
 
-The top rows show a clear pattern:
+The output keeps model, features, and policy separate. If mismatches rise only on version 42 while feature and policy versions stay fixed, model rollback has stronger evidence. If both models fail only when `feature_version='product-embedding-v18'`, feature containment deserves priority. The decision ID lets responders preserve exact examples before routing changes.
 
-| category | ordered_dietary_flags | decisions | mismatch_rate | reject_rate |
-|---|---|---:|---:|---:|
-| bakery | gluten_free | 842 | 0.091 | 0.31 |
-| dairy | vegan | 1,104 | 0.074 | 0.27 |
-| prepared_meals | halal | 390 | 0.041 | 0.18 |
+## Find The Smallest Unsafe Boundary
+<!-- section-summary: Segment analysis identifies where the product is unsafe so containment can protect users without disabling healthy traffic. -->
 
-Now the team can choose a smaller containment rule. The model may still perform well for bottled water, paper goods, and household items. The unsafe slice is dietary-sensitive substitutions where category matching and item metadata must be strict.
+Global metrics hide the shape of this incident. FreshBasket groups decisions by ordered dietary flag, product category, store region, model version, and whether the new embedding was present. Bakery substitutions for gluten-free orders have a 9.1 percent mismatch rate. Vegan dairy substitutions show 7.4 percent. Ordinary household-item substitutions remain close to baseline.
 
-The incident owner should also check feature freshness. A model can make bad predictions because a feature feed broke:
+This analysis reveals a boundary the routing system can enforce: dietary-sensitive orders should not be auto-accepted. The team sends those cases to picker review or refund while leaving ordinary substitutions available. That is faster and less disruptive than turning off the entire model.
 
-```sql
-SELECT
-  feature_name,
-  MAX(event_time) AS last_update,
-  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(event_time), MINUTE) AS age_minutes,
-  COUNT(*) AS rows_seen
-FROM warehouse.feature_freshness
-WHERE feature_group IN ("catalog_item_metadata", "dietary_flags", "substitution_pairs")
-GROUP BY feature_name
-ORDER BY age_minutes DESC;
-```
+Segment containment is safe only when the segment is reliable at decision time. A vague analytical group such as “users similar to past complainants” would be hard to enforce and easy to misuse. Here, the product already has explicit dietary requirements attached to the ordered item, so the boundary is visible and testable.
 
-If dietary flags are stale, the fix may be data rollback or feature refresh. If features are fresh and version 42 alone changed behavior, model rollback or threshold containment is more likely.
+## Choose A Reversible Containment
+<!-- section-summary: The team selects the quickest reversible action that reduces harm and matches the evidence available. -->
 
-![Find the failing ShelfSwap segment](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/shelfswap-failing-segment.png)
-*Segment analysis shows whether the incident needs a broad rollback or a focused guardrail for the risky product categories.*
+FreshBasket has several possible controls. Raising the auto-accept threshold would reduce automatic decisions everywhere, but it might still allow a confidently wrong dietary substitution. Rolling back version 42 would restore known model behaviour, but only if version 42 is the cause and version 41 remains compatible with current features. Rolling back the feature feed might help if the new embeddings are corrupt, but other consumers could depend on it.
 
-## Choose A Containment Path
-<!-- section-summary: Containment should reduce harm quickly while preserving enough evidence for the real fix. -->
+Containment selection uses three dimensions: **time to reduce harm**, **scope of affected traffic**, and **reversibility**. A product guard can act within minutes and target a known policy boundary. A model rollback may take longer while restoring a reviewed baseline across many segments. A feature rollback can repair several consumers and also create a larger blast radius. The incident owner chooses the control with the strongest evidence and the smallest acceptable secondary cost, then records the next escalation if that control fails.
 
-Containment is the first production action that lowers harm. It does not need to explain the root cause. It needs to make the product safer and keep the evidence trail intact.
+The incident owner first disables automatic acceptance for dietary-sensitive substitutions. A rules-based guard sends exact dietary conflicts directly to refund and sends uncertain cases to a picker. This action protects the affected customers immediately and does not require the team to settle the model-versus-data question.
 
-ShelfSwap has four realistic containment paths:
-
-| Path | Action | Expected effect | Risk |
-|---|---|---|---|
-| Disable auto-accept for dietary-sensitive substitutions | Route those cases to picker review or refund | Stops unsafe automatic decisions | Review queue may grow |
-| Lower the auto-accept threshold | Require stronger confidence for automatic replacements | Reduces low-quality substitutions | More refunds or review work |
-| Move registry alias back to version 41 | Serve the previous model | Restores known behavior if model 42 caused issue | Loses any real improvements in 42 |
-| Roll back feature feed | Restore previous item metadata or feature table | Fixes feature-caused issue | Data rollback can affect other models |
-
-A safe first action can combine a guardrail and an alias decision:
+The emergency policy is explicit and versioned:
 
 ```yaml
-containment:
-  action_1:
-    type: policy_guardrail
-    rule: disable_auto_accept_for_dietary_sensitive_substitutions
-    owner: substitutions-product
-    expected_time_minutes: 5
-  action_2:
-    type: registry_alias_rollback
-    model_name: substitution_ranker
-    alias: champion
-    from_version: "42"
-    to_version: "41"
-    owner: ml-platform-oncall
-    expected_time_minutes: 10
-  verification:
-    - dietary_mismatch_rate_below_0_005
-    - picker_override_rate_returns_to_baseline_band
-    - support_ticket_rate_declines
+policy_version: substitution-safety-2026-07-14.1
+rules:
+  - when: ordered.dietary_flags intersects [vegan, gluten_free, nut_free]
+    if: replacement.dietary_flags does_not_satisfy ordered.dietary_flags
+    action: refund
+  - when: ordered.dietary_flags intersects [vegan, gluten_free, nut_free]
+    action: picker_review
+  - when: true
+    action: model_policy
+expires_at: 2026-07-16T12:00:00Z
+owner: substitution-incident-commander
 ```
 
-If the system uses MLflow model aliases, the alias move should be recorded with an incident tag or release note. If the team uses Databricks Unity Catalog models, the same idea applies: move the serving alias or deployment target in the governed registry workflow, then record who approved the movement and why.
+The exact-conflict rule executes before any model threshold. The second rule catches sensitive cases whose catalog data does not prove compatibility. The expiry forces an owner to review the temporary capacity cost instead of leaving an emergency setting invisible for months.
 
-The key habit is to make the action reversible. A rushed change hidden in a manual console click creates a second incident later. Use a tracked config change, a registry alias event, a deployment event, or an incident command log.
+Before activation, the team replays preserved decisions through the policy. Every known dietary mismatch must route to refund or review, while ordinary household substitutions retain their original path. After activation, a query checks that `auto_accepted=true` has zero rows for the protected flags. Any violating row pages the incident owner because the policy and traffic router disagree.
 
-## Add Human Review And Fallbacks
-<!-- section-summary: Human review and fallback rules keep high-risk decisions moving while the model team investigates. -->
+The team preserves a replayable sample before changing traffic. It records the request-time features, model and policy versions, output, product action, and later outcome under the applicable privacy controls. That sample lets engineers compare candidate causes after containment without relying on a production state that has already changed.
 
-Bad predictions rarely require the whole product to stop. A good system has fallback choices. ShelfSwap can send high-risk substitutions to picker review, ask the customer in the app, or refund the item. Each fallback has a cost, so the incident team should choose based on customer safety and operational capacity.
+The review queue now grows, so containment has an operational cost. Store operations adds reviewers for the afternoon and watches queue age. A control that avoids model harm but leaves orders waiting for hours would create a different product failure.
 
-Here is a temporary policy patch:
+After replaying recent decisions, the ML team finds that version 42 relies too strongly on the new embedding when product metadata is sparse. Version 41 performs better on the affected slice and is compatible with the current request schema. The release owner rolls model traffic back to version 41 while keeping the dietary guard active.
 
-```yaml
-temporary_policy_patch:
-  incident_id: inc-2026-07-05-substitutions
-  expires_at: "2026-07-06T12:00:00Z"
-  rules:
-    - name: dietary_sensitive_review
-      when:
-        any_ordered_flag:
-          - gluten_free
-          - vegan
-          - halal
-          - nut_free
-      action: route_to_picker_review
-      fallback_if_queue_wait_minutes_above: 8
-      fallback_action: refund
-    - name: auto_accept_threshold_raise
-      when:
-        category:
-          - bakery
-          - dairy
-          - prepared_meals
-      set_min_score: 0.92
-  owner: substitutions-product
-  approver: incident-commander
+## Keep Humans In A Real Decision Role
+<!-- section-summary: Human review helps only when reviewers have sufficient context, clear authority, and a path to disagree with the model. -->
+
+During containment, the picker interface shows the ordered item, proposed replacement, dietary facts, price difference, and stock alternatives. It does not present the model score as proof that the suggestion is correct. The reviewer can choose a different item, refund the order, or flag incorrect catalog metadata.
+
+These outcomes are valuable evidence, but they are not automatically perfect labels. A hurried picker may accept the first option, stores may interpret policy differently, and some customer preferences are absent from the catalog. FreshBasket separates the reviewer's action from the later customer acceptance and from any adjudicated dietary-policy label.
+
+This separation prevents the retraining pipeline from teaching the next model that every emergency reviewer action was ground truth. The feedback team samples disagreements and sends ambiguous cases to a senior catalog specialist before using them for model repair.
+
+## Verify Recovery In The Product
+<!-- section-summary: Recovery is demonstrated by safer decisions, healthy review operations, and confirmed runtime state rather than a successful rollback command. -->
+
+The deployment system reports that the rollback completed, but FreshBasket verifies the running path. Prediction telemetry shows version 41 receiving traffic. The dietary policy reports that automatic acceptance is disabled for the protected segment. Picker queue wait remains within the temporary staffing target.
+
+Over the next hour, new dietary mismatches fall below the team's incident threshold. Customer rejection and picker override rates move back toward their previous ranges. Support reports fewer new cases. These signals cover model state, policy state, operational load, and user impact; any one of them alone would give an incomplete picture.
+
+Recovery evidence is recorded as one result rather than scattered screenshots. The `picker_queue_p95_minutes` field is the 95th-percentile wait: 95 percent of picker tasks waited that long or less.
+
+```json
+{
+  "incident": "SUB-2841",
+  "traffic_model_version": "41",
+  "dietary_auto_accept_violations": 0,
+  "dietary_mismatch_rate_60m": 0.0021,
+  "picker_queue_p95_minutes": 6.4,
+  "new_customer_reports_30m": 1,
+  "fixture_replay": "48/48 passed",
+  "state": "contained_monitoring"
+}
 ```
 
-The expiration field matters. Temporary mitigations tend to stay forever when nobody names the cleanup time. An expiring policy forces the team to revisit the issue after the model or feature fix lands.
+The state remains `contained_monitoring` while customer outcomes continue to arrive. Runtime identity and policy violations can recover immediately; outcome evidence takes longer. The incident closes only after the reviewed window passes and the temporary guard receives an explicit keep, replace, or remove decision.
 
-Human review needs its own monitoring. A mitigation that protects prediction quality can still overload store pickers:
+FreshBasket keeps the guard after version 41 returns until enough reviewed outcomes confirm that the product is stable. It also records the time and owner for the later decision, so a temporary emergency control cannot quietly remain as permanent behaviour.
 
-```sql
-SELECT
-  store_region,
-  COUNT(*) AS review_items,
-  APPROX_QUANTILES(review_wait_minutes, 100)[OFFSET(95)] AS p95_wait_minutes,
-  AVG(CASE WHEN fallback_action = "refund" THEN 1 ELSE 0 END) AS refund_rate
-FROM warehouse.substitution_review_queue
-WHERE created_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
-GROUP BY store_region
-ORDER BY p95_wait_minutes DESC;
-```
+Delayed and irreversible effects need their own recovery work. A harmful recommendation can trigger a purchase, denial, message, or queue change before the system rolls back. Restoring the previous model protects future decisions while leaving earlier effects in place. The incident plan should identify affected decision IDs, notify the team that owns remediation, and record which actions can be reversed.
 
-If review wait time rises too much, the product owner may choose refunds for the riskiest categories. That is a product tradeoff, and it should be explicit.
+Some products can automatically cancel or recompute decisions. Others need customer support, refunds, corrected notifications, or human review. High-impact workflows may require a preserved list of affected people under strict access controls. Recovery evidence should report both the current safe state and the backlog of prior harm still being repaired.
 
-## Collect The Repair Packet
-<!-- section-summary: The repair packet turns an incident into a focused model, data, or policy fix. -->
+## Repair The System That Allowed The Failure
+<!-- section-summary: The permanent fix addresses model evaluation, feature contracts, and release safeguards revealed by the incident. -->
 
-Once containment is in place, the team needs a repair packet. This packet helps the model owner reproduce the issue and decide whether the fix belongs in data, training, evaluation, policy, or serving.
+The investigation shows that offline evaluation had one broad “grocery substitutions” result but no meaningful dietary slices. Sparse product metadata was replaced with a neutral embedding without a visible missingness feature. The canary dashboard tracked acceptance and latency, but not dietary mismatch or picker override by model version.
 
-A useful repair packet includes:
+The repair therefore spans more than retraining. The catalog pipeline validates required dietary metadata. The model receives an explicit missingness signal. Evaluation adds policy-relevant slices and replays the incident examples. Release monitoring compares picker override, customer rejection, and dietary mismatch during canaries. The guarded product rule remains independent of the learned model because some constraints should be enforced directly.
 
-| Evidence | Why it matters |
-|---|---|
-| Current and previous model versions | Shows which release introduced the behavior |
-| Decision log samples | Shows real product inputs and outputs |
-| Segment metrics | Shows where the issue concentrates |
-| Feature freshness and drift report | Separates model behavior from input-data problems |
-| Policy config before and after mitigation | Shows how product decisions changed |
-| Human review outcomes | Shows what expert reviewers chose |
-| Customer rejection and support-ticket samples | Shows user-facing harm |
+The team trains a new candidate only after these changes are in place. It compares the candidate with version 41 on the original holdout, recent production feedback, and the incident set. A model that fixes the headline slice while damaging ordinary substitutions does not pass.
 
-The model team can add a focused evaluation slice:
+## A Safe Response Narrows Uncertainty
+<!-- section-summary: Effective bad-prediction response protects users first, then uses connected evidence to identify and repair the failing layer. -->
 
-```yaml
-eval_slice:
-  name: dietary_sensitive_substitutions
-  source: warehouse.substitution_decisions
-  filters:
-    ordered_dietary_flags:
-      - gluten_free
-      - vegan
-      - halal
-      - nut_free
-  minimum_examples: 5000
-  metrics:
-    - top_1_category_match_rate
-    - dietary_flag_match_rate
-    - customer_reject_rate
-    - picker_override_rate
-  release_gate:
-    dietary_flag_match_rate_min: 0.995
-    customer_reject_rate_max_delta: 0.02
-```
+FreshBasket first addressed the product decision that was harming customers, found the smallest enforceable unsafe segment, and applied a reversible control. It then used versioned prediction, feature, policy, and outcome records to select a rollback and verify recovery.
 
-That slice should join the normal release gate. The next version should pass the general metric and the incident-specific metric. Otherwise, the same failure can return under a better average score.
-
-## Verify Recovery
-<!-- section-summary: Recovery means the harmful decision path returns to a safe band, and the temporary mitigation has an owner. -->
-
-After containment, keep watching the same signals that triggered the incident. A service rollback is only successful when the product outcome recovers.
-
-ShelfSwap can use this recovery checklist:
-
-| Check | Target |
-|---|---|
-| Dietary mismatch rate | Below 0.5 percent for 60 minutes |
-| Customer rejection rate | Back inside baseline band |
-| Picker override rate | Back inside baseline band or explained by policy |
-| Review queue wait | p95 below 8 minutes |
-| Support tickets | New tickets declining for affected categories |
-| Alias/deployment state | Version 41 or patched policy recorded as active |
-| Follow-up owner | Named model/data owner for permanent fix |
-
-The final incident note should name the current production state:
-
-```yaml
-recovery:
-  production_model_alias: champion -> version 41
-  temporary_policy: dietary_sensitive_review
-  temporary_policy_expiry: "2026-07-06T12:00:00Z"
-  repair_owner: catalog-ml-team
-  next_release_gate_added: dietary_sensitive_substitutions
-  incident_status: mitigated
-```
-
-That note prevents confusion the next morning. Everyone can see whether the system is running on rollback, temporary policy, or permanent repair.
-
-![ShelfSwap containment and repair loop](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/shelfswap-containment-repair-loop.png)
-*The response loop protects shoppers first, then turns the incident evidence into a stronger release gate for the next model.*
-
-## Putting It Together
-<!-- section-summary: Handling bad predictions means protecting the product first, then repairing the model with evidence. -->
-
-Bad predictions are production incidents because they change real decisions. The service can stay healthy while the product gets worse. ShelfSwap's substitution model showed that clearly: the endpoint stayed up while dietary-sensitive replacements turned unsafe.
-
-The response path is practical. Measure impact, find the failing segment, choose containment, add human review or fallback rules, collect a repair packet, and verify recovery with product metrics. Some incidents need model rollback. Some need feature rollback. Some need a temporary policy patch while the model team retrains or adds a missing evaluation slice.
-
-The useful habit is to keep product safety and evidence together. A quick mitigation protects users. A clean incident packet helps the team repair the system instead of repeating the same failure in the next release.
+That sequence is useful across ML products. Contain the decision, preserve the evidence, verify the running system, and repair the conditions that let the failure escape. A model rollback is one tool inside that response, not the definition of the response itself.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [Databricks Manage Model Lifecycle In Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [Prometheus Alerting Rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
-- [OpenTelemetry HTTP Metrics Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
-- [scikit-learn Model Evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html)
+- [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/)
+- [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
+- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+- [MLflow model aliases](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
